@@ -8,13 +8,15 @@ removing either keyword from ``_message_to_response`` must fail here.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
 
-from src.api.threads.threads import _format_message_response
+from src.api.threads import threads as legacy_threads
 from src.api.threads.workspace_routes.presenters import (
     _message_to_response,
     _thread_to_detail_response,
@@ -124,12 +126,12 @@ def test_message_response_preserves_legacy_null_identity_and_stopped_state() -> 
     assert payload["stopped"] is None
 
 
-def test_deprecated_thread_route_formatter_preserves_message_identity() -> None:
-    """The separate /api/v2/threads formatter cannot drop runtime identity.
+def test_deprecated_thread_list_route_preserves_message_identity_in_json() -> None:
+    """The /api/v2/threads list route cannot drop runtime identity or state.
 
-    Mutation proof: disable threads.py:1069, then run ``pytest -q
+    Mutation proof: disable threads.py:1069 or threads.py:1076, then run ``pytest -q
     backend/tests/unit/api/test_message_presenter_identity.py -k
-    deprecated_thread_route_formatter`` from the repository root.
+    deprecated_thread_list_route`` from the repository root.
     """
     message = _message(
         database_id=DATABASE_ASSISTANT_ID,
@@ -137,14 +139,33 @@ def test_deprecated_thread_route_formatter_preserves_message_identity() -> None:
         client_message_id=CLIENT_ASSISTANT_ID,
         stopped=True,
     )
+    service = SimpleNamespace(
+        list_messages=AsyncMock(return_value=([message], 1)),
+    )
 
-    response = _format_message_response(message)
+    with patch.object(legacy_threads, "get_chat_service", return_value=service):
+        response = asyncio.run(
+            legacy_threads.list_messages(
+                thread_id=THREAD_ID,
+                limit=100,
+                offset=0,
+                before_id=None,
+                since=None,
+                order=None,
+                current_user=SimpleNamespace(id=USER_ID),
+                db=SimpleNamespace(),
+            )
+        )
 
-    assert response.client_message_id == CLIENT_ASSISTANT_ID
-    assert response.stopped is True
     payload = response.model_dump(mode="json")
-    assert payload["client_message_id"] == "40000000-0000-0000-0000-000000000004"
-    assert payload["stopped"] is True
+    assert payload["total"] == 1
+    assert payload["has_more"] is False
+    assert len(payload["messages"]) == 1
+    assert (
+        payload["messages"][0]["client_message_id"]
+        == "40000000-0000-0000-0000-000000000004"
+    )
+    assert payload["messages"][0]["stopped"] is True
 
 
 def test_thread_detail_uses_message_presenter_without_losing_rich_provenance() -> None:
