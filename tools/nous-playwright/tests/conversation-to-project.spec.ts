@@ -117,11 +117,20 @@ test('chat retrieves the paper, approves a new project, and persists its documen
       await turnFinished(page);
       await expect(answer).toHaveCount(1); // no duplicate final transcript rows
       await expect(answer).toContainText(/self[\s-]?attention/i);
-      const source = answer.getByRole('link', { name: PAPER, exact: true });
+      // Catch missing sources and citations wired to the wrong document, without
+      // requiring the old direct-link presentation of the sources footer.
+      const source = answer.getByRole('region', { name: 'Sources', exact: true })
+        .getByRole('button')
+        .filter({ has: page.getByText(/^Attention Is All You Need(?: · p\. \d+)?$/) });
       await expect(source).toHaveCount(1);
-      await expect(source).toHaveAttribute('href', new RegExp(PAPER_ID));
-      // This is a content/citation smoke check, not a semantic-faithfulness score
-      // or a test that the rendered citation URL opens the right route.
+      await source.click();
+      const viewer = page.getByRole('region', { name: 'Artifact viewer', exact: true });
+      await viewer.getByRole('button', { name: 'Open document', exact: true }).click();
+      await expect(viewer.getByRole('heading', { name: PAPER, exact: true })).toBeVisible();
+      await expect(viewer.getByRole('link', { name: 'Open full page', exact: true }))
+        .toHaveAttribute('href', `/documents/${PAPER_ID}`);
+      await viewer.getByRole('button', { name: 'Close artifact panel', exact: true }).click();
+      // This remains a source-identity smoke check, not a semantic-faithfulness score.
       await page.waitForURL((url) => Boolean(url.searchParams.get('thread')), { timeout: 30_000 });
       run.threadUrl = page.url();
       await capture(page, info, '02-answer-and-tools');
@@ -159,7 +168,10 @@ test('chat retrieves the paper, approves a new project, and persists its documen
       await capture(page, info, '04-add-document-approval');
       await page.bringToFront();
       await gate.getByRole('button', { name: 'Approve', exact: true }).click();
-      await expect(gate).toBeHidden({ timeout: AGENT_TIMEOUT });
+      // Reconciliation can briefly overlap optimistic and persisted tool rows.
+      // Require every approval dialog to disappear, rather than a single-element
+      // assertion that throws on the overlap before the wait can finish.
+      await expect(gate).toHaveCount(0, { timeout: AGENT_TIMEOUT });
       const completed = page.locator('[data-role="assistant"]').filter({ hasText: projectName });
       // The UI can briefly overlap optimistic and persisted rows. Wait for
       // content without a strict single-element lookup, then check final counts.
