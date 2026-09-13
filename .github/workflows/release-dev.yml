@@ -1,29 +1,7 @@
 name: Release Dev
 
-# Reintroduced after #1379 removed the never-bootstrapped exact-SHA release.
-# This is the deliberately simplified version: it restores the historically
-# working promotion pattern (the old "chore(gitops): update dev images to
-# <tag> [skip ci]" commits on develop) instead of the deploy/dev branch +
-# GitHub App design, which never finished bootstrapping.
-#
-# Chain: green Test Pipeline on develop -> build the image at that exact SHA
-# via docker-build.yml -> commit the values-dev.yaml digest/tag bump straight
-# to develop with [skip ci] using a GitHub App token. Argo CD's nous-dev app
-# tracks develop, so the bump commit is the deployment.
-#
-# Why an App token and not GITHUB_TOKEN: develop requires 11 status checks, and
-# a [skip ci] push reports none, so the push is rejected with GH006. Classic
-# branch protection has no bypass list for apps, so the required checks live in
-# a ruleset ("develop required checks") that lists this app as a bypass actor.
-# See scripts/ci/migrate-develop-protection-to-ruleset.sh.
-#
-# Guards kept from the old design:
-# - only a completed, successful Test Pipeline run for develop triggers it
-# - the image is built at the tested workflow_run.head_sha, never a re-read tip
-# - the bump is skipped if develop moved past the tested SHA (the newer push's
-#   own pipeline run will promote instead)
-# - single concurrency group with cancellation
-
+# A green source commit produces a digest-pinned GitOps PR. GITHUB_TOKEN
+# cannot bypass develop's required checks; deployment follows a normal merge.
 on:
   workflow_run:
     workflows: ["Test Pipeline"]
@@ -38,70 +16,113 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build tested image
+  prepare:
+    name: Check release source
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'develop' &&
       github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.source.outputs.needed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: develop
+          fetch-depth: 2
+      - name: Skip stale sources and deployment-only commits
+        id: source
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch origin develop
+          if [ "$(git rev-parse HEAD)" != "$SOURCE_SHA" ] || [ "$(git rev-parse origin/develop)" != "$SOURCE_SHA" ]; then
+            echo "develop moved; the newer source run owns release preparation"
+            exit 0
+          fi
+          if git diff --quiet HEAD^ HEAD -- . ':!infrastructure/helm/knowledge-graph-analytics/values-dev.yaml'; then
+            echo "Only deployment values changed; do not create a release loop"
+            exit 0
+          fi
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build tested image
+    needs: prepare
+    if: needs.prepare.outputs.needed == 'true'
     uses: ./.github/workflows/docker-build.yml
     with:
       source_sha: ${{ github.event.workflow_run.head_sha }}
     secrets: inherit
 
   promote:
-    name: Promote to dev values
+    name: Propose dev image update
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
     steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.CLAUDE_APP_ID }}
-          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
-          # scope the minted token to contents only, whatever the App may hold
-          permission-contents: write
-
       - name: Checkout develop
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: develop
-          # persisted as the push credential for the bump commit below
-          token: ${{ steps.app-token.outputs.token }}
 
       - name: Install yq
         run: |
           YQ_VERSION="v4.44.6"
-          curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq
+          curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
 
-      - name: Bump dev image identity
+      - name: Open checked GitOps pull request
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
           DIGEST: ${{ needs.build.outputs.digest }}
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TIP="$(git rev-parse HEAD)"
-          if [ "$TIP" != "$SOURCE_SHA" ]; then
-            echo "develop moved to $TIP after $SOURCE_SHA was tested; skipping (newer run promotes instead)"
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ || ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid image identity"
+            exit 1
+          fi
+          git fetch origin develop
+          if [ "$(git rev-parse origin/develop)" != "$SOURCE_SHA" ]; then
+            echo "develop moved; the newer source run owns promotion"
             exit 0
           fi
-
           VALUES_FILE="infrastructure/helm/knowledge-graph-analytics/values-dev.yaml"
           yq -i '.backend.image.digest = strenv(DIGEST)' "$VALUES_FILE"
           yq -i '.backend.image.tag = strenv(SOURCE_SHA)' "$VALUES_FILE"
           yq -i '.backend.image.sourceSha = strenv(SOURCE_SHA)' "$VALUES_FILE"
-          yq '.backend.image' "$VALUES_FILE"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$VALUES_FILE"
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
+          if git diff --quiet; then
+            echo "Image already selected"
             exit 0
           fi
 
-          git commit -m "chore(gitops): update dev images to ${SOURCE_SHA:0:7} [skip ci]"
-          git push origin HEAD:develop
+          BRANCH="codex/release-dev-$SOURCE_SHA"
+          if git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null; then
+            git fetch origin "$BRANCH"
+            # Reuse only an identical proposal; never overwrite branch edits.
+            git diff --exit-code FETCH_HEAD
+          else
+            git checkout -b "$BRANCH"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add "$VALUES_FILE"
+            git commit -m "chore(gitops): propose dev image ${SOURCE_SHA:0:7}"
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
+          PR_URL="$(gh pr list --base develop --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
+          if [ -z "$PR_URL" ]; then
+            printf 'Deploy tested source %s at immutable digest %s.\n\nImage producer: %s\n\nMerge after Test Pipeline, Secret Scan, and Helm Validate pass. Argo CD applies the merged values.\n' "$SOURCE_SHA" "$DIGEST" "$BUILD_URL" > "$RUNNER_TEMP/release-pr.md"
+            PR_URL="$(gh pr create --base develop --head "$BRANCH" --title "chore(gitops): deploy dev image ${SOURCE_SHA:0:7}" --body-file "$RUNNER_TEMP/release-pr.md")"
+          fi
+          # Token-created PR events need approval. Explicit dispatch runs the
+          # same checks at the proposal's exact head without another credential.
+          for workflow in test-pipeline.yml secret-scan.yml helm-validate.yml; do
+            gh workflow run "$workflow" --ref "$BRANCH"
+          done
+          printf '## Dev image proposed\n\n%s\n\nMerge after its checks pass to deploy.\n' "$PR_URL" >> "$GITHUB_STEP_SUMMARY"

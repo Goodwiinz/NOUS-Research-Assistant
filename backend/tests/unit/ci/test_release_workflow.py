@@ -1,18 +1,10 @@
-"""Static contracts for the image-build workflow and the absence of
-automatic deploy paths.
-
-These tests intentionally inspect workflow structure instead of executing
-GitHub Actions. The automatic exact-SHA dev release chain (``release-dev.yml``)
-was removed because it was never bootstrapped (no ``deploy/dev`` branch, no
-release-App credential); these tests now protect what remains: that
-``docker-build.yml`` still builds and verifies an exact-SHA immutable image on
-demand, and that neither ``gitops-image-update.yml`` nor ``deploy.yml`` has
-grown an automatic trigger that could recreate an unproven auto-deploy path.
-"""
+"""Contracts for exact-source image builds and protected-branch GitOps PRs."""
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, cast
 
@@ -128,3 +120,84 @@ def test_deploy_workflow_has_no_automatic_docker_build_trigger() -> None:
     assert set(triggers) == {"workflow_dispatch"}
     assert "workflow_run" not in triggers
     assert "push" not in triggers
+
+
+def test_dev_release_uses_builtin_token_and_preserves_branch_checks() -> None:
+    release = _load_workflow(WORKFLOWS / "release-dev.yml")
+    promote = release["jobs"]["promote"]
+    proposal = _step_with_run(release, "promote", "gh pr create")
+    shell = str(proposal["run"])
+
+    assert proposal["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert promote["permissions"] == {
+        "contents": "write",
+        "pull-requests": "write",
+        "actions": "write",
+    }
+    assert "create-github-app-token" not in str(release)
+    assert "CLAUDE_APP" not in str(release)
+    assert not re.search(r"git\s+push[^\n]*(?:HEAD:|origin\s+)develop", shell)
+    assert "[skip ci]" not in shell
+    assert "test-pipeline.yml secret-scan.yml helm-validate.yml" in shell
+    assert 'gh workflow run "$workflow" --ref "$BRANCH"' in shell
+    assert release["jobs"]["build"]["needs"] == "prepare"
+    assert release["jobs"]["build"]["if"] == "needs.prepare.outputs.needed == 'true'"
+
+
+def test_release_source_gate_skips_image_bumps_and_stale_runs(tmp_path: Path) -> None:
+    """Execute the actual gate against Git; a values-only merge must not loop.
+
+    Mutation-verified: replacing either guard at release-dev.yml:39 or :43
+    with `if false` fails the corresponding assertion below. Run with:
+    pytest --noconftest -c /dev/null backend/tests/unit/ci/test_release_workflow.py
+    """
+    remote = tmp_path / "origin.git"
+    repo = tmp_path / "checkout"
+    subprocess.run(
+        ["git", "init", "--bare", str(remote)], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "clone", str(remote), str(repo)], check=True, capture_output=True
+    )
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+
+    git("checkout", "-b", "develop")
+    git("config", "user.name", "Release test")
+    git("config", "user.email", "release-test@example.invalid")
+    (repo / "source.txt").write_text("initial")
+    git("add", ".")
+    git("commit", "-m", "initial")
+    (repo / "source.txt").write_text("new source")
+    git("commit", "-am", "source change")
+    git("push", "origin", "develop")
+    source_sha = git("rev-parse", "HEAD")
+    release = _load_workflow(WORKFLOWS / "release-dev.yml")
+    step = _step_with_run(release, "prepare", "needed=true")
+    output = tmp_path / "output"
+
+    def needed(sha: str) -> bool:
+        output.write_text("")
+        subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", str(step["run"])],
+            cwd=repo,
+            env={**os.environ, "SOURCE_SHA": sha, "GITHUB_OUTPUT": str(output)},
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return "needed=true" in output.read_text()
+
+    assert needed(source_sha), "A fresh source change must build"
+    values = repo / "infrastructure/helm/knowledge-graph-analytics/values-dev.yaml"
+    values.parent.mkdir(parents=True)
+    values.write_text("backend: {image: {tag: tested}}")
+    git("add", ".")
+    git("commit", "-m", "promote image")
+    git("push", "origin", "develop")
+    assert not needed(
+        git("rev-parse", "HEAD")
+    ), "Image promotion must not rebuild itself"
+    git("checkout", "--detach", source_sha)
+    assert not needed(source_sha), "A stale pipeline must not propose an old image"
