@@ -113,6 +113,22 @@ describe('consumeSse error frame category', () => {
     expect(category).toBeUndefined();
   });
 
+  it.each(['authentication_required', 'permission_denied'])(
+    'never accepts the local-only %s signal from an SSE frame',
+    async (localFailure) => {
+      global.fetch = fetchWith([
+        `event: error\ndata: {"error":"x","category":"${localFailure}"}\n\n`,
+      ]);
+      const onError = vi.fn();
+
+      await agentChatService.streamMessage(request, { onError });
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0][1]).toBeUndefined();
+      expect(onError.mock.calls[0][2]).toBeUndefined();
+    }
+  );
+
   it('ignores a non-string category', async () => {
     const [, category] = await errorFromFrame(
       'event: error\ndata: {"error":"x","category":42}\n\n'

@@ -92,6 +92,12 @@ function LoginPageContent(): React.JSX.Element | null {
   const searchParams = useSearchParams();
   const nextPath = resolvePostLoginPath(searchParams.get('next'));
   const callbackError = describeAuthCallbackError(searchParams.get('error'));
+  const chatRecoveryMessage =
+    searchParams.get('reauth') === 'chat'
+      ? searchParams.get('draft') === 'saved'
+        ? "Please sign in again to continue. Sign in to the same account to return to this conversation. Your message text is saved in this tab and won't be sent until you press Send."
+        : 'Please sign in again to continue.'
+      : null;
   const [formData, setFormData] = useState<LoginFormData>({
     email: '',
     password: '',
@@ -202,6 +208,14 @@ function LoginPageContent(): React.JSX.Element | null {
             </div>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+              {chatRecoveryMessage ? (
+                <div className="rounded-(--nous-radius-md) border border-(--nous-sol)/30 bg-(--nous-sol)/10 p-3">
+                  <p className="text-sm text-(--nous-titan)">
+                    {chatRecoveryMessage}
+                  </p>
+                </div>
+              ) : null}
+
               {error && (
                 <div
                   role="alert"

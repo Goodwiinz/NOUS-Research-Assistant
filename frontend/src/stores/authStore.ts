@@ -46,6 +46,7 @@ interface AuthState {
     organization_name?: string;
   }) => Promise<RegisterResult>;
   signOut: () => Promise<void>;
+  invalidateRejectedSession: (expectedUserId: string) => void;
   resetPassword: (email: string) => Promise<void>;
   fetchProfile: () => Promise<void>;
   updateUser: (user: Partial<User>) => void;
@@ -90,6 +91,16 @@ let signInInFlight = 0;
 // explicit callers) onto a single /auth/me round-trip.
 let profileFetchInFlight: Promise<void> | null = null;
 
+function clearUserScopedClientState(): void {
+  clearWorkspaceServiceCache();
+  useArtifactPanelStore.getState().reset();
+  // The root QueryClient and APIClient singleton survive client-side auth
+  // transitions, so neither may retain the previous user's private data or
+  // bearer token after a session is rejected.
+  getAppQueryClient()?.clear();
+  api.clearAuth();
+}
+
 function getSupabaseClient(): SupabaseClient {
   const supabase = createSupabaseBrowserClient();
 
@@ -106,15 +117,7 @@ function getSupabaseClient(): SupabaseClient {
       }
 
       if (event === 'SIGNED_OUT') {
-        clearWorkspaceServiceCache();
-        useArtifactPanelStore.getState().reset();
-        // The root QueryClient survives client-side auth transitions, so a
-        // shared-browser account switch could serve the previous user's
-        // note/draft bodies straight from cache. Drop everything.
-        getAppQueryClient()?.clear();
-        // Drop the cached bearer token so the shared APIClient singleton can't
-        // keep sending the signed-out user's JWT.
-        api.clearAuth();
+        clearUserScopedClientState();
         useAuthStore.setState({
           user: null,
           organization: null,
@@ -267,19 +270,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   },
 
   signOut: async () => {
-    clearWorkspaceServiceCache();
-    // Drop the chat artifact panel's state — it survives navigation, so a
-    // shared-browser account switch would otherwise show the previous
-    // user's artifact title when the next user opens /chat.
-    useArtifactPanelStore.getState().reset();
-    // Drop the React Query cache with it — user-private note/draft bodies
-    // are keyed without user identity, so they'd otherwise survive into the
-    // next signed-in session on this browser.
-    getAppQueryClient()?.clear();
-    // Clear the shared APIClient token immediately so no in-flight or
-    // subsequent request can carry the old JWT, even if the network call
-    // below fails.
-    api.clearAuth();
+    clearUserScopedClientState();
 
     // Always clear local state first so the UI reflects signed-out
     // immediately regardless of the network outcome.
@@ -312,6 +303,25 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         error: `Signed out on this device, but the session could not be revoked on the server: ${message}`,
       });
     }
+  },
+
+  invalidateRejectedSession: (expectedUserId: string) => {
+    const currentUser = get().user;
+
+    // A late response from user A must never clear a newer user B session.
+    if (currentUser && currentUser.id !== expectedUserId) {
+      return;
+    }
+
+    clearUserScopedClientState();
+    clearSupabaseAuthCookies();
+    set({
+      user: null,
+      organization: null,
+      isAuthenticated: false,
+      error: null,
+      ...CLEARED_PENDING_CONFIRMATION,
+    });
   },
 
   resetPassword: async (email: string) => {

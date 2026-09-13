@@ -650,6 +650,7 @@ const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
   upstream_timeout: 'The model took too long. Retry usually works.',
   invalid_request: "This request can't be retried as-is.",
   conflict: 'A confirmation is already in progress.',
+  permission_denied: "You don't have permission to complete this action.",
 };
 
 /**
@@ -660,6 +661,7 @@ const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
 const NON_RETRYABLE_ERROR_CATEGORIES: ReadonlySet<string> = new Set([
   'invalid_request',
   'conflict',
+  'permission_denied',
 ]);
 
 export function AuiAssistantMessage({

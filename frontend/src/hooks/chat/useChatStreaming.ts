@@ -17,6 +17,13 @@ import {
   ChatConversation,
   generateConversationTitle,
 } from '@/hooks/chat/chatTypes';
+import {
+  clearArmedChatAuthRecovery,
+  consumeChatAuthRecovery,
+  discardChatAuthRecovery,
+  markChatAuthRecoveryReady,
+  stageChatAuthRecovery,
+} from '@/hooks/chat/chatAuthRecovery';
 import { agentChatService } from '@/services/agentChatService';
 import type { AgentStreamCallbacks } from '@/services/agentChatService';
 import type {
@@ -48,6 +55,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useProjectStore } from '@/store/projectStore';
+import { useAuthStore } from '@/stores/authStore';
 import { v5 as uuidv5 } from 'uuid';
 
 /**
@@ -235,6 +243,15 @@ export interface PendingConfirmation {
   /** Stable identities for reconciliation across the interrupt/resume split. */
   userRuntimeId?: string;
   assistantRuntimeId?: string;
+}
+
+interface StreamAuthRecoveryAttempt {
+  attemptId: string;
+  ownerUserId: string;
+  threadId: string;
+  promptStaged: boolean;
+  authRefreshStarted: boolean;
+  navigationStarted: boolean;
 }
 
 /** Map raw planner SSE steps onto the structured inline-plan shape. */
@@ -473,6 +490,7 @@ export function useChatStreaming(
   const streamingTimestampRef = useRef<number | null>(null);
   const streamingRafRef = useRef<number | null>(null);
   const pendingStreamContentRef = useRef<string | null>(null);
+  const authRecoveryAttemptRef = useRef<StreamAuthRecoveryAttempt | null>(null);
   // rAF-batched SSE seq cursor (same pattern as streamingRafRef for tokens):
   // onSeq fires per frame, but the activity store only needs the latest value
   // once per paint.
@@ -529,6 +547,8 @@ export function useChatStreaming(
   const storeIsRetrievingRag = useChatStore((state) => state.isRetrievingRag);
   const streamingThreadId = useChatStore((state) => state.streamingThreadId);
   const activeThreadId = useChatStore((state) => state.currentThreadId);
+  const authIsAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const authenticatedUserId = useAuthStore((state) => state.user?.id ?? null);
   const pendingConfirmation = activeThreadId
     ? (pendingConfirmations[activeThreadId] ?? null)
     : null;
@@ -555,6 +575,64 @@ export function useChatStreaming(
   const router = useRouter();
   const queryClient = useQueryClient();
 
+  const finishAuthRecoveryAttempt = useCallback(
+    (attempt: StreamAuthRecoveryAttempt | undefined): void => {
+      if (!attempt) return;
+      clearArmedChatAuthRecovery(attempt.attemptId);
+      if (authRecoveryAttemptRef.current === attempt) {
+        authRecoveryAttemptRef.current = null;
+      }
+    },
+    []
+  );
+
+  const beginAuthRecovery = useCallback(
+    (attempt: StreamAuthRecoveryAttempt): void => {
+      if (
+        authRecoveryAttemptRef.current !== attempt ||
+        attempt.navigationStarted
+      ) {
+        return;
+      }
+
+      const auth = useAuthStore.getState();
+      // The response belongs to the snapshotted user. If another account has
+      // already replaced it, discard that user's staged text and leave the
+      // newer session completely untouched.
+      if (auth.user && auth.user.id !== attempt.ownerUserId) {
+        if (attempt.promptStaged) {
+          discardChatAuthRecovery(attempt.attemptId);
+        }
+        authRecoveryAttemptRef.current = null;
+        return;
+      }
+
+      const draftSaved =
+        attempt.promptStaged && markChatAuthRecoveryReady(attempt.attemptId);
+      // Latch before mutating auth. The synchronous store update rerenders the
+      // hook and its recovery effect, which must not issue a second replace.
+      attempt.navigationStarted = true;
+
+      if (attempt.threadId) {
+        useAgentActivityStore.getState().finishRun(attempt.threadId, 'error');
+      }
+
+      if (auth.isAuthenticated) {
+        auth.invalidateRejectedSession(attempt.ownerUserId);
+      }
+
+      const nextPath = attempt.threadId
+        ? getSelectedThreadUrl(attempt.threadId)
+        : '/chat';
+      const recoveryParams = new URLSearchParams();
+      recoveryParams.set('reauth', 'chat');
+      if (draftSaved) recoveryParams.set('draft', 'saved');
+      recoveryParams.set('next', nextPath);
+      router.replace(`/login?${recoveryParams.toString()}`);
+    },
+    [router]
+  );
+
   // Recovery is once per activation, not once per component lifetime. A
   // failed resume/probe can be retried by leaving and returning to the thread.
   useEffect(() => {
@@ -566,6 +644,33 @@ export function useChatStreaming(
       lastActivatedThreadRef.current = activeThreadId;
     }
   }, [activeThreadId]);
+
+  // A rejected Supabase refresh can emit SIGNED_OUT before the retried fetch
+  // settles. Promote the already-staged draft and navigate here, while the
+  // routed hook is still mounted; its later cleanup may then abort the fetch
+  // without losing the handoff.
+  useEffect(() => {
+    if (authIsAuthenticated) return;
+    const attempt = authRecoveryAttemptRef.current;
+    if (!attempt?.authRefreshStarted) return;
+    beginAuthRecovery(attempt);
+  }, [authIsAuthenticated, beginAuthRecovery]);
+
+  // Recovery is composer-only. Consumption removes the record first, then
+  // restores text for the same account and thread without dispatching Send.
+  useEffect(() => {
+    if (!authIsAuthenticated || !authenticatedUserId || !activeThreadId) {
+      return;
+    }
+    const restoredPrompt = consumeChatAuthRecovery({
+      ownerUserId: authenticatedUserId,
+      threadId: activeThreadId,
+    });
+    if (restoredPrompt !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setInput(restoredPrompt);
+    }
+  }, [activeThreadId, authIsAuthenticated, authenticatedUserId]);
 
   // Refetch the Working-folders queries once a project-mutating tool
   // succeeds, so the rail shows agent-created sources/notes/drafts without
@@ -692,6 +797,7 @@ export function useChatStreaming(
        * re-activating the thread can try again — the run itself may well
        * still be alive on the backend. */
       keepRunOnFailure?: boolean;
+      authRecoveryAttempt?: StreamAuthRecoveryAttempt;
       start: (
         callbacks: AgentStreamCallbacks,
         signal: AbortSignal
@@ -705,6 +811,7 @@ export function useChatStreaming(
         quietWhenEmpty,
         suppressCommit,
         keepRunOnFailure,
+        authRecoveryAttempt,
         start,
       } = opts;
 
@@ -1046,8 +1153,17 @@ export function useChatStreaming(
                 assistantRuntimeId,
               });
             },
+            onAuthRefreshAttempt: () => {
+              if (
+                authRecoveryAttemptRef.current === authRecoveryAttempt &&
+                authRecoveryAttempt
+              ) {
+                authRecoveryAttempt.authRefreshStarted = true;
+              }
+            },
             onDone: (payload) => {
               console.log('[Agent] Stream complete');
+              finishAuthRecoveryAttempt(authRecoveryAttempt);
               if (payload) {
                 doneIds = payload;
               }
@@ -1057,14 +1173,27 @@ export function useChatStreaming(
                   .finishRun(currentThreadId, 'done');
               }
             },
-            onError: (error, category) => {
-              console.error('[Agent] Stream error:', error, category);
+            onError: (error, category, localFailure) => {
+              console.error(
+                '[Agent] Stream error:',
+                error,
+                category,
+                localFailure
+              );
               streamHadError = true;
               if (currentThreadId) {
                 useAgentActivityStore
                   .getState()
                   .finishRun(currentThreadId, 'error');
               }
+              if (
+                localFailure === 'authentication_required' &&
+                authRecoveryAttempt
+              ) {
+                beginAuthRecovery(authRecoveryAttempt);
+                return;
+              }
+              finishAuthRecoveryAttempt(authRecoveryAttempt);
               // Show error as assistant message instead of blank bubble.
               // The server authored this failure, so its category wins; the
               // legacy client-side 'stream-error' is only the fallback for a
@@ -1079,7 +1208,7 @@ export function useChatStreaming(
                 error: {
                   message:
                     'This response failed to generate. Please try again.',
-                  category: category ?? 'stream-error',
+                  category: localFailure ?? category ?? 'stream-error',
                 },
               };
               if (isTurnDisplayed())
@@ -1324,6 +1453,7 @@ export function useChatStreaming(
           await reconcileUser('exception');
         }
       } finally {
+        finishAuthRecoveryAttempt(authRecoveryAttempt);
         submitLockRef.current = false;
         setIsLoading(false);
         // A token that landed just before an exception can leave a scheduled
@@ -1365,6 +1495,8 @@ export function useChatStreaming(
     },
     [
       flushPendingSeq,
+      beginAuthRecovery,
+      finishAuthRecoveryAttempt,
       setMessages,
       setConversations,
       enableRAG,
@@ -1382,6 +1514,9 @@ export function useChatStreaming(
       supersedesClientMessageId?: string,
       attachmentIds?: string[]
     ) => {
+      // This identity must be captured before the stream's token refresh can
+      // synchronously emit SIGNED_OUT and clear the auth store.
+      const ownerUserId = useAuthStore.getState().user?.id;
       if (submitLockRef.current) {
         console.warn('[Chat] Send ignored: submit already in flight');
         return;
@@ -1553,6 +1688,33 @@ export function useChatStreaming(
 
         if (preflightAbort.signal.aborted) return;
 
+        let authRecoveryAttempt: StreamAuthRecoveryAttempt | undefined;
+        if (ownerUserId) {
+          const currentUserId = useAuthStore.getState().user?.id;
+          if (currentUserId !== ownerUserId || !currentThreadId) {
+            // Auth changed while a new thread was being prepared. Do not send a
+            // stale account's prompt; put it back in the composer instead.
+            rollbackPreflight();
+            return;
+          }
+
+          authRecoveryAttempt = {
+            attemptId: crypto.randomUUID(),
+            ownerUserId,
+            threadId: currentThreadId,
+            promptStaged: false,
+            authRefreshStarted: false,
+            navigationStarted: false,
+          };
+          authRecoveryAttempt.promptStaged = stageChatAuthRecovery({
+            attemptId: authRecoveryAttempt.attemptId,
+            ownerUserId,
+            threadId: currentThreadId,
+            prompt: content,
+          });
+          authRecoveryAttemptRef.current = authRecoveryAttempt;
+        }
+
         // Stream via Agent (LangGraph) backend.
         // The workspace thread IS the agent thread (server-canonical).
         const existingAgentThreadId = currentThreadId || undefined;
@@ -1575,6 +1737,7 @@ export function useChatStreaming(
             currentConversationId,
             newMessages,
             assistantRuntimeId,
+            authRecoveryAttempt,
             start: (streamCallbacks, signal) =>
               agentChatService.streamMessage(
                 {
@@ -1920,6 +2083,7 @@ export function useChatStreaming(
 
   const handleConfirmation = useCallback(
     async (confirmed: boolean) => {
+      const ownerUserId = useAuthStore.getState().user?.id;
       if (!pendingConfirmation) return;
       // CX1 belt: block a synchronous double-click before it can fire a
       // second streamConfirm call (see confirmLockRef declaration).
@@ -2099,6 +2263,20 @@ export function useChatStreaming(
 
         const confirmAbort = new AbortController();
         abortControllerRef.current = confirmAbort;
+        const authRecoveryAttempt: StreamAuthRecoveryAttempt | undefined =
+          ownerUserId
+            ? {
+                attemptId: crypto.randomUUID(),
+                ownerUserId,
+                threadId: pendingConfirmation.workspaceThreadId,
+                promptStaged: false,
+                authRefreshStarted: false,
+                navigationStarted: false,
+              }
+            : undefined;
+        if (authRecoveryAttempt) {
+          authRecoveryAttemptRef.current = authRecoveryAttempt;
+        }
 
         try {
           await agentChatService.streamConfirm(
@@ -2308,7 +2486,16 @@ export function useChatStreaming(
                 pendingStreamContentRef.current = '';
                 useChatStore.setState({ streamingContent: '' });
               },
+              onAuthRefreshAttempt: () => {
+                if (
+                  authRecoveryAttempt &&
+                  authRecoveryAttemptRef.current === authRecoveryAttempt
+                ) {
+                  authRecoveryAttempt.authRefreshStarted = true;
+                }
+              },
               onDone: (payload) => {
+                finishAuthRecoveryAttempt(authRecoveryAttempt);
                 confirmDoneIds = payload ?? {};
                 if (confirmContent.trim()) {
                   const baseMessage = buildConfirmMessage(
@@ -2345,8 +2532,16 @@ export function useChatStreaming(
                     setMessages([...confirmMessages, msg]);
                 }
               },
-              onError: (error, category) => {
+              onError: (error, category, localFailure) => {
                 confirmHadError = true;
+                if (
+                  localFailure === 'authentication_required' &&
+                  authRecoveryAttempt
+                ) {
+                  beginAuthRecovery(authRecoveryAttempt);
+                  return;
+                }
+                finishAuthRecoveryAttempt(authRecoveryAttempt);
                 // The confirm path used to commit a PLAIN content bubble for a
                 // failure — no `error` block, so no Retry affordance and no
                 // category. Same shape as the main stream now: server category
@@ -2360,7 +2555,7 @@ export function useChatStreaming(
                   error: {
                     message:
                       'This confirmation failed to complete. Please try again.',
-                    category: category ?? 'stream-error',
+                    category: localFailure ?? category ?? 'stream-error',
                   },
                 };
                 confirmCommitted = true;
@@ -2424,6 +2619,7 @@ export function useChatStreaming(
           confirmThrew = true;
           await reconcileConfirmationUser('confirmation-exception');
         } finally {
+          finishAuthRecoveryAttempt(authRecoveryAttempt);
           // Close out the agent activity rail — the interrupt left the run
           // "running" and neither onDone (confirm path) nor handleStop
           // (activeRunThreadRef is null here) ever finished it (round-3 M1).
@@ -2507,6 +2703,8 @@ export function useChatStreaming(
     },
     [
       flushPendingSeq,
+      beginAuthRecovery,
+      finishAuthRecoveryAttempt,
       pendingConfirmation,
       messages,
       setMessages,
