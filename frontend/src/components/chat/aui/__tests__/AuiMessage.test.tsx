@@ -379,7 +379,9 @@ describe('AuiAssistantMessage committed-path chrome (ChatBubble parity)', () => 
     expect(
       screen.getByRole('button', { name: 'Source 2: Paper B' })
     ).toBeInTheDocument();
-    expect(within(screen.getByRole('list')).getAllByRole('listitem')).toHaveLength(2);
+    expect(
+      within(screen.getByRole('list')).getAllByRole('listitem')
+    ).toHaveLength(2);
   });
 
   it('renders the committed execution plan', () => {
@@ -430,6 +432,56 @@ describe('AuiAssistantMessage committed-path chrome (ChatBubble parity)', () => 
 });
 
 describe('AuiMessageByIndex runtime-sync race', () => {
+  // Mutation proof: removing AuiMessageByIndex's runtimeMessageId mismatch
+  // guard must fail this test on the stale Approval needed dialog.
+  // From frontend: vitest run src/components/chat/aui/__tests__/AuiMessage.test.tsx -t 'stale approval'
+  it('does not render a stale approval in a completed answer slot before runtime sync', async () => {
+    const approval = makeChatPageMessage({
+      runtimeId: 'approval:thread-1',
+      source: 'local-only',
+      role: 'assistant',
+      content: '',
+      pendingApproval: {
+        id: 'gate-1',
+        tools: [{ name: 'create_project', args: { name: 'Research' } }],
+      },
+    });
+    const answer = makeChatPageMessage({
+      runtimeId: 'answer-1',
+      role: 'assistant',
+      content: 'Project created.',
+    });
+    const renderFrame = (
+      runtimeMessages: (typeof approval)[],
+      row = answer
+    ): React.ReactElement => (
+      <ChatRuntimeProvider
+        messages={runtimeMessages}
+        isRunning={false}
+        onSend={noop}
+        onCancel={noop}
+      >
+        <AuiMessageByIndex index={0} message={row} />
+      </ChatRuntimeProvider>
+    );
+
+    // The list has the answer, but the post-commit runtime still has the gate
+    // at the same in-bounds index. Never mount that gate in the answer row.
+    const { rerender } = render(renderFrame([approval], approval));
+    await screen.findByRole('alertdialog', { name: 'Approval needed' });
+    rerender(renderFrame([approval]));
+    expect(
+      screen.queryByRole('alertdialog', { name: 'Approval needed' })
+    ).not.toBeInTheDocument();
+    rerender(renderFrame([answer]));
+    await waitFor(() =>
+      expect(screen.getByText('Project created.')).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByRole('alertdialog', { name: 'Approval needed' })
+    ).not.toBeInTheDocument();
+  });
+
   it('hands an optimistic row to its canonical replacement without a duplicate bubble', async () => {
     const optimistic = makeChatPageMessage({
       runtimeId: 'runtime-answer',

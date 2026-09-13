@@ -989,6 +989,7 @@ export function AuiMessageByIndex({
   // thread. MessageByIndex throws on out-of-bounds, so skip the stale
   // frame; the effect fires immediately after commit and re-renders us.
   const runtimeMessageCount = useThread((t) => t.messages.length);
+  const runtimeMessageId = useThread((t) => t.messages[index]?.id);
 
   // The components map is module-level (stable identity); only the row's DATA
   // changes, and it travels by context so a message refresh re-renders the
@@ -1006,6 +1007,11 @@ export function AuiMessageByIndex({
   );
 
   if (index >= runtimeMessageCount) return null;
+  // Reconciliation can reorder rows without changing the runtime's length.
+  // Until its post-commit sync catches up, this index may still name an
+  // approval gate rather than the answer now occupying the list row. Never
+  // render another message's tools (or actionable approval) in this slot.
+  if (message && runtimeMessageId !== message.runtimeId) return null;
 
   // resetKey settles the boundary when the runtime re-syncs: count changes on
   // grow/shrink, and message id changes on thread switch even when counts match.
