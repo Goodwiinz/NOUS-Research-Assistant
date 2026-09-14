@@ -331,6 +331,46 @@ def test_merge_never_filters_or_renumbers_existing_rag_slots() -> None:
     assert merged[3]["document_id"] == str(new_id)
 
 
+def test_scoped_target_appends_without_substituting_or_renumbering() -> None:
+    target_id = "11111111-1111-4111-8111-111111111111"
+    distractor_id = "22222222-2222-4222-8222-222222222222"
+    existing = [
+        {
+            "document_id": distractor_id,
+            "title": "Earlier source",
+            "content": "existing evidence",
+            "score": 0.2,
+        }
+    ]
+
+    merged = merge_retrieved_contexts(
+        existing,
+        [
+            {
+                "id": "named-source-call",
+                "tool_name": "do_kb_retrieve",
+                "status": "completed",
+                "result": {
+                    "chunks": [
+                        {
+                            "document_id": target_id,
+                            "title": "Attention Is All You Need",
+                            "text": "target evidence",
+                            "score": 0.51,
+                        }
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert merged[0] == existing[0]
+    assert [(item["document_id"], item["content"]) for item in merged] == [
+        (distractor_id, "existing evidence"),
+        (target_id, "target evidence"),
+    ]
+
+
 async def test_tool_node_promotes_fresh_execution_before_history_pruning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -14,7 +14,7 @@ stay DRY and any future bug-fix lands in a single place.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Sequence
+from typing import Collection, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -44,6 +44,7 @@ async def resolve_and_filter_chunks(
     org_id: UUID,
     session: AsyncSession,
     project_id: Optional[str] = None,
+    allowed_document_ids: Optional[Collection[UUID]] = None,
 ) -> tuple[dict[str, tuple[str, str]], list[Chunk]]:
     """Resolve DO KB chunks to Documents and optionally filter by project.
 
@@ -114,24 +115,35 @@ async def resolve_and_filter_chunks(
             .where(Document.organization_id == org_id)
             .where(or_(*filters))
         )
-        title_by_doc_id: dict[UUID, tuple[str, str]] = {}
-        title_by_leaf: dict[str, tuple[str, str]] = {}
+        title_by_doc_id: dict[UUID, Optional[str]] = {}
+        doc_ids_by_storage_alias: dict[str, set[UUID]] = {}
         for doc_id, storage_path, title in rows:
-            title_by_doc_id[doc_id] = (str(doc_id), title or str(doc_id))
+            title_by_doc_id[doc_id] = title
             if storage_path:
-                title_by_leaf[storage_path] = (str(doc_id), title or storage_path)
                 leaf = storage_path.rsplit("/", 1)[-1]
-                title_by_leaf[leaf] = (str(doc_id), title or leaf)
+                for alias in {storage_path, leaf}:
+                    doc_ids_by_storage_alias.setdefault(alias, set()).add(doc_id)
 
         # Key ``title_by_key`` by the RAW KB key (``c.document_id``) so
         # downstream lookups (``_ranked_doc_ids``, ``_shape_do_kb_context``, the
         # project filter below) resolve without re-deriving the stem.
         for k in storage_keys:
-            resolved_id = doc_id_by_key.get(k)
-            if resolved_id is not None and resolved_id in title_by_doc_id:
-                title_by_key[k] = title_by_doc_id[resolved_id]
-            elif k in title_by_leaf:
-                title_by_key[k] = title_by_leaf[k]
+            candidate_ids = set(doc_ids_by_storage_alias.get(k, ()))
+            canonical_id = doc_id_by_key.get(k)
+            if canonical_id is not None and canonical_id in title_by_doc_id:
+                candidate_ids.add(canonical_id)
+
+            # A provider key is trustworthy only when every matching canonical
+            # and storage identity belongs to the same document. Resolve this
+            # before project/allowed-ID filtering so those scopes cannot hide a
+            # competing same-org document and manufacture uniqueness.
+            if len(candidate_ids) != 1:
+                continue
+
+            resolved_id = next(iter(candidate_ids))
+            title = title_by_doc_id[resolved_id]
+            fallback_title = str(resolved_id) if resolved_id == canonical_id else k
+            title_by_key[k] = (str(resolved_id), title or fallback_title)
 
     # ------------------------------------------------------------------
     # Step 2: project scoping via CollectionDocument
@@ -171,5 +183,18 @@ async def resolve_and_filter_chunks(
                     if (title_by_key.get(c.document_id or "", (None, None))[0] or "")
                     in in_project
                 ]
+
+    if allowed_document_ids is not None:
+        allowed = set(allowed_document_ids)
+        title_by_key = {
+            key: value
+            for key, value in title_by_key.items()
+            if UUID(value[0]) in allowed
+        }
+        chunks_to_emit = [
+            chunk
+            for chunk in chunks_to_emit
+            if (chunk.document_id or "") in title_by_key
+        ]
 
     return title_by_key, chunks_to_emit
