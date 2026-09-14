@@ -46,9 +46,17 @@ configuration through the existing environment or secret injection boundary.
 
 ## Verification
 
-The only routine monitoring check is the repository script below. It requires
-Docker to be installed and the Docker daemon running; the script checks
-Compose configuration and does not establish live scrape or alert health.
+The repository validator below is the routine configuration check, but its
+current prerequisites and limitation must be explicit. It invokes the
+standalone `docker-compose` executable (the `docker compose` plugin alone does
+not satisfy `command -v docker-compose`) and requires Docker/the daemon. It
+also has a moved-file defect: its required-file check still looks for
+root-level `QUICK_START_MONITORING.sh` and `START_MONITORED_SYSTEM.sh`, while
+the files now live at `scripts/utilities/QUICK_START_MONITORING.sh` and
+`scripts/startup/START_MONITORED_SYSTEM.sh`. Therefore the validator cannot
+pass against the current layout until that operational script is corrected;
+fixing it is outside this documentation task. The script checks Compose
+configuration and does not establish live scrape or alert health.
 
 ```sh
 bash scripts/validate_docker_compose.sh

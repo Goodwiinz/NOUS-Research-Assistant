@@ -27,10 +27,11 @@ from `backend/tests/` (backend unit/API/service tests) and from frontend
 - Label integration, service, database, browser, and credential prerequisites
   honestly. A blocked environment is `NOT RUN`, not a passing test result.
 
-The shared-dev maximum load runner is disruptive. Its README boundary is:
-**“Announce it before running `tests/load/run-shared-dev-max.sh --full`.”**
-Obtain explicit environment authorization as well. Do not run the full
-shared-dev stress profile as routine validation.
+The shared-dev maximum load runner is disruptive. Its README warning is:
+**“Announce it before running `--full`.”** The full runner is
+`tests/load/run-shared-dev-max.sh`; obtain explicit environment authorization
+before invoking its `--full` mode. Do not run the full shared-dev stress
+profile as routine validation.
 
 ## Required workflow
 

@@ -57,7 +57,7 @@ The repository directory-doc lint is `make docs-lint` (or
 `python3 scripts/docs/check_dir_docs.py`); its scope is documented in the
 [`directory-doc tooling guide`](../scripts/docs/README.md). It checks tracked
 `README.md` and `doc.md` files only; it does not lint `AGENTS.md`. For changed
-documentation, also run `git diff --check -- docs/AGENTS.md` and manually
+documentation, also run `git diff --check -- docs/` and manually
 resolve all changed relative links and paths. These checks do not prove that a
 historical claim is current; verify current claims against the linked source of
 truth.

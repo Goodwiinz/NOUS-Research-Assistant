@@ -69,14 +69,26 @@ frontend change:
 
 ## Verification
 
-Run the exact matrix-backed frontend checks:
+The changed-file ratchet is a comparator, not a standalone lint command. From
+the repository root, use a resolvable base ref (the CI job selects the PR base,
+push-before SHA, or default branch) and feed it one full ESLint JSON report:
 
 ```sh
-pnpm --dir frontend lint:changed
-pnpm --dir frontend quality:exclusions
+BASE=origin/develop  # replace with the applicable, locally available base ref
+pnpm install --frozen-lockfile
+pnpm --dir frontend exec eslint app src --format json --output-file /tmp/eslint-report.json || true
+pnpm --dir frontend lint:changed -- --report /tmp/eslint-report.json --base "$BASE"
+pnpm --dir frontend quality:exclusions -- --base "$BASE"
 pnpm --dir frontend type-check
 pnpm --dir frontend test
 ```
+
+The `|| true` is intentional: ESLint may report known full-tree debt, while
+`check_frontend_quality.mjs` owns the blocking baseline decision. Installing
+dependencies alone does not make the bare `pnpm --dir frontend lint:changed`
+invocation valid because it still lacks the required report (and, for changed
+files, the base/ref input). The CI-equivalent local wrapper is
+`scripts/ci/run_local_ci.sh --base "$BASE" --frontend`.
 
 Accessibility E2E is available as
 `pnpm --dir frontend test:e2e:accessibility`, but it is browser/service-

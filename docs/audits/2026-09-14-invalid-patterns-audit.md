@@ -140,6 +140,30 @@ database, credential, deployment, cluster, destructive, or live webhook
 operations. Those limits are validation gaps, not evidence that the related
 production behavior is healthy.
 
+### Final-fix provenance reconciliation (2026-09-14)
+
+The original acceptance results above remain point-in-time evidence from the
+implementation HEAD; this amendment records limitations proven while
+reconciling the scoped guidance and does not convert any prior `BLOCKED` or
+withheld operation into a pass. The frontend package's `lint:changed` script
+delegates directly to `scripts/ci/check_frontend_quality.mjs`, whose parser
+requires `--report` and whose `--base` option obtains changed frontend paths
+through `scripts/ci/changed_source_files.py`. The CI workflow first generates
+`/tmp/eslint-report.json` with `pnpm exec eslint app src --format json`, then
+runs the comparator with `--report ... --base "$BASE"`; the local-CI wrapper
+uses the same temporary-report and base-ref sequence. Consequently, a bare
+`pnpm --dir frontend lint:changed` remains an invalid standalone ratchet
+invocation even after dependencies are installed; the historical exit-2
+result in the acceptance table is preserved as recorded.
+
+The monitoring validator's source also proves two current limitations: it
+requires the standalone `docker-compose` executable, and its required-file
+check still names root-level `QUICK_START_MONITORING.sh` and
+`START_MONITORED_SYSTEM.sh` even though the tracked files are now under
+`scripts/utilities/` and `scripts/startup/`. The historical Compose `BLOCKED`
+result and all intentionally withheld live operations remain unchanged; no
+operational script fix or claim that this validator can pass was made here.
+
 ### Candidate-review searches
 
 - Contract/consumer searches found the directory-doc lint, changed-file
@@ -269,16 +293,16 @@ findings. Each has a concrete follow-up requirement.
 
 | Candidate | Current classification | Required follow-up evidence |
 | --- | --- | --- |
-| `backend/src/auth/ab_testing_auth.py:117-178` (`RR-001`) catches JWT and broad exceptions and puts their text in `HTTPException.detail`. | Review risk: the helper's references are confined to this unregistered module; no active route or middleware consumer was found. | Prove route/middleware registration before claiming reachable disclosure; if registered, sanitize unexpected details, log internally, and add non-disclosure tests. |
+| `backend/src/auth/ab_testing_auth.py:117-190` (`RR-001`) catches JWT and broad exceptions and puts their text in `HTTPException.detail`. | Review risk: the helper's references are confined to this unregistered module; no active route or middleware consumer was found. | Prove route/middleware registration before claiming reachable disclosure; if registered, sanitize unexpected details, log internally, and add non-disclosure tests. |
 | `backend/src/services/infrastructure/feature_flags.py:80-84` (`RR-002`) resolves `../../feature-flags/launchdarkly-config.json` to `backend/src/feature-flags/...`, not the tracked root config. | Review risk: production code only re-exports the class; the sole concrete consumer found is an isolated unit test, so mock/development impact is unproven. | Prove runtime registration/consumer, then resolve and test the real repository-relative path before calling the root config live. |
 | `frontend/src/components/layout/Sidebar.tsx` and its a11y test (`RR-003`) contain unlabeled landmarks/icon-only collapsed links and disabled axe rules. | Review risk: the active dashboard uses `SidebarLayout`/`AppRail`; the defective Sidebar is reached only through otherwise unreferenced legacy `AppLayout` and tests. | Prove whether `AppLayout` is loaded by any active route/build entry; if so, fix names, remove suppressions, and run focused/browser accessibility checks. |
 | `frontend/trigger.config.ts:21` declares `dirs: ["./src/trigger"]` relative to `frontend`, while the root `trigger.config.ts:21` and root `tsconfig.json:14` load `src/trigger/`; `frontend/src/trigger/example.ts:1-12` is the only tracked child example. | Ambiguous Trigger.dev reachability and likely stale/duplicate configuration. | Prove which config the deployed Trigger command consumes, then either align the loader path or document the intentionally separate package. Do not claim root `src/trigger` is deployed from the frontend config without that proof. |
 | `src/trigger/_lib/backend-client.ts:1-120` centralizes bounded retries, optional service authorization, and response schemas for the root Trigger jobs; user-scoped agent jobs pass a user bearer token at `src/trigger/agent/execute-agent.ts:87-125` and the backend endpoints remain the authorization boundary. | Preventative pattern with deployment/reachability risk, not a confirmed vulnerability. | Verify each registered task is loaded by the root config, each write is idempotent/HITL-safe, and logs/metadata never contain access or service-role tokens. |
 | `frontend/lint_output.txt` is tracked; `.env`-named example/test files are tracked under `backend`, `config/environments`, and `tests/e2e`. | Path-only tracked-artifact/config risk. | Identify whether the lint output is consumed; remove or replace it only through an approved history/ownership decision. Confirm each environment file contains sanitized test/example material without opening values in an audit. |
 | Numerous duplicate basenames occur across `deployment`, `infrastructure`, `config`, and `monitoring` (charts, values, Compose/Prometheus/Grafana files). Root Compose symlinks point to `config/docker-compose/`; live dev Argo CD is documented at `infrastructure/argocd/applications/dev.yaml`, while staging/production material remains in the tree. | Duplicate configuration and historical/live-status risk; the symlinks themselves are intentional. | Trace every change to its workflow/consumer, render the relevant base-plus-overlay combination, and reconcile the older deployment README/workflows with `docs/engineering/gotchas.md:9-10` before changing status claims. |
-| `scripts/test_arxiv_cli_neo4j.py:12-16` uses `subprocess.run(..., shell=True)` with hardcoded test commands and a fixed local path. | Rejected false positive for arbitrary execution: test-only, constant command strings, no user-controlled input, and not an application path. | If promoted to a reusable/production tool, replace it with an argument list and an explicit configurable working directory. |
+| `scripts/test_arxiv_cli_neo4j.py:12-17` uses `subprocess.run(..., shell=True)` with hardcoded test commands and a fixed local path. | Rejected false positive for arbitrary execution: test-only, constant command strings, no user-controlled input, and not an application path. | If promoted to a reusable/production tool, replace it with an argument list and an explicit configurable working directory. |
 | `scripts/backup/disaster_recovery.py:37,396-409,429-430` and `scripts/setup_databases.py:43,137-182,217-218` interpolate SQL identifiers into DDL. | Rejected false positive for SQL injection in inspected paths: identifiers pass `safe_identifier`; values are parameterized or quoted for the intended setup operation. | Keep the validator and parameterization when editing; add focused tests if new identifier inputs are introduced. |
-| `backend/src/services/sandbox/e2b_sandbox_manager.py:125-225` constructs subprocess calls inside an E2B sandbox; video processing uses argument-list `subprocess.run` without shell parsing. | Rejected false positive for host arbitrary execution. The sandbox is the explicit execution boundary and package names are filtered; video calls use argv lists. | Preserve the sandbox boundary, package allowlist, timeout, and no-shell argument form. |
+| `backend/src/services/sandbox/e2b_sandbox_manager.py:125-225` constructs subprocess calls inside an E2B sandbox; `backend/src/services/processing/video_processing_service.py:105,334,410` uses argument-list `subprocess.run` without shell parsing. | Rejected false positive for host arbitrary execution. The sandbox is the explicit execution boundary and package names are filtered; video calls use argv lists. | Preserve the sandbox boundary, package allowlist, timeout, and no-shell argument form. |
 | `frontend/src/test/a11y.ts:5-37` has a no-op fallback when `jest-axe` is unavailable; many typing/lint suppressions are documented, and workflow `continue-on-error` lanes are explicitly advisory at `.github/workflows/test-pipeline.yml:139,191,262-327,629,668`. | Review risk, not a new suppression finding at this SHA. | Make the accessibility helper fail closed in CI or assert dependency presence, and keep each suppression tied to a narrow rationale/removal condition. Do not call advisory lanes blocking. |
 | Service-, credential-, browser-, Docker-, Helm-, cluster-, and Harbor-dependent paths were not exercised. | Service-dependent validation gap. | Run only in the authorized environment with the required pinned tooling and record the result separately from this credential-free baseline. |
 
