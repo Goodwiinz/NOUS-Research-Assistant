@@ -56,11 +56,8 @@ The NOUS workflow contract test and directory-doc lint are the deterministic
 checks named by the CI/docs contracts:
 
 ```sh
-python3 -m pytest tests/unit/scripts/ \
-  --confcutdir=tests/unit/scripts \
-  -q --no-cov
-
-python3 scripts/docs/check_dir_docs.py
+python3 -m pytest tests/unit/scripts/ --confcutdir=tests/unit/scripts -q -p no:cacheprovider --no-cov
+make docs-lint
 ```
 
 ## Verification
