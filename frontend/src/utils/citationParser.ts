@@ -268,6 +268,19 @@ export function getReferencedCitations(
 }
 
 /**
+ * Match the committed-message source policy: prefer citations that resolve
+ * from inline markers, otherwise keep every source attached by the backend.
+ * Invalid-only markers therefore follow the same fallback as no markers.
+ */
+export function getVisibleCitations(
+  content: string,
+  citations: Citation[]
+): Citation[] {
+  const referenced = getReferencedCitations(content, citations);
+  return referenced.length > 0 ? referenced : citations;
+}
+
+/**
  * Get citation by index from citations array
  *
  * @param citations - Array of citations from message

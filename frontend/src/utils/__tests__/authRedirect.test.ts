@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { getSafeAuthRedirect } from '@/utils/authRedirect';
+import {
+  getLoginPathWithRedirect,
+  getSafeAuthRedirect,
+} from '@/utils/authRedirect';
 
 describe('getSafeAuthRedirect', () => {
   it('falls back to dashboard when next points to an external origin', () => {
@@ -35,5 +38,19 @@ describe('getSafeAuthRedirect', () => {
     expect(
       getSafeAuthRedirect('/dashboard?tab=x#y', 'http://localhost:3000')
     ).toBe('/dashboard?tab=x#y');
+  });
+
+  it('encodes a safe internal destination into the login next parameter', () => {
+    expect(getLoginPathWithRedirect('/chat?thread=thread-1')).toBe(
+      '/login?next=%2Fchat%3Fthread%3Dthread-1'
+    );
+  });
+
+  it('omits next when the requested post-login destination is external', () => {
+    expect(getLoginPathWithRedirect('https://evil.example/phish')).toBe(
+      '/login'
+    );
+    expect(getLoginPathWithRedirect('//evil.example/phish')).toBe('/login');
+    expect(getLoginPathWithRedirect('/\\evil.example/phish')).toBe('/login');
   });
 });

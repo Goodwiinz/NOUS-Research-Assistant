@@ -1,6 +1,11 @@
 import { Metadata } from 'next';
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
+import {
+  AUTH_RETURN_TO_HEADER,
+  getLoginPathWithRedirect,
+} from '@/utils/authRedirect';
 import DashboardLayoutClient from './dashboard-layout-client';
 
 export const metadata: Metadata = {
@@ -34,10 +39,14 @@ export default async function DashboardLayout({
   // (dashboard) layout (or add an equivalent getUser() guard of its own) —
   // there is no middleware backstop.
   const supabase = await createClient();
+  const requestHeaders = await headers();
   const {
     data: { user },
     error,
   } = await supabase.auth.getUser();
+  const loginPath = getLoginPathWithRedirect(
+    requestHeaders.get(AUTH_RETURN_TO_HEADER)
+  );
   // Surface WHY there's no user: a network/verification failure (unreachable
   // auth endpoint, bad key, GoTrue 5xx) is otherwise indistinguishable from a
   // genuinely-anonymous visitor — both fall through to redirect('/login').
@@ -47,9 +56,24 @@ export default async function DashboardLayout({
       error.status,
       error.message
     );
+    // Retryable/network/server failures do not prove that the session is
+    // anonymous. Keep the route fail-closed and let Next's error boundary
+    // offer request recovery instead of incorrectly converting the failure
+    // into a logout/login navigation.
+    if (
+      error.name === 'AuthRetryableFetchError' ||
+      error.status === undefined ||
+      error.status === 0 ||
+      error.status === 408 ||
+      error.status === 429 ||
+      error.status >= 500
+    ) {
+      throw error;
+    }
+    redirect(loginPath);
   }
   if (!user) {
-    redirect('/login');
+    redirect(loginPath);
   }
 
   return <DashboardLayoutClient>{children}</DashboardLayoutClient>;
