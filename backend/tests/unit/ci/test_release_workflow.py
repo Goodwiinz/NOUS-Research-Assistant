@@ -148,7 +148,8 @@ def test_release_source_gate_skips_image_bumps_and_stale_runs(tmp_path: Path) ->
     """Execute the actual gate against Git; a values-only merge must not loop.
 
     Mutation-verified: replacing either guard at release-dev.yml:39 or :43
-    with `if false` fails the corresponding assertion below. Run with:
+    with `if false` fails the corresponding assertion below. The proposal
+    guard at test-pipeline.yml:59 is likewise mutation-verified. Run with:
     pytest --noconftest -c /dev/null backend/tests/unit/ci/test_release_workflow.py
     """
     remote = tmp_path / "origin.git"
@@ -190,6 +191,23 @@ def test_release_source_gate_skips_image_bumps_and_stale_runs(tmp_path: Path) ->
         return "needed=true" in output.read_text()
 
     assert needed(source_sha), "A fresh source change must build"
+    proposal_check = _step_with_run(
+        _load_workflow(WORKFLOWS / "test-pipeline.yml"),
+        "lint-backend",
+        "Release proposal is stale",
+    )
+
+    def proposal_status(branch: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", str(proposal_check["run"])],
+            cwd=repo,
+            env={**os.environ, "RELEASE_BRANCH": branch},
+            capture_output=True,
+            text=True,
+        )
+
+    proposal_branch = f"codex/release-dev-{source_sha}"
+    assert proposal_status(proposal_branch).returncode == 0
     values = repo / "infrastructure/helm/knowledge-graph-analytics/values-dev.yaml"
     values.parent.mkdir(parents=True)
     values.write_text("backend: {image: {tag: tested}}")
@@ -199,5 +217,9 @@ def test_release_source_gate_skips_image_bumps_and_stale_runs(tmp_path: Path) ->
     assert not needed(
         git("rev-parse", "HEAD")
     ), "Image promotion must not rebuild itself"
+    stale = proposal_status(proposal_branch)
+    assert stale.returncode != 0, "A stale release PR must fail a required check"
+    assert "Release proposal is stale" in stale.stdout
+    assert proposal_status("ordinary-feature").returncode == 0
     git("checkout", "--detach", source_sha)
     assert not needed(source_sha), "A stale pipeline must not propose an old image"
