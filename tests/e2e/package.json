@@ -30,7 +30,7 @@
     "lighthouse": "^13.4.1",
     "lodash": "^4.17.21",
     "moment": "^2.30.1",
-    "pa11y": "^9.1.1",
+    "pa11y": "^10.0.0",
     "pixelmatch": "^7.2.0",
     "playwright": "^1.47.2",
     "pngjs": "^7.0.0",
