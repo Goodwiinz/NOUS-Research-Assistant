@@ -137,6 +137,49 @@ async def test_no_timeout_does_not_wrap_and_passes_top_k():
     client.retrieve.assert_awaited_once_with(kb_uuid="kb", query="q", top_k=None)
 
 
+async def test_named_document_filters_are_forwarded_once():
+    filters = {
+        "equals": {
+            "key": "item_name",
+            "value": "11111111-1111-4111-8111-111111111111.txt",
+        }
+    }
+    client = MagicMock()
+    client.retrieve = AsyncMock(return_value=RetrieveResult(chunks=[], total=0))
+
+    with patch("src.services.do_kb.get_do_kb_client", return_value=client):
+        outcome = await retrieve_kb_chunks(
+            kb_uuid="kb", query="attention", top_k=8, filters=filters
+        )
+
+    assert outcome.status is DOKBRetrieveStatus.SUCCESS
+    client.retrieve.assert_awaited_once_with(
+        kb_uuid="kb", query="attention", top_k=8, filters=filters
+    )
+
+
+async def test_filtered_400_preserves_status_without_broad_retry():
+    filters = {
+        "equals": {
+            "key": "item_name",
+            "value": "11111111-1111-4111-8111-111111111111.txt",
+        }
+    }
+    exc = DOKnowledgeBaseError("invalid request body", status_code=400)
+    client = _client_raising(exc)
+
+    with patch("src.services.do_kb.get_do_kb_client", return_value=client):
+        outcome = await retrieve_kb_chunks(
+            kb_uuid="kb", query="attention", filters=filters
+        )
+
+    assert outcome.status is DOKBRetrieveStatus.ERROR_OTHER
+    assert outcome.error is exc
+    client.retrieve.assert_awaited_once_with(
+        kb_uuid="kb", query="attention", top_k=None, filters=filters
+    )
+
+
 async def test_generic_exception_propagates():
     with patch(
         "src.services.do_kb.get_do_kb_client",
