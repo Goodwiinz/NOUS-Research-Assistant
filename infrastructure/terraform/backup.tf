@@ -271,7 +271,8 @@ resource "aws_iam_role_policy_attachment" "backup_replication_policy" {
 # =============================================================================
 
 resource "aws_backup_vault" "main" {
-  name = "${var.project_name}-backup-vault"
+  name        = "${var.project_name}-backup-vault"
+  kms_key_arn = aws_kms_key.backup.arn
 
   tags = {
     Name = "${var.project_name}-backup-vault"

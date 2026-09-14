@@ -140,9 +140,11 @@ module "vpc" {
   private_subnets = [for i in range(length(data.aws_availability_zones.available.names)) : cidrsubnet(var.vpc_cidr, 4, i)]
   public_subnets  = [for i in range(length(data.aws_availability_zones.available.names)) : cidrsubnet(var.vpc_cidr, 8, i + 100)]
 
-  enable_nat_gateway     = true
-  single_nat_gateway     = false
-  one_nat_gateway_per_az = true
+  enable_nat_gateway = true
+  # Lean dev choice: one NAT gateway shared across AZs (~$33/mo) instead of
+  # per-AZ gateways (~$100/mo). Revisit per-AZ for prod.
+  single_nat_gateway     = true
+  one_nat_gateway_per_az = false
   enable_dns_hostnames   = true
   enable_dns_support     = true
 
