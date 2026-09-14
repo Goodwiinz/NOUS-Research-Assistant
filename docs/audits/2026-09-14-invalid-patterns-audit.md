@@ -296,6 +296,7 @@ findings. Each has a concrete follow-up requirement.
 | `backend/src/auth/ab_testing_auth.py:117-190` (`RR-001`) catches JWT and broad exceptions and puts their text in `HTTPException.detail`. | Review risk: the helper's references are confined to this unregistered module; no active route or middleware consumer was found. | Prove route/middleware registration before claiming reachable disclosure; if registered, sanitize unexpected details, log internally, and add non-disclosure tests. |
 | `backend/src/services/infrastructure/feature_flags.py:80-84` (`RR-002`) resolves `../../feature-flags/launchdarkly-config.json` to `backend/src/feature-flags/...`, not the tracked root config. | Review risk: production code only re-exports the class; the sole concrete consumer found is an isolated unit test, so mock/development impact is unproven. | Prove runtime registration/consumer, then resolve and test the real repository-relative path before calling the root config live. |
 | `frontend/src/components/layout/Sidebar.tsx` and its a11y test (`RR-003`) contain unlabeled landmarks/icon-only collapsed links and disabled axe rules. | Review risk: the active dashboard uses `SidebarLayout`/`AppRail`; the defective Sidebar is reached only through otherwise unreferenced legacy `AppLayout` and tests. | Prove whether `AppLayout` is loaded by any active route/build entry; if so, fix names, remove suppressions, and run focused/browser accessibility checks. |
+| `frontend/src/lib/thread-hooks.ts:1,149,210` and `frontend/src/lib/analytics.ts:269` (`RR-004`) retain Tambo-named/type references after the owner removed Tambo guidance. | Review risk: application code and dependencies were intentionally left unchanged; runtime reachability and dependency-removal impact were not established. | Trace imports and runtime consumers, inspect the dependency manifests, and remove or replace the references only in a separately authorized code/dependency cleanup. Do not claim these references are dead or safe to delete from this documentation pass. |
 | `frontend/trigger.config.ts:21` declares `dirs: ["./src/trigger"]` relative to `frontend`, while the root `trigger.config.ts:21` and root `tsconfig.json:14` load `src/trigger/`; `frontend/src/trigger/example.ts:1-12` is the only tracked child example. | Ambiguous Trigger.dev reachability and likely stale/duplicate configuration. | Prove which config the deployed Trigger command consumes, then either align the loader path or document the intentionally separate package. Do not claim root `src/trigger` is deployed from the frontend config without that proof. |
 | `src/trigger/_lib/backend-client.ts:1-120` centralizes bounded retries, optional service authorization, and response schemas for the root Trigger jobs; user-scoped agent jobs pass a user bearer token at `src/trigger/agent/execute-agent.ts:87-125` and the backend endpoints remain the authorization boundary. | Preventative pattern with deployment/reachability risk, not a confirmed vulnerability. | Verify each registered task is loaded by the root config, each write is idempotent/HITL-safe, and logs/metadata never contain access or service-role tokens. |
 | `frontend/lint_output.txt` is tracked; `.env`-named example/test files are tracked under `backend`, `config/environments`, and `tests/e2e`. | Path-only tracked-artifact/config risk. | Identify whether the lint output is consumed; remove or replace it only through an approved history/ownership decision. Confirm each environment file contains sanitized test/example material without opening values in an audit. |
@@ -305,6 +306,34 @@ findings. Each has a concrete follow-up requirement.
 | `backend/src/services/sandbox/e2b_sandbox_manager.py:125-225` constructs subprocess calls inside an E2B sandbox; `backend/src/services/processing/video_processing_service.py:105,334,410` uses argument-list `subprocess.run` without shell parsing. | Rejected false positive for host arbitrary execution. The sandbox is the explicit execution boundary and package names are filtered; video calls use argv lists. | Preserve the sandbox boundary, package allowlist, timeout, and no-shell argument form. |
 | `frontend/src/test/a11y.ts:5-37` has a no-op fallback when `jest-axe` is unavailable; many typing/lint suppressions are documented, and workflow `continue-on-error` lanes are explicitly advisory at `.github/workflows/test-pipeline.yml:139,191,262-327,629,668`. | Review risk, not a new suppression finding at this SHA. | Make the accessibility helper fail closed in CI or assert dependency presence, and keep each suppression tied to a narrow rationale/removal condition. Do not call advisory lanes blocking. |
 | Service-, credential-, browser-, Docker-, Helm-, cluster-, and Harbor-dependent paths were not exercised. | Service-dependent validation gap. | Run only in the authorized environment with the required pinned tooling and record the result separately from this credential-free baseline. |
+
+## Owner correction amendment (2026-09-14)
+
+The original audit results, classifications, and point-in-time command outputs
+above are preserved. The owner later confirmed that Tambo AI is no longer used
+and authorized a bounded documentation correction: the stale marker and
+completed Tambo section were removed from `frontend/AGENTS.md`, while its
+Context7 section was preserved unchanged. This later decision supersedes the
+historical Tambo-preservation requirement in the approved design and plan; it
+does not claim that the remaining source references are dead or safe to delete.
+
+The unresolved references at
+`frontend/src/lib/thread-hooks.ts:1,149,210` and
+`frontend/src/lib/analytics.ts:269` are recorded above as a review risk.
+Application code and dependencies were intentionally not changed because
+runtime reachability and dependency-removal impact were not established. A
+separate authorized follow-up must trace consumers and manifests before
+cleanup.
+
+The corrected frontend verification guidance now prefers
+`scripts/ci/run_local_ci.sh --base "$BASE" --frontend`. The wrapper creates a
+fresh temporary ESLint JSON report with `mktemp`, invokes the comparators
+directly without an extra pnpm `--` separator, and cleans the report afterward.
+The original acceptance rows documenting the invalid bare
+comparator invocation and its blocked result remain unchanged as historical
+evidence; this amendment does not convert them into a pass or claim that the
+frontend toolchain was exercised. The wrapper does not run frontend unit tests;
+the separate `pnpm --dir frontend test` command remains required.
 
 ## Root coverage and guidance mapping
 

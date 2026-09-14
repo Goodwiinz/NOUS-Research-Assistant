@@ -2,16 +2,6 @@
 
 Project guidelines for AI assistants.
 
-
-<!-- tambo-docs-v1.0 -->
-## Tambo AI Framework
-
-This project uses **Tambo AI** for building AI assistants with generative UI and MCP support.
-
-**Documentation**: https://docs.tambo.co/llms.txt
-
-**CLI**: Use `npx tambo` to add UI components or upgrade. Run `npx tambo help` to learn more.
-
 ## Context7
 
 When you need library/API documentation, code examples, or config steps, use the `context7` MCP tools to fetch up-to-date docs. Append `use context7` to prompts.
@@ -71,24 +61,24 @@ frontend change:
 
 The changed-file ratchet is a comparator, not a standalone lint command. From
 the repository root, use a resolvable base ref (the CI job selects the PR base,
-push-before SHA, or default branch) and feed it one full ESLint JSON report:
+push-before SHA, or default branch) and use the CI-equivalent local wrapper:
 
 ```sh
 BASE=origin/develop  # replace with the applicable, locally available base ref
 pnpm install --frozen-lockfile
-pnpm --dir frontend exec eslint app src --format json --output-file /tmp/eslint-report.json || true
-pnpm --dir frontend lint:changed -- --report /tmp/eslint-report.json --base "$BASE"
-pnpm --dir frontend quality:exclusions -- --base "$BASE"
-pnpm --dir frontend type-check
+scripts/ci/run_local_ci.sh --base "$BASE" --frontend
 pnpm --dir frontend test
 ```
 
-The `|| true` is intentional: ESLint may report known full-tree debt, while
-`check_frontend_quality.mjs` owns the blocking baseline decision. Installing
-dependencies alone does not make the bare `pnpm --dir frontend lint:changed`
-invocation valid because it still lacks the required report (and, for changed
-files, the base/ref input). The CI-equivalent local wrapper is
-`scripts/ci/run_local_ci.sh --base "$BASE" --frontend`.
+The wrapper creates a fresh temporary ESLint JSON report with `mktemp`, invokes
+both blocking comparators directly without an extra pnpm `--` separator, and
+removes the report after evaluation. ESLint's known full-tree debt remains
+advisory while the comparators own the blocking baseline decisions. The wrapper
+does not run frontend unit tests; keep the separate `pnpm --dir frontend test`
+command above. Only the ESLint comparator consumes the JSON report; the
+exclusion checker accepts the base/changed inputs and reads repository
+configuration. Do not invoke either comparator bare: the ESLint comparator
+requires its report and, for changed files, the base/ref input.
 
 Accessibility E2E is available as
 `pnpm --dir frontend test:e2e:accessibility`, but it is browser/service-

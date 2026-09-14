@@ -837,3 +837,25 @@ git status --short
 ```
 
 Expected: the reconciliation commit contains only intended documentation changes and the working tree is clean apart from unrelated pre-existing work identified in Task 1.
+
+## Owner amendment (2026-09-14)
+
+This plan remains a historical record, so its original requirements and
+examples are preserved above. The owner later confirmed that Tambo AI is no
+longer used and authorized a bounded documentation correction. That decision
+supersedes the Tambo-preservation requirement in the Global Constraints,
+frontend matrix, and Task 2 instructions: remove the stale marker and completed
+Tambo section from `frontend/AGENTS.md`, retain Context7 unchanged, and do not
+change application code or dependencies. The Tambo-named/type references in
+`frontend/src/lib/thread-hooks.ts` and `frontend/src/lib/analytics.ts` remain a
+review risk until runtime reachability and dependency-removal impact are
+proved.
+
+The owner decision also supersedes the invalid bare frontend comparator
+examples in the original verification steps. The corrected workflow prefers
+`scripts/ci/run_local_ci.sh --base "$BASE" --frontend`; its fresh `mktemp`
+report is cleaned after use and the comparators are invoked directly without an
+extra pnpm `--` separator. This amendment records the later owner decision
+without silently rewriting the historical plan. The wrapper does not run
+frontend unit tests; retain the separate `pnpm --dir frontend test` command
+from the original verification requirements.

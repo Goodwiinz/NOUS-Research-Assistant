@@ -120,3 +120,25 @@ Acceptance requires:
 - `git diff --check` to pass; and
 - the final audit to distinguish current findings from preventative rules and
   limitations.
+
+## Owner amendment (2026-09-14)
+
+This approved design remains a historical record of the original requirements
+and acceptance criteria. The owner later confirmed that Tambo AI is no longer
+used and authorized a bounded documentation correction. That decision
+supersedes the Scope requirement to preserve the Tambo marker and completed
+Tambo section in `frontend/AGENTS.md`; the correction removes that stale section
+while preserving the separate Context7 section unchanged. It does not authorize
+application-code or dependency edits. The Tambo-named/type references in
+`frontend/src/lib/thread-hooks.ts` and `frontend/src/lib/analytics.ts` therefore
+remain unresolved review risks until runtime reachability and dependency-removal
+impact are established.
+
+The owner decision also supersedes the invalid bare frontend comparator examples
+in the original workflow guidance. Current frontend verification must prefer
+`scripts/ci/run_local_ci.sh --base "$BASE" --frontend`, which creates and cleans
+a fresh temporary ESLint report and invokes the comparators directly without an
+extra pnpm `--` separator. The original requirements and point-in-time results
+above are preserved. The wrapper does not run frontend unit tests; the separate
+`pnpm --dir frontend test` command remains required. This amendment records the
+later decision rather than rewriting history.
