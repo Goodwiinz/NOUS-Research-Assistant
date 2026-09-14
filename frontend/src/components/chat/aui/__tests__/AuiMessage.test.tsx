@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -20,6 +21,10 @@ import {
 
 const noop = vi.fn();
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 function Thrower({
   shouldThrow,
   message,
@@ -31,6 +36,36 @@ function Thrower({
 }): React.ReactElement {
   if (shouldThrow) throw new Error(message);
   return <>{children}</>;
+}
+
+function captureAnimationFrames(): {
+  run: (id: number) => void;
+  runEvenIfCancelled: (id: number) => void;
+} {
+  let nextId = 1;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  const allCallbacks = new Map<number, FrameRequestCallback>();
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    const id = nextId;
+    nextId += 1;
+    callbacks.set(id, callback);
+    allCallbacks.set(id, callback);
+    return id;
+  });
+  vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+    callbacks.delete(id);
+  });
+
+  return {
+    run(id: number) {
+      const callback = callbacks.get(id);
+      callbacks.delete(id);
+      callback?.(0);
+    },
+    runEvenIfCancelled(id: number) {
+      allCallbacks.get(id)?.(0);
+    },
+  };
 }
 
 function renderMessages(
@@ -872,6 +907,166 @@ describe('MessageByIndexBoundary', () => {
       </MessageByIndexBoundary>
     );
     expect(screen.getByText('recovered')).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  it('re-attempts one transient out-of-bounds render after commit without a key change', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    let shouldThrow = true;
+    const MutableThrower = (): React.ReactElement => {
+      if (shouldThrow) {
+        throw new Error('useClientLookup: Index 0 out of bounds (length: 0)');
+      }
+      return <>recovered after adapter sync</>;
+    };
+    render(
+      <MessageByIndexBoundary resetKey="stable">
+        <MutableThrower />
+      </MessageByIndexBoundary>
+    );
+
+    expect(screen.queryByText('recovered after adapter sync')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    shouldThrow = false;
+    act(() => frames.run(1));
+
+    expect(screen.getByText('recovered after adapter sync')).toBeVisible();
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+    spy.mockRestore();
+  });
+
+  it('bounds a persistent out-of-bounds error to one retry and a null fallback', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    render(
+      <MessageByIndexBoundary resetKey="persistent">
+        <Thrower
+          shouldThrow
+          message="useClientLookup: Index 0 out of bounds (length: 0)"
+        >
+          never visible
+        </Thrower>
+      </MessageByIndexBoundary>
+    );
+
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+    act(() => frames.run(1));
+
+    expect(screen.queryByText('never visible')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+    spy.mockRestore();
+  });
+
+  it('cancels a pending retry when it unmounts', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    captureAnimationFrames();
+    const view = render(
+      <MessageByIndexBoundary resetKey="unmounting">
+        <Thrower
+          shouldThrow
+          message="useClientLookup: Index 0 out of bounds (length: 0)"
+        />
+      </MessageByIndexBoundary>
+    );
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    view.unmount();
+
+    expect(window.cancelAnimationFrame).toHaveBeenCalledWith(1);
+    spy.mockRestore();
+  });
+
+  it('cancels and rejects a stale retry after the reset key changes', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    const Stable = vi.fn((): React.ReactElement => <>new message</>);
+    const view = render(
+      <MessageByIndexBoundary resetKey="old">
+        <Thrower
+          shouldThrow
+          message="useClientLookup: Index 0 out of bounds (length: 0)"
+        />
+      </MessageByIndexBoundary>
+    );
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <MessageByIndexBoundary resetKey="new">
+        <Stable />
+      </MessageByIndexBoundary>
+    );
+    expect(screen.getByText('new message')).toBeVisible();
+    expect(window.cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(Stable).toHaveBeenCalledOnce();
+
+    act(() => frames.runEvenIfCancelled(1));
+
+    expect(Stable).toHaveBeenCalledOnce();
+    expect(screen.getByText('new message')).toBeVisible();
+    spy.mockRestore();
+  });
+
+  it('cancels an old OOB frame and gives a replacement OOB key one distinct retry', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    let replacementShouldThrow = true;
+    const Replacement = (): React.ReactElement => {
+      if (replacementShouldThrow) {
+        throw new Error('useClientLookup: Index 0 out of bounds (length: 0)');
+      }
+      return <>replacement recovered</>;
+    };
+    const SwitchingBoundary = (): React.ReactElement => {
+      const [resetKey, setResetKey] = React.useState<'old' | 'new'>('old');
+      const [, forceReplacementRender] = React.useState(0);
+      return (
+        <>
+          <button onClick={() => setResetKey('new')}>switch OOB key</button>
+          <button onClick={() => forceReplacementRender((value) => value + 1)}>
+            rerender replacement
+          </button>
+          <MessageByIndexBoundary resetKey={resetKey}>
+            {resetKey === 'old' ? (
+              <Thrower
+                shouldThrow
+                message="useClientLookup: Index 0 out of bounds (length: 0)"
+              />
+            ) : (
+              <Replacement />
+            )}
+          </MessageByIndexBoundary>
+        </>
+      );
+    };
+    render(<SwitchingBoundary />);
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: 'switch OOB key' }));
+
+    expect(window.cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    // Even if the browser had already queued the cancelled old callback, it
+    // must not consume the replacement key's single retry budget.
+    act(() => frames.runEvenIfCancelled(1));
+    expect(screen.queryByText('replacement recovered')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    replacementShouldThrow = false;
+    act(() => frames.run(2));
+    expect(screen.getByText('replacement recovered')).toBeVisible();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    // The replacement key already spent its one retry. A later persistent
+    // OOB for that same key returns to the bounded null fallback.
+    replacementShouldThrow = true;
+    fireEvent.click(
+      screen.getByRole('button', { name: 'rerender replacement' })
+    );
+    expect(screen.queryByText('replacement recovered')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
     spy.mockRestore();
   });
 });

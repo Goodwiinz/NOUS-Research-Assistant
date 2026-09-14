@@ -9,8 +9,8 @@ import type { Thread } from '@/types/workspace';
 import type { ChatSliceCreator, ChatState } from '../types';
 
 export interface SelectionSlice {
-  setCurrentWorkspace: (workspaceId: string | null) => void;
-  setCurrentConversation: (conversationId: string | null) => void;
+  setCurrentWorkspace: (workspaceId: string | null) => Promise<void>;
+  setCurrentConversation: (conversationId: string | null) => Promise<void>;
   setCurrentThread: (threadId: string | null) => void;
   setThreadProjectBinding: (
     threadId: string,
@@ -26,7 +26,7 @@ export const createSelectionSlice: ChatSliceCreator<SelectionSlice> = (
   set,
   get
 ) => ({
-  setCurrentWorkspace: (workspaceId) => {
+  setCurrentWorkspace: async (workspaceId) => {
     set((state) => {
       state.currentWorkspaceId = workspaceId;
       // Clear downstream selections when workspace changes
@@ -36,11 +36,11 @@ export const createSelectionSlice: ChatSliceCreator<SelectionSlice> = (
 
     // Load conversations for new workspace
     if (workspaceId) {
-      get().loadConversations(workspaceId);
+      await get().loadConversations(workspaceId);
     }
   },
 
-  setCurrentConversation: (conversationId) => {
+  setCurrentConversation: async (conversationId) => {
     set((state) => {
       state.currentConversationId = conversationId;
       // Clear thread selection when conversation changes
@@ -49,7 +49,7 @@ export const createSelectionSlice: ChatSliceCreator<SelectionSlice> = (
 
     // Load threads for new conversation
     if (conversationId) {
-      get().loadThreads(conversationId);
+      await get().loadThreads(conversationId);
     }
   },
 
