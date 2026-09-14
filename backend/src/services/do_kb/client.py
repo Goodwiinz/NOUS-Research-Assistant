@@ -291,10 +291,11 @@ class DOKnowledgeBaseClient:
         query: str,
         top_k: Optional[int] = None,
         alpha: Optional[float] = None,
+        filters: Optional[dict[str, Any]] = None,
     ) -> RetrieveResult:
         # DO KBaaS ``/v1/{kb}/retrieve`` now validates the body against a strict
         # schema — any unrecognized field yields ``400 {"message":"invalid
-        # request body"}``. The accepted fields are exactly:
+        # request body"}``. The live-proven generic fields are exactly:
         #   query: str (required)
         #   num_results: int 1-100 (required; NOT top_k)
         #   alpha: float 0-1 (optional; lexical vs semantic balance)
@@ -311,6 +312,11 @@ class DOKnowledgeBaseClient:
         )
         if resolved_alpha is not None:
             body["alpha"] = resolved_alpha
+        # Current DO documentation advertises optional scoped filters. Generic
+        # callers omit this field; named-document retrieval sends it once and
+        # fails closed if the deployed endpoint rejects it.
+        if filters is not None:
+            body["filters"] = filters
 
         payload = await self._request(
             "POST",
