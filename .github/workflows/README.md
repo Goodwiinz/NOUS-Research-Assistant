@@ -14,6 +14,12 @@ permissions read-only. Only the promotion job requests contents, pull-request,
 and workflow-dispatch write permissions; it never approves or merges a PR,
 changes branch protection, or pushes to `develop`.
 
+Keep **Require branches to be up to date before merging** enabled on
+`develop`. The required Lint Backend job checks each generated release
+branch against the current `develop` SHA. Together these reject a proposal
+if source advances during CI or before merge; updating the old branch does
+not make its old image eligible again.
+
 ## Workflow responsibilities
 
 | Workflow | Trigger | Responsibility |
