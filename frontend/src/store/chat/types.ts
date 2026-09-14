@@ -130,8 +130,8 @@ export interface ChatState {
 
 export interface ChatActions {
   // Selection actions
-  setCurrentWorkspace: (workspaceId: string | null) => void;
-  setCurrentConversation: (conversationId: string | null) => void;
+  setCurrentWorkspace: (workspaceId: string | null) => Promise<void>;
+  setCurrentConversation: (conversationId: string | null) => Promise<void>;
   setCurrentThread: (threadId: string | null) => void;
   setThreadProjectBinding: (
     threadId: string,

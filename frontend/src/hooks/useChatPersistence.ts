@@ -305,8 +305,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
     error,
     // Actions (stable refs)
     initializeDefaultWorkspace,
-    loadConversations,
-    loadThreads,
     loadMessages,
     createThread,
     createConversation,
@@ -334,8 +332,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
       isSendingMessage: s.isSendingMessage,
       error: s.error,
       initializeDefaultWorkspace: s.initializeDefaultWorkspace,
-      loadConversations: s.loadConversations,
-      loadThreads: s.loadThreads,
       loadMessages: s.loadMessages,
       createThread: s.createThread,
       createConversation: s.createConversation,
@@ -446,7 +442,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           throw new Error('Workspace initialization returned no workspace');
         }
 
-        await loadConversations(state.currentWorkspaceId);
         if (useChatStore.getState().error === 'Failed to load conversations') {
           throw new Error('Failed to load conversations');
         }
@@ -471,7 +466,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
             '[useChatPersistence] Setting first conversation:',
             conversationId
           );
-          setCurrentConversation(conversationId);
         } else if (workspaceConversations.length === 0) {
           debugLog(
             '[useChatPersistence] No conversations, creating new one...'
@@ -492,7 +486,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           // lookup see it, exactly as a store-side create would have.
           registerConversation(newConv, state.currentWorkspaceId);
           conversationId = newConv.id;
-          setCurrentConversation(newConv.id);
         }
 
         if (!conversationId) {
@@ -501,11 +494,12 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           );
         }
 
+        await setCurrentConversation(conversationId);
+
         debugLog(
-          '[useChatPersistence] Loading threads for conversation:',
+          '[useChatPersistence] Loaded threads for conversation:',
           conversationId
         );
-        await loadThreads(conversationId);
         if (useChatStore.getState().error === 'Failed to load threads') {
           throw new Error('Failed to load threads');
         }
@@ -578,8 +572,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
   }, [
     isAuthenticated,
     initializeDefaultWorkspace,
-    loadConversations,
-    loadThreads,
     setCurrentConversation,
     setCurrentThread,
     registerConversation,

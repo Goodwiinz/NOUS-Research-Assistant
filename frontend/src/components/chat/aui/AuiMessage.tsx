@@ -869,16 +869,52 @@ export function AuiAssistantMessage({
  * that throws "useClientLookup: Index N out of bounds" from inside the child's
  * store update, out of the render-time guard's reach (prod crash on thread
  * switch). That frame is transient: render nothing for it and re-attempt once
- * the runtime settles (resetKey changes). Anything else is a real bug —
+ * the runtime's client lookup settles. Anything else is a real bug —
  * rethrow it to the app's error boundary rather than silently swallow.
  */
+function MessageByIndexRetry({
+  resetKey,
+  onRetry,
+}: {
+  resetKey: string;
+  onRetry: (resetKey: string) => void;
+}): null {
+  const [adapterSettled, setAdapterSettled] = useState(false);
+
+  useEffect(() => {
+    // useExternalStoreRuntime installs its latest adapter in a parent passive
+    // effect. The frame commits this sentinel after that adapter notification;
+    // the following passive effect retries against the settled client lookup.
+    let active = true;
+    const frame = window.requestAnimationFrame(() => {
+      if (active) setAdapterSettled(true);
+    });
+    return () => {
+      active = false;
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (adapterSettled) onRetry(resetKey);
+  }, [adapterSettled, onRetry, resetKey]);
+
+  return null;
+}
+
 export class MessageByIndexBoundary extends React.Component<
   { resetKey: string; children: ReactNode },
   { error: Error | null; lastResetKey: string }
 > {
+  private retriedResetKey: string | null = null;
+
   constructor(props: { resetKey: string; children: ReactNode }) {
     super(props);
     this.state = { error: null, lastResetKey: props.resetKey };
+  }
+
+  private static isTransientIndexError(error: Error): boolean {
+    return /out of bounds|useClientLookup/i.test(error.message);
   }
 
   static getDerivedStateFromError(error: Error): { error: Error } {
@@ -897,16 +933,38 @@ export class MessageByIndexBoundary extends React.Component<
     return null;
   }
 
+  private retryTransientError = (retryKey: string): void => {
+    if (this.props.resetKey !== retryKey || this.retriedResetKey === retryKey) {
+      return;
+    }
+    this.retriedResetKey = retryKey;
+    this.setState({ error: null });
+  };
+
+  componentDidUpdate(prevProps: { resetKey: string }): void {
+    if (prevProps.resetKey === this.props.resetKey) return;
+    if (this.retriedResetKey !== this.props.resetKey) {
+      this.retriedResetKey = null;
+    }
+  }
+
   render(): ReactNode {
     const { error } = this.state;
     if (error) {
       // Version-coupled: this matches @assistant-ui/react@0.14.29's transient
       // out-of-bounds message. If a version bump rewords it, the classifier
       // stops matching and the boundary rethrows (crash returns) — but the
-      // "shrinks under a mounted message" test in AuiMessage.test.tsx drives
-      // the REAL runtime OOB, so a wording change trips it red in CI. On a bump:
+      // direct boundary regression in AuiMessage.test.tsx drives the exact
+      // known OOB wording, so a wording change trips it red in CI. On a bump,
       // re-run that test and update this pattern if it fails.
-      if (/out of bounds|useClientLookup/i.test(error.message)) return null;
+      if (MessageByIndexBoundary.isTransientIndexError(error)) {
+        return this.retriedResetKey === this.props.resetKey ? null : (
+          <MessageByIndexRetry
+            resetKey={this.props.resetKey}
+            onRetry={this.retryTransientError}
+          />
+        );
+      }
       throw error;
     }
     return this.props.children;
