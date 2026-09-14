@@ -299,26 +299,35 @@ describe('useChatStreaming pending-confirmation probe (cold thread load)', () =>
   });
 
   it('leaves a running run with the cursor-based resume owner', async () => {
-    const refreshSpy = vi.fn().mockResolvedValue(true);
-    useChatStore.setState({ refreshMessages: refreshSpy });
-    useAgentActivityStore
-      .getState()
-      .startRun('thread-A', 'NOUS', 'still running');
-    useAgentActivityStore.getState().setStreamSeq('thread-A', 7, 'stream-A');
-    resumeStreamMock.mockResolvedValue({ status: 'idle' });
+    const resumeLog = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const refreshSpy = vi.fn().mockResolvedValue(true);
+      useChatStore.setState({ refreshMessages: refreshSpy });
+      useAgentActivityStore
+        .getState()
+        .startRun('thread-A', 'NOUS', 'still running');
+      useAgentActivityStore.getState().setStreamSeq('thread-A', 7, 'stream-A');
+      resumeStreamMock.mockResolvedValue({ status: 'idle' });
 
-    const { result } = await renderStreaming();
+      const { result } = await renderStreaming();
 
-    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(1));
-    expect(resumeStreamMock).toHaveBeenCalledWith(
-      'thread-A',
-      7,
-      expect.any(Object),
-      expect.any(AbortSignal),
-      'stream-A'
-    );
-    await waitFor(() => expect(refreshSpy).toHaveBeenCalled());
-    expect(result.current.pendingConfirmation).toBeNull();
+      await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(1));
+      expect(resumeStreamMock).toHaveBeenCalledWith(
+        'thread-A',
+        7,
+        expect.any(Object),
+        expect.any(AbortSignal),
+        'stream-A'
+      );
+      expect(resumeLog).toHaveBeenCalledWith(
+        '[Chat] Resuming in-flight agent stream:',
+        'thread-A'
+      );
+      await waitFor(() => expect(refreshSpy).toHaveBeenCalled());
+      expect(result.current.pendingConfirmation).toBeNull();
+    } finally {
+      resumeLog.mockRestore();
+    }
   });
 
   it('does not probe while a stream is live', async () => {
