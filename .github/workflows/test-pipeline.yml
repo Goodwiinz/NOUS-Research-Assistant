@@ -49,6 +49,18 @@ jobs:
           # Full history: the changed-file ratchet diffs against the PR base
           # (or push `before`) via merge-base, which a shallow clone breaks.
           fetch-depth: 0
+      - name: Reject stale release proposals
+        env:
+          RELEASE_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if [[ "$RELEASE_BRANCH" =~ ^codex/release-dev-([0-9a-f]{40})$ ]]; then
+            SOURCE_SHA="${BASH_REMATCH[1]}"
+            git fetch origin develop
+            if [ "$(git rev-parse origin/develop)" != "$SOURCE_SHA" ]; then
+              echo "::error::Release proposal is stale; use the newer source release"
+              exit 1
+            fi
+          fi
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
