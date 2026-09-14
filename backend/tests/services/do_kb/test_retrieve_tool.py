@@ -47,6 +47,22 @@ def _scalar_result(values: list[UUID]) -> MagicMock:
     return result
 
 
+def _authorized_document_result(
+    rows: list[tuple[UUID, str | None, str]],
+) -> MagicMock:
+    """Mirror the three-column authorization result used by named retrieval."""
+    result = MagicMock()
+    result.all.return_value = rows
+    result.__iter__.side_effect = lambda: iter(rows)
+    return result
+
+
+def _filtered_item_names(filters: dict) -> list[str]:
+    if "equals" in filters:
+        return [filters["equals"]["value"]]
+    return [clause["equals"]["value"] for clause in filters["or_all"]]
+
+
 @pytest.mark.unit
 def test_schema_registered():
     names = {t["function"]["name"] for t in AGENT_TOOLS}
@@ -144,7 +160,9 @@ async def test_returns_empty_when_disabled(monkeypatch):
 async def test_named_scope_is_authorized_before_disabled_limitation():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_scalar_result([TARGET_ID]))
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result([(TARGET_ID, None, "local")])
+    )
     kb_lookup = AsyncMock(return_value="kb-1")
     provider = AsyncMock()
     disabled_settings = _settings()
@@ -393,7 +411,7 @@ async def test_named_scope_authorizes_before_provider_and_drops_stronger_distrac
             "document-authorization" if not events else "canonical-resolution"
         )
         if len(events) == 1:
-            return _scalar_result([TARGET_ID])
+            return _authorized_document_result([(TARGET_ID, None, "local")])
         return [
             (
                 TARGET_ID,
@@ -454,6 +472,11 @@ async def test_named_scope_authorizes_before_provider_and_drops_stronger_distrac
         )
 
     authorization_sql = str(db.execute.await_args_list[0].args[0]).lower()
+    selected_columns = authorization_sql.split("\nfrom", 1)[0]
+    assert "documents.id" in selected_columns
+    assert "documents.storage_path" in selected_columns
+    assert "documents.storage_backend" in selected_columns
+    assert "documents.title" not in selected_columns
     assert "documents.organization_id" in authorization_sql
     assert "documents.is_deleted = false" in authorization_sql
     assert "documents.id in" in authorization_sql
@@ -485,10 +508,174 @@ async def test_named_scope_authorizes_before_provider_and_drops_stronger_distrac
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_case", "storage_path"),
+    [
+        (
+            "no-text",
+            "documents/00000000-0000-0000-0000-000000000010/"
+            "11111111-1111-4111-8111-111111111111/rate-policy.pdf",
+        ),
+        (
+            "canonical-upload-failure",
+            "documents/00000000-0000-0000-0000-000000000010/"
+            "11111111-1111-4111-8111-111111111111/upload-fallback.pdf",
+        ),
+    ],
+)
+async def test_named_scope_retrieves_original_s3_ingest_fallback(
+    source_case: str, storage_path: str
+):
+    """The durable row cannot distinguish why ingest selected its original.
+
+    Ingest uses the original S3 object both when content text is absent and
+    when uploading the canonical text mirror fails. Named retrieval must allow
+    both possible item names so either already-indexed source stays reachable.
+    """
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    leaf = storage_path.rsplit("/", 1)[-1]
+    authorization = _authorized_document_result([(TARGET_ID, storage_path, "s3")])
+    resolution_rows = [
+        (TARGET_ID, storage_path, "API Rate Limit Policy"),
+    ]
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[authorization, resolution_rows])
+
+    async def retrieve(**kwargs):
+        allowed_names = _filtered_item_names(kwargs["filters"])
+        chunks = (
+            [
+                Chunk(
+                    text=f"evidence from {source_case}",
+                    score=0.91,
+                    document_id=leaf,
+                    metadata={"score_source": "upstream"},
+                )
+            ]
+            if leaf in allowed_names
+            else []
+        )
+        return DOKBRetrieveOutcome(
+            status=DOKBRetrieveStatus.SUCCESS,
+            result=RetrieveResult(chunks=chunks, total=len(chunks)),
+        )
+
+    provider = AsyncMock(side_effect=retrieve)
+    with (
+        patch("src.core.config.settings", _settings()),
+        patch(
+            "src.services.do_kb.retrieval.resolve_org_kb_uuid",
+            AsyncMock(return_value="kb-1"),
+        ),
+        patch("src.services.do_kb.retrieval.retrieve_kb_chunks", provider),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {
+                "query": "rate limit",
+                "document_ids": [str(TARGET_ID)],
+            },
+            db,
+            user,
+        )
+
+    assert [chunk["text"] for chunk in result["chunks"]] == [
+        f"evidence from {source_case}"
+    ]
+    assert result["chunks"][0]["document_id"] == str(TARGET_ID)
+    assert result["chunks"][0]["title"] == "API Rate Limit Policy"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_multiple_named_documents_retrieve_mixed_canonical_and_original_sources():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    original_path = (
+        f"documents/{user.organization_id}/{TARGET_ID}/1700000000_rate-policy.pdf"
+    )
+    original_leaf = original_path.rsplit("/", 1)[-1]
+    authorization = _authorized_document_result(
+        [
+            (TARGET_ID, original_path, "s3"),
+            (DISTRACTOR_ID, None, "local"),
+        ]
+    )
+    resolution_rows = [
+        (TARGET_ID, original_path, "API Rate Limit Policy"),
+        (DISTRACTOR_ID, None, "Webhook Retry Policy"),
+    ]
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[authorization, resolution_rows])
+
+    async def retrieve(**kwargs):
+        allowed_names = _filtered_item_names(kwargs["filters"])
+        required_names = {original_leaf, f"{DISTRACTOR_ID}.txt"}
+        chunks = []
+        if required_names.issubset(allowed_names):
+            chunks = [
+                Chunk(
+                    text="original-object evidence",
+                    score=0.94,
+                    document_id=original_leaf,
+                    metadata={"score_source": "upstream"},
+                ),
+                Chunk(
+                    text="canonical evidence",
+                    score=0.83,
+                    document_id=f"{DISTRACTOR_ID}.txt",
+                    metadata={"score_source": "upstream"},
+                ),
+            ]
+        return DOKBRetrieveOutcome(
+            status=DOKBRetrieveStatus.SUCCESS,
+            result=RetrieveResult(chunks=chunks, total=len(chunks)),
+        )
+
+    provider = AsyncMock(side_effect=retrieve)
+    with (
+        patch("src.core.config.settings", _settings()),
+        patch(
+            "src.services.do_kb.retrieval.resolve_org_kb_uuid",
+            AsyncMock(return_value="kb-1"),
+        ),
+        patch("src.services.do_kb.retrieval.retrieve_kb_chunks", provider),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {
+                "query": "compare policies",
+                "document_ids": [str(TARGET_ID), str(DISTRACTOR_ID)],
+            },
+            db,
+            user,
+        )
+
+    assert _filtered_item_names(provider.await_args.kwargs["filters"]) == [
+        f"{TARGET_ID}.txt",
+        original_leaf,
+        f"{DISTRACTOR_ID}.txt",
+    ]
+    assert [chunk["text"] for chunk in result["chunks"]] == [
+        "original-object evidence",
+        "canonical evidence",
+    ]
+    assert [chunk["document_id"] for chunk in result["chunks"]] == [
+        str(TARGET_ID),
+        str(DISTRACTOR_ID),
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_multiple_named_documents_use_one_or_all_filter():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_scalar_result([TARGET_ID, DISTRACTOR_ID]))
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result(
+            [
+                (TARGET_ID, None, "local"),
+                (DISTRACTOR_ID, None, "local"),
+            ]
+        )
+    )
     provider = AsyncMock(
         return_value=DOKBRetrieveOutcome(
             status=DOKBRetrieveStatus.SUCCESS,
@@ -579,7 +766,7 @@ async def test_unavailable_named_document_fails_closed_before_kb_lookup(
 ):
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_scalar_result([]))
+    db.execute = AsyncMock(return_value=_authorized_document_result([]))
     kb_lookup = AsyncMock(return_value="kb-1")
     provider = AsyncMock()
 
@@ -606,7 +793,9 @@ async def test_unavailable_named_document_fails_closed_before_kb_lookup(
 async def test_partial_named_document_authorization_rejects_entire_set():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_scalar_result([TARGET_ID]))
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result([(TARGET_ID, None, "local")])
+    )
     kb_lookup = AsyncMock(return_value="kb-1")
     provider = AsyncMock()
 
@@ -636,7 +825,10 @@ async def test_soft_deleted_project_membership_is_not_authorized():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
     db.execute = AsyncMock(
-        side_effect=[_scalar_result([TARGET_ID]), _scalar_result([])]
+        side_effect=[
+            _authorized_document_result([(TARGET_ID, None, "local")]),
+            _scalar_result([]),
+        ]
     )
     owned_project = SimpleNamespace(id=project_id)
     verify_project = AsyncMock(return_value=owned_project)
@@ -674,10 +866,93 @@ async def test_soft_deleted_project_membership_is_not_authorized():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_owned_project_accepts_complete_multi_document_scope():
+    project_id = UUID("44444444-4444-4444-8444-444444444444")
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    authorization = _authorized_document_result(
+        [
+            (TARGET_ID, None, "local"),
+            (DISTRACTOR_ID, None, "local"),
+        ]
+    )
+    named_membership = _scalar_result([TARGET_ID, DISTRACTOR_ID])
+    resolution_rows = [
+        (TARGET_ID, None, "API Rate Limit Policy"),
+        (DISTRACTOR_ID, None, "Webhook Retry Policy"),
+    ]
+    resolver_membership = [(TARGET_ID,), (DISTRACTOR_ID,)]
+    db = MagicMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            authorization,
+            named_membership,
+            resolution_rows,
+            resolver_membership,
+        ]
+    )
+    provider = AsyncMock(
+        return_value=DOKBRetrieveOutcome(
+            status=DOKBRetrieveStatus.SUCCESS,
+            result=RetrieveResult(
+                chunks=[
+                    Chunk(
+                        text="rate evidence",
+                        score=0.9,
+                        document_id=f"{TARGET_ID}.txt",
+                        metadata={"score_source": "upstream"},
+                    ),
+                    Chunk(
+                        text="retry evidence",
+                        score=0.8,
+                        document_id=f"{DISTRACTOR_ID}.txt",
+                        metadata={"score_source": "upstream"},
+                    ),
+                ],
+                total=2,
+            ),
+        )
+    )
+
+    with (
+        patch("src.core.config.settings", _settings()),
+        patch(
+            "src.services.agent.tools_impl._verify_project_ownership",
+            AsyncMock(return_value=SimpleNamespace(id=project_id)),
+        ),
+        patch(
+            "src.services.do_kb.retrieval.resolve_org_kb_uuid",
+            AsyncMock(return_value="kb-1"),
+        ),
+        patch("src.services.do_kb.retrieval.retrieve_kb_chunks", provider),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {
+                "query": "compare policies",
+                "project_id": str(project_id),
+                "document_ids": [str(TARGET_ID), str(DISTRACTOR_ID)],
+            },
+            db,
+            user,
+        )
+
+    assert provider.await_count == 1
+    assert [chunk["document_id"] for chunk in result["chunks"]] == [
+        str(TARGET_ID),
+        str(DISTRACTOR_ID),
+    ]
+    named_membership_sql = str(db.execute.await_args_list[1].args[0]).lower()
+    assert "collection_documents.collection_id" in named_membership_sql
+    assert "collection_documents.is_deleted = false" in named_membership_sql
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_unowned_project_named_scope_does_not_fall_back_org_wide():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_scalar_result([TARGET_ID]))
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result([(TARGET_ID, None, "local")])
+    )
     verify_project = AsyncMock(return_value=None)
     kb_lookup = AsyncMock(return_value="kb-1")
     provider = AsyncMock()
@@ -711,7 +986,9 @@ async def test_unowned_project_named_scope_does_not_fall_back_org_wide():
 async def test_filtered_provider_400_returns_limitation_without_retry():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_scalar_result([TARGET_ID]))
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result([(TARGET_ID, None, "local")])
+    )
     provider_error = DOKnowledgeBaseError("invalid request body", status_code=400)
     provider = AsyncMock(
         return_value=DOKBRetrieveOutcome(
@@ -751,7 +1028,9 @@ async def test_filtered_provider_400_returns_limitation_without_retry():
 async def test_named_scope_without_provisioned_kb_returns_explicit_limitation():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_scalar_result([TARGET_ID]))
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result([(TARGET_ID, None, "local")])
+    )
     provider = AsyncMock()
 
     with (
@@ -776,7 +1055,9 @@ async def test_named_scope_without_provisioned_kb_returns_explicit_limitation():
 async def test_named_scope_provider_exception_returns_limitation_without_retry():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_scalar_result([TARGET_ID]))
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result([(TARGET_ID, None, "local")])
+    )
     provider = AsyncMock(side_effect=RuntimeError("provider transport failed"))
 
     with (

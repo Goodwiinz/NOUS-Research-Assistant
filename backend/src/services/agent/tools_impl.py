@@ -1838,17 +1838,6 @@ async def _tool_do_kb_retrieve(
                 seen_document_ids.add(document_id)
                 requested_document_ids.append(document_id)
 
-        clauses = [
-            {
-                "equals": {
-                    "key": "item_name",
-                    "value": f"{document_id}.txt",
-                }
-            }
-            for document_id in requested_document_ids
-        ]
-        provider_filters = clauses[0] if len(clauses) == 1 else {"or_all": clauses}
-
     kb_enabled = getattr(_kb_settings, "DO_KB_ENABLED", False)
     if not kb_enabled and not scoped_intent:
         return {"chunks": [], "total": 0, "source": "do_kb", "reason": "disabled"}
@@ -1859,18 +1848,22 @@ async def _tool_do_kb_retrieve(
             return scoped_limitation("requested_documents_unavailable")
         try:
             authorized_rows = await db.execute(
-                select(Document.id).where(
+                select(
+                    Document.id,
+                    Document.storage_path,
+                    Document.storage_backend,
+                ).where(
                     Document.id.in_(requested_document_ids),
                     Document.organization_id == current_user.organization_id,
                     Document.is_deleted == False,
                 )
             )
-            authorized_document_ids = {
-                UUID(str(document_id))
-                for document_id in authorized_rows.scalars().all()
+            authorized_documents = {
+                UUID(str(document_id)): (storage_path, storage_backend)
+                for document_id, storage_path, storage_backend in authorized_rows.all()
             }
             requested_document_id_set = set(requested_document_ids)
-            if authorized_document_ids != requested_document_id_set:
+            if set(authorized_documents) != requested_document_id_set:
                 return scoped_limitation("requested_documents_unavailable")
 
             project_id = args.get("project_id")
@@ -1892,6 +1885,26 @@ async def _tool_do_kb_retrieve(
                 }
                 if member_document_ids != requested_document_id_set:
                     return scoped_limitation("requested_documents_unavailable")
+
+            item_names: list[str] = []
+            seen_item_names: set[str] = set()
+            for document_id in requested_document_ids:
+                candidate_names = [f"{document_id}.txt"]
+                storage_path, storage_backend = authorized_documents[document_id]
+                if storage_backend == "s3" and storage_path:
+                    original_leaf = storage_path.rsplit("/", 1)[-1]
+                    if original_leaf:
+                        candidate_names.append(original_leaf)
+                for item_name in candidate_names:
+                    if item_name not in seen_item_names:
+                        seen_item_names.add(item_name)
+                        item_names.append(item_name)
+
+            clauses = [
+                {"equals": {"key": "item_name", "value": item_name}}
+                for item_name in item_names
+            ]
+            provider_filters = clauses[0] if len(clauses) == 1 else {"or_all": clauses}
         except Exception as exc:
             logger.warning(
                 "do_kb_retrieve named-document authorization failed: %s", exc
