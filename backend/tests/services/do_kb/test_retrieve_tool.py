@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -583,6 +584,82 @@ async def test_named_scope_retrieves_original_s3_ingest_fallback(
     ]
     assert result["chunks"][0]["document_id"] == str(TARGET_ID)
     assert result["chunks"][0]["title"] == "API Rate Limit Policy"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_rows", [False, True], ids=["a-first", "b-first"])
+async def test_named_scope_rejects_shared_original_basename_before_project_filter(
+    reverse_rows: bool,
+) -> None:
+    project_id = UUID("44444444-4444-4444-8444-444444444444")
+    user: Any = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    shared_leaf = "rate-policy.pdf"
+    target_path = f"documents/{user.organization_id}/{TARGET_ID}/{shared_leaf}"
+    distractor_path = f"documents/{user.organization_id}/{DISTRACTOR_ID}/{shared_leaf}"
+    resolution_rows = [
+        (TARGET_ID, target_path, "Requested Policy"),
+        (DISTRACTOR_ID, distractor_path, "Unrelated Policy"),
+    ]
+    if reverse_rows:
+        resolution_rows.reverse()
+    db = MagicMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _authorized_document_result([(TARGET_ID, target_path, "s3")]),
+            _scalar_result([TARGET_ID]),
+            resolution_rows,
+            [(TARGET_ID,)],
+        ]
+    )
+
+    async def retrieve(**kwargs: Any) -> DOKBRetrieveOutcome:
+        allowed_names = _filtered_item_names(kwargs["filters"])
+        chunks = (
+            [
+                Chunk(
+                    text="stronger evidence from unrelated document B",
+                    score=0.99,
+                    document_id=shared_leaf,
+                    metadata={"score_source": "upstream"},
+                )
+            ]
+            if shared_leaf in allowed_names
+            else []
+        )
+        return DOKBRetrieveOutcome(
+            status=DOKBRetrieveStatus.SUCCESS,
+            result=RetrieveResult(chunks=chunks, total=len(chunks)),
+        )
+
+    provider = AsyncMock(side_effect=retrieve)
+    with (
+        patch("src.core.config.settings", _settings()),
+        patch(
+            "src.services.agent.tools_impl._verify_project_ownership",
+            AsyncMock(return_value=SimpleNamespace(id=project_id)),
+        ),
+        patch(
+            "src.services.do_kb.retrieval.resolve_org_kb_uuid",
+            AsyncMock(return_value="kb-1"),
+        ),
+        patch("src.services.do_kb.retrieval.retrieve_kb_chunks", provider),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {
+                "query": "rate limits",
+                "project_id": str(project_id),
+                "document_ids": [str(TARGET_ID)],
+            },
+            db,
+            user,
+        )
+
+    provider_call = provider.await_args
+    assert provider_call is not None
+    assert shared_leaf in _filtered_item_names(provider_call.kwargs["filters"])
+    assert result["chunks"] == []
+    assert result["reason"] == "no_scoped_chunks"
 
 
 @pytest.mark.unit
