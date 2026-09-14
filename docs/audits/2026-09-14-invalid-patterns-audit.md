@@ -83,17 +83,20 @@ they matched a search pattern.
 
 ### Deterministic checks
 
-Each required check was run independently. `PASS`, `FAIL`, and `NOT RUN` mean
-the following for this snapshot:
+Each required check was run independently. `PASS` means the check completed
+successfully; `FAIL` means a completed check found a repository defect;
+`BLOCKED` means the command or its preflight was invoked but could not
+complete because a tool, dependency, or environment was unavailable; and
+`NOT RUN` means the operation was intentionally withheld.
 
 | Command | Result | Concise evidence |
 | --- | --- | --- |
 | `python3 scripts/docs/check_dir_docs.py` | `PASS` | `dir-docs: 46 directory doc(s) OK.` |
 | `ruff check backend/src` | `PASS` | Ruff reported `All checks passed!` |
-| `(cd backend && python ../scripts/ci/check_alembic.py)` | `NOT RUN` | The exact command returned 127 because the `python` executable is unavailable. The `python3` equivalent was attempted separately and could not import `alembic`; no network install was attempted. |
-| `python scripts/ci/generate_openapi.py --check` | `NOT RUN` | The exact command returned 127 because the `python` executable is unavailable. The `python3` equivalent was attempted separately and could not import `langgraph`; no network install was attempted. |
-| `pytest -q backend/tests/unit/architecture backend/tests/unit/ci` | `FAIL` | 291 collection/test errors were caused by missing `langgraph`; this is a dependency failure, not evidence that the guards pass or fail on repository behavior. |
-| `pnpm --dir frontend lint:changed` | `FAIL` | Exit 2: `check_frontend_quality.mjs` requires its CI `--report` argument. pnpm also reported Node 22.22.0 while the repository declares Node 24, and frontend `node_modules` is absent. |
+| `(cd backend && python ../scripts/ci/check_alembic.py)` | `BLOCKED` | The exact command returned 127 because the `python` executable is unavailable. The `python3` equivalent was attempted separately and could not import `alembic`; no network install was attempted. |
+| `python scripts/ci/generate_openapi.py --check` | `BLOCKED` | The exact command returned 127 because the `python` executable is unavailable. The `python3` equivalent was attempted separately and could not import `langgraph`; no network install was attempted. |
+| `pytest -q backend/tests/unit/architecture backend/tests/unit/ci` | `BLOCKED` | 291 collection/test errors were caused by missing `langgraph`; this is a dependency failure, not evidence that the guards pass or fail on repository behavior. |
+| `pnpm --dir frontend lint:changed` | `BLOCKED` | Exit 2: `check_frontend_quality.mjs` requires its CI `--report` argument. pnpm also reported Node 22.22.0 while the repository declares Node 24, and frontend `node_modules` is absent. |
 | `pnpm --dir frontend quality:exclusions` | `PASS` | `OK: 23 baselined production exclusions, no new type-check debt.` |
 
 The supplemental `python3` attempts above were diagnostic only. They did not
@@ -103,10 +106,9 @@ install dependencies, modify tracked files, or read credential values.
 
 Task 6 reran the safe acceptance matrix at implementation HEAD
 `7707d514af9922acb4099fa252b2c4fef1c8bb7d`, before this audit reconciliation.
-`PASS` means the command completed with exit code 0. `NOT RUN` means the
-command was intentionally withheld because it requires a missing tool or a
-browser/service/credential/cluster environment; a command that was invoked
-but could not execute is recorded as blocked with its observed exit code.
+The status vocabulary above is applied uniformly here: missing-tool or
+missing-dependency attempts are `BLOCKED`, while intentionally withheld live
+operations are `NOT RUN`.
 
 | Area | Command or review | Result and exact evidence |
 | --- | --- | --- |
@@ -121,14 +123,16 @@ but could not execute is recorded as blocked with its observed exit code.
 | Backend architecture/CI | `pytest -q backend/tests/unit/architecture backend/tests/unit/ci` | `BLOCKED` (`exit 1`) — 291 collection errors, all reported as missing `langgraph`; not a behavioral pass/fail. |
 | Backend API/threads | `pytest -q backend/tests/unit/api backend/tests/api/threads` | `BLOCKED` (`exit 2`) — 55 collection errors, including missing `spacy`; not a behavioral pass/fail. |
 | Backend services/threads | `pytest -q backend/tests/unit/services/threads backend/tests/api/threads` | `BLOCKED` (`exit 2`) — 20 collection errors, including missing `spacy`; not a behavioral pass/fail. |
-| OpenAPI | `python scripts/ci/generate_openapi.py --check` | `NOT RUN` (`exit 127`) — `python` executable is unavailable. The diagnostic `python3` equivalent was blocked by missing `langgraph`. |
-| Alembic | `(cd backend && python ../scripts/ci/check_alembic.py)` | `NOT RUN` (`exit 127`) — `python` executable is unavailable. The diagnostic `python3` equivalent was blocked by missing `alembic`. |
+| OpenAPI | `python scripts/ci/generate_openapi.py --check` | `BLOCKED` (`exit 127`) — `python` executable is unavailable. The diagnostic `python3` equivalent was blocked by missing `langgraph`. |
+| Alembic | `(cd backend && python ../scripts/ci/check_alembic.py)` | `BLOCKED` (`exit 127`) — `python` executable is unavailable. The diagnostic `python3` equivalent was blocked by missing `alembic`. |
 | Frontend exclusion ratchet | `pnpm --dir frontend quality:exclusions` | `PASS` — `OK: 23 baselined production exclusions, no new type-check debt`; pnpm warned that the runtime is Node 22.22.0 rather than declared Node 24. |
 | Frontend changed lint | `pnpm --dir frontend lint:changed` | `BLOCKED` (`exit 2`) — wrapper requires CI `--report`; Node 22.22.0 and absent `frontend/node_modules` were also reported. |
-| Frontend type/test | `pnpm --dir frontend type-check`; `pnpm --dir frontend test` | `NOT RUN` — both reached package scripts but could not execute because `tsc`/`vitest` were unavailable with no local dependencies. |
-| Compose checks | `docker compose -f config/docker-compose/docker-compose.development.yml config --quiet`; `bash infrastructure/tests/docker_compose_development_config_test.sh`; `bash scripts/validate_docker_compose.sh` | `NOT RUN` — Docker was present, but the Compose subcommand/plugin was unavailable (`unknown shorthand flag: 'f'`; monitoring script reported `Docker Compose is not installed`). |
-| Helm checks | Legacy lint, three environment lint/template loops, and NetworkPolicy/image-digest/PDB render scripts | `NOT RUN` — `helm` was unavailable (`command not found`). No cluster operation was attempted. |
-| Playwright listing | `pnpm test:list` from `tools/nous-playwright` | `NOT RUN` — package dependencies are absent (`playwright: not found`). Browser/service checks were not attempted. |
+| Frontend type/test | `pnpm --dir frontend type-check`; `pnpm --dir frontend test` | `BLOCKED` — both reached package scripts but could not execute because `tsc`/`vitest` were unavailable with no local dependencies. |
+| Compose checks | `docker compose -f config/docker-compose/docker-compose.development.yml config --quiet`; `bash infrastructure/tests/docker_compose_development_config_test.sh`; `bash scripts/validate_docker_compose.sh` | `BLOCKED` — Docker was present, but the Compose subcommand/plugin was unavailable (`unknown shorthand flag: 'f'`; monitoring script reported `Docker Compose is not installed`). |
+| Helm checks | Legacy lint, three environment lint/template loops, and NetworkPolicy/image-digest/PDB render scripts | `BLOCKED` — invoked Helm checks reported `command not found`; the remaining loops were not entered after that preflight. No cluster operation was attempted. |
+| Playwright listing | `pnpm test:list` from `tools/nous-playwright` | `BLOCKED` — package dependencies are absent (`playwright: not found`). Browser/service checks were not attempted. |
+| Secret-scan preflight/scan | `command -v gitleaks`; actual `gitleaks git ...` scan | `BLOCKED` preflight — `gitleaks unavailable`; `NOT RUN` scan — intentionally withheld after the preflight failure. |
+| Intentionally withheld live operations | Browser E2E/accessibility, hosted services, database/Redis, deployment/cluster, credentials, Harbor, and live webhooks | `NOT RUN` — withheld by the credential-free/safety scope; no command was invoked. |
 | Diff/working tree | `git diff --check`; `git status --short`; `git diff --name-only a269136add01f977c474e3550fc3069600fea8f..HEAD` | `PASS` before reconciliation — whitespace check was silent, status was clean, and the base diff contained only the audit plus the 20 scoped guides. |
 
 The acceptance matrix intentionally did not run browser, hosted service,
@@ -253,10 +257,10 @@ the gate are recorded without claiming a passing run.
 | Access helpers fail closed on caller identity; workspace access is membership/public/owner-based while document access is organization-scoped; soft-deleted ancestors revoke child access. | `backend/tests/unit/architecture/test_maintenance_contracts.py:81-120`, `backend/src/services/threads/workspace_access.py:320-385`, and `docs/engineering/backend.md:42-70`. Execution was blocked by the same missing dependency. | `backend`, `database`, `supabase`, and `tests`: preserve identity/org predicates and negative authorization coverage. |
 | Generated OpenAPI and frontend TypeScript artifacts are regenerated from the FastAPI app and diffed together. | `scripts/ci/generate_openapi.py:1-142`, `.github/workflows/test-pipeline.yml:491-560`, and `backend/tests/unit/ci/test_generate_openapi.py:104-139`. The OpenAPI check could not import `langgraph`. | `backend`, `frontend`, and `specs`: never hand-edit generated API files; adopt wire types on touch. |
 | Migration history has a blocking static single-head/revision-length guard, while execution probes are explicitly service-dependent/advisory where documented. | `scripts/ci/check_alembic.py:60-140`, `.github/workflows/test-pipeline.yml:219-268`, and migration contract tests. The static command was not runnable because `python`/`alembic` prerequisites were unavailable. | `database`, `supabase`, `backend`, and `tests`: append migrations, preserve order, and label DB probes honestly. |
-| Backend and frontend quality ratchets do not accept new changed-file debt; tsconfig production exclusions require a reviewed baseline. | `.github/workflows/test-pipeline.yml:82-191`, `scripts/ci/check_frontend_quality.mjs:1-20`, `scripts/ci/check_tsconfig_exclusions.py:1-22`, and `frontend/quality-baseline.json:1-23`. The exclusion ratchet passed; changed-lint was invoked without its CI report argument and failed. | `backend`, `frontend`, `scripts`, and `tests`: do not lower floors or bypass changed-file gates. |
+| Backend and frontend quality ratchets do not accept new changed-file debt; tsconfig production exclusions require a reviewed baseline. | `.github/workflows/test-pipeline.yml:82-191`, `scripts/ci/check_frontend_quality.mjs:1-20`, `scripts/ci/check_tsconfig_exclusions.py:1-22`, and `frontend/quality-baseline.json:1-23`. The exclusion ratchet passed; changed-lint was blocked because its CI report argument and local frontend dependencies were unavailable. | `backend`, `frontend`, `scripts`, and `tests`: do not lower floors or bypass changed-file gates. |
 | Secret scanning is present before commit and in protected-branch CI, with repository-specific rules and security-control tests. | `.pre-commit-config.yaml:40-47`, `.github/workflows/secret-scan.yml:18-55`, `.gitleaks.toml:1-20`, and `backend/tests/security/test_pre_public_security_audit_guards.py:92-124`. No gitleaks binary was installed or scan run in this audit. | All roots: keep secrets indirect, do not echo values, and preserve the scan hooks/workflow. |
 | Accessibility checks exist for selected rendered components, and `IconButton` requires/propagates an accessible label. | `frontend/src/test/a11y.ts:1-37`, `frontend/package.json:150-158`, and `frontend/src/components/ui/icon-button.tsx:11-41`. The helper's no-op fallback and Sidebar suppressions are limitations/risk; there is no claim of global compliance. | `frontend`, `tools`, and `tests`: preserve accessible names, keyboard/focus behavior, and real axe/browser validation. |
-| Helm environments are linted/rendered as base-plus-overlay combinations with NetworkPolicy, immutable-image, and PDB assertions. | `.github/workflows/helm-validate.yml:35-63`, `infrastructure/helm/knowledge-graph-analytics/tests/networkpolicy_render_test.sh:13-104`, `backend_image_digest_render_test.sh:1-66`, and `pdb_render_test.sh:1-46`. Helm/Docker/cluster execution was not attempted in this credential-free audit. | `infrastructure`, `deployment`, `config`, and `monitoring`: preserve consumer-aware overlays and render checks; do not apply to a cluster without authorization. |
+| Helm environments are linted/rendered as base-plus-overlay combinations with NetworkPolicy, immutable-image, and PDB assertions. | `.github/workflows/helm-validate.yml:35-63`, `infrastructure/helm/knowledge-graph-analytics/tests/networkpolicy_render_test.sh:13-104`, `infrastructure/helm/knowledge-graph-analytics/tests/backend_image_digest_render_test.sh:1-66`, and `infrastructure/helm/knowledge-graph-analytics/tests/pdb_render_test.sh:1-46`. Helm/Docker/cluster execution was blocked by unavailable tools in this audit. | `infrastructure`, `deployment`, `config`, and `monitoring`: preserve consumer-aware overlays and render checks; do not apply to a cluster without authorization. |
 
 ## Review risks
 
@@ -357,12 +361,12 @@ unchanged and remains the parent policy.
   only the tsconfig-exclusion ratchet passed directly. Frontend type-check and
   unit tests could not find `tsc`/`vitest` because `node_modules` is absent.
 - Docker was present but its Compose plugin was unavailable, and Helm,
-  Playwright, and gitleaks were not installed. Compose/Helm render checks,
-  Playwright listing, and secret scanning therefore remain `NOT RUN`; no
-  service startup, database, Redis, browser, Kubernetes, Supabase,
-  LaunchDarkly, Harbor, credential, cluster, or live webhook operation was
-  attempted. The report does not assert live deployment, scrape, auth, or
-  alert behavior.
+  Playwright, and gitleaks were not installed. Their invoked preflights are
+  `BLOCKED`; the actual gitleaks scan and all browser/hosted-service/
+  deployment/cluster operations were intentionally `NOT RUN`. No service
+  startup, database, Redis, browser, Kubernetes, Supabase, LaunchDarkly,
+  Harbor, credential, cluster, or live webhook operation was attempted. The
+  report does not assert live deployment, scrape, auth, or alert behavior.
 - Existing workflows and older READMEs contain historical/live-status tension,
   especially around staging/production deployment. This report preserves the
   contradiction as a review risk instead of choosing the older prose.
