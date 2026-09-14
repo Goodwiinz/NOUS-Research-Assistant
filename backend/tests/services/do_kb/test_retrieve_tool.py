@@ -15,6 +15,7 @@ from uuid import UUID
 
 import pytest
 
+from src.models.user import User
 from src.services.agent import tools as tools_module
 from src.services.agent import tools_impl
 from src.services.agent.tools import do_kb_retrieve
@@ -30,6 +31,10 @@ from src.services.do_kb.retrieval import DOKBRetrieveOutcome, DOKBRetrieveStatus
 TARGET_ID = UUID("11111111-1111-4111-8111-111111111111")
 DISTRACTOR_ID = UUID("22222222-2222-4222-8222-222222222222")
 MISSING_ID = UUID("33333333-3333-4333-8333-333333333333")
+
+
+def _test_user() -> User:
+    return User(id=UUID(int=1), organization_id=UUID(int=10))
 
 
 def _settings() -> SimpleNamespace:
@@ -526,14 +531,14 @@ async def test_named_scope_authorizes_before_provider_and_drops_stronger_distrac
 )
 async def test_named_scope_retrieves_original_s3_ingest_fallback(
     source_case: str, storage_path: str
-):
+) -> None:
     """The durable row cannot distinguish why ingest selected its original.
 
     Ingest uses the original S3 object both when content text is absent and
     when uploading the canonical text mirror fails. Named retrieval must allow
     both possible item names so either already-indexed source stays reachable.
     """
-    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    user = _test_user()
     leaf = storage_path.rsplit("/", 1)[-1]
     authorization = _authorized_document_result([(TARGET_ID, storage_path, "s3")])
     resolution_rows = [
@@ -542,7 +547,7 @@ async def test_named_scope_retrieves_original_s3_ingest_fallback(
     db = MagicMock()
     db.execute = AsyncMock(side_effect=[authorization, resolution_rows])
 
-    async def retrieve(**kwargs):
+    async def retrieve(**kwargs: Any) -> DOKBRetrieveOutcome:
         allowed_names = _filtered_item_names(kwargs["filters"])
         chunks = (
             [
@@ -664,8 +669,8 @@ async def test_named_scope_rejects_shared_original_basename_before_project_filte
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_multiple_named_documents_retrieve_mixed_canonical_and_original_sources():
-    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+async def test_mixed_named_documents_retrieve_canonical_and_original_sources() -> None:
+    user = _test_user()
     original_path = (
         f"documents/{user.organization_id}/{TARGET_ID}/1700000000_rate-policy.pdf"
     )
@@ -683,7 +688,7 @@ async def test_multiple_named_documents_retrieve_mixed_canonical_and_original_so
     db = MagicMock()
     db.execute = AsyncMock(side_effect=[authorization, resolution_rows])
 
-    async def retrieve(**kwargs):
+    async def retrieve(**kwargs: Any) -> DOKBRetrieveOutcome:
         allowed_names = _filtered_item_names(kwargs["filters"])
         required_names = {original_leaf, f"{DISTRACTOR_ID}.txt"}
         chunks = []
@@ -725,7 +730,9 @@ async def test_multiple_named_documents_retrieve_mixed_canonical_and_original_so
             user,
         )
 
-    assert _filtered_item_names(provider.await_args.kwargs["filters"]) == [
+    provider_call = provider.await_args
+    assert provider_call is not None
+    assert _filtered_item_names(provider_call.kwargs["filters"]) == [
         f"{TARGET_ID}.txt",
         original_leaf,
         f"{DISTRACTOR_ID}.txt",
@@ -943,9 +950,9 @@ async def test_soft_deleted_project_membership_is_not_authorized():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_owned_project_accepts_complete_multi_document_scope():
+async def test_owned_project_accepts_complete_multi_document_scope() -> None:
     project_id = UUID("44444444-4444-4444-8444-444444444444")
-    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    user = _test_user()
     authorization = _authorized_document_result(
         [
             (TARGET_ID, None, "local"),
