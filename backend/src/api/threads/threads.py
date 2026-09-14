@@ -1066,6 +1066,7 @@ def _format_message_response(message) -> ChatMessageResponse:
     return ChatMessageResponse(
         id=message.id,
         thread_id=message.thread_id,
+        client_message_id=message.client_message_id,
         user_id=message.user_id,
         role=message.role,
         content=message.content,
