@@ -30,6 +30,30 @@ def record_event(event: dict[str, Any]) -> None:
         EVENTS.append({"sequence": len(EVENTS) + 1, **event})
 
 
+def _item_name_from_equals(clause: Any) -> str:
+    if not isinstance(clause, dict) or set(clause) != {"equals"}:
+        raise ValueError("filter clause must contain only equals")
+    equals = clause["equals"]
+    if not isinstance(equals, dict) or set(equals) != {"key", "value"}:
+        raise ValueError("equals must contain only key and value")
+    if equals["key"] != "item_name" or not isinstance(equals["value"], str):
+        raise ValueError("equals supports only string item_name values")
+    return equals["value"]
+
+
+def item_names_from_filters(filters: Any) -> set[str]:
+    if not isinstance(filters, dict):
+        raise ValueError("filters must be an object")
+    if set(filters) == {"equals"}:
+        return {_item_name_from_equals(filters)}
+    if set(filters) == {"or_all"}:
+        clauses = filters["or_all"]
+        if not isinstance(clauses, list) or not clauses:
+            raise ValueError("or_all must be a non-empty list")
+        return {_item_name_from_equals(clause) for clause in clauses}
+    raise ValueError("unrecognized filter operator")
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "NOUSBenchmarkMock/1.0"
 
@@ -91,8 +115,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("query is required")
             if not 1 <= num_results <= 100:
                 raise ValueError("num_results out of range")
-            if set(body) - {"query", "num_results", "alpha"}:
+            if set(body) - {"query", "num_results", "alpha", "filters"}:
                 raise ValueError("unrecognized field")
+            allowed_item_names = (
+                item_names_from_filters(body["filters"]) if "filters" in body else None
+            )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             record_event(
                 {
@@ -112,7 +139,16 @@ class Handler(BaseHTTPRequestHandler):
         # sentinel below so it can get a genuine empty *success* without a
         # second mock endpoint or a relevance model.
         no_match = "no such policy exists" in query.casefold()
-        selected = [] if no_match else RECORDS[:num_results]
+        eligible_records = (
+            RECORDS
+            if allowed_item_names is None
+            else [
+                record
+                for record in RECORDS
+                if f"{record['document_id']}.txt" in allowed_item_names
+            ]
+        )
+        selected = [] if no_match else eligible_records[:num_results]
         results = [
             {
                 "text_content": record["text"],

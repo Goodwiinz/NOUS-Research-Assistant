@@ -487,7 +487,34 @@ async def test_retrieve_body_is_strict_query_num_results_alpha_only():
     assert sent_body["num_results"] >= 1
     assert "reranking" not in sent_body
     assert "search_type" not in sent_body
+    assert "filters" not in sent_body
     assert set(sent_body) <= {"query", "num_results", "alpha"}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_retrieve_adds_exact_named_document_filter_only_when_requested():
+    cfg = _make_settings(DO_KB_RETRIEVE_ALPHA=None)
+    client = DOKnowledgeBaseClient(cfg=cfg)
+    filters = {
+        "equals": {
+            "key": "item_name",
+            "value": "11111111-1111-4111-8111-111111111111.txt",
+        }
+    }
+
+    with patch("httpx.AsyncClient") as mock_async_client:
+        request_mock = AsyncMock(
+            return_value=_mock_response(200, {"results": [], "total_results": 0})
+        )
+        mock_async_client.return_value.request = request_mock
+
+        await client.retrieve(
+            kb_uuid="kb-123", query="attention", top_k=8, filters=filters
+        )
+
+    _, _, sent_body = _sent_method_url_body(request_mock)
+    assert sent_body == {"query": "attention", "num_results": 8, "filters": filters}
 
 
 @pytest.mark.unit
