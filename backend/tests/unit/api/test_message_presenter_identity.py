@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.threads import threads as legacy_threads
 from src.api.threads.workspace_routes.presenters import (
@@ -24,6 +25,8 @@ from src.api.threads.workspace_routes.presenters import (
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.citation import Citation
 from src.models.message_attachment import MessageAttachment
+from src.models.thread import Thread
+from src.models.user import User
 
 pytestmark = pytest.mark.unit
 
@@ -142,20 +145,25 @@ def test_deprecated_thread_list_route_preserves_message_identity_in_json() -> No
     service = SimpleNamespace(
         list_messages=AsyncMock(return_value=([message], 1)),
     )
+    current_user = User(id=USER_ID)
+    db = AsyncSession()
 
-    with patch.object(legacy_threads, "get_chat_service", return_value=service):
-        response = asyncio.run(
-            legacy_threads.list_messages(
-                thread_id=THREAD_ID,
-                limit=100,
-                offset=0,
-                before_id=None,
-                since=None,
-                order=None,
-                current_user=SimpleNamespace(id=USER_ID),
-                db=SimpleNamespace(),
+    try:
+        with patch.object(legacy_threads, "get_chat_service", return_value=service):
+            response = asyncio.run(
+                legacy_threads.list_messages(
+                    thread_id=THREAD_ID,
+                    limit=100,
+                    offset=0,
+                    before_id=None,
+                    since=None,
+                    order=None,
+                    current_user=current_user,
+                    db=db,
+                )
             )
-        )
+    finally:
+        asyncio.run(db.close())
 
     payload = response.model_dump(mode="json")
     assert payload["total"] == 1
@@ -170,57 +178,64 @@ def test_deprecated_thread_list_route_preserves_message_identity_in_json() -> No
 
 def test_thread_detail_uses_message_presenter_without_losing_rich_provenance() -> None:
     """Thread-detail nesting keeps identity, state, and existing provenance."""
-    message = _message(
-        database_id=DATABASE_ASSISTANT_ID,
+    message = ChatMessage(
+        id=DATABASE_ASSISTANT_ID,
+        thread_id=THREAD_ID,
+        user_id=None,
         role=MessageRole.ASSISTANT,
+        content="assistant content",
+        token_count=7,
+        latency_ms=1250,
         client_message_id=CLIENT_ASSISTANT_ID,
         stopped=True,
+        tool_executions=[
+            {
+                "id": "tool-1",
+                "tool_name": "search_documents",
+                "args": {"query": "identity"},
+                "status": "completed",
+            }
+        ],
+        plan=[
+            {
+                "step": 1,
+                "description": "Search documents",
+                "tool": "search_documents",
+                "args_hint": {},
+                "depends_on": [],
+            }
+        ],
+        plan_reasoning="Search before answering.",
+        token_usage={"input_tokens": 11, "output_tokens": 7},
+        progress_steps=[{"phase": "writing", "detail": "Drafting"}],
+        citations=[
+            Citation(
+                id=UUID("70000000-0000-0000-0000-000000000007"),
+                external_reference_id="arXiv:2609.00001",
+                source_position=1,
+                snippet="Identity provenance.",
+                document_title="Stable Message Identity",
+                document_type="paper",
+                created_at=CREATED_AT,
+                updated_at=CREATED_AT,
+            )
+        ],
+        attachments=[
+            MessageAttachment(
+                id=UUID("90000000-0000-0000-0000-000000000009"),
+                document_id=UUID("a0000000-0000-0000-0000-00000000000a"),
+                display_name="identity-notes.pdf",
+                thumbnail_url=None,
+                created_at=CREATED_AT,
+                updated_at=CREATED_AT,
+            )
+        ],
+        is_deleted=False,
+        superseded_by_message_id=None,
+        created_at=CREATED_AT,
+        updated_at=CREATED_AT,
     )
-    message.tool_executions = [
-        {
-            "id": "tool-1",
-            "tool_name": "search_documents",
-            "args": {"query": "identity"},
-            "status": "completed",
-        }
-    ]
-    message.plan = [
-        {
-            "step": 1,
-            "description": "Search documents",
-            "tool": "search_documents",
-            "args_hint": {},
-            "depends_on": [],
-        }
-    ]
-    message.plan_reasoning = "Search before answering."
-    message.token_usage = {"input_tokens": 11, "output_tokens": 7}
-    message.progress_steps = [{"phase": "writing", "detail": "Drafting"}]
-    message.citations = [
-        Citation(
-            id=UUID("70000000-0000-0000-0000-000000000007"),
-            external_reference_id="arXiv:2609.00001",
-            source_position=1,
-            snippet="Identity provenance.",
-            document_title="Stable Message Identity",
-            document_type="paper",
-            created_at=CREATED_AT,
-            updated_at=CREATED_AT,
-        )
-    ]
-    message.attachments = [
-        MessageAttachment(
-            id=UUID("90000000-0000-0000-0000-000000000009"),
-            document_id=UUID("a0000000-0000-0000-0000-00000000000a"),
-            display_name="identity-notes.pdf",
-            thumbnail_url=None,
-            created_at=CREATED_AT,
-            updated_at=CREATED_AT,
-        )
-    ]
-    message.is_deleted = False
-    message.superseded_by_message_id = None
-    thread = SimpleNamespace(
+    thread = Thread(
         id=THREAD_ID,
         conversation_id=UUID("80000000-0000-0000-0000-000000000008"),
         title="Identity thread",

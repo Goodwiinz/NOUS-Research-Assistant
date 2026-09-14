@@ -71,7 +71,11 @@ function canonicalTurn(index: number): ChatMessage[] {
   ];
 }
 
-function RuntimeFrame({ messages }: { messages: ChatPageMessage[] }) {
+function RuntimeFrame({
+  messages,
+}: {
+  messages: ChatPageMessage[];
+}): React.JSX.Element {
   return (
     <ChatRuntimeProvider
       messages={messages}
@@ -118,11 +122,7 @@ describe('message identity handoff', () => {
         expectedIds: [...turnIdentities[0], ...turnIdentities[1]],
       },
       {
-        localMessages: [
-          ...optimistic[0],
-          ...optimistic[1],
-          ...optimistic[2],
-        ],
+        localMessages: [...optimistic[0], ...optimistic[1], ...optimistic[2]],
         storeMessages: [...canonical[0], ...canonical[1]],
         messageFreshness: 'stale' as const,
         expectedIds: [
@@ -132,11 +132,7 @@ describe('message identity handoff', () => {
         ],
       },
       {
-        localMessages: [
-          ...optimistic[0],
-          ...optimistic[1],
-          ...optimistic[2],
-        ],
+        localMessages: [...optimistic[0], ...optimistic[1], ...optimistic[2]],
         storeMessages: [...canonical[0], ...canonical[1], ...canonical[2]],
         messageFreshness: 'fresh' as const,
         expectedIds: [
