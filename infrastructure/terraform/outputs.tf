@@ -28,7 +28,7 @@ output "cluster_security_group_id" {
 
 output "cluster_iam_role_arn" {
   description = "IAM role ARN of the EKS cluster"
-  value       = module.eks.eks_managed_node_groups["default"].iam_role_arn
+  value       = module.eks.cluster_iam_role_arn
 }
 
 output "eks_node_group_role_arn" {

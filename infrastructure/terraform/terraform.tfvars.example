@@ -15,12 +15,15 @@ eks_cluster_version = "1.28"
 # Network Configuration
 vpc_cidr = "10.0.0.0/16"
 
-# Node Group (single lean SPOT node group; second "spot" group in main.tf
-# stays dormant at desired 0 with a NO_SCHEDULE taint)
+# Node Group (single lean SPOT node group)
 min_nodes = 1
 max_nodes = 3
 desired_nodes = 1
 node_instance_types = ["t3.large"]
+
+# EKS aws-auth admins (REQUIRED before apply to avoid lockout: fill with the
+# ARN(s) of the IAM role you assume, e.g. arn:aws:iam::<account>:role/<admin>)
+cluster_admin_role_arns = []
 
 # Database Configuration (RDS PostgreSQL)
 db_instance_class = "db.t4g.small"

@@ -74,6 +74,12 @@ variable "node_instance_types" {
   default     = ["m5.large", "m5a.large", "m5d.large"]
 }
 
+variable "cluster_admin_role_arns" {
+  description = "IAM role ARNs granted system:masters on the EKS cluster via aws-auth. Set to your admin role ARN(s) before apply to avoid lockout when manage_aws_auth_configmap = true."
+  type        = list(string)
+  default     = []
+}
+
 # Database Configuration
 variable "db_instance_class" {
   description = "RDS instance class"

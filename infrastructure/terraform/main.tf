@@ -202,13 +202,25 @@ module "eks" {
   create_node_security_group    = true
 
   manage_aws_auth_configmap = true
-  aws_auth_roles = [
-    {
-      rolearn  = module.eks.eks_managed_node_groups["default"].iam_role_arn
-      username = "system:node:{{SessionName}}"
-      groups   = ["system:bootstrappers", "system:nodes"]
-    }
-  ]
+  # Node role grants bootstrap/nodes; cluster admin role(s) from
+  # var.cluster_admin_role_arns get system:masters so the cluster creator is
+  # not locked out when the aws-auth ConfigMap is terraform-managed.
+  aws_auth_roles = concat(
+    [
+      {
+        rolearn  = module.eks.eks_managed_node_groups["default"].iam_role_arn
+        username = "system:node:{{SessionName}}"
+        groups   = ["system:bootstrappers", "system:nodes"]
+      }
+    ],
+    [
+      for arn in var.cluster_admin_role_arns : {
+        rolearn  = arn
+        username = "admin"
+        groups   = ["system:masters"]
+      }
+    ]
+  )
 
   eks_managed_node_groups = {
     default = {
@@ -242,40 +254,10 @@ module "eks" {
       tags = {
         Name = "${var.project_name}-node-group"
         Type = "EKS Managed Node Group"
-      }
-    }
 
-    # Spot instance node group for cost optimization
-    spot = {
-      instance_types = ["m5.large", "m5a.large", "m5d.large", "c5.large", "c5a.large"]
-
-      min_size     = 0
-      max_size     = 10
-      desired_size = 0
-
-      capacity_type = "SPOT"
-
-      block_device_mappings = {
-        xvda = {
-          device_name = "/dev/xvda"
-          ebs = {
-            volume_size = 50
-            volume_type = "gp3"
-          }
-        }
-      }
-
-      taints = {
-        spot = {
-          key    = "spot-instance"
-          value  = "true"
-          effect = "NO_SCHEDULE"
-        }
-      }
-
-      tags = {
-        Name = "${var.project_name}-spot-node-group"
-        Type = "EKS Spot Node Group"
+        # Cluster Autoscaler discovery tags (ASG autodiscovery)
+        "k8s.io/cluster-autoscaler/enabled"             = "true"
+        "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
       }
     }
   }

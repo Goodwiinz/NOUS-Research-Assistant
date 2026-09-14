@@ -151,47 +151,54 @@ resource "aws_iam_policy" "backup_s3_policy" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetBucketLocation",
-          "s3:ListBucket",
-          "s3:GetBucketVersioning",
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:DeleteObject",
-          "s3:ListMultipartUploadParts",
-          "s3:AbortMultipartUpload"
-        ]
-        Resource = [
-          aws_s3_bucket.backups.arn,
-          "${aws_s3_bucket.backups.arn}/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetBucketLocation",
-          "s3:ListBucket",
-          "s3:GetBucketVersioning",
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:DeleteObject",
-          "s3:ListMultipartUploadParts",
-          "s3:AbortMultipartUpload"
-        ]
-        Resource = [
-          var.enable_cross_region_backup ? aws_s3_bucket.backups_dr[0].arn : "",
-          var.enable_cross_region_backup ? "${aws_s3_bucket.backups_dr[0].arn}/*" : ""
-        ]
-        Condition = {
-          StringEquals = {
-            "aws:RequestedRegion" = var.backup_region
+    # Cross-region statement is only appended when DR replication is enabled,
+    # otherwise it would emit empty Resource entries and AWS rejects the
+    # policy document as malformed.
+    Statement = concat(
+      [
+        {
+          Effect = "Allow"
+          Action = [
+            "s3:GetBucketLocation",
+            "s3:ListBucket",
+            "s3:GetBucketVersioning",
+            "s3:PutObject",
+            "s3:GetObject",
+            "s3:DeleteObject",
+            "s3:ListMultipartUploadParts",
+            "s3:AbortMultipartUpload"
+          ]
+          Resource = [
+            aws_s3_bucket.backups.arn,
+            "${aws_s3_bucket.backups.arn}/*"
+          ]
+        }
+      ],
+      var.enable_cross_region_backup ? [
+        {
+          Effect = "Allow"
+          Action = [
+            "s3:GetBucketLocation",
+            "s3:ListBucket",
+            "s3:GetBucketVersioning",
+            "s3:PutObject",
+            "s3:GetObject",
+            "s3:DeleteObject",
+            "s3:ListMultipartUploadParts",
+            "s3:AbortMultipartUpload"
+          ]
+          Resource = [
+            aws_s3_bucket.backups_dr[0].arn,
+            "${aws_s3_bucket.backups_dr[0].arn}/*"
+          ]
+          Condition = {
+            StringEquals = {
+              "aws:RequestedRegion" = var.backup_region
+            }
           }
         }
-      }
-    ]
+      ] : []
+    )
   })
 }
 
