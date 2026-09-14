@@ -22,12 +22,17 @@ import type {
   UseChatStreamingParams,
   UseChatStreamingReturn,
 } from '@/hooks/chat/useChatStreaming';
-import { CHAT_AUTH_RECOVERY_STORAGE_KEY } from '@/hooks/chat/chatAuthRecovery';
+import {
+  CHAT_AUTH_RECOVERY_STORAGE_KEY,
+  markChatAuthRecoveryReady,
+  stageChatAuthRecovery,
+} from '@/hooks/chat/chatAuthRecovery';
 import { useChatStore } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { useAuthStore } from '@/stores/authStore';
 
 const THREAD_ID = 'thread-A';
+const THREAD_B_ID = 'thread-B';
 const USER_A = { id: 'user-A' } as NonNullable<
   ReturnType<typeof useAuthStore.getState>['user']
 >;
@@ -50,6 +55,7 @@ type StreamCallbacks = {
 let authListener: AuthListener | undefined;
 let routeTransition: ((path: string) => void) | undefined;
 let useActualStreamMessage = false;
+let currentSearchParams = new URLSearchParams();
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
 const streamMessageMock = vi.fn();
@@ -71,7 +77,7 @@ const realConsoleWarn = console.warn;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: pushMock, replace: replaceMock }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => currentSearchParams,
 }));
 
 vi.mock('@/lib/supabase/client', () => ({
@@ -153,7 +159,19 @@ function makeParams(
     setConversations: vi.fn(),
     dbConversation: null,
     enableRAG: false,
+    authRecoveryRoute: { isReady: true, threadId: THREAD_ID },
   };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function storedRecovery(): Record<string, unknown> | null {
@@ -198,6 +216,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
 
   beforeEach(() => {
     sessionStorage.clear();
+    currentSearchParams = new URLSearchParams();
     useActualStreamMessage = false;
     global.fetch = realFetch;
     routeTransition = undefined;
@@ -369,6 +388,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
         dbConversation: session.dbConversation,
         workspace: session.workspace,
         enableRAG: false,
+        authRecoveryRoute: session.authRecoveryRoute,
       });
       useEffect(() => {
         if (!session.isInitializing) routedStreaming = streaming;
@@ -481,6 +501,272 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     expect(replaceMock).not.toHaveBeenCalled();
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
     expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'a different URL thread',
+      query: `thread=${THREAD_B_ID}`,
+      expectedThreadId: THREAD_B_ID,
+      retainedDraft: 'account B draft',
+      shouldRestore: false,
+    },
+    {
+      name: 'explicit new-chat intent',
+      query: 'new=1',
+      expectedThreadId: null,
+      retainedDraft: 'new chat draft',
+      shouldRestore: false,
+    },
+    {
+      name: 'the matching URL thread',
+      query: `thread=${THREAD_ID}`,
+      expectedThreadId: THREAD_ID,
+      retainedDraft: '',
+      shouldRestore: true,
+    },
+  ])(
+    'waits for session readiness before recovery on $name',
+    async ({ query, expectedThreadId, retainedDraft, shouldRestore }) => {
+      const pendingWorkspace = deferred<{ id: string; name: string }>();
+      currentSearchParams = new URLSearchParams(query);
+      getDefaultWorkspaceMock.mockReturnValueOnce(pendingWorkspace.promise);
+      listWorkspaceThreadsMock.mockResolvedValueOnce({
+        threads: [
+          {
+            id: THREAD_ID,
+            conversation_id: 'conversation-A',
+            title: 'Thread A',
+            status: 'active',
+            message_count: 0,
+            token_count: 0,
+            created_at: '2026-09-13T00:00:00.000Z',
+            updated_at: '2026-09-13T00:00:00.000Z',
+          },
+          {
+            id: THREAD_B_ID,
+            conversation_id: 'conversation-B',
+            title: 'Thread B',
+            status: 'active',
+            message_count: 0,
+            token_count: 0,
+            created_at: '2026-09-13T00:00:00.000Z',
+            updated_at: '2026-09-13T00:00:00.000Z',
+          },
+        ],
+        total: 2,
+        page: 1,
+        limit: 50,
+        has_more: false,
+      });
+      expect(
+        stageChatAuthRecovery({
+          attemptId: 'route-readiness-attempt',
+          ownerUserId: USER_A.id,
+          threadId: THREAD_ID,
+          prompt: 'account A recovered prompt',
+        })
+      ).toBe(true);
+      expect(markChatAuthRecoveryReady('route-readiness-attempt')).toBe(true);
+
+      const [{ useChatSession }, { useChatStreaming }] = await Promise.all([
+        import('@/hooks/chat/useChatSession'),
+        import('@/hooks/chat/useChatStreaming'),
+      ]);
+      let latest:
+        | {
+            session: ReturnType<typeof useChatSession>;
+            streaming: UseChatStreamingReturn;
+          }
+        | undefined;
+
+      function RoutedRecoveryHooks(): ReactNode {
+        const session = useChatSession();
+        const streaming = useChatStreaming({
+          messages: session.messages,
+          displayedMessages: session.displayedMessages,
+          setMessages: session.setMessages,
+          conversations: session.conversations,
+          setConversations: session.setConversations,
+          dbConversation: session.dbConversation,
+          workspace: session.workspace,
+          enableRAG: false,
+          authRecoveryRoute: session.authRecoveryRoute,
+        });
+        latest = { session, streaming };
+        return createElement('div', { 'data-testid': 'routed-recovery' });
+      }
+
+      const routed = render(createElement(RoutedRecoveryHooks), { wrapper });
+      await waitFor(() =>
+        expect(getDefaultWorkspaceMock).toHaveBeenCalledTimes(1)
+      );
+
+      expect(latest?.session.isInitializing).toBe(true);
+      expect(latest?.streaming.input).toBe('');
+      expect(storedRecovery()?.state).toBe('ready');
+
+      if (!shouldRestore) {
+        act(() => latest?.streaming.setInput(retainedDraft));
+      }
+      await act(async () => {
+        pendingWorkspace.resolve({ id: 'workspace-A', name: 'Workspace A' });
+      });
+      await waitFor(() => expect(latest?.session.isInitializing).toBe(false));
+
+      if (expectedThreadId) {
+        await waitFor(() =>
+          expect(latest?.session.activeThreadId).toBe(expectedThreadId)
+        );
+      }
+      if (shouldRestore) {
+        await waitFor(() =>
+          expect(latest?.streaming.input).toBe('account A recovered prompt')
+        );
+        expect(
+          sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)
+        ).toBeNull();
+      } else {
+        expect(latest?.streaming.input).toBe(retainedDraft);
+        expect(storedRecovery()).toEqual(
+          expect.objectContaining({
+            ownerUserId: USER_A.id,
+            threadId: THREAD_ID,
+            state: 'ready',
+          })
+        );
+      }
+      expect(streamMessageMock).not.toHaveBeenCalled();
+      routed.unmount();
+    }
+  );
+
+  it('does not consume through a stale ready-route prop when the live selection differs', async () => {
+    expect(
+      stageChatAuthRecovery({
+        attemptId: 'stale-route-prop',
+        ownerUserId: USER_A.id,
+        threadId: THREAD_ID,
+        prompt: 'thread A only',
+      })
+    ).toBe(true);
+    expect(markChatAuthRecoveryReady('stale-route-prop')).toBe(true);
+    useChatStore.setState({ currentThreadId: THREAD_B_ID });
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+
+    const { result } = renderHook(() => useChatStreaming(makeParams()), {
+      wrapper,
+    });
+
+    expect(result.current.input).toBe('');
+    expect(storedRecovery()).toEqual(
+      expect.objectContaining({
+        ownerUserId: USER_A.id,
+        threadId: THREAD_ID,
+        state: 'ready',
+      })
+    );
+    expect(streamMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the live account before a ready-route recovery effect consumes', async () => {
+    expect(
+      stageChatAuthRecovery({
+        attemptId: 'account-switch-before-passive-effect',
+        ownerUserId: USER_A.id,
+        threadId: THREAD_ID,
+        prompt: 'account A effect prompt',
+      })
+    ).toBe(true);
+    expect(
+      markChatAuthRecoveryReady('account-switch-before-passive-effect')
+    ).toBe(true);
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    let latest: UseChatStreamingReturn | undefined;
+
+    function AccountSwitchBeforePassiveEffect(): ReactNode {
+      const streaming = useChatStreaming(makeParams());
+      useLayoutEffect(() => {
+        useAuthStore.setState({ user: USER_B, isAuthenticated: true });
+      }, []);
+      latest = streaming;
+      return createElement('div', { 'data-testid': 'account-switch-effect' });
+    }
+
+    render(createElement(AccountSwitchBeforePassiveEffect), { wrapper });
+    await waitFor(() =>
+      expect(useAuthStore.getState().user?.id).toBe(USER_B.id)
+    );
+
+    expect(latest?.input).toBe('');
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(streamMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('does not consume when the initialization watchdog exposes an unsettled route', async () => {
+    vi.useFakeTimers();
+    const pendingWorkspace = new Promise<never>(() => {});
+    currentSearchParams = new URLSearchParams(`thread=${THREAD_ID}`);
+    getDefaultWorkspaceMock.mockReturnValueOnce(pendingWorkspace);
+    expect(
+      stageChatAuthRecovery({
+        attemptId: 'watchdog-route',
+        ownerUserId: USER_A.id,
+        threadId: THREAD_ID,
+        prompt: 'wait for settled initialization',
+      })
+    ).toBe(true);
+    expect(markChatAuthRecoveryReady('watchdog-route')).toBe(true);
+
+    const [{ useChatSession }, { useChatStreaming }] = await Promise.all([
+      import('@/hooks/chat/useChatSession'),
+      import('@/hooks/chat/useChatStreaming'),
+    ]);
+    let latest:
+      | {
+          session: ReturnType<typeof useChatSession>;
+          streaming: UseChatStreamingReturn;
+        }
+      | undefined;
+
+    function WatchdogRecoveryHooks(): ReactNode {
+      const session = useChatSession();
+      const streaming = useChatStreaming({
+        messages: session.messages,
+        displayedMessages: session.displayedMessages,
+        setMessages: session.setMessages,
+        conversations: session.conversations,
+        setConversations: session.setConversations,
+        dbConversation: session.dbConversation,
+        workspace: session.workspace,
+        enableRAG: false,
+        authRecoveryRoute: session.authRecoveryRoute,
+      });
+      latest = { session, streaming };
+      return createElement('div', { 'data-testid': 'watchdog-recovery' });
+    }
+
+    const routed = render(createElement(WatchdogRecoveryHooks), { wrapper });
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      expect(latest?.session.isInitializing).toBe(false);
+      expect(latest?.session.initError).toContain(
+        'Connecting is taking longer than expected'
+      );
+      expect(latest?.session.authRecoveryRoute).toEqual({
+        isReady: false,
+        threadId: THREAD_ID,
+      });
+      expect(latest?.streaming.input).toBe('');
+      expect(storedRecovery()?.state).toBe('ready');
+      expect(streamMessageMock).not.toHaveBeenCalled();
+    } finally {
+      routed.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('uses generic sign-in recovery without storing an ownerless prompt', async () => {
@@ -718,6 +1004,54 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     }
 
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    const recoveryUrl = replaceMock.mock.calls[0][0] as string;
+    expect(recoveryUrl).toContain('reauth=chat');
+    expect(recoveryUrl).not.toContain('draft=saved');
+    expect(recoveryUrl).not.toContain('cannot');
+  });
+
+  it('still reaches generic sign-in when acquiring session storage is denied', async () => {
+    const sessionStorageDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'sessionStorage'
+    );
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get: () => {
+        throw new DOMException('storage denied', 'SecurityError');
+      },
+    });
+    streamMessageMock.mockImplementation(
+      async (_request: unknown, callbacks: StreamCallbacks) => {
+        callbacks.onAuthRefreshAttempt?.();
+        callbacks.onError?.(
+          'Authentication required',
+          undefined,
+          'authentication_required'
+        );
+      }
+    );
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+
+    try {
+      const { result } = renderHook(() => useChatStreaming(makeParams()), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.handleSubmit('cannot be stored');
+      });
+    } finally {
+      if (sessionStorageDescriptor) {
+        Object.defineProperty(
+          window,
+          'sessionStorage',
+          sessionStorageDescriptor
+        );
+      }
+    }
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    expect(replaceMock).toHaveBeenCalledTimes(1);
     const recoveryUrl = replaceMock.mock.calls[0][0] as string;
     expect(recoveryUrl).toContain('reauth=chat');
     expect(recoveryUrl).not.toContain('draft=saved');

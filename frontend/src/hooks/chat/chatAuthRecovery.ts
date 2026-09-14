@@ -22,7 +22,14 @@ export interface StageChatAuthRecoveryInput {
 }
 
 function recoveryStorage(): Storage | null {
-  return typeof window === 'undefined' ? null : window.sessionStorage;
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage;
+  } catch {
+    // Some browsers expose the property but throw SecurityError while
+    // acquiring it under restricted storage policies.
+    return null;
+  }
 }
 
 function removeRecoveryRecord(storage: Storage): void {

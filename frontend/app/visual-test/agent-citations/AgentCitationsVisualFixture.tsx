@@ -88,6 +88,7 @@ function FixtureChat(): React.JSX.Element {
     workspace: session.workspace,
     enableRAG: true,
     navigateToThread,
+    authRecoveryRoute: session.authRecoveryRoute,
   });
   const liveCitations = useChatStore((state) => state.streamingCitations).map(
     normalizeCitation

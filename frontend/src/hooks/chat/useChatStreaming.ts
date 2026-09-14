@@ -17,6 +17,7 @@ import {
   ChatConversation,
   generateConversationTitle,
 } from '@/hooks/chat/chatTypes';
+import type { ChatAuthRecoveryRoute } from '@/hooks/chat/useChatSession';
 import {
   clearArmedChatAuthRecovery,
   consumeChatAuthRecovery,
@@ -377,6 +378,9 @@ export interface UseChatStreamingParams {
   /** Embedded surfaces may own URL synchronization without navigating away.
    * The production chat defaults to the canonical `/chat` route. */
   navigateToThread?: (threadId: string) => void;
+  /** Omission disables draft restoration. Route owners must explicitly prove
+   * that URL intent, initialization, and selected thread have converged. */
+  authRecoveryRoute?: ChatAuthRecoveryRoute;
 }
 
 export interface UseChatStreamingReturn {
@@ -426,6 +430,7 @@ export function useChatStreaming(
     workspace,
     enableRAG,
     navigateToThread,
+    authRecoveryRoute,
   } = params;
 
   // ---- Project context (for agent page_context) ----
@@ -662,18 +667,32 @@ export function useChatStreaming(
   // Recovery is composer-only. Consumption removes the record first, then
   // restores text for the same account and thread without dispatching Send.
   useEffect(() => {
-    if (!authIsAuthenticated || !authenticatedUserId || !activeThreadId) {
+    const recoveryThreadId = authRecoveryRoute?.threadId;
+    if (
+      !authRecoveryRoute?.isReady ||
+      !authIsAuthenticated ||
+      !authenticatedUserId ||
+      !recoveryThreadId
+    ) {
+      return;
+    }
+    const liveAuth = useAuthStore.getState();
+    if (
+      !liveAuth.isAuthenticated ||
+      liveAuth.user?.id !== authenticatedUserId ||
+      useChatStore.getState().currentThreadId !== recoveryThreadId
+    ) {
       return;
     }
     const restoredPrompt = consumeChatAuthRecovery({
       ownerUserId: authenticatedUserId,
-      threadId: activeThreadId,
+      threadId: recoveryThreadId,
     });
     if (restoredPrompt !== null) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setInput(restoredPrompt);
     }
-  }, [activeThreadId, authIsAuthenticated, authenticatedUserId]);
+  }, [authIsAuthenticated, authenticatedUserId, authRecoveryRoute]);
 
   // Refetch the Working-folders queries once a project-mutating tool
   // succeeds, so the rail shows agent-created sources/notes/drafts without
@@ -1548,12 +1567,27 @@ export function useChatStreaming(
       // installs the live stream controller.
       const preflightAbort = new AbortController();
       abortControllerRef.current = preflightAbort;
-      const rollbackPreflight = (): void => {
-        setMessages(messages);
-        setInput(content);
+      const ownsPreflight = (): boolean =>
+        useAuthStore.getState().user?.id === ownerUserId;
+      const abandonPreflight = (): void => {
         setIsLoading(false);
         submitLockRef.current = false;
         stopTargetRef.current = null;
+      };
+      const rollbackPreflight = (): void => {
+        if (!ownsPreflight()) {
+          abandonPreflight();
+          return;
+        }
+        setMessages(messages);
+        setInput(content);
+        abandonPreflight();
+      };
+      const preflightWasSuperseded = (): boolean => {
+        if (preflightAbort.signal.aborted) return true;
+        if (ownsPreflight()) return false;
+        abandonPreflight();
+        return true;
       };
       // A cold-load confirmation probe still in flight is now stale: whatever
       // interrupt it might replay predates this turn, and the server abandons
@@ -1625,17 +1659,17 @@ export function useChatStreaming(
               if (!activeWorkspaceId) {
                 const defaultWorkspace =
                   await workspaceService.getOrCreateDefaultWorkspace();
-                if (preflightAbort.signal.aborted) return;
+                if (preflightWasSuperseded()) return;
                 activeWorkspaceId = defaultWorkspace.id;
               }
               threadConversation =
                 await workspaceService.getOrCreateDefaultConversation(
                   activeWorkspaceId
                 );
-              if (preflightAbort.signal.aborted) return;
+              if (preflightWasSuperseded()) return;
             }
 
-            if (preflightAbort.signal.aborted) return;
+            if (preflightWasSuperseded()) return;
             const dynamicTitle = generateConversationTitle(content);
             console.log(
               '[Chat] Creating new thread in database with title:',
@@ -1648,7 +1682,7 @@ export function useChatStreaming(
                 projectId: boundProjectId,
               })
             );
-            if (preflightAbort.signal.aborted) return;
+            if (preflightWasSuperseded()) return;
 
             // Register in the chat store: the binding selectors and
             // setThreadProjectBinding read store.threads, and without this the
@@ -1674,6 +1708,13 @@ export function useChatStreaming(
             setConversations((prev) => [newConv, ...prev]);
             useChatStore.getState().setCurrentThread(newConv.id);
             queueMicrotask(() => {
+              if (
+                preflightAbort.signal.aborted ||
+                !ownsPreflight() ||
+                useChatStore.getState().currentThreadId !== newThread.id
+              ) {
+                return;
+              }
               if (navigateToThread) {
                 navigateToThread(newThread.id);
               } else {
@@ -1682,31 +1723,21 @@ export function useChatStreaming(
             });
             console.log('[Chat] Created new thread:', newThread.id);
           } catch (error) {
-            if (preflightAbort.signal.aborted) return;
+            if (preflightWasSuperseded()) return;
             console.error('[Chat] Failed to create thread:', error);
             // Roll back the optimistic turn: the user message was appended and
             // the composer cleared before this call. Without this the bubble
             // ghosts (never sent, gone on reload) and the typed text is lost.
             // Restore both and tell the user, so they can retry.
-            setMessages(messages);
-            setInput(content);
+            rollbackPreflight();
             toast.error('Could not start the conversation. Please try again.');
-            submitLockRef.current = false;
-            setIsLoading(false);
             return;
           }
         }
 
-        if (preflightAbort.signal.aborted) return;
+        if (preflightWasSuperseded()) return;
 
-        const currentUserId = useAuthStore.getState().user?.id;
-        if (
-          (ownerUserId &&
-            (currentUserId !== ownerUserId || !currentThreadId)) ||
-          (!ownerUserId && currentUserId)
-        ) {
-          // Auth changed while a new thread was being prepared. Do not send a
-          // stale account's prompt; put it back in the composer instead.
+        if (!currentThreadId) {
           rollbackPreflight();
           return;
         }

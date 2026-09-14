@@ -162,4 +162,40 @@ describe('chatAuthRecovery session handoff', () => {
     expect(stageChatAuthRecovery(ATTEMPT_A, 1_000)).toBe(false);
     expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
   });
+
+  it('fails closed when the browser denies access to sessionStorage itself', () => {
+    const sessionStorageDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'sessionStorage'
+    );
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get: () => {
+        throw new DOMException('storage denied', 'SecurityError');
+      },
+    });
+
+    try {
+      expect(stageChatAuthRecovery(ATTEMPT_A, 1_000)).toBe(false);
+      expect(markChatAuthRecoveryReady('attempt-A', 2_000)).toBe(false);
+      expect(() =>
+        clearArmedChatAuthRecovery('attempt-A', 2_000)
+      ).not.toThrow();
+      expect(() => discardChatAuthRecovery('attempt-A', 2_000)).not.toThrow();
+      expect(
+        consumeChatAuthRecovery(
+          { ownerUserId: 'user-A', threadId: 'thread-A' },
+          2_000
+        )
+      ).toBeNull();
+    } finally {
+      if (sessionStorageDescriptor) {
+        Object.defineProperty(
+          window,
+          'sessionStorage',
+          sessionStorageDescriptor
+        );
+      }
+    }
+  });
 });
