@@ -20,6 +20,8 @@ import type {
 import { useChatStore } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 
+const realRefreshMessages = useChatStore.getState().refreshMessages;
+
 function wrapper({ children }: { children: ReactNode }): ReactElement {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -103,6 +105,7 @@ describe('useChatStreaming pending-confirmation probe (cold thread load)', () =>
       currentThreadId: 'thread-A',
       isStreaming: false,
       streamingThreadId: null,
+      refreshMessages: realRefreshMessages,
     });
   });
 
@@ -258,17 +261,63 @@ describe('useChatStreaming pending-confirmation probe (cold thread load)', () =>
     expect(resumeStreamMock).toHaveBeenCalledTimes(1);
   });
 
-  it('does not probe a thread this session already owns (run record present)', async () => {
+  it.each(['done', 'stopped'] as const)(
+    'does not probe a thread with a settled %s run',
+    async (state) => {
+      parkedInterrupt();
+      useAgentActivityStore
+        .getState()
+        .startRun('thread-A', 'NOUS', 'already mine');
+      useAgentActivityStore.getState().finishRun('thread-A', state);
+
+      const { result } = await renderStreaming();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(resumeStreamMock).not.toHaveBeenCalled();
+      expect(result.current.pendingConfirmation).toBeNull();
+    }
+  );
+
+  it('probes an error run for a confirmation left parked server-side', async () => {
     parkedInterrupt();
     useAgentActivityStore
       .getState()
-      .startRun('thread-A', 'NOUS', 'already mine');
-    useAgentActivityStore.getState().finishRun('thread-A', 'stopped');
+      .startRun('thread-A', 'NOUS', 'failed confirmation');
+    useAgentActivityStore.getState().finishRun('thread-A', 'error');
 
     const { result } = await renderStreaming();
-    await new Promise((resolve) => setTimeout(resolve, 30));
 
-    expect(resumeStreamMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(result.current.pendingConfirmation).not.toBeNull()
+    );
+    expect(resumeStreamMock).toHaveBeenCalledWith(
+      'thread-A',
+      0,
+      expect.any(Object),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it('leaves a running run with the cursor-based resume owner', async () => {
+    const refreshSpy = vi.fn().mockResolvedValue(true);
+    useChatStore.setState({ refreshMessages: refreshSpy });
+    useAgentActivityStore
+      .getState()
+      .startRun('thread-A', 'NOUS', 'still running');
+    useAgentActivityStore.getState().setStreamSeq('thread-A', 7, 'stream-A');
+    resumeStreamMock.mockResolvedValue({ status: 'idle' });
+
+    const { result } = await renderStreaming();
+
+    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(1));
+    expect(resumeStreamMock).toHaveBeenCalledWith(
+      'thread-A',
+      7,
+      expect.any(Object),
+      expect.any(AbortSignal),
+      'stream-A'
+    );
+    await waitFor(() => expect(refreshSpy).toHaveBeenCalled());
     expect(result.current.pendingConfirmation).toBeNull();
   });
 

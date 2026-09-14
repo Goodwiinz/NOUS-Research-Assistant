@@ -2054,10 +2054,12 @@ export function useChatStreaming(
     if (!threadId || isLoading || storeIsStreaming) return;
     if (pendingConfirmation) return;
     if (useChatStore.getState().isStreaming) return;
-    // Any run record at all means this session already owns the thread's
-    // lifecycle (running → the resume effect; stopped/done/error → the user
-    // already saw and settled the gate).
-    if (useAgentActivityStore.getState().runs[threadId]) return;
+    // A running run belongs to the resume effect; stopped/done means this
+    // session already saw and settled the gate. An error run is different: an
+    // auth-navigation abort can leave its confirmation parked server-side, so
+    // allow the confirmation-only probe to check it once.
+    const run = useAgentActivityStore.getState().runs[threadId];
+    if (run && run.state !== 'error') return;
     if (confirmationProbedRef.current.has(threadId)) return;
     confirmationProbedRef.current.add(threadId);
 
@@ -2627,7 +2629,11 @@ export function useChatStreaming(
                 buildConfirmMessage(confirmContent, true),
               ]);
           }
-          if (nestedConfirmation || confirmHadError) {
+          if (
+            nestedConfirmation ||
+            confirmHadError ||
+            authRecoveryAttempt.navigationStarted
+          ) {
             await reconcileConfirmationUser(
               nestedConfirmation ? 'confirmation-paused' : 'confirmation-error'
             );
@@ -2671,7 +2677,10 @@ export function useChatStreaming(
           // A nested interrupt keeps the run open: the turn isn't over.
           // A failed attempt leaves the graph interrupted, so the run is not
           // over either — only finish it when the turn genuinely ended.
-          const confirmFailed = confirmHadError || confirmThrew;
+          const confirmFailed =
+            confirmHadError ||
+            confirmThrew ||
+            authRecoveryAttempt.navigationStarted;
           if (
             !nestedConfirmation &&
             !confirmFailed &&
