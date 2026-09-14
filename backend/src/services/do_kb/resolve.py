@@ -14,7 +14,7 @@ stay DRY and any future bug-fix lands in a single place.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Sequence
+from typing import Collection, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -44,6 +44,7 @@ async def resolve_and_filter_chunks(
     org_id: UUID,
     session: AsyncSession,
     project_id: Optional[str] = None,
+    allowed_document_ids: Optional[Collection[UUID]] = None,
 ) -> tuple[dict[str, tuple[str, str]], list[Chunk]]:
     """Resolve DO KB chunks to Documents and optionally filter by project.
 
@@ -171,5 +172,18 @@ async def resolve_and_filter_chunks(
                     if (title_by_key.get(c.document_id or "", (None, None))[0] or "")
                     in in_project
                 ]
+
+    if allowed_document_ids is not None:
+        allowed = set(allowed_document_ids)
+        title_by_key = {
+            key: value
+            for key, value in title_by_key.items()
+            if UUID(value[0]) in allowed
+        }
+        chunks_to_emit = [
+            chunk
+            for chunk in chunks_to_emit
+            if (chunk.document_id or "") in title_by_key
+        ]
 
     return title_by_key, chunks_to_emit

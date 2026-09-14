@@ -168,6 +168,45 @@ async def test_canonical_text_key_uuid_stem_resolution():
     assert len(chunks_to_emit) == 1
 
 
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_allowed_document_ids_drop_stronger_provider_distractor():
+    target_id = UUID("11111111-1111-4111-8111-111111111111")
+    distractor_id = UUID("22222222-2222-4222-8222-222222222222")
+    chunks = [
+        _make_chunk(
+            document_id=f"{distractor_id}.txt",
+            text="stronger but unrelated",
+            score=0.99,
+        ),
+        _make_chunk(
+            document_id=f"{target_id}.txt",
+            text="target evidence",
+            score=0.51,
+        ),
+    ]
+    session = _mock_session_with_docs(
+        doc_rows=[
+            (target_id, "target.pdf", "Attention Is All You Need"),
+            (distractor_id, "distractor.pdf", "Unrelated Paper"),
+        ]
+    )
+
+    title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
+        chunks=chunks,
+        org_id=uuid4(),
+        session=session,
+        allowed_document_ids={target_id},
+    )
+
+    assert [chunk.text for chunk in chunks_to_emit] == ["target evidence"]
+    assert title_by_key[f"{target_id}.txt"] == (
+        str(target_id),
+        "Attention Is All You Need",
+    )
+    assert f"{distractor_id}.txt" not in title_by_key
+
+
 # -------------------------------------------------------------------------
 # Test 4: Project scoping filters out non-member docs
 # -------------------------------------------------------------------------

@@ -241,6 +241,15 @@ AGENT_TOOLS = [
                         "description": "Number of chunks to return (1-20).",
                         "default": 8,
                     },
+                    "document_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Canonical document UUIDs returned by search_documents. "
+                            "When supplied, retrieval is limited to these documents "
+                            "(maximum 20)."
+                        ),
+                    },
                 },
                 "required": ["query"],
             },
@@ -1758,10 +1767,11 @@ async def _tool_search_documents(
             # this the model reported "no documents found" while do_kb_retrieve
             # sat unused one call away (live miss 2026-08-12).
             payload["suggestion"] = (
-                "No title/filename matched. This tool does not search "
-                "document content — retry with do_kb_retrieve for a "
-                "content-level (semantic) search before telling the "
-                "user nothing was found."
+                "No title/filename matched. If the user requested a specific named "
+                "source, state that it could not be identified and do not substitute "
+                "broad retrieval. This tool does not search document content; for "
+                "topical discovery not tied to a named source, retry with "
+                "do_kb_retrieve before telling the user nothing was found."
             )
         return payload
     except Exception as e:
@@ -1790,8 +1800,106 @@ async def _tool_do_kb_retrieve(
 
     top_k = max(1, min(int(args.get("top_k", _kb_settings.DO_KB_DEFAULT_TOP_K)), 20))
 
-    if not getattr(_kb_settings, "DO_KB_ENABLED", False):
+    scoped_intent = "document_ids" in args
+    requested_document_ids: list[UUID] = []
+    provider_filters: Optional[dict[str, Any]] = None
+
+    def scoped_limitation(reason: str) -> Dict[str, Any]:
+        return {
+            "chunks": [],
+            "total": 0,
+            "source": "do_kb",
+            "reason": reason,
+            "note": (
+                "The requested document could not be retrieved as evidence. "
+                "No other document was substituted."
+            ),
+            "evidence_mode": False,
+        }
+
+    if scoped_intent:
+        raw_document_ids = args.get("document_ids")
+        if (
+            not isinstance(raw_document_ids, list)
+            or not raw_document_ids
+            or len(raw_document_ids) > 20
+        ):
+            return scoped_limitation("invalid_document_scope")
+
+        seen_document_ids: set[UUID] = set()
+        for raw_document_id in raw_document_ids:
+            if not isinstance(raw_document_id, str) or not raw_document_id.strip():
+                return scoped_limitation("invalid_document_scope")
+            try:
+                document_id = UUID(raw_document_id.strip())
+            except (ValueError, TypeError, AttributeError):
+                return scoped_limitation("invalid_document_scope")
+            if document_id not in seen_document_ids:
+                seen_document_ids.add(document_id)
+                requested_document_ids.append(document_id)
+
+        clauses = [
+            {
+                "equals": {
+                    "key": "item_name",
+                    "value": f"{document_id}.txt",
+                }
+            }
+            for document_id in requested_document_ids
+        ]
+        provider_filters = clauses[0] if len(clauses) == 1 else {"or_all": clauses}
+
+    kb_enabled = getattr(_kb_settings, "DO_KB_ENABLED", False)
+    if not kb_enabled and not scoped_intent:
         return {"chunks": [], "total": 0, "source": "do_kb", "reason": "disabled"}
+
+    resolved_project_id: Optional[str] = None
+    if scoped_intent:
+        if db is None:
+            return scoped_limitation("requested_documents_unavailable")
+        try:
+            authorized_rows = await db.execute(
+                select(Document.id).where(
+                    Document.id.in_(requested_document_ids),
+                    Document.organization_id == current_user.organization_id,
+                    Document.is_deleted == False,
+                )
+            )
+            authorized_document_ids = {
+                UUID(str(document_id))
+                for document_id in authorized_rows.scalars().all()
+            }
+            requested_document_id_set = set(requested_document_ids)
+            if authorized_document_ids != requested_document_id_set:
+                return scoped_limitation("requested_documents_unavailable")
+
+            project_id = args.get("project_id")
+            if project_id:
+                project = await _verify_project_ownership(project_id, db, current_user)
+                if not project:
+                    return scoped_limitation("requested_documents_unavailable")
+                resolved_project_id = str(project.id)
+                membership_rows = await db.execute(
+                    select(CollectionDocument.document_id).where(
+                        CollectionDocument.collection_id == project.id,
+                        CollectionDocument.document_id.in_(requested_document_ids),
+                        CollectionDocument.is_deleted == False,
+                    )
+                )
+                member_document_ids = {
+                    UUID(str(document_id))
+                    for document_id in membership_rows.scalars().all()
+                }
+                if member_document_ids != requested_document_id_set:
+                    return scoped_limitation("requested_documents_unavailable")
+        except Exception as exc:
+            logger.warning(
+                "do_kb_retrieve named-document authorization failed: %s", exc
+            )
+            return scoped_limitation("requested_documents_unavailable")
+
+        if not kb_enabled:
+            return scoped_limitation("scoped_retrieval_unavailable")
 
     # Read kb_uuid from the org. Lazy import to keep cold-start light.
     from src.services.do_kb.retrieval import (
@@ -1805,6 +1913,8 @@ async def _tool_do_kb_retrieve(
         kb_uuid = await resolve_org_kb_uuid(db, current_user.organization_id)
 
     if not kb_uuid:
+        if scoped_intent:
+            return scoped_limitation("scoped_retrieval_unavailable")
         return {
             "chunks": [],
             "total": 0,
@@ -1817,14 +1927,19 @@ async def _tool_do_kb_retrieve(
     # helper. A non-DOKnowledgeBaseError propagates out of the helper and is
     # caught by the broad except below, preserving the tool's error-dict path.
     try:
-        outcome = await retrieve_kb_chunks(
-            kb_uuid=kb_uuid,
-            query=query,
-            org_id=current_user.organization_id,
-            top_k=top_k,
-        )
+        retrieve_kwargs: Dict[str, Any] = {
+            "kb_uuid": kb_uuid,
+            "query": query,
+            "org_id": current_user.organization_id,
+            "top_k": top_k,
+        }
+        if provider_filters is not None:
+            retrieve_kwargs["filters"] = provider_filters
+        outcome = await retrieve_kb_chunks(**retrieve_kwargs)
     except Exception as exc:
         logger.warning("do_kb_retrieve failed: %s", exc)
+        if scoped_intent:
+            return scoped_limitation("scoped_retrieval_unavailable")
         return {
             "chunks": [],
             "total": 0,
@@ -1833,6 +1948,8 @@ async def _tool_do_kb_retrieve(
         }
 
     if outcome.status is not DOKBRetrieveStatus.SUCCESS:
+        if scoped_intent:
+            return scoped_limitation("scoped_retrieval_unavailable")
         failure = (
             asyncio.TimeoutError()
             if outcome.status is DOKBRetrieveStatus.TIMEOUT
@@ -1853,8 +1970,7 @@ async def _tool_do_kb_retrieve(
     # using it as a filter — otherwise passing another (in-org) project's id
     # would reveal which org documents belong to it (membership inference).
     # Mirrors the _verify_project_ownership guard the sibling project tools use.
-    resolved_project_id: Optional[str] = None
-    if project_id:
+    if project_id and not scoped_intent:
         if db is None:
             # Can't verify without a session — drop the filter rather than
             # trust an unverified id (fall back to org-wide scoping).
@@ -1884,12 +2000,15 @@ async def _tool_do_kb_retrieve(
     if db is not None and result.chunks:
         from src.services.do_kb.resolve import resolve_and_filter_chunks
 
-        title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
-            chunks=result.chunks,
-            org_id=current_user.organization_id,
-            session=db,
-            project_id=resolved_project_id,
-        )
+        resolve_kwargs: Dict[str, Any] = {
+            "chunks": result.chunks,
+            "org_id": current_user.organization_id,
+            "session": db,
+            "project_id": resolved_project_id,
+        }
+        if scoped_intent:
+            resolve_kwargs["allowed_document_ids"] = set(requested_document_ids)
+        title_by_key, chunks_to_emit = await resolve_and_filter_chunks(**resolve_kwargs)
 
     from src.services.do_kb.postprocess import sanitize_and_deduplicate_chunks
 
@@ -1905,6 +2024,8 @@ async def _tool_do_kb_retrieve(
     )
     chunks_to_emit = postprocessed.chunks
     if not chunks_to_emit:
+        if scoped_intent:
+            return scoped_limitation("no_scoped_chunks")
         return {
             "chunks": [],
             "total": 0,
@@ -1922,6 +2043,8 @@ async def _tool_do_kb_retrieve(
 
     chunks_to_emit = drop_low_relevance_chunks(chunks_to_emit)
     if not chunks_to_emit:
+        if scoped_intent:
+            return scoped_limitation("no_scoped_chunks")
         return {
             "chunks": [],
             "total": 0,
@@ -1970,7 +2093,7 @@ async def _tool_do_kb_retrieve(
 
     payload = {
         "chunks": chunks_payload,
-        "total": len(chunks_payload) if project_id else result.total,
+        "total": len(chunks_payload) if project_id or scoped_intent else result.total,
         "source": "do_kb",
         "query": query,
         "evidence_mode": evidence_mode,
