@@ -20,7 +20,6 @@ from urllib.parse import SplitResult, parse_qsl, quote, urlsplit, urlunsplit
 import structlog
 from jinja2 import BaseLoader, Environment, select_autoescape
 from jinja2.ext import loopcontrols
-from markupsafe import Markup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -40,7 +39,10 @@ from src.shared.export_schemas import (
 
 logger = structlog.get_logger(__name__)
 
-_MARKDOWN_SPECIAL = re.compile(r"([\\`*_[\]{}()<>])")
+# HTML-sensitive characters are escaped by Jinja when the plain-text source
+# string enters the template. Escaping angle brackets here as well would leave
+# visible backslashes/entities in the rendered Markdown label.
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_[\]{}()])")
 _ARXIV_ID = re.compile(
     r"(?:\d{4}\.\d{4,5}|[a-z][a-z0-9.-]*/\d{7})(?:v\d+)?",
     re.IGNORECASE,
@@ -361,7 +363,7 @@ class MarkdownFormatter(ExportFormatter):
         self._env.filters["citation_source"] = self._citation_source
         self._template = self._env.from_string(MARKDOWN_TEMPLATE)
 
-    def _citation_source(self, citation: CitationExport, source_number: int) -> Markup:
+    def _citation_source(self, citation: CitationExport, source_number: int) -> str:
         """Render one bold source label, linking only to stable safe targets."""
         reference = citation.external_reference_id
         if citation.document_title:
@@ -380,9 +382,11 @@ class MarkdownFormatter(ExportFormatter):
             destination = _external_reference_destination(reference)
 
         escaped_label = _escape_markdown_label(label)
+        # Return ordinary text so the template's autoescape remains in force
+        # for both untrusted source labels and URL query parameters.
         if destination:
-            return Markup(f"**[{escaped_label}]({destination})**")
-        return Markup(f"**{escaped_label}**")
+            return f"**[{escaped_label}]({destination})**"
+        return f"**{escaped_label}**"
 
     def format(self, thread: ThreadExport, options: ExportOptions) -> bytes:
         content = self._template.render(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
+from markdown_it import MarkdownIt
 
 from src.core.config import settings
 from src.services.research.export_service import MarkdownFormatter
@@ -97,6 +98,54 @@ def test_safe_external_url_is_preserved_with_markdown_safe_destination(
     assert (
         "**[Result](https://example.org/papers/result_%28final%29.pdf#section-2)**"
         in markdown
+    )
+
+
+@pytest.mark.parametrize("document_id", ["doc-1", None])
+def test_citation_titles_are_html_escaped_without_corrupting_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+    document_id: str | None,
+) -> None:
+    """Bypassing autoescape or double-escaping angle brackets breaks this output."""
+    monkeypatch.setattr(settings, "FRONTEND_BASE_URL", "https://goodwiinz.tech")
+
+    markdown = _render(
+        CitationExport(
+            id="citation-1",
+            document_id=document_id,
+            document_title="Evidence <img src=x onerror=alert(1)> & [draft]",
+        )
+    )
+    source = markdown.split("### Sources", 1)[1].split("---", 1)[0]
+
+    assert "<" not in source
+    assert ">" not in source
+    rendered = MarkdownIt("commonmark").render(source)
+    assert "Evidence &lt;img src=x onerror=alert(1)&gt; &amp; [draft]" in rendered
+    assert "<img" not in rendered
+    if document_id:
+        assert 'href="https://goodwiinz.tech/documents/doc-1"' in rendered
+    else:
+        assert "<a " not in rendered
+
+
+def test_autoescaped_source_links_preserve_query_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTML escaping must not drop or double-encode a source URL's ampersand."""
+    monkeypatch.setattr(settings, "FRONTEND_BASE_URL", "https://goodwiinz.tech")
+    markdown = _render(
+        CitationExport(
+            id="citation-1",
+            external_reference_id="https://example.org/paper?q=attention&view=full",
+            document_title="Attention & memory",
+        )
+    )
+
+    rendered = MarkdownIt("commonmark").render(markdown)
+    assert (
+        '<a href="https://example.org/paper?q=attention&amp;view=full">'
+        "Attention &amp; memory</a>" in rendered
     )
 
 

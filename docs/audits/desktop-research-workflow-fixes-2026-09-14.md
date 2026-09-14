@@ -74,6 +74,31 @@ or bundler changes are intentionally outside this five-fix PR.
 The actual patched Markdown formatter generated a fixture containing a stable
 document hyperlink and `(p. 3)`, but its browser download path was not verified.
 
+## PR #1643 CI correction
+
+The first remote pipeline identified two distinct failures:
+
+- Bandit 1.9.4 rejected the dynamic `Markup(...)` wrappers in the new citation
+  formatter (B704). The local CI helper had not exercised this security gate.
+  The formatter now returns ordinary text through Jinja's existing autoescape;
+  Markdown and HTML escaping are applied without double-escaping angle brackets.
+- E2E stopped before running tests because Docker Hub's authentication endpoint
+  reset the connection while BuildKit fetched `docker/dockerfile:1`. No E2E
+  assertion failed in that run. The release gate correctly reported both failures.
+
+The correction passed 20 scoped export tests, including real CommonMark rendering
+of linked/unlinked untrusted titles and preservation of URL query parameters.
+Both new HTML-escaping cases failed before the correction. The exact security
+command failed before and passed afterward:
+
+```sh
+bandit -r backend/src -ll -ii -x tests -b backend/.bandit-baseline.json
+```
+
+Bandit was pinned to 1.9.4, matching CI. No security baseline, suppression, workflow,
+or release requirement was relaxed. Independent review found no remaining issue.
+The corrected commit must still pass its remote pipeline, including the E2E retry.
+
 ### Required desktop follow-up
 
 - [ ] On a runnable preview, search an exact library title and inspect the request.
