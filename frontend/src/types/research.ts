@@ -2,6 +2,11 @@
  * TypeScript types for Research Assistant feature
  */
 
+import type {
+  ApiCitationListResponse,
+  ApiCitationResponse,
+} from './api/citation-contract';
+
 // ============================================================================
 // Citation Types
 // ============================================================================
@@ -25,34 +30,38 @@ export interface CitationCreate {
   needsReview?: boolean;
 }
 
-export interface CitationResponse {
-  id: string;
-  messageId?: string;
-  documentId?: string;
-  externalReferenceId?: string;
-  documentTitle: string;
-  documentType: string;
-  authors?: string[];
-  year?: number;
-  venue?: string;
-  doi?: string;
-  arxivId?: string;
-  abstract?: string;
-  snippet?: string;
-  pageNumber?: number;
-  score: number;
-  metadataSource: string;
-  needsReview: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
+/** CamelCase presentation model derived from the generated wire response. */
+export type CitationResponse = {
+  id: ApiCitationResponse['id'];
+  messageId: ApiCitationResponse['message_id'];
+  documentId: ApiCitationResponse['document_id'];
+  externalReferenceId: ApiCitationResponse['external_reference_id'];
+  documentTitle: ApiCitationResponse['document_title'];
+  documentType: ApiCitationResponse['document_type'];
+  authors: Exclude<ApiCitationResponse['authors'], undefined>;
+  year: ApiCitationResponse['year'];
+  venue: ApiCitationResponse['venue'];
+  doi: ApiCitationResponse['doi'];
+  arxivId: ApiCitationResponse['arxiv_id'];
+  abstract: ApiCitationResponse['abstract'];
+  snippet: ApiCitationResponse['snippet'];
+  pageNumber: ApiCitationResponse['page_number'];
+  chunkId: ApiCitationResponse['chunk_id'];
+  chunkIndex: ApiCitationResponse['chunk_index'];
+  rerankScore: ApiCitationResponse['rerank_score'];
+  score: ApiCitationResponse['score'];
+  metadataSource: ApiCitationResponse['metadata_source'];
+  needsReview: ApiCitationResponse['needs_review'];
+  createdAt: ApiCitationResponse['created_at'];
+  updatedAt: ApiCitationResponse['updated_at'];
+};
 
-export interface CitationListResponse {
+export type CitationListResponse = Omit<
+  ApiCitationListResponse,
+  'citations'
+> & {
   citations: CitationResponse[];
-  total: number;
-  skip: number;
-  limit: number;
-}
+};
 
 // ============================================================================
 // Project Types

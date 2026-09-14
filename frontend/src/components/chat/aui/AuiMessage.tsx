@@ -57,7 +57,7 @@ import { cn } from '@/lib/utils';
 import { useChatStore } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { normalizeCitation } from '@/utils/citationNormalizer';
-import { getReferencedCitations, type Citation } from '@/utils/citationParser';
+import { getVisibleCitations, type Citation } from '@/utils/citationParser';
 import { toToolCallParts } from './convertMessage';
 
 export type OnCitationClick = (
@@ -683,16 +683,13 @@ export function AuiAssistantMessage({
     [message?.citations]
   );
 
-  const inlineCitations = useMemo(
-    () => getReferencedCitations(message?.content ?? '', allCitations),
-    [message?.content, allCitations]
-  );
-
   // Inline-referenced citations when available, else all attached ones —
   // footer chips + tool strip must render whenever the backend attached
   // sources, even if the AI didn't use [Doc N] markers.
-  const visibleCitations =
-    inlineCitations.length > 0 ? inlineCitations : allCitations;
+  const visibleCitations = useMemo(
+    () => getVisibleCitations(message?.content ?? '', allCitations),
+    [message?.content, allCitations]
+  );
 
   // One numbering for the whole turn: the inline superscripts and the sources
   // list below the reply must agree, so both read it off the same map.

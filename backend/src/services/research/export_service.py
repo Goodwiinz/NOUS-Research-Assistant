@@ -10,10 +10,12 @@ Handles conversion of thread data to various formats:
 
 import io
 import json
+import re
 import zipfile
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, BinaryIO, Dict, List, Optional, Protocol
+from urllib.parse import SplitResult, parse_qsl, quote, urlsplit, urlunsplit
 
 import structlog
 from jinja2 import BaseLoader, Environment, select_autoescape
@@ -22,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.core.config import settings
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.citation import Citation
 from src.models.conversation import Conversation
@@ -35,6 +38,151 @@ from src.shared.export_schemas import (
 )
 
 logger = structlog.get_logger(__name__)
+
+# HTML-sensitive characters are escaped by Jinja when the plain-text source
+# string enters the template. Escaping angle brackets here as well would leave
+# visible backslashes/entities in the rendered Markdown label.
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_[\]{}()])")
+_ARXIV_ID = re.compile(
+    r"(?:\d{4}\.\d{4,5}|[a-z][a-z0-9.-]*/\d{7})(?:v\d+)?",
+    re.IGNORECASE,
+)
+_DOI = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
+_MARKDOWN_URL_SAFE = ":/?#[]@!$&'*+,;=%~-._"
+_SENSITIVE_QUERY_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "credential",
+        "exp",
+        "expires",
+        "expiry",
+        "id_token",
+        "refresh_token",
+        "sig",
+        "signature",
+        "token",
+        "x-amz-credential",
+        "x-amz-expires",
+        "x-amz-security-token",
+        "x-amz-signature",
+        "x-goog-credential",
+        "x-goog-expires",
+        "x-goog-signature",
+    }
+)
+
+
+def _split_safe_http_url(value: str) -> Optional[SplitResult]:
+    """Parse a link destination, rejecting active schemes and credentials."""
+    if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+
+    try:
+        parsed = urlsplit(value.strip())
+        # Reading ``port`` also rejects malformed/out-of-range port syntax.
+        parsed.port
+    except ValueError:
+        return None
+
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    if any(char.isspace() for char in parsed.netloc) or "\\" in parsed.netloc:
+        return None
+    return parsed
+
+
+def _safe_markdown_destination(value: str) -> Optional[str]:
+    """Return a Markdown-safe absolute HTTP(S) URL, or no destination."""
+    parsed = _split_safe_http_url(value)
+    if (
+        parsed is None
+        or _has_sensitive_query(parsed.query)
+        or _has_sensitive_query(parsed.fragment)
+    ):
+        return None
+    normalized = urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc,
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+    return quote(normalized, safe=_MARKDOWN_URL_SAFE)
+
+
+def _configured_frontend_origin() -> Optional[str]:
+    """Resolve the trusted frontend origin without consulting request headers."""
+    base_url = settings.FRONTEND_BASE_URL.strip()
+    if not base_url:
+        origins = settings.cors_origins_list
+        base_url = origins[0] if origins else ""
+
+    parsed = _split_safe_http_url(base_url)
+    if parsed is None:
+        return None
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc, "", "", "")).rstrip("/")
+
+
+def _external_reference_destination(reference: Optional[str]) -> Optional[str]:
+    """Resolve only external identifier formats with canonical public URLs."""
+    if not reference:
+        return None
+
+    direct_url = _safe_markdown_destination(reference)
+    if direct_url:
+        return direct_url
+
+    normalized = reference.strip()
+    arxiv_id = (
+        normalized[6:].strip()
+        if normalized.lower().startswith("arxiv:")
+        else normalized
+    )
+    if _ARXIV_ID.fullmatch(arxiv_id):
+        return f"https://arxiv.org/abs/{quote(arxiv_id, safe='/.')}"
+
+    doi = (
+        normalized[4:].strip() if normalized.lower().startswith("doi:") else normalized
+    )
+    if _DOI.fullmatch(doi):
+        return f"https://doi.org/{quote(doi, safe='/.-_:;')}"
+
+    return None
+
+
+def _has_sensitive_query(query: str) -> bool:
+    """Detect common signed/expiring URL credentials without logging values."""
+    query_keys = {key.casefold() for key, _ in parse_qsl(query, keep_blank_values=True)}
+    return not _SENSITIVE_QUERY_KEYS.isdisjoint(query_keys)
+
+
+def _contains_sensitive_url_data(value: Optional[str]) -> bool:
+    """Return whether an identifier embeds credentials or signed query data."""
+    if not value:
+        return False
+    try:
+        parsed = urlsplit(value.strip())
+    except ValueError:
+        return False
+    return (
+        parsed.username is not None
+        or parsed.password is not None
+        or _has_sensitive_query(parsed.query)
+        or _has_sensitive_query(parsed.fragment)
+    )
+
+
+def _escape_markdown_label(value: str) -> str:
+    """Escape source labels without allowing line or inline-markup injection."""
+    flattened = " ".join(value.splitlines())
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", flattened)
 
 
 # Markdown template
@@ -65,7 +213,7 @@ MARKDOWN_TEMPLATE = """# {{ thread.title or "Untitled Thread" }}
 {% if message.citations and options.include_citations %}
 ### Sources
 {% for citation in message.citations %}
-- **{{ citation.document_title or citation.external_reference_id or "Source " ~ loop.index }}**{% if citation.page_number %} (p. {{ citation.page_number }}){% endif %}{% if citation.score %} [{{ "%.2f"|format(citation.score) }}]{% endif %}
+- {{ citation | citation_source(loop.index) }}{% if citation.page_number is not none %} (p. {{ citation.page_number }}){% endif %}{% if citation.score %} [{{ "%.2f"|format(citation.score) }}]{% endif %}
 {% if citation.snippet %}
   > {{ citation.snippet | truncate(200) }}
 {% endif %}
@@ -207,11 +355,38 @@ class MarkdownFormatter(ExportFormatter):
     """Format thread as Markdown."""
 
     def __init__(self):
+        self._frontend_origin = _configured_frontend_origin()
         # Enable autoescape for security (even for Markdown)
         self._env = Environment(
             loader=BaseLoader(), extensions=[loopcontrols], autoescape=True
         )
+        self._env.filters["citation_source"] = self._citation_source
         self._template = self._env.from_string(MARKDOWN_TEMPLATE)
+
+    def _citation_source(self, citation: CitationExport, source_number: int) -> str:
+        """Render one bold source label, linking only to stable safe targets."""
+        reference = citation.external_reference_id
+        if citation.document_title:
+            label = citation.document_title
+        elif _contains_sensitive_url_data(reference):
+            # Never copy URL credentials or signed query secrets into an export.
+            label = f"Source {source_number}"
+        else:
+            label = reference or f"Source {source_number}"
+
+        destination = None
+        if citation.document_id and self._frontend_origin:
+            document_id = quote(citation.document_id, safe="")
+            destination = f"{self._frontend_origin}/documents/{document_id}"
+        elif reference:
+            destination = _external_reference_destination(reference)
+
+        escaped_label = _escape_markdown_label(label)
+        # Return ordinary text so the template's autoescape remains in force
+        # for both untrusted source labels and URL query parameters.
+        if destination:
+            return f"**[{escaped_label}]({destination})**"
+        return f"**{escaped_label}**"
 
     def format(self, thread: ThreadExport, options: ExportOptions) -> bytes:
         content = self._template.render(
@@ -563,8 +738,6 @@ class ExportService:
 
     def _slugify(self, text: str, max_length: int = 50) -> str:
         """Convert text to URL-safe slug."""
-        import re
-
         text = text.lower()
         text = re.sub(r"[^\w\s-]", "", text)
         text = re.sub(r"[-\s]+", "_", text)
