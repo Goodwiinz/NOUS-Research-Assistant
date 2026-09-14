@@ -70,6 +70,24 @@ class TestClassifyError:
         )
         assert err.category == "transient"
 
+    def test_arxiv_cooldown_survives_error_payload_round_trip(self) -> None:
+        from src.services.agent.error_recovery import (
+            classify_error_from_payload,
+            tool_error_payload,
+        )
+
+        payload = tool_error_payload(
+            "search_arxiv",
+            RuntimeError(
+                "ArXiv rate limited (HTTP 429). Try again in 60 seconds. secret"
+            ),
+        )
+        result = classify_error_from_payload("search_arxiv", payload).to_payload()
+        assert result["error_type"] == "transient"
+        assert "60 seconds" in result["error"]
+        assert "Do not retry arXiv this turn" in result["suggestion"]
+        assert "secret" not in json.dumps(result)
+
     def test_no_results_is_recoverable(self):
         from src.services.agent.error_recovery import classify_error_from_payload
 
