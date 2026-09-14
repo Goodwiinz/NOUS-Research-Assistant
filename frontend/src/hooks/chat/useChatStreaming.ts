@@ -247,7 +247,7 @@ export interface PendingConfirmation {
 
 interface StreamAuthRecoveryAttempt {
   attemptId: string;
-  ownerUserId: string;
+  ownerUserId: string | null;
   threadId: string;
   promptStaged: boolean;
   authRefreshStarted: boolean;
@@ -599,7 +599,10 @@ export function useChatStreaming(
       // The response belongs to the snapshotted user. If another account has
       // already replaced it, discard that user's staged text and leave the
       // newer session completely untouched.
-      if (auth.user && auth.user.id !== attempt.ownerUserId) {
+      if (
+        auth.user &&
+        (attempt.ownerUserId === null || auth.user.id !== attempt.ownerUserId)
+      ) {
         if (attempt.promptStaged) {
           discardChatAuthRecovery(attempt.attemptId);
         }
@@ -1161,6 +1164,14 @@ export function useChatStreaming(
                 authRecoveryAttempt.authRefreshStarted = true;
               }
             },
+            onAuthRefreshSuccess: () => {
+              if (
+                authRecoveryAttemptRef.current === authRecoveryAttempt &&
+                authRecoveryAttempt
+              ) {
+                authRecoveryAttempt.authRefreshStarted = false;
+              }
+            },
             onDone: (payload) => {
               console.log('[Agent] Stream complete');
               finishAuthRecoveryAttempt(authRecoveryAttempt);
@@ -1688,32 +1699,35 @@ export function useChatStreaming(
 
         if (preflightAbort.signal.aborted) return;
 
-        let authRecoveryAttempt: StreamAuthRecoveryAttempt | undefined;
-        if (ownerUserId) {
-          const currentUserId = useAuthStore.getState().user?.id;
-          if (currentUserId !== ownerUserId || !currentThreadId) {
-            // Auth changed while a new thread was being prepared. Do not send a
-            // stale account's prompt; put it back in the composer instead.
-            rollbackPreflight();
-            return;
-          }
+        const currentUserId = useAuthStore.getState().user?.id;
+        if (
+          (ownerUserId &&
+            (currentUserId !== ownerUserId || !currentThreadId)) ||
+          (!ownerUserId && currentUserId)
+        ) {
+          // Auth changed while a new thread was being prepared. Do not send a
+          // stale account's prompt; put it back in the composer instead.
+          rollbackPreflight();
+          return;
+        }
 
-          authRecoveryAttempt = {
-            attemptId: crypto.randomUUID(),
-            ownerUserId,
-            threadId: currentThreadId,
-            promptStaged: false,
-            authRefreshStarted: false,
-            navigationStarted: false,
-          };
+        const authRecoveryAttempt: StreamAuthRecoveryAttempt = {
+          attemptId: crypto.randomUUID(),
+          ownerUserId: ownerUserId ?? null,
+          threadId: currentThreadId ?? '',
+          promptStaged: false,
+          authRefreshStarted: false,
+          navigationStarted: false,
+        };
+        if (ownerUserId && currentThreadId) {
           authRecoveryAttempt.promptStaged = stageChatAuthRecovery({
             attemptId: authRecoveryAttempt.attemptId,
             ownerUserId,
             threadId: currentThreadId,
             prompt: content,
           });
-          authRecoveryAttemptRef.current = authRecoveryAttempt;
         }
+        authRecoveryAttemptRef.current = authRecoveryAttempt;
 
         // Stream via Agent (LangGraph) backend.
         // The workspace thread IS the agent thread (server-canonical).
@@ -2263,20 +2277,15 @@ export function useChatStreaming(
 
         const confirmAbort = new AbortController();
         abortControllerRef.current = confirmAbort;
-        const authRecoveryAttempt: StreamAuthRecoveryAttempt | undefined =
-          ownerUserId
-            ? {
-                attemptId: crypto.randomUUID(),
-                ownerUserId,
-                threadId: pendingConfirmation.workspaceThreadId,
-                promptStaged: false,
-                authRefreshStarted: false,
-                navigationStarted: false,
-              }
-            : undefined;
-        if (authRecoveryAttempt) {
-          authRecoveryAttemptRef.current = authRecoveryAttempt;
-        }
+        const authRecoveryAttempt: StreamAuthRecoveryAttempt = {
+          attemptId: crypto.randomUUID(),
+          ownerUserId: ownerUserId ?? null,
+          threadId: pendingConfirmation.workspaceThreadId,
+          promptStaged: false,
+          authRefreshStarted: false,
+          navigationStarted: false,
+        };
+        authRecoveryAttemptRef.current = authRecoveryAttempt;
 
         try {
           await agentChatService.streamConfirm(
@@ -2492,6 +2501,11 @@ export function useChatStreaming(
                   authRecoveryAttemptRef.current === authRecoveryAttempt
                 ) {
                   authRecoveryAttempt.authRefreshStarted = true;
+                }
+              },
+              onAuthRefreshSuccess: () => {
+                if (authRecoveryAttemptRef.current === authRecoveryAttempt) {
+                  authRecoveryAttempt.authRefreshStarted = false;
                 }
               },
               onDone: (payload) => {

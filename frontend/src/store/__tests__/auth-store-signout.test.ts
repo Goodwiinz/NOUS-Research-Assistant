@@ -198,12 +198,66 @@ describe('useAuthStore signOut', () => {
     expect(mockBrowserSignOut).not.toHaveBeenCalled();
   });
 
+  it('accepts a null expected owner only while no account is present', async () => {
+    const mockCreateClient = vi.fn();
+    const mockClearWorkspaceServiceCache = vi.fn();
+    const mockClearCookies = vi.fn();
+
+    vi.doMock('@/lib/supabase/client', () => ({
+      createClient: mockCreateClient,
+    }));
+    vi.doMock('@/services/workspaceService', () => ({
+      clearWorkspaceServiceCache: mockClearWorkspaceServiceCache,
+    }));
+    vi.doMock('@/lib/supabase/clearAuthCookies', () => ({
+      clearSupabaseAuthCookies: mockClearCookies,
+    }));
+
+    const { useAuthStore } =
+      await vi.importActual<typeof import('@/stores/authStore')>(
+        '@/stores/authStore'
+      );
+    useAuthStore.setState({
+      user: null,
+      organization: null,
+      isAuthenticated: true,
+    });
+
+    useAuthStore.getState().invalidateRejectedSession(null);
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    expect(mockClearWorkspaceServiceCache).toHaveBeenCalledTimes(1);
+    expect(mockClearCookies).toHaveBeenCalledTimes(1);
+    expect(mockCreateClient).not.toHaveBeenCalled();
+
+    useAuthStore.setState({
+      user: { id: 'user-B' } as User,
+      organization: { id: 'org-B' } as Organization,
+      isAuthenticated: true,
+    });
+    useAuthStore.getState().invalidateRejectedSession(null);
+
+    expect(useAuthStore.getState()).toEqual(
+      expect.objectContaining({
+        user: { id: 'user-B' },
+        organization: { id: 'org-B' },
+        isAuthenticated: true,
+      })
+    );
+    expect(mockClearWorkspaceServiceCache).toHaveBeenCalledTimes(1);
+    expect(mockClearCookies).toHaveBeenCalledTimes(1);
+  });
+
   it('does not let user A recovery clear user B or schedule a late SDK wipe', async () => {
     let finishSdkSignOut!: () => void;
     const deferredSdkSignOut = new Promise<void>((resolve) => {
       finishSdkSignOut = resolve;
     });
-    const mockBrowserSignOut = vi.fn(() => deferredSdkSignOut);
+    const sdkStorage = { ownerUserId: 'user-A' as string | null };
+    const mockBrowserSignOut = vi.fn(async () => {
+      await deferredSdkSignOut;
+      sdkStorage.ownerUserId = null;
+    });
     const mockCreateClient = vi.fn(() => ({
       auth: {
         onAuthStateChange: vi.fn(),
@@ -245,14 +299,19 @@ describe('useAuthStore signOut', () => {
       organization: { id: 'org-B' } as Organization,
       isAuthenticated: true,
     });
+
+    // Demonstrate the rejected design with an operation the test actually
+    // starts and settles: its late local removal erases B from SDK storage.
+    const unsafeLateSignOut = mockBrowserSignOut();
+    sdkStorage.ownerUserId = 'user-B';
     finishSdkSignOut();
-    await deferredSdkSignOut;
-    await Promise.resolve();
+    await unsafeLateSignOut;
+    expect(mockBrowserSignOut).toHaveBeenCalledTimes(1);
+    expect(sdkStorage.ownerUserId).toBeNull();
 
     // A late A-owned callback is also rejected without repeating teardown.
     useAuthStore.getState().invalidateRejectedSession('user-A');
 
-    expect(mockBrowserSignOut).not.toHaveBeenCalled();
     expect(mockClearWorkspaceServiceCache).toHaveBeenCalledTimes(1);
     expect(mockClearCookies).toHaveBeenCalledTimes(1);
     expect(useAuthStore.getState()).toEqual(

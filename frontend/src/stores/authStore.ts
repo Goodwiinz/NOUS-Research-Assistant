@@ -46,7 +46,7 @@ interface AuthState {
     organization_name?: string;
   }) => Promise<RegisterResult>;
   signOut: () => Promise<void>;
-  invalidateRejectedSession: (expectedUserId: string) => void;
+  invalidateRejectedSession: (expectedUserId: string | null) => void;
   resetPassword: (email: string) => Promise<void>;
   fetchProfile: () => Promise<void>;
   updateUser: (user: Partial<User>) => void;
@@ -305,7 +305,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     }
   },
 
-  invalidateRejectedSession: (expectedUserId: string) => {
+  invalidateRejectedSession: (expectedUserId: string | null) => {
     const currentUser = get().user;
 
     // A late response from user A must never clear a newer user B session.

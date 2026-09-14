@@ -1,6 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { createElement, type ReactNode } from 'react';
+import { act, render, renderHook, waitFor } from '@testing-library/react';
+import {
+  createElement,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useState,
+} from 'react';
 import {
   afterEach,
   beforeAll,
@@ -12,7 +18,10 @@ import {
 } from 'vitest';
 
 import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
-import type { UseChatStreamingParams } from '@/hooks/chat/useChatStreaming';
+import type {
+  UseChatStreamingParams,
+  UseChatStreamingReturn,
+} from '@/hooks/chat/useChatStreaming';
 import { CHAT_AUTH_RECOVERY_STORAGE_KEY } from '@/hooks/chat/chatAuthRecovery';
 import { useChatStore } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
@@ -35,11 +44,13 @@ type StreamCallbacks = {
   onDone?: (payload?: Record<string, unknown>) => void;
   onError?: (error: string, category?: string, localFailure?: string) => void;
   onAuthRefreshAttempt?: () => void;
+  onAuthRefreshSuccess?: () => void;
 };
 
 let authListener: AuthListener | undefined;
-let routeUnmount: (() => void) | undefined;
+let routeTransition: ((path: string) => void) | undefined;
 let useActualStreamMessage = false;
+const pushMock = vi.fn();
 const replaceMock = vi.fn();
 const streamMessageMock = vi.fn();
 const actualServiceErrorMock = vi.fn();
@@ -50,10 +61,16 @@ const listMessagesMock = vi
   .mockResolvedValue({ messages: [], has_more: false });
 const getSessionMock = vi.fn();
 const refreshSessionMock = vi.fn();
+const getDefaultWorkspaceMock = vi.fn();
+const listWorkspaceThreadsMock = vi.fn();
+const getThreadMock = vi.fn();
 const realFetch = global.fetch;
+const realConsoleError = console.error;
+const realConsoleLog = console.log;
+const realConsoleWarn = console.warn;
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), replace: replaceMock }),
+  useRouter: () => ({ push: pushMock, replace: replaceMock }),
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -110,6 +127,11 @@ vi.mock('@/services/workspaceService', () => ({
     createThread: vi.fn(),
     createMessage: vi.fn().mockResolvedValue({ id: 'message-1' }),
     listMessages: (...args: unknown[]) => listMessagesMock(...args),
+    getOrCreateDefaultWorkspace: (...args: unknown[]) =>
+      getDefaultWorkspaceMock(...args),
+    listWorkspaceThreads: (...args: unknown[]) =>
+      listWorkspaceThreadsMock(...args),
+    getThread: (...args: unknown[]) => getThreadMock(...args),
   },
 }));
 
@@ -154,6 +176,21 @@ function lastErrorCategory(
 }
 
 describe('useChatStreaming exhausted-auth recovery', () => {
+  // Fix-round-1 mutation checks (2026-09-14):
+  // - Removing the retry-success callback at agentChatService.ts:271 fails
+  //   both service lifecycle tests (0 calls) and "closes the auth-loss
+  //   window" (`ready`, expected `armed`):
+  //   pnpm --dir frontend exec vitest run src/services/__tests__/agentChatService.resilience.test.ts src/hooks/chat/__tests__/useChatStreaming.authRecovery.test.tsx -t "refreshed session|successful refresh lifecycle|closes the auth-loss window" --reporter=verbose
+  // - Letting an ownerless attempt ignore a newly present account at
+  //   useChatStreaming.ts:602-605 fails both message and confirmation account
+  //   guards with an unexpected recovery navigation:
+  //   pnpm --dir frontend exec vitest run src/hooks/chat/__tests__/useChatStreaming.authRecovery.test.tsx -t "abandons ownerless|accountAppears=true" --reporter=verbose
+  // - Refusing to register the ownerless attempt at
+  //   useChatStreaming.ts:1730 fails generic recovery (auth stays true):
+  //   pnpm --dir frontend exec vitest run src/hooks/chat/__tests__/useChatStreaming.authRecovery.test.tsx -t "uses generic sign-in recovery without storing an ownerless prompt" --reporter=verbose
+  // - Letting invalidateRejectedSession(null) ignore its current-account gate
+  //   at authStore.ts:312 fails by clearing user B:
+  //   pnpm --dir frontend exec vitest run src/store/__tests__/auth-store-signout.test.ts -t "null expected owner" --reporter=verbose
   beforeAll(async () => {
     await useAuthStore.getState().initialize();
     expect(authListener).toBeTypeOf('function');
@@ -163,7 +200,13 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     sessionStorage.clear();
     useActualStreamMessage = false;
     global.fetch = realFetch;
-    replaceMock.mockReset();
+    routeTransition = undefined;
+    pushMock.mockReset().mockImplementation((path: string) => {
+      routeTransition?.(path);
+    });
+    replaceMock.mockReset().mockImplementation((path: string) => {
+      routeTransition?.(path);
+    });
     streamMessageMock.mockReset();
     actualServiceErrorMock.mockReset();
     streamConfirmMock.mockReset();
@@ -178,7 +221,64 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     listMessagesMock
       .mockReset()
       .mockResolvedValue({ messages: [], has_more: false });
-    routeUnmount = undefined;
+    getDefaultWorkspaceMock.mockReset().mockResolvedValue({
+      id: 'workspace-A',
+      name: 'Workspace A',
+    });
+    listWorkspaceThreadsMock.mockReset().mockResolvedValue({
+      threads: [
+        {
+          id: THREAD_ID,
+          conversation_id: 'conversation-A',
+          title: 'Thread A',
+          status: 'active',
+          message_count: 0,
+          token_count: 0,
+          created_at: '2026-09-13T00:00:00.000Z',
+          updated_at: '2026-09-13T00:00:00.000Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      limit: 50,
+      has_more: false,
+    });
+    getThreadMock.mockResolvedValue({
+      id: THREAD_ID,
+      conversation_id: 'conversation-A',
+      title: 'Thread A',
+      status: 'active',
+      message_count: 0,
+      token_count: 0,
+      created_at: '2026-09-13T00:00:00.000Z',
+      updated_at: '2026-09-13T00:00:00.000Z',
+    });
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      const first = args[0];
+      if (
+        typeof first === 'string' &&
+        (first.startsWith('[ChatReconciliationInvariant]') ||
+          first.startsWith('[Agent] Stream error:') ||
+          first.startsWith('Failed to send message:'))
+      ) {
+        return;
+      }
+      realConsoleError(...args);
+    });
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      const first = args[0];
+      if (
+        typeof first === 'string' &&
+        (first.startsWith('[Chat]') || first.startsWith('[Agent]'))
+      ) {
+        return;
+      }
+      realConsoleLog(...args);
+    });
+    vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      if (args[0] === '[ChatReconciliationInvariant]') return;
+      realConsoleWarn(...args);
+    });
     useAuthStore.setState({
       user: USER_A,
       organization: null,
@@ -195,7 +295,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
   });
 
   afterEach(() => {
-    routeUnmount?.();
+    vi.restoreAllMocks();
     global.fetch = realFetch;
     useChatStore.setState({
       isStreaming: false,
@@ -206,16 +306,15 @@ describe('useChatStreaming exhausted-auth recovery', () => {
   it('survives a real SIGNED_OUT route unmount and restores without resending', async () => {
     const order: string[] = [];
     let stateAtNavigation: Record<string, unknown> | null = null;
-    const setMessages = vi.fn();
+    let routedStreaming: UseChatStreamingReturn | undefined;
     useActualStreamMessage = true;
-    replaceMock.mockImplementation(() => {
-      stateAtNavigation = storedRecovery();
-      expect(stateAtNavigation?.state).toBe('ready');
-      order.push('ready');
-      queueMicrotask(() => {
-        order.push('unmount');
-        routeUnmount?.();
-      });
+    replaceMock.mockImplementation((path: string) => {
+      if (path.startsWith('/login')) {
+        stateAtNavigation = storedRecovery();
+        expect(stateAtNavigation?.state).toBe('ready');
+        order.push('ready');
+      }
+      routeTransition?.(path);
     });
     refreshSessionMock.mockImplementation(async () => {
       // The service's marker runs synchronously immediately before refresh.
@@ -254,15 +353,57 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     );
     global.fetch = fetchMock as typeof fetch;
 
-    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
-    const first = renderHook(() => useChatStreaming(makeParams(setMessages)), {
-      wrapper,
-    });
-    routeUnmount = first.unmount;
+    const [{ useChatSession }, { useChatStreaming }] = await Promise.all([
+      import('@/hooks/chat/useChatSession'),
+      import('@/hooks/chat/useChatStreaming'),
+    ]);
+
+    function ChatRoute(): ReactNode {
+      const session = useChatSession();
+      const streaming = useChatStreaming({
+        messages: session.messages,
+        displayedMessages: session.displayedMessages,
+        setMessages: session.setMessages,
+        conversations: session.conversations,
+        setConversations: session.setConversations,
+        dbConversation: session.dbConversation,
+        workspace: session.workspace,
+        enableRAG: false,
+      });
+      useEffect(() => {
+        if (!session.isInitializing) routedStreaming = streaming;
+      }, [session.isInitializing, streaming]);
+      useLayoutEffect(
+        () => () => {
+          order.push('unmount');
+        },
+        []
+      );
+      return createElement('div', { 'data-testid': 'chat-route' });
+    }
+
+    function RoutedHarness(): ReactNode {
+      const [route, setRoute] = useState('/chat');
+      useEffect(() => {
+        routeTransition = (path: string) => setRoute(path);
+        return () => {
+          routeTransition = undefined;
+        };
+      }, []);
+      return route.startsWith('/login')
+        ? createElement('div', { 'data-testid': 'login-route' })
+        : createElement(ChatRoute);
+    }
+
+    const routed = render(createElement(RoutedHarness), { wrapper });
+    await waitFor(() => expect(routedStreaming).toBeDefined());
+    replaceMock.mockClear();
+    pushMock.mockClear();
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
 
     let submit!: Promise<void>;
     await act(async () => {
-      submit = first.result.current.handleSubmit('keep this private prompt');
+      submit = routedStreaming!.handleSubmit('keep this private prompt');
       await Promise.resolve();
     });
     await waitFor(() => expect(replaceMock).toHaveBeenCalledTimes(1));
@@ -281,6 +422,9 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(refreshSessionMock).toHaveBeenCalledTimes(1);
     expect(actualServiceErrorMock).not.toHaveBeenCalled();
+    expect(timerSpy.mock.calls.some(([, delay]) => delay === 1_500)).toBe(true);
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 1_600)));
+    expect(pushMock).not.toHaveBeenCalled();
     expect(stateAtNavigation).toEqual(
       expect.objectContaining({
         ownerUserId: 'user-A',
@@ -296,6 +440,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     expect(recoveryUrl).toContain(
       `next=${encodeURIComponent(`/chat?thread=${THREAD_ID}`)}`
     );
+    routed.unmount();
 
     act(() => {
       useAuthStore.setState({ user: USER_A, isAuthenticated: true });
@@ -335,6 +480,174 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     );
     expect(replaceMock).not.toHaveBeenCalled();
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+  });
+
+  it('uses generic sign-in recovery without storing an ownerless prompt', async () => {
+    const setMessages = vi.fn();
+    useAuthStore.setState({ user: null, isAuthenticated: true });
+    streamMessageMock.mockImplementation(
+      async (_request: unknown, callbacks: StreamCallbacks) => {
+        callbacks.onAuthRefreshAttempt?.();
+        callbacks.onError?.(
+          'Authentication required',
+          undefined,
+          'authentication_required'
+        );
+      }
+    );
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    const { result } = renderHook(
+      () => useChatStreaming(makeParams(setMessages)),
+      { wrapper }
+    );
+
+    await act(async () => {
+      await result.current.handleSubmit('must never be persisted');
+    });
+
+    expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    expect(lastErrorCategory(setMessages)).toBeUndefined();
+    expect(replaceMock).toHaveBeenCalledTimes(1);
+    const recoveryUrl = replaceMock.mock.calls[0][0] as string;
+    expect(recoveryUrl).toContain('reauth=chat');
+    expect(recoveryUrl).not.toContain('draft=saved');
+    expect(recoveryUrl).not.toContain('persisted');
+  });
+
+  it('recovers ownerlessly when SIGNED_OUT beats the final retry response', async () => {
+    let releaseStream: (() => void) | undefined;
+    useAuthStore.setState({ user: null, isAuthenticated: true });
+    streamMessageMock.mockImplementation(
+      (_request: unknown, callbacks: StreamCallbacks) => {
+        callbacks.onAuthRefreshAttempt?.();
+        authListener?.('SIGNED_OUT', null);
+        return new Promise<void>((resolve) => {
+          releaseStream = resolve;
+        });
+      }
+    );
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    const { result } = renderHook(() => useChatStreaming(makeParams()), {
+      wrapper,
+    });
+
+    let submit!: Promise<void>;
+    await act(async () => {
+      submit = result.current.handleSubmit('must remain memory only');
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledTimes(1));
+
+    expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+    expect(replaceMock.mock.calls[0][0]).not.toContain('draft=saved');
+    await act(async () => {
+      releaseStream?.();
+      await submit;
+    });
+  });
+
+  it('abandons ownerless recovery when another account appears', async () => {
+    const setMessages = vi.fn();
+    useAuthStore.setState({ user: null, isAuthenticated: true });
+    streamMessageMock.mockImplementation(
+      async (_request: unknown, callbacks: StreamCallbacks) => {
+        callbacks.onAuthRefreshAttempt?.();
+        useAuthStore.setState({ user: USER_B, isAuthenticated: true });
+        callbacks.onError?.(
+          'Authentication required',
+          undefined,
+          'authentication_required'
+        );
+      }
+    );
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    const { result } = renderHook(
+      () => useChatStreaming(makeParams(setMessages)),
+      { wrapper }
+    );
+
+    await act(async () => {
+      await result.current.handleSubmit('owner unavailable');
+    });
+
+    expect(useAuthStore.getState()).toEqual(
+      expect.objectContaining({ user: USER_B, isAuthenticated: true })
+    );
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(lastErrorCategory(setMessages)).toBeUndefined();
+    expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+  });
+
+  it('closes the auth-loss window after a successful retry response opens', async () => {
+    useActualStreamMessage = true;
+    let bodyReadStarted = false;
+    getSessionMock
+      .mockResolvedValueOnce({
+        data: { session: { access_token: 'token-A' } },
+      })
+      .mockResolvedValueOnce({
+        data: { session: { access_token: 'token-A-refreshed' } },
+      });
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        if (fetchMock.mock.calls.length === 1) {
+          return { ok: false, status: 401 } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: () => {
+                bodyReadStarted = true;
+                return new Promise<ReadableStreamReadResult<Uint8Array>>(
+                  (_resolve, reject) => {
+                    init?.signal?.addEventListener(
+                      'abort',
+                      () => reject(new DOMException('aborted', 'AbortError')),
+                      { once: true }
+                    );
+                  }
+                );
+              },
+              cancel: async () => {},
+              releaseLock: () => {},
+            }),
+          },
+        } as Response;
+      }
+    );
+    global.fetch = fetchMock as typeof fetch;
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    const { result } = renderHook(() => useChatStreaming(makeParams()), {
+      wrapper,
+    });
+
+    let submit!: Promise<void>;
+    await act(async () => {
+      submit = result.current.handleSubmit('healthy after refresh');
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(bodyReadStarted).toBe(true);
+    });
+
+    await act(async () => {
+      authListener?.('SIGNED_OUT', null);
+      await Promise.resolve();
+    });
+
+    expect(storedRecovery()?.state).toBe('armed');
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(actualServiceErrorMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      result.current.handleStop();
+      await submit;
+    });
     expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
   });
 
@@ -610,5 +923,122 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     expect(recoveryUrl).toContain(
       `next=${encodeURIComponent(`/chat?thread=${THREAD_ID}`)}`
     );
+  });
+
+  it.each([
+    { accountAppears: false, expectedNavigations: 1 },
+    { accountAppears: true, expectedNavigations: 0 },
+  ])(
+    'handles ownerless confirmation recovery with accountAppears=$accountAppears',
+    async ({ accountAppears, expectedNavigations }) => {
+      resumeStreamMock.mockImplementation(
+        async (
+          threadId: string,
+          _after: number,
+          callbacks: {
+            onConfirmation?: (
+              threadId: string,
+              confirmation: Record<string, unknown>
+            ) => void;
+          }
+        ) => {
+          callbacks.onConfirmation?.(threadId, {
+            tool_name: 'create_project_note',
+            tool_args: { title: 'Private note' },
+          });
+          return { status: 'resumed' };
+        }
+      );
+      streamConfirmMock.mockImplementation(
+        async (_request: unknown, callbacks: StreamCallbacks) => {
+          callbacks.onAuthRefreshAttempt?.();
+          if (accountAppears) {
+            useAuthStore.setState({ user: USER_B, isAuthenticated: true });
+          }
+          callbacks.onError?.(
+            'Authentication required',
+            undefined,
+            'authentication_required'
+          );
+        }
+      );
+      const { useChatStreaming } =
+        await import('@/hooks/chat/useChatStreaming');
+      const { result } = renderHook(() => useChatStreaming(makeParams()), {
+        wrapper,
+      });
+      await waitFor(() =>
+        expect(result.current.pendingConfirmation).not.toBeNull()
+      );
+      act(() => {
+        useAuthStore.setState({ user: null, isAuthenticated: true });
+      });
+
+      await act(async () => {
+        await result.current.handleConfirmation(true);
+      });
+
+      expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+      expect(replaceMock).toHaveBeenCalledTimes(expectedNavigations);
+      if (accountAppears) {
+        expect(useAuthStore.getState()).toEqual(
+          expect.objectContaining({ user: USER_B, isAuthenticated: true })
+        );
+      } else {
+        expect(useAuthStore.getState().isAuthenticated).toBe(false);
+        expect(replaceMock.mock.calls[0][0]).not.toContain('draft=saved');
+      }
+    }
+  );
+
+  it('closes the confirmation auth-loss window after a successful retry', async () => {
+    resumeStreamMock.mockImplementation(
+      async (
+        threadId: string,
+        _after: number,
+        callbacks: {
+          onConfirmation?: (
+            threadId: string,
+            confirmation: Record<string, unknown>
+          ) => void;
+        }
+      ) => {
+        callbacks.onConfirmation?.(threadId, {
+          tool_name: 'create_project_note',
+          tool_args: { title: 'Private note' },
+        });
+        return { status: 'resumed' };
+      }
+    );
+    streamConfirmMock.mockImplementation(
+      (_request: unknown, callbacks: StreamCallbacks, signal: AbortSignal) => {
+        callbacks.onAuthRefreshAttempt?.();
+        callbacks.onAuthRefreshSuccess?.();
+        authListener?.('SIGNED_OUT', null);
+        return new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }
+    );
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    const { result } = renderHook(() => useChatStreaming(makeParams()), {
+      wrapper,
+    });
+    await waitFor(() =>
+      expect(result.current.pendingConfirmation).not.toBeNull()
+    );
+
+    let confirm!: Promise<void>;
+    await act(async () => {
+      confirm = result.current.handleConfirmation(true);
+      await Promise.resolve();
+    });
+
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+    await act(async () => {
+      result.current.handleStop();
+      await confirm;
+    });
   });
 });

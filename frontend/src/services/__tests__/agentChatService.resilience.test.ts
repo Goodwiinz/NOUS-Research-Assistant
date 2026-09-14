@@ -164,15 +164,18 @@ describe('agentChatService stream resilience', () => {
     const onDone = vi.fn();
     const onError = vi.fn();
     const onAuthRefreshAttempt = vi.fn();
+    const onAuthRefreshSuccess = vi.fn();
     await agentChatService.streamMessage(request, {
       onDone,
       onError,
       onAuthRefreshAttempt,
+      onAuthRefreshSuccess,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(refreshSession).toHaveBeenCalledTimes(1);
     expect(onAuthRefreshAttempt).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshSuccess).toHaveBeenCalledTimes(1);
     expect(
       (fetchMock.mock.calls[0]?.[1]?.headers as Headers).get('Authorization')
     ).toBe('Bearer token-old');
@@ -181,6 +184,9 @@ describe('agentChatService stream resilience', () => {
     ).toBe('Bearer token-new');
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
+    expect(onAuthRefreshSuccess.mock.invocationCallOrder[0]).toBeLessThan(
+      onDone.mock.invocationCallOrder[0]
+    );
   });
 
   it('reports authentication_required after exactly one failed refresh retry', async () => {
@@ -195,19 +201,48 @@ describe('agentChatService stream resilience', () => {
 
     const onError = vi.fn();
     const onAuthRefreshAttempt = vi.fn();
+    const onAuthRefreshSuccess = vi.fn();
     await agentChatService.streamMessage(request, {
       onError,
       onAuthRefreshAttempt,
+      onAuthRefreshSuccess,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(refreshSession).toHaveBeenCalledTimes(1);
     expect(onAuthRefreshAttempt).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshSuccess).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
     // The wire-category channel stays undefined: a rejected credential is not
     // an invalid request. The third argument is explicitly client-local.
     expect(onError.mock.calls[0][1]).toBeUndefined();
     expect(onError.mock.calls[0][2]).toBe('authentication_required');
+  });
+
+  it('reports a successful refresh lifecycle on streamConfirm too', async () => {
+    const fetchMock = vi.fn(async () => {
+      if (fetchMock.mock.calls.length === 1) {
+        return { ok: false, status: 401, body: null };
+      }
+      return {
+        ok: true,
+        status: 200,
+        body: readerFrom(['event: done\ndata: {"status":"complete"}\n\n']),
+      };
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const onAuthRefreshAttempt = vi.fn();
+    const onAuthRefreshSuccess = vi.fn();
+
+    await agentChatService.streamConfirm(
+      { thread_id: 'thread-A', confirmed: true },
+      { onAuthRefreshAttempt, onAuthRefreshSuccess }
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshAttempt).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshSuccess).toHaveBeenCalledTimes(1);
   });
 
   it('reports permission_denied for 403 without refreshing', async () => {

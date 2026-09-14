@@ -96,6 +96,8 @@ async function getStreamAuthHeaders(
 export interface AgentStreamCallbacks {
   /** Client-only lifecycle marker fired immediately before the one auth retry. */
   onAuthRefreshAttempt?: () => void;
+  /** The retried HTTP response accepted refreshed auth and is ready to read. */
+  onAuthRefreshSuccess?: () => void;
   onToken?: (content: string) => void;
   /** Provider-authored reasoning summary only; raw reasoning is never sent. */
   onReasoningDelta?: (content: string) => void;
@@ -252,7 +254,8 @@ async function fetchStreamWithAuthRetry(
   url: string,
   init: Omit<RequestInit, 'headers'>,
   extraHeaders: Record<string, string> = {},
-  onAuthRefreshAttempt?: () => void
+  onAuthRefreshAttempt?: () => void,
+  onAuthRefreshSuccess?: () => void
 ): Promise<Response> {
   const open = async (forceRefresh: boolean): Promise<Response> => {
     const headers = new Headers(await getStreamAuthHeaders({ forceRefresh }));
@@ -264,7 +267,9 @@ async function fetchStreamWithAuthRetry(
   const response = await open(false);
   if (response.status !== 401) return response;
   onAuthRefreshAttempt?.();
-  return open(true);
+  const retriedResponse = await open(true);
+  if (retriedResponse.ok) onAuthRefreshSuccess?.();
+  return retriedResponse;
 }
 
 /**
@@ -675,7 +680,8 @@ class AgentChatService {
           signal,
         },
         {},
-        callbacks.onAuthRefreshAttempt
+        callbacks.onAuthRefreshAttempt,
+        callbacks.onAuthRefreshSuccess
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -816,7 +822,8 @@ class AgentChatService {
           signal,
         },
         {},
-        callbacks.onAuthRefreshAttempt
+        callbacks.onAuthRefreshAttempt,
+        callbacks.onAuthRefreshSuccess
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
