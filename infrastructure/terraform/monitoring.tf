@@ -71,9 +71,9 @@ resource "aws_cloudwatch_dashboard" "main" {
 
         properties = {
           metrics = [
-            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", module.rds.db_instance_id],
-            [".", "DatabaseConnections", "DBInstanceIdentifier", module.rds.db_instance_id],
-            [".", "FreeStorageSpace", "DBInstanceIdentifier", module.rds.db_instance_id]
+            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", module.rds.db_instance_identifier],
+            [".", "DatabaseConnections", "DBInstanceIdentifier", module.rds.db_instance_identifier],
+            [".", "FreeStorageSpace", "DBInstanceIdentifier", module.rds.db_instance_identifier]
           ]
           view    = "timeSeries"
           stacked = false
@@ -130,10 +130,10 @@ resource "aws_cloudwatch_dashboard" "main" {
         height = 12
 
         properties = {
-          query   = "SOURCE '${aws_cloudwatch_log_group.application_logs.name}' | fields @timestamp, @message | sort @timestamp desc | limit 100"
-          region  = var.aws_region
-          title   = "Application Logs"
-          view    = "table"
+          query  = "SOURCE '${aws_cloudwatch_log_group.application_logs.name}' | fields @timestamp, @message | sort @timestamp desc | limit 100"
+          region = var.aws_region
+          title  = "Application Logs"
+          view   = "table"
         }
       },
       {
@@ -209,7 +209,7 @@ resource "aws_cloudwatch_metric_alarm" "database_cpu_high" {
   alarm_description   = "This metric monitors RDS CPU utilization"
 
   dimensions = {
-    DBInstanceIdentifier = module.rds.db_instance_id
+    DBInstanceIdentifier = module.rds.db_instance_identifier
   }
 
   alarm_actions = [aws_sns_topic.alerts.arn]
@@ -231,7 +231,7 @@ resource "aws_cloudwatch_metric_alarm" "database_storage_low" {
   alarm_description   = "This metric monitors free RDS storage space"
 
   dimensions = {
-    DBInstanceIdentifier = module.rds.db_instance_id
+    DBInstanceIdentifier = module.rds.db_instance_identifier
   }
 
   alarm_actions = [aws_sns_topic.alerts.arn]
@@ -297,6 +297,7 @@ resource "aws_xray_sampling_rule" "default" {
   count = var.enable_monitoring ? 1 : 0
 
   rule_name      = "${var.project_name}-default"
+  resource_arn   = "*"
   priority       = 100
   fixed_rate     = 0.1
   reservoir_size = 100

@@ -33,10 +33,10 @@ terraform {
   }
 
   backend "s3" {
-    bucket = var.terraform_state_bucket
-    key    = "knowledge-graph-analytics/terraform.tfstate"
-    region = var.aws_region
-    encrypt = true
+    bucket         = var.terraform_state_bucket
+    key            = "knowledge-graph-analytics/terraform.tfstate"
+    region         = var.aws_region
+    encrypt        = true
     dynamodb_table = var.terraform_lock_table
   }
 }
@@ -140,22 +140,24 @@ module "vpc" {
   private_subnets = [for i in range(length(data.aws_availability_zones.available.names)) : cidrsubnet(var.vpc_cidr, 4, i)]
   public_subnets  = [for i in range(length(data.aws_availability_zones.available.names)) : cidrsubnet(var.vpc_cidr, 8, i + 100)]
 
-  enable_nat_gateway   = true
-  single_nat_gateway   = false
+  enable_nat_gateway     = true
+  single_nat_gateway     = false
   one_nat_gateway_per_az = true
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+  enable_dns_hostnames   = true
+  enable_dns_support     = true
 
   public_subnet_tags = {
-    "kubernetes.io/cluster/${module.eks.cluster_name}" = "shared"
-    "kubernetes.io/role/elb"                           = "1"
-    Type                                               = "Public"
+    # var.cluster_name instead of module.eks.cluster_name: avoids
+    # vpc <-> eks dependency cycle (EKS subnets depend on VPC output)
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                    = "1"
+    Type                                        = "Public"
   }
 
   private_subnet_tags = {
-    "kubernetes.io/cluster/${module.eks.cluster_name}" = "shared"
-    "kubernetes.io/role/internal-elb"                  = "1"
-    Type                                               = "Private"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"           = "1"
+    Type                                        = "Private"
   }
 
   tags = {
@@ -198,8 +200,12 @@ module "eks" {
   create_node_security_group    = true
 
   manage_aws_auth_configmap = true
-  aws_auth_node_iam_role_arns = [
-    module.eks.eks_managed_node_groups["default"].iam_role_arn
+  aws_auth_roles = [
+    {
+      rolearn  = module.eks.eks_managed_node_groups["default"].iam_role_arn
+      username = "system:node:{{SessionName}}"
+      groups   = ["system:bootstrappers", "system:nodes"]
+    }
   ]
 
   eks_managed_node_groups = {
@@ -210,7 +216,8 @@ module "eks" {
       max_size     = var.max_nodes
       desired_size = var.desired_nodes
 
-      capacity_type = "ON_DEMAND"
+      # Lean dev sizing: single SPOT node group (t3.large via var.node_instance_types)
+      capacity_type = "SPOT"
 
       update_config = {
         max_unavailable_percentage = 33
@@ -459,20 +466,20 @@ module "rds" {
   username = var.db_username
   password = random_password.db_password.result
 
-  port     = 5432
+  port                   = 5432
   vpc_security_group_ids = [aws_security_group.rds.id]
-  subnet_ids = module.vpc.private_subnets
+  subnet_ids             = module.vpc.private_subnets
 
   maintenance_window = "Mon:03:00-Mon:04:00"
   backup_window      = "04:00-06:00"
 
-  backup_retention_period = 7
-  skip_final_snapshot     = var.environment == "development" ? true : false
-  final_snapshot_identifier = var.environment == "production" ? "${var.project_name}-final-snapshot" : null
+  backup_retention_period          = 7
+  skip_final_snapshot              = var.environment == "development" ? true : false
+  final_snapshot_identifier_prefix = "${var.project_name}-final-snapshot"
 
   deletion_protection = var.environment == "production" ? true : false
 
-  family = "postgres15"
+  family               = "postgres15"
   major_engine_version = "15"
 
   parameters = [
@@ -505,10 +512,10 @@ resource "aws_security_group" "rds" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
-    description = "PostgreSQL from EKS nodes"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
+    description     = "PostgreSQL from EKS nodes"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
     security_groups = [module.eks.cluster_security_group_id]
   }
 
@@ -534,25 +541,27 @@ module "elasticache" {
 
   create_replication_group = true
   replication_group_id     = "${var.project_name}-redis"
-  replication_group_description = "Redis cluster for ${var.project_name}"
+  description              = "Redis cluster for ${var.project_name}"
 
-  node_type                = var.redis_node_type
-  number_cache_clusters    = var.redis_number_nodes
-  port                     = 6379
-  parameter_group_name     = "default.redis7"
-  auth_token               = random_password.redis_auth_token.result
+  node_type                  = var.redis_node_type
+  num_cache_clusters         = var.redis_number_nodes
+  port                       = 6379
+  parameter_group_name       = "default.redis7"
+  auth_token                 = random_password.redis_auth_token.result
   transit_encryption_enabled = true
   at_rest_encryption_enabled = true
 
   subnet_group_name  = aws_elasticache_subnet_group.default.name
   security_group_ids = [aws_security_group.redis.id]
 
-  automatic_failover_enabled = true
-  multi_az_enabled          = true
+  # Single-node lean dev cache: ElastiCache requires >= 2 nodes for automatic
+  # failover / multi-AZ, so both must be disabled when redis_number_nodes == 1.
+  automatic_failover_enabled = false
+  multi_az_enabled           = false
 
   snapshot_retention_limit = 7
-  snapshot_window         = "03:00-05:00"
-  maintenance_window      = "sun:05:00-sun:06:00"
+  snapshot_window          = "03:00-05:00"
+  maintenance_window       = "sun:05:00-sun:06:00"
 
   tags = {
     Name = "${var.project_name}-redis"
@@ -574,10 +583,10 @@ resource "aws_security_group" "redis" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
-    description = "Redis from EKS nodes"
-    from_port   = 6379
-    to_port     = 6379
-    protocol    = "tcp"
+    description     = "Redis from EKS nodes"
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
     security_groups = [module.eks.cluster_security_group_id]
   }
 
@@ -594,50 +603,5 @@ resource "aws_security_group" "redis" {
 }
 
 # =============================================================================
-# Outputs
+# Outputs are defined in outputs.tf
 # =============================================================================
-
-output "cluster_endpoint" {
-  description = "Endpoint for EKS control plane"
-  value       = module.eks.cluster_endpoint
-}
-
-output "cluster_name" {
-  description = "Kubernetes Cluster Name"
-  value       = module.eks.cluster_name
-}
-
-output "cluster_certificate_authority_data" {
-  description = "Kubernetes Cluster Certificate Authority Data"
-  value       = module.eks.cluster_certificate_authority_data
-}
-
-output "region" {
-  description = "AWS region"
-  value       = var.aws_region
-}
-
-output "vpc_id" {
-  description = "VPC ID"
-  value       = module.vpc.vpc_id
-}
-
-output "database_endpoint" {
-  description = "RDS endpoint"
-  value       = module.rds.db_instance_endpoint
-}
-
-output "database_port" {
-  description = "RDS port"
-  value       = module.rds.db_instance_port
-}
-
-output "redis_endpoint" {
-  description = "ElastiCache endpoint"
-  value       = module.elasticache.replication_group_primary_endpoint_address
-}
-
-output "storage_bucket_name" {
-  description = "S3 bucket for application storage"
-  value       = aws_s3_bucket.application_storage.bucket
-}

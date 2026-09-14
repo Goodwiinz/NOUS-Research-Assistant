@@ -28,7 +28,7 @@ output "cluster_security_group_id" {
 
 output "cluster_iam_role_arn" {
   description = "IAM role ARN of the EKS cluster"
-  value       = module.eks.iam_role_arn
+  value       = module.eks.eks_managed_node_groups["default"].iam_role_arn
 }
 
 output "eks_node_group_role_arn" {
@@ -82,7 +82,7 @@ output "nat_gateway_ids" {
 
 output "nat_gateway_public_ips" {
   description = "List of NAT Gateway public IPs"
-  value       = module.vpc.natgw_public_ips
+  value       = module.vpc.nat_public_ips
 }
 
 # =============================================================================
@@ -133,7 +133,7 @@ output "database_engine" {
 
 output "database_engine_version" {
   description = "Database engine version"
-  value       = module.rds.db_instance_engine_version
+  value       = module.rds.db_instance_engine_version_actual
 }
 
 # =============================================================================
@@ -162,7 +162,7 @@ output "redis_members" {
 
 output "redis_engine_version" {
   description = "Redis engine version"
-  value       = module.elasticache.replication_group_engine_version
+  value       = module.elasticache.replication_group_engine_version_actual
 }
 
 # =============================================================================
@@ -263,7 +263,7 @@ output "kubeconfig" {
             - "--region"
             - "${var.aws_region}"
   EOT
-  sensitive = true
+  sensitive   = true
 }
 
 # =============================================================================
@@ -283,10 +283,10 @@ output "helm_release_command" {
 output "cluster_addons" {
   description = "List of cluster addons deployed"
   value = {
-    coredns             = module.eks.cluster_addons["coredns"]
-    kube_proxy          = module.eks.cluster_addons["kube-proxy"]
-    vpc_cni             = module.eks.cluster_addons["vpc-cni"]
-    aws_ebs_csi_driver  = module.eks.cluster_addons["aws-ebs-csi-driver"]
+    coredns            = module.eks.cluster_addons["coredns"]
+    kube_proxy         = module.eks.cluster_addons["kube-proxy"]
+    vpc_cni            = module.eks.cluster_addons["vpc-cni"]
+    aws_ebs_csi_driver = module.eks.cluster_addons["aws-ebs-csi-driver"]
   }
 }
 

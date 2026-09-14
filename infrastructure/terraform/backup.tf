@@ -51,8 +51,8 @@ resource "aws_s3_bucket_public_access_block" "backups" {
 
 # Cross-region replication for disaster recovery
 resource "aws_s3_bucket" "backups_dr" {
-  count  = var.enable_cross_region_backup ? 1 : 0
-  bucket = "${var.project_name}-${var.environment}-backups-dr-${random_string.backup_dr_suffix.result}"
+  count    = var.enable_cross_region_backup ? 1 : 0
+  bucket   = "${var.project_name}-${var.environment}-backups-dr-${random_string.backup_dr_suffix[0].result}"
   provider = aws.dr
 
   tags = {
@@ -63,15 +63,15 @@ resource "aws_s3_bucket" "backups_dr" {
 }
 
 resource "random_string" "backup_dr_suffix" {
-  count  = var.enable_cross_region_backup ? 1 : 0
+  count   = var.enable_cross_region_backup ? 1 : 0
   length  = 8
   special = false
   upper   = false
 }
 
 resource "aws_s3_bucket_versioning" "backups_dr" {
-  count  = var.enable_cross_region_backup ? 1 : 0
-  bucket = aws_s3_bucket.backups_dr[0].id
+  count    = var.enable_cross_region_backup ? 1 : 0
+  bucket   = aws_s3_bucket.backups_dr[0].id
   provider = aws.dr
 
   versioning_configuration {
@@ -80,8 +80,8 @@ resource "aws_s3_bucket_versioning" "backups_dr" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "backups_dr" {
-  count  = var.enable_cross_region_backup ? 1 : 0
-  bucket = aws_s3_bucket.backups_dr[0].id
+  count    = var.enable_cross_region_backup ? 1 : 0
+  bucket   = aws_s3_bucket.backups_dr[0].id
   provider = aws.dr
 
   rule {
@@ -94,17 +94,17 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "backups_dr" {
 # Replication configuration
 resource "aws_s3_bucket_replication_configuration" "backups_replication" {
   count  = var.enable_cross_region_backup ? 1 : 0
-  role   = aws_iam_role.backup_replication.arn
+  role   = aws_iam_role.backup_replication[0].arn
   bucket = aws_s3_bucket.backups.id
 
   rule {
-    id = "backup_replication"
+    id     = "backup_replication"
     status = "Enabled"
 
     destination {
       bucket        = aws_s3_bucket.backups_dr[0].arn
       storage_class = "STANDARD_IA"
-      account       = data.aws_caller_identity.dr.account_id
+      account       = data.aws_caller_identity.dr[0].account_id
     }
 
     delete_marker_replication {
@@ -202,8 +202,8 @@ resource "aws_iam_role_policy_attachment" "backup_s3_policy_attachment" {
 
 # Role for cross-region replication
 resource "aws_iam_role" "backup_replication" {
-  count  = var.enable_cross_region_backup ? 1 : 0
-  name = "${var.project_name}-backup-replication-role"
+  count = var.enable_cross_region_backup ? 1 : 0
+  name  = "${var.project_name}-backup-replication-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -224,8 +224,8 @@ resource "aws_iam_role" "backup_replication" {
 }
 
 resource "aws_iam_policy" "backup_replication_policy" {
-  count  = var.enable_cross_region_backup ? 1 : 0
-  name = "${var.project_name}-backup-replication-policy"
+  count = var.enable_cross_region_backup ? 1 : 0
+  name  = "${var.project_name}-backup-replication-policy"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -261,7 +261,7 @@ resource "aws_iam_policy" "backup_replication_policy" {
 }
 
 resource "aws_iam_role_policy_attachment" "backup_replication_policy" {
-  count  = var.enable_cross_region_backup ? 1 : 0
+  count      = var.enable_cross_region_backup ? 1 : 0
   policy_arn = aws_iam_policy.backup_replication_policy[0].arn
   role       = aws_iam_role.backup_replication[0].name
 }
@@ -271,8 +271,7 @@ resource "aws_iam_role_policy_attachment" "backup_replication_policy" {
 # =============================================================================
 
 resource "aws_backup_vault" "main" {
-  name          = "${var.project_name}-backup-vault"
-  encryption_key_arn = aws_kms_key.backup.arn
+  name = "${var.project_name}-backup-vault"
 
   tags = {
     Name = "${var.project_name}-backup-vault"
@@ -414,10 +413,6 @@ resource "aws_backup_selection" "rds" {
   resources = [
     module.rds.db_instance_arn
   ]
-
-  tags = {
-    Name = "${var.project_name}-rds-selection"
-  }
 }
 
 resource "aws_backup_selection" "eks" {
@@ -428,10 +423,6 @@ resource "aws_backup_selection" "eks" {
   resources = [
     "arn:aws:eks:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster/${module.eks.cluster_name}"
   ]
-
-  tags = {
-    Name = "${var.project_name}-eks-selection"
-  }
 }
 
 # =============================================================================
@@ -440,10 +431,10 @@ resource "aws_backup_selection" "eks" {
 
 # Enhanced RDS backup settings
 resource "aws_db_instance_automated_backups_replication" "rds_dr_replication" {
-  count  = var.enable_cross_region_backup ? 1 : 0
+  count                  = var.enable_cross_region_backup ? 1 : 0
   source_db_instance_arn = module.rds.db_instance_arn
-  retention_period         = 7
-  provider = aws.dr
+  retention_period       = 7
+  provider               = aws.dr
 }
 
 # =============================================================================
@@ -474,6 +465,7 @@ resource "aws_iam_role" "velero" {
 
 resource "aws_iam_role_policy" "velero" {
   name = "${var.project_name}-velero-policy"
+  role = aws_iam_role.velero.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -525,10 +517,7 @@ resource "aws_iam_role_policy" "velero" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "velero_policy_attachment" {
-  policy_arn = aws_iam_role_policy.velero.arn
-  role       = aws_iam_role.velero.name
-}
+# aws_iam_role_policy.velero already attaches the inline policy to the role.
 
 # =============================================================================
 # Disaster Recovery Configuration
@@ -581,6 +570,7 @@ resource "aws_iam_role_policy_attachment" "backup_verification_lambda_logs" {
 
 resource "aws_iam_role_policy" "backup_verification_lambda_policy" {
   name = "${var.project_name}-backup-verification-lambda-policy"
+  role = aws_iam_role.backup_verification_lambda.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -614,17 +604,15 @@ resource "aws_iam_role_policy" "backup_verification_lambda_policy" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "backup_verification_lambda_policy_attachment" {
-  policy_arn = aws_iam_role_policy.backup_verification_lambda_policy.arn
-  role       = aws_iam_role.backup_verification_lambda.name
-}
+# aws_iam_role_policy.backup_verification_lambda_policy already attaches
+# the inline policy to the role.
 
 # =============================================================================
 # Data Source for DR Region
 # =============================================================================
 
 data "aws_caller_identity" "dr" {
-  count  = var.enable_cross_region_backup ? 1 : 0
+  count    = var.enable_cross_region_backup ? 1 : 0
   provider = aws.dr
 }
 
