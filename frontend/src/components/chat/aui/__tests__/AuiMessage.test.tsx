@@ -1007,4 +1007,66 @@ describe('MessageByIndexBoundary', () => {
     expect(screen.getByText('new message')).toBeVisible();
     spy.mockRestore();
   });
+
+  it('cancels an old OOB frame and gives a replacement OOB key one distinct retry', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    let replacementShouldThrow = true;
+    const Replacement = (): React.ReactElement => {
+      if (replacementShouldThrow) {
+        throw new Error('useClientLookup: Index 0 out of bounds (length: 0)');
+      }
+      return <>replacement recovered</>;
+    };
+    const SwitchingBoundary = (): React.ReactElement => {
+      const [resetKey, setResetKey] = React.useState<'old' | 'new'>('old');
+      const [, forceReplacementRender] = React.useState(0);
+      return (
+        <>
+          <button onClick={() => setResetKey('new')}>switch OOB key</button>
+          <button onClick={() => forceReplacementRender((value) => value + 1)}>
+            rerender replacement
+          </button>
+          <MessageByIndexBoundary resetKey={resetKey}>
+            {resetKey === 'old' ? (
+              <Thrower
+                shouldThrow
+                message="useClientLookup: Index 0 out of bounds (length: 0)"
+              />
+            ) : (
+              <Replacement />
+            )}
+          </MessageByIndexBoundary>
+        </>
+      );
+    };
+    render(<SwitchingBoundary />);
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: 'switch OOB key' }));
+
+    expect(window.cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    // Even if the browser had already queued the cancelled old callback, it
+    // must not consume the replacement key's single retry budget.
+    act(() => frames.runEvenIfCancelled(1));
+    expect(screen.queryByText('replacement recovered')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    replacementShouldThrow = false;
+    act(() => frames.run(2));
+    expect(screen.getByText('replacement recovered')).toBeVisible();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    // The replacement key already spent its one retry. A later persistent
+    // OOB for that same key returns to the bounded null fallback.
+    replacementShouldThrow = true;
+    fireEvent.click(
+      screen.getByRole('button', { name: 'rerender replacement' })
+    );
+    expect(screen.queryByText('replacement recovered')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
 });
