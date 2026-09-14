@@ -9,15 +9,17 @@ root-by-root baseline for the scoped `AGENTS.md` files planned by
 `docs/superpowers/specs/2026-09-14-invalid-patterns-agent-guidance-design.md`.
 It does not change production behavior.
 
-Five confirmed findings were identified: five `medium`-severity findings and
-no confirmed `critical`, `high`, or `low` findings. They are raw internal
-exception details in two HTTP paths (IP-001 and IP-002), a mock feature-flag
-loader path that does not reach the tracked config (IP-003), a document status
-read without an organization predicate (IP-004), and known accessibility
-deficiencies hidden by narrowly disabled axe rules in the legacy Sidebar test
-(IP-005). The highest-priority work is to sanitize public errors, restore
-tenant-aware status reads, repair the feature-flag consumer path, and remove
-the Sidebar accessibility suppressions after fixing the rendered controls.
+Two confirmed findings were identified: one `medium`-severity finding and one
+`low`-severity finding, with no confirmed `critical` or `high` findings. The
+confirmed findings are raw internal exception details in the registered admin
+worker-status endpoint (IP-001) and a document status read that violates the
+organization/live-row query contract (IP-002). Three candidates remain review
+risks because reachability or production impact was not proved: the
+unregistered authentication helper's exception details (RR-001), the
+feature-flag loader path (RR-002), and the legacy Sidebar accessibility gaps
+(RR-003). The highest-priority work is to sanitize the registered admin error,
+restore the status service's defense-in-depth query contract, and then prove
+the three held candidates' consumers before changing production behavior.
 
 The audit also records enforced invariants and review risks separately. In
 particular, most SQL/process/suppression matches are safe or documented after
@@ -104,10 +106,11 @@ install dependencies, modify tracked files, or read credential values.
   assertions, actionlint, and gitleaks hooks/workflows. The workflow and older
   README evidence disagree about retired staging/production deployment paths;
   this is recorded as a review risk below rather than silently resolved.
-- Exception searches produced many matches. IP-001 and IP-002 are the two
-  reachable HTTP paths whose response details interpolate arbitrary exception
-  text. Expected domain/validation errors and log-only catches were not called
-  findings.
+- Exception searches produced many matches. IP-001 is the registered HTTP path
+  whose response detail interpolates arbitrary exception text. RR-001 is an
+  unregistered authentication helper with the same pattern; its module-local
+  callers do not establish an active route or middleware consumer. Expected
+  domain/validation errors and log-only catches were not called findings.
 - SQL searches found parameterized values and allowlisted identifier
   interpolation in the inspected setup/backup scripts. No confirmed dynamic
   SQL injection was established.
@@ -116,17 +119,21 @@ install dependencies, modify tracked files, or read credential values.
   arbitrary-shell finding was established after tracing their inputs.
 - Tenant searches found the organization-aware `workspace_access` funnel and
   organization predicates in the inspected document/dedup/search paths. The
-  status broadcast query in IP-004 remains an unscoped exception.
+  status broadcast query in IP-002 remains an unscoped contract exception;
+  public realtime consumers scope before calling it and delivery derives its
+  target organization and owner from the loaded document.
 - Suppression searches found documented typing/lint exceptions, generated
   compatibility imports, and intentionally advisory workflow lanes. The
-  Sidebar's two disabled axe rules document real rendered deficiencies and are
-  represented by IP-005; no separate undocumented suppression finding was
+  Sidebar's two disabled axe rules document real component-local deficiencies;
+  because the active dashboard uses `SidebarLayout`/`AppRail` and the legacy
+  `AppLayout` consumer was not found, they remain RR-003 rather than a current
+  production finding. No separate undocumented suppression finding was
   added.
 - Accessibility inspection found that the production `IconButton` component
   requires a `label` prop and sets `aria-label`; the inspected IconButton
-  consumers supplied labels. The Sidebar is the confirmed exception because
-  its `<nav>` elements have no distinct labels and collapsed links contain no
-  text or `aria-label`.
+  consumers supplied labels. The legacy Sidebar's `<nav>` elements have no
+  distinct labels and collapsed links contain no text or `aria-label`, but its
+  production reachability is unproven and is recorded as RR-003.
 - Artifact, duplicate-basename, and symlink searches were path-only. No
   environment-file, trace, credential, or other sensitive value was opened or
   copied into this report.
@@ -139,18 +146,7 @@ repository-relative paths, line ranges, config keys, and the kind of risk.
 
 ## Confirmed findings
 
-### IP-001 — Authentication dependency exposes arbitrary exception text
-
-| Field | Evidence |
-| --- | --- |
-| Severity / root | `medium` / `backend` |
-| Location | `backend/src/auth/ab_testing_auth.py:164-178` |
-| Observed behavior | `get_current_user_from_token` turns JWT and broad exception messages into `HTTPException.detail`, including `str(e)`/`str(e)`-derived text, instead of returning a stable public authentication message. |
-| Impact | A reachable authentication failure can disclose parser, conversion, or backend implementation details to the caller and creates an unstable public contract. The match is not a credential disclosure by itself, so it is not critical. |
-| Evidence and validation | The enclosing function decodes a caller-provided bearer token, parses UUIDs, queries the user, and catches both `JWTError` and `Exception`. The `ruff` run passed, but the backend guard suite was not executable because `langgraph` is missing. No test was found that asserts exception-detail redaction for this function. |
-| Next action | Log the exception internally with structured context and return a fixed 401 detail for all unexpected authentication failures; add focused tests for malformed tokens, UUID conversion, and database exceptions that assert no internal text crosses the HTTP boundary. |
-
-### IP-002 — Admin worker-status endpoint exposes backend exception text
+### IP-001 — Admin worker-status endpoint exposes backend exception text
 
 | Field | Evidence |
 | --- | --- |
@@ -161,40 +157,50 @@ repository-relative paths, line ranges, config keys, and the kind of risk.
 | Evidence and validation | The enclosing route gathers Celery worker/task state and has an admin dependency; the broad catch is directly reachable when that inspection fails. No safe-error assertion was found for this route. The required backend test suite was blocked by missing `langgraph`. |
 | Next action | Preserve the stable service-unavailable/server-error distinction, log the original exception internally, and test that the HTTP response contains only a stable public message. |
 
-### IP-003 — Mock feature-flag loader resolves the wrong tracked path
+### IP-002 — Status broadcast reads a document without organization scope
 
 | Field | Evidence |
 | --- | --- |
-| Severity / root | `medium` / `feature-flags` (consumer in `backend`) |
-| Location | `backend/src/services/infrastructure/feature_flags.py:80-84` |
-| Observed behavior | The loader joins the module directory with `../../feature-flags/launchdarkly-config.json`, which resolves to `backend/src/feature-flags/launchdarkly-config.json`. The tracked config is at `feature-flags/launchdarkly-config.json`; the resolved path does not exist at the audited SHA. |
-| Impact | In mock/development mode the tracked flag config is skipped and hardcoded fallbacks are used. This can silently ignore a config change or make the mock behavior differ from the intended consumer. LaunchDarkly-backed mode is a separate path, so this is not classified as a live provider-key failure. |
-| Evidence and validation | The constructor calls `_load_mock_flags` when the SDK/key path is unavailable, catches file-load errors, and then fills defaults. Existing unit tests patch `os.path.exists`/`open` and therefore exercise parsing but do not prove the real repository-relative path. No root-local feature-flag validator exists. |
-| Next action | Resolve the path from the consuming file to the tracked root (or move the config under an explicitly owned path), then add a test that uses the real repository layout and verifies a known config entry is loaded without exposing provider keys. |
-
-### IP-004 — Status broadcast reads a document without organization scope
-
-| Field | Evidence |
-| --- | --- |
-| Severity / root | `medium` / `backend` |
+| Severity / root | `low` / `backend` |
 | Location | `backend/src/services/infrastructure/status_update_service.py:178-195` |
 | Observed behavior | `broadcast_document_update` accepts only `document_id` and queries `Document` with `Document.id == document_id`; it does not apply `organization_id` or `is_deleted` in the read predicate. The result is then shaped with title, filename, type, processing state, and owner/org-derived broadcast metadata. |
-| Impact | A caller that supplies or obtains an ID outside its intended tenant boundary can make the status service load and broadcast another tenant's document metadata. Current channel fan-out later derives `target_organization` and skips an org-less shared broadcast, which reduces but does not replace an organization-aware read/access predicate. |
-| Evidence and validation | The public realtime endpoints validate `Document.organization_id == organization.id` before calling this service, but internal processing/status callers also call it with only a document ID. The repository's backend contract explicitly requires organization predicates for every document, dedup, and search-suggestion query. Existing tests cover fail-closed channel fan-out for org-less rows, not this query predicate. |
-| Next action | Thread the owning organization through every status producer, filter the document read by organization and live-row policy, and add a cross-tenant regression test covering both direct and queued broadcasts. |
+| Impact | This is a confirmed defense-in-depth and live-row query-contract violation, but the inspected call paths do not demonstrate a requester injecting a foreign ID and receiving or misdirecting data. Public realtime consumers first enforce organization and live-row scope, and delivery is derived from the loaded document's own organization and owner. The remaining risk is stale/deleted metadata and future callers bypassing the established route checks, so no current cross-tenant disclosure is claimed. |
+| Evidence and validation | The public realtime endpoints enforce `Document.organization_id == organization.id` and `Document.is_deleted == False` before calling the service. Internal processing/status callers call it with only a document ID, but no caller was found that accepts an untrusted foreign ID or bypasses the service's own delivery target. Existing tests cover fail-closed channel fan-out for org-less rows, not this query predicate. |
+| Next action | Thread the owning organization through status producers or require a preloaded scoped document, filter the read by organization and live-row policy, and add direct/queued regression tests for cross-tenant IDs and deleted rows. |
 
-### IP-005 — Sidebar accessibility rules are disabled for real rendered gaps
+### Review-risk candidates formerly considered findings
+
+#### RR-001 — Authentication helper exposes arbitrary exception text
 
 | Field | Evidence |
 | --- | --- |
-| Severity / root | `medium` / `frontend` |
-| Location | `frontend/src/components/layout/Sidebar.tsx:135-161`; `frontend/src/components/layout/Sidebar.tsx:60-75`; test suppressions at `frontend/src/components/layout/__tests__/Sidebar.a11y.test.tsx:40-59` |
-| Observed behavior | The main and bottom navigation are two unlabeled `<nav>` elements. When collapsed, each navigation link renders only an icon and relies on a Tooltip, with no text or `aria-label` on the link. The a11y test disables `landmark-unique` and, for the collapsed state, `link-name`. |
-| Impact | Screen-reader users cannot reliably distinguish the navigation landmarks or name collapsed links in the rendered DOM. The test can pass while those two rules remain unsatisfied. The issue is a known legacy accessibility gap, not a claim that every frontend control is inaccessible. |
-| Evidence and validation | The test comments explicitly identify both issues and the rendered `Sidebar` source confirms the missing props. Other inspected `IconButton` uses supplied the required `label` prop, so they were rejected as false positives. Accessibility tests are present in frontend source, but no full accessibility workflow was run in this credential-free snapshot. |
-| Next action | Add distinct `aria-label` values to both nav landmarks and accessible names to collapsed links, then remove the two rule disables and run the focused axe tests plus the browser accessibility project. |
+| Classification / root | Review risk / `backend` |
+| Location | `backend/src/auth/ab_testing_auth.py:117-178`, with module-local references at `:220`, `:546-611` |
+| Candidate behavior | `get_current_user_from_token` places JWT and broad exception text in `HTTPException.detail`. |
+| Why not confirmed | Repository references found for this helper are confined to the same unregistered module; no active route or middleware imports it. The pattern is therefore not a demonstrated reachable HTTP disclosure at this SHA. |
+| Required follow-up | Prove route or middleware registration and then sanitize unexpected details, log structured internal context, and add malformed-token/UUID/database non-disclosure tests if an active consumer is found. |
 
-No confirmed finding was assigned `critical`, `high`, or `low` severity at this
+#### RR-002 — Feature-flag loader resolves an unverified tracked path
+
+| Field | Evidence |
+| --- | --- |
+| Classification / root | Review risk / `feature-flags` (candidate consumer in `backend`) |
+| Location | `backend/src/services/infrastructure/feature_flags.py:80-84` |
+| Candidate behavior | The loader joins the module directory with `../../feature-flags/launchdarkly-config.json`, resolving to `backend/src/feature-flags/launchdarkly-config.json`, while the tracked config is at `feature-flags/launchdarkly-config.json`. |
+| Why not confirmed | Production code only re-exports `FeatureFlagService` from `backend/src/services/infrastructure/__init__.py:8,29-31`; the sole concrete consumer found imports the module directly for isolated unit tests. No runtime registration or production consumer was verified, so mock/development impact cannot be claimed. |
+| Required follow-up | Prove a runtime consumer/registration, resolve the relative path from that consumer, and add a real-layout test before calling the root config live or changing it. |
+
+#### RR-003 — Legacy Sidebar accessibility suppressions hide component-local gaps
+
+| Field | Evidence |
+| --- | --- |
+| Classification / root | Review risk / `frontend` |
+| Location | `frontend/src/components/layout/Sidebar.tsx:60-75,135-161`; suppressions at `frontend/src/components/layout/__tests__/Sidebar.a11y.test.tsx:40-59` |
+| Candidate behavior | The legacy Sidebar has unlabeled `<nav>` landmarks and icon-only collapsed links without text or `aria-label`; its a11y test disables `landmark-unique` and `link-name`. |
+| Why not confirmed | The active dashboard imports `SidebarLayout` in `frontend/app/(dashboard)/dashboard-layout-client.tsx:4,31-38`, and `SidebarLayout` renders `AppRail` at `frontend/src/components/layout/SidebarLayout.tsx:75-78`. The defective Sidebar is reached only through the otherwise unreferenced legacy `AppLayout` and its tests. Current production user impact is therefore unproven. |
+| Required follow-up | Prove whether `AppLayout` is loaded by any active route/build entry; if it is, add landmark/link names, remove the two suppressions, and run focused axe plus browser accessibility checks. |
+
+No confirmed finding was assigned `critical` or `high` severity at this
 point-in-time baseline. The absence of a finding in a severity is not a claim
 that a future deeper review cannot discover one.
 
@@ -222,6 +228,9 @@ findings. Each has a concrete follow-up requirement.
 
 | Candidate | Current classification | Required follow-up evidence |
 | --- | --- | --- |
+| `backend/src/auth/ab_testing_auth.py:117-178` (`RR-001`) catches JWT and broad exceptions and puts their text in `HTTPException.detail`. | Review risk: the helper's references are confined to this unregistered module; no active route or middleware consumer was found. | Prove route/middleware registration before claiming reachable disclosure; if registered, sanitize unexpected details, log internally, and add non-disclosure tests. |
+| `backend/src/services/infrastructure/feature_flags.py:80-84` (`RR-002`) resolves `../../feature-flags/launchdarkly-config.json` to `backend/src/feature-flags/...`, not the tracked root config. | Review risk: production code only re-exports the class; the sole concrete consumer found is an isolated unit test, so mock/development impact is unproven. | Prove runtime registration/consumer, then resolve and test the real repository-relative path before calling the root config live. |
+| `frontend/src/components/layout/Sidebar.tsx` and its a11y test (`RR-003`) contain unlabeled landmarks/icon-only collapsed links and disabled axe rules. | Review risk: the active dashboard uses `SidebarLayout`/`AppRail`; the defective Sidebar is reached only through otherwise unreferenced legacy `AppLayout` and tests. | Prove whether `AppLayout` is loaded by any active route/build entry; if so, fix names, remove suppressions, and run focused/browser accessibility checks. |
 | `frontend/trigger.config.ts` declares `dirs: ["./src/trigger"]` relative to `frontend`, while the root `trigger.config.ts` and root `tsconfig.json` load `src/trigger/`; `frontend/src/trigger/example.ts` is the only tracked child example. | Ambiguous Trigger.dev reachability and likely stale/duplicate configuration. | Prove which config the deployed Trigger command consumes, then either align the loader path or document the intentionally separate package. Do not claim root `src/trigger` is deployed from the frontend config without that proof. |
 | `src/trigger/_lib/backend-client.ts` centralizes bounded retries, optional service authorization, and response schemas for the root Trigger jobs; user-scoped agent jobs pass a user bearer token and the backend endpoints remain the authorization boundary. | Preventative pattern with deployment/reachability risk, not a confirmed vulnerability. | Verify each registered task is loaded by the root config, each write is idempotent/HITL-safe, and logs/metadata never contain access or service-role tokens. |
 | `frontend/lint_output.txt` is tracked; `.env`-named example/test files are tracked under `backend`, `config/environments`, and `tests/e2e`. | Path-only tracked-artifact/config risk. | Identify whether the lint output is consumed; remove or replace it only through an approved history/ownership decision. Confirm each environment file contains sanitized test/example material without opening values in an audit. |
@@ -235,13 +244,13 @@ findings. Each has a concrete follow-up requirement.
 ## Root coverage and guidance mapping
 
 The following table is the handoff contract for the 20 child guides. `IP-*`
-refers to confirmed findings above; invariant labels refer to the enforced
-invariant table. The final column describes durable rule themes, not new
-production guarantees.
+refers to confirmed findings above and `RR-*` to held review risks; invariant
+labels refer to the enforced invariant table. The final column describes
+durable rule themes, not new production guarantees.
 
 | Root | Evidence reviewed | Findings/invariants | Intended guidance themes |
 | --- | --- | --- | --- |
-| `backend` | `docs/engineering/backend.md`, `api-contracts.md`, `testing.md`, `gotchas.md`; API/services/tests; CI and OpenAPI scripts. | IP-001, IP-002, IP-004; router/access/generated/migration/ratchet invariants. | Router → service → transaction boundaries; membership vs organization scope; ancestor soft-delete checks; safe public errors; bound SQL/validated enums; compatibility exports; generated contract workflow. |
+| `backend` | `docs/engineering/backend.md`, `api-contracts.md`, `testing.md`, `gotchas.md`; API/services/tests; CI and OpenAPI scripts. | IP-001, IP-002, RR-001; router/access/generated/migration/ratchet invariants. | Router → service → transaction boundaries; membership vs organization scope; ancestor soft-delete checks; safe public errors; bound SQL/validated enums; compatibility exports; generated contract workflow. |
 | `brand` | Tracked SVG/HTML/source assets, screenshots, DOCX, and root `README.md` consumer. | No IP; artifact review risk. | Preserve source/rendered artifacts, provenance, accessibility/identity metadata, and consumer-aware visual review; no bulk binary overwrite. |
 | `config` | `config/docker-compose/`, root Compose symlinks, manifests, workflow consumers, and environment-path inventory. | Duplicate-config risk; Compose/render invariant. | Edit canonical targets once; preserve layering and symlinks; keep environment values/secrets indirect; do not silently diverge CI/prod defaults. |
 | `data` | `data/datasets/` inventory and referenced evaluation/test consumers. | No IP; artifact/provenance risk. | Preserve provenance and schemas; do not mutate fixtures to hide failures or commit customer/sensitive data; require named consumer for replacement. |
@@ -249,8 +258,8 @@ production guarantees.
 | `deployment` | Legacy Helm/Kubernetes tree, deployment workflows, and retirement notes in `gotchas.md`. | Duplicate/live-status risk; Helm invariant. | Treat legacy paths as non-live until proven; require consumer/reachability checks; validate charts read-only; no deploy/apply/rollback without authorization. |
 | `docs` | Engineering index, dated audits/reports/plans/specs, directory-doc tooling, and historical workflow docs. | Documentation contradiction risk; directory-doc invariant. | Keep canonical vs historical hierarchy clear, links/paths real, dated records immutable, and old status/commands labeled. |
 | `evals` | `evals/README.md`, baseline/manifests, task specs/verifiers, and judge-separation text. | Artifact/provenance risk; isolation invariant. | Keep task digests/baselines immutable, isolate judge credentials, preserve fixtures, and never score infrastructure failure as reward zero. |
-| `feature-flags` | `launchdarkly-config.json`, backend loader, enum/default tests, and frontend flag consumer. | IP-003. | Prove runtime consumer, align keys/enums/defaults/rollouts, keep configs secret-free, and test relative paths before calling config live. |
-| `frontend` | `docs/engineering/frontend.md`, `api-contracts.md`, `testing.md`, UX audit, WCAG checklist, components/tests, and package scripts. | IP-005; frontend/ratchet/generated/accessibility invariants. | One cache owner; chat-store facade; backend-only writes/reconciliation; adapter/generated-type rules; ratchets only tighten; accessible names/focus; Node 24/pnpm/root lockfile. |
+| `feature-flags` | `launchdarkly-config.json`, backend loader, enum/default tests, and frontend flag consumer. | RR-002. | Prove runtime consumer, align keys/enums/defaults/rollouts, keep configs secret-free, and test relative paths before calling config live. |
+| `frontend` | `docs/engineering/frontend.md`, `api-contracts.md`, `testing.md`, UX audit, WCAG checklist, components/tests, and package scripts. | RR-003; frontend/ratchet/generated/accessibility invariants. | One cache owner; chat-store facade; backend-only writes/reconciliation; adapter/generated-type rules; ratchets only tighten; accessible names/focus; Node 24/pnpm/root lockfile. |
 | `infrastructure` | Argo CD dev application, knowledge-graph Helm chart/overlays/tests, workflow README, and retirement notes. | Duplicate/live-status risk; Helm invariant. | Preserve live dev ownership, base-plus-overlay rendering, secret indirection, full-SHA/digest images, NetworkPolicy/PDB assertions; no cluster apply. |
 | `memory` | Dated contextual notes and repository references; no authoritative implementation contract. | No IP; provenance/privacy risk. | Treat notes as contextual and potentially personal; date claims, cross-check sources, and keep secrets/personal data out of reports. |
 | `monitoring` | `monitoring/README.md`, local Compose/Prometheus/Grafana/OTel files, deployment copies, and script consumers. | Duplicate-config risk; secret-scan invariant. | Identify canonical consumer, do not synchronize same-named configs blindly, keep `.env`/webhook/auth values private, and validate config without claiming live scrape/alert health. |
@@ -264,21 +273,24 @@ production guarantees.
 
 ## Remediation priorities
 
-1. Sanitize IP-001 and IP-002 at the HTTP boundary, retain internal
-   structured exception logging, and add focused non-disclosure tests.
-2. Fix IP-004 by carrying organization identity through status producers and
-   enforcing organization/live-row predicates in the service read; add a
-   cross-tenant regression test for direct and queued broadcasts.
-3. Fix IP-003's repository-relative path and add a real-layout feature-flag
-   test that prevents silent fallback when the tracked config changes.
-4. Fix IP-005 in the rendered Sidebar, remove the disabled axe rules, and run
-   focused component checks plus the browser accessibility project in an
-   installed Node 24 environment.
-5. Resolve the Trigger config relationship and duplicate/stale configuration
+1. Sanitize IP-001 at the registered admin HTTP boundary, retain internal
+   structured exception logging, and add a focused non-disclosure test.
+2. Fix IP-002 by carrying organization identity through status producers or
+   requiring a preloaded scoped document, enforcing organization/live-row
+   predicates, and testing direct/queued foreign and deleted IDs.
+3. Prove RR-001's route or middleware consumer before treating its auth helper
+   exception text as reachable; sanitize and test it only if registration is
+   established.
+4. Prove RR-002's runtime feature-flag consumer and registration, then align
+   the relative path and add a real-layout test before calling the config live.
+5. Prove RR-003's legacy `AppLayout` reachability; only if active, fix the
+   rendered Sidebar, remove the disabled axe rules, and run focused/browser
+   accessibility checks in an installed Node 24 environment.
+6. Resolve the Trigger config relationship and duplicate/stale configuration
    risks with consumer evidence; separately decide the fate of tracked
    `frontend/lint_output.txt` and environment test/example artifacts. Do not
    delete or rewrite historical material as a side effect of this audit.
-6. Restore the pinned local validation prerequisites (Python/Alembic/backend
+7. Restore the pinned local validation prerequisites (Python/Alembic/backend
    dependencies and frontend Node 24/frozen install) before treating the
    blocked checks as a usable baseline. This documentation change itself fixes
    only missing guidance; it does not remediate production code.
