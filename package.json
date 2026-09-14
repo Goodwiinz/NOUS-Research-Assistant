@@ -23,7 +23,7 @@
     "trigger:deploy": "pnpm dlx trigger.dev@4.4.6 deploy"
   },
   "dependencies": {
-    "@trigger.dev/sdk": "4.4.6"
+    "@trigger.dev/sdk": "4.5.16"
   },
   "engines": {
     "node": "24.x"
