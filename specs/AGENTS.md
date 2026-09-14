@@ -7,10 +7,13 @@ applies.
 
 This directory contains numbered feature specifications, plans, research,
 data-model notes, contracts, quickstarts, checklists, and implementation
-summaries. They are dated design and project records unless a current consumer
-explicitly adopts a contract. For the live HTTP contract, FastAPI/Pydantic and
-the generated artifacts described in [`docs/engineering/api-contracts.md`](../docs/engineering/api-contracts.md)
-are authoritative; these snapshot specs do not replace that pipeline.
+summaries. Every file under `specs/` remains a dated design or project record,
+even when current code implements it or a consumer follows it. For the live
+HTTP contract, FastAPI/Pydantic alone is the source of truth. `backend/openapi.json`
+and `frontend/src/types/generated/api.d.ts` are generated outputs of the
+pipeline described in [`docs/engineering/api-contracts.md`](../docs/engineering/api-contracts.md),
+not independent authorities; these snapshot specs do not replace that
+pipeline.
 
 ## Invalid patterns
 
@@ -32,9 +35,9 @@ are authoritative; these snapshot specs do not replace that pipeline.
 ## Required workflow
 
 - Before changing a spec record, identify its number, date, status, source
-  revision, and whether it is historical, proposed, or adopted by a current
-  consumer. Link a superseding decision forward rather than silently changing
-  old evidence.
+  revision, and whether it is historical, proposed, planned, or implemented.
+  It remains historical in every case. Link a superseding decision forward
+  rather than silently changing old evidence.
 - Keep numbered specs, contracts, and checklists internally consistent without
   weakening their historical meaning. Mark new observations with a date and
   verify implementation/status claims against the current consumer and
