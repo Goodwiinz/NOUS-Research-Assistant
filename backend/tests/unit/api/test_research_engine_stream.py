@@ -352,6 +352,53 @@ class TestStreamEndpointSuccess:
         db.add.assert_called()
         stream_app.dependency_overrides.pop(get_db, None)
 
+    def test_stream_persists_discovered_sources_with_step(
+        self, stream_app, stream_client
+    ):
+        from src.models.research_source import ResearchSource
+        from src.models.research_step import ResearchStep
+
+        run_id = uuid.uuid4()
+        source_id = uuid.uuid4()
+        run = _make_run(id=run_id)
+        bp = _make_blueprint(id=run.blueprint_id, steps=[{"type": "search"}])
+        db = _mock_db_returning(run_result=run, blueprint_result=bp)
+        stream_app.dependency_overrides[get_db] = lambda: db
+        record = {
+            "source_id": str(source_id),
+            "connector_type": "openalex",
+            "external_id": "W123",
+            "title": "Paper",
+            "authors": ["Author"],
+            "abstract": "Actual evidence",
+            "url": "https://openalex.org/W123",
+            "content_hash": "a" * 64,
+            "evidence_level": "abstract",
+            "metadata": {"identifiers": {"doi": "10.1234/abc"}, "provenance": []},
+        }
+
+        async def engine_run(**kwargs):
+            yield {
+                "event": "step_complete",
+                "step_index": 0,
+                "output": {"source_records": [record]},
+            }
+            yield {"event": "run_complete"}
+
+        response = self._patch_engine_and_get(
+            stream_app, stream_client, run_id, engine_run
+        )
+        assert "event: run_complete" in response.text
+        added = [call.args[0] for call in db.add.call_args_list]
+        sources = [row for row in added if isinstance(row, ResearchSource)]
+        assert len(sources) == 1
+        assert sources[0].run_id == run_id
+        assert sources[0].id == source_id
+        assert sources[0].abstract == "Actual evidence"
+        assert sources[0].metadata_["identifiers"] == {"doi": "10.1234/abc"}
+        step = next(row for row in added if isinstance(row, ResearchStep))
+        assert step.output["source_records"][0]["source_id"] == str(sources[0].id)
+
     def test_stream_honors_external_pause_request(self, stream_app, stream_client):
         run_id = uuid.uuid4()
         bp_id = uuid.uuid4()

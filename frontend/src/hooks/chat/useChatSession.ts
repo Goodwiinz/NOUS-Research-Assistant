@@ -14,6 +14,7 @@ import { upsertConversationFromThread } from '@/components/chat/shared/threadCon
 import { workspaceService } from '@/services/workspaceService';
 import { useChatStore } from '@/store/chat-store';
 import { useAuthStore } from '@/stores/authStore';
+import { getLoginPathWithRedirect } from '@/utils/authRedirect';
 import {
   ChatMessage as DBChatMessage,
   Conversation as DBConversation,
@@ -277,11 +278,15 @@ export function useChatSession(): UseChatSessionReturn {
   useEffect(() => {
     if (!isAuthenticated && !isInitializing) {
       const timer = setTimeout(() => {
-        router.push('/login');
+        router.push(
+          getLoginPathWithRedirect(
+            threadFromUrl ? getSelectedThreadUrl(threadFromUrl) : '/chat'
+          )
+        );
       }, 1500); // Short delay to show the "Redirecting..." state
       return () => clearTimeout(timer);
     }
-  }, [isAuthenticated, isInitializing, router]);
+  }, [isAuthenticated, isInitializing, router, threadFromUrl]);
 
   // Thread-scoped load-failure signal. The toast fires only when the failed
   // thread is the one on screen, and — unlike the old loading-flag transition

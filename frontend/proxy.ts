@@ -1,5 +1,6 @@
 import { type NextRequest } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
+import { AUTH_RETURN_TO_HEADER } from '@/utils/authRedirect';
 
 /**
  * Per-request CSP with a script nonce (audit #4 completion).
@@ -55,6 +56,13 @@ export async function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-nonce', nonce);
   requestHeaders.set('Content-Security-Policy', csp);
+  // The dashboard server layout cannot otherwise recover the concrete URL
+  // that entered a route group. Always overwrite the inbound value so a
+  // client cannot spoof an external/post-login destination.
+  requestHeaders.set(
+    AUTH_RETURN_TO_HEADER,
+    `${request.nextUrl.pathname}${request.nextUrl.search}`
+  );
 
   const response = await updateSession(request, requestHeaders);
 
