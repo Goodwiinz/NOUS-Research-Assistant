@@ -32,6 +32,10 @@ commonLabels:
 infisical:
   enabled: true
   envSlug: "dev"
+  # Chart-default secrets map merges over this, so prune the DO Spaces
+  # folder explicitly (null deletes the key): S3 auth rides IRSA instead.
+  secrets:
+    spaces-credentials: null
 
 # ──────────────────────────────────────────────
 # Frontend deployed via Vercel — no in-cluster manifests (unchanged by AWS move).
@@ -74,6 +78,12 @@ backend:
       external-dns.alpha.kubernetes.io/hostname: dev-api.gen-text.app
       external-dns.alpha.kubernetes.io/ttl: "300"
       external-dns.alpha.kubernetes.io/provider: cloudflare
+      # Helm deep-merges this map over the chart defaults, so the chart's
+      # nginx ingress annotations survive unless explicitly pruned. Null
+      # values delete the keys from the rendered ALB ingress.
+      "nginx.ingress.kubernetes.io/proxy-body-size": null
+      "nginx.ingress.kubernetes.io/rewrite-target": null
+      "nginx.ingress.kubernetes.io/ssl-redirect": null
     hosts:
       - host: dev-api.gen-text.app
         paths:
