@@ -116,7 +116,7 @@ kubectl get ingress -n rag-dev --context $DOKS_CONTEXT -o wide > /tmp/do-ingress
 cat /tmp/do-replicas.txt /tmp/do-ingress.txt
 ```
 
-Expected: e.g. `nous-dev-knowledge-graph-analytics-backend 1`, `-celery-beat 1`, `-celery-worker 1`. `/tmp/do-ingress.txt` shows the current DO LB address behind `dev-api.gen-text.app`.
+Expected: e.g. `nous-dev-knowledge-graph-analytics-backend 1`, `nous-dev-celery-beat 1`, `nous-dev-celery-worker 1`. `/tmp/do-ingress.txt` shows the current DO LB address behind `dev-api.gen-text.app`.
 
 **HALT:** any precondition fails → fix before freeze. Do not enter the window.
 
@@ -554,8 +554,8 @@ Run all from outside the cluster (real user path, via ALB). Frontend: `https://d
 | 3 | Chat streaming (SSE) | Send a chat message | Tokens stream incrementally (ALB `idle-timeout: 300` ≥ app `TIMEOUT: 300`) |
 | 4 | WebSocket | Open a session that uses the ws path | Socket connects (ALB `idle-timeout: 4000` on websocket-ingress); `/ws/health` 200 |
 | 5 | Knowledge-graph entities page | Open entities page | Nodes/edges render (Neo4j restored — data visible from Step 4) |
-| 6 | Celery beat | `kubectl logs -n rag-dev --context $EKS_CONTEXT deploy/nous-dev-knowledge-graph-analytics-celery-beat --tail=50` | Heartbeat/tick lines; no task failures |
-| 7 | Celery worker | `kubectl logs -n rag-dev --context $EKS_CONTEXT deploy/nous-dev-knowledge-graph-analytics-celery-worker --tail=50` | Tasks consumed from ElastiCache queue |
+| 6 | Celery beat | `kubectl logs -n rag-dev --context $EKS_CONTEXT deploy/nous-dev-celery-beat --tail=50` | Heartbeat/tick lines; no task failures |
+| 7 | Celery worker | `kubectl logs -n rag-dev --context $EKS_CONTEXT deploy/nous-dev-celery-worker --tail=50` | Tasks consumed from ElastiCache queue |
 | 8 | KEDA scale-from-zero | Push enough queue depth (or wait for load) then `kubectl get hpa,so -n rag-dev --context $EKS_CONTEXT` | ScaledObject active; worker replicas > min; scales back down after |
 | 9 | S3 round-trip | Download a pre-migration file through the UI/app | File served from S3 (`nous-storage-us-east-1`) |
 | 10 | Synthetic traffic | `kubectl get cronjob -n rag-dev --context $EKS_CONTEXT` → wait for next `*/20` tick → check job logs | Synthetic job succeeds |
