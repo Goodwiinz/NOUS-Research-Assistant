@@ -7,13 +7,36 @@
  * useChatStreaming.confirmToolSteps.test.tsx. No existing test exercised
  * this path — added per the Task 5.5 mutation-verification sweep.
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createElement, type ReactElement, type ReactNode } from 'react';
-import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
+import {
+  createElement,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
+import {
+  selectDisplayedMessages,
+  type ChatPageMessage,
+} from '@/components/chat/shared/cloudMessageView';
+import { ChatSurface } from '@/components/chat/ChatSurface';
 import { useChatStore } from '@/store/chat-store';
 import type { UseChatStreamingParams } from '@/hooks/chat/useChatStreaming';
+import type { UseChatSessionReturn } from '@/hooks/chat/useChatSession';
+import type { UseChatThreadActionsReturn } from '@/hooks/chat/useChatThreadActions';
+import type { UseChatDrawerReturn } from '@/hooks/chat/useChatDrawer';
+import type { UseCitationPanelReturn } from '@/hooks/chat/useCitationPanel';
+import type { UseChatComposerActionsReturn } from '@/hooks/chat/useChatComposerActions';
+import type { UseSlashCommandsReturn } from '@/hooks/chat/useSlashCommands';
 
 function wrapper({ children }: { children: ReactNode }): ReactElement {
   const client = new QueryClient({
@@ -66,6 +89,104 @@ function makeParams(): UseChatStreamingParams {
   };
 }
 
+function OptimisticFirstSendHarness(): ReactElement {
+  const [messages, setMessages] = useState<ChatPageMessage[]>([]);
+  const [conversations, setConversations] = useState<
+    UseChatStreamingParams['conversations']
+  >([]);
+  const displayedMessages = selectDisplayedMessages({
+    localMessages: messages,
+    storeMessages: [],
+  });
+  const streaming = useChatStreaming({
+    messages,
+    displayedMessages,
+    setMessages,
+    conversations,
+    setConversations,
+    dbConversation: null,
+    workspace: { id: 'ws-A', name: 'Research' } as never,
+    enableRAG: false,
+    navigateToThread: () => {},
+  });
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <ChatSurface
+      session={
+        {
+          conversations,
+          workspace: { id: 'ws-A', name: 'Research' },
+          activeThreadId: null,
+          displayedMessages,
+          isAuthenticated: true,
+          isInitializing: false,
+          initError: null,
+          isLoadingMessages: false,
+          hasMoreThreads: false,
+          loadMoreThreads: () => Promise.resolve(),
+          loadOlderMessages: () => Promise.resolve(),
+          messagePagination: null,
+        } as unknown as UseChatSessionReturn
+      }
+      streaming={streaming}
+      threadActions={
+        {
+          renameDialog: {
+            open: false,
+            threadId: '',
+            currentTitle: '',
+            value: '',
+          },
+          setRenameDialog: () => {},
+          deleteDialog: { open: false, threadId: '' },
+          setDeleteDialog: () => {},
+          bulkDeleteDialog: { open: false, ids: [] },
+          setBulkDeleteDialog: () => {},
+          handleRenameThread: () => Promise.resolve(),
+          commitRename: () => Promise.resolve(),
+          handleDeleteThread: () => {},
+          commitDeleteThread: () => Promise.resolve(),
+          handleBulkDeleteThreads: () => {},
+          commitBulkDelete: () => Promise.resolve(),
+        } as UseChatThreadActionsReturn
+      }
+      drawer={
+        {
+          isOpen: false,
+          openDrawer: () => {},
+          closeDrawer: () => {},
+          toggleDrawer: () => {},
+          drawerRef,
+          handleDrawerKeyDown: () => {},
+        } as UseChatDrawerReturn
+      }
+      citationPanel={
+        { handleCitationClick: () => {} } as UseCitationPanelReturn
+      }
+      composerActions={
+        {
+          handleAttach: async () => [],
+          handleRegenerate: () => {},
+          handleEditUserMessage: () => {},
+        } as unknown as UseChatComposerActionsReturn
+      }
+      slashCommands={
+        {
+          commandOutputs: [],
+          handleSlashCommand: () => {},
+          handleCommandItemAction: () => {},
+          submitMessage: () => true,
+          startNewChat: () => {},
+        } as UseSlashCommandsReturn
+      }
+      enableRAG={false}
+      setEnableRAG={() => {}}
+      onSelectThread={() => {}}
+    />
+  );
+}
+
 describe('useChatStreaming submit single-flight (submitLockRef)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -76,7 +197,67 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
     vi.mocked(
       workspaceService.getOrCreateDefaultConversation
     ).mockResolvedValue({ id: 'conversation-A' } as never);
+    Element.prototype.scrollIntoView = vi.fn();
     useChatStore.getState().reset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders the optimistic first message before conversation preflight resolves', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    vi.mocked(
+      workspaceService.getOrCreateDefaultConversation
+    ).mockImplementationOnce(() => new Promise(() => {}) as never);
+    vi.mocked(workspaceService.createThread).mockResolvedValue({
+      id: 'thread-new',
+      conversation_id: 'conversation-A',
+      title: 'Visible before preflight',
+    } as never);
+    streamMessageMock.mockResolvedValue(undefined);
+    useChatStore.setState({ currentThreadId: null });
+
+    render(<OptimisticFirstSendHarness />, { wrapper });
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        'Ask anything, or paste a passage to discuss…'
+      ),
+      { target: { value: 'Visible before preflight' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() =>
+      expect(
+        workspaceService.getOrCreateDefaultConversation
+      ).toHaveBeenCalledOnce()
+    );
+    await waitFor(() =>
+      expect(screen.getByText('Visible before preflight')).toBeVisible()
+    );
+    expect(screen.getAllByText('Visible before preflight')).toHaveLength(1);
+    expect(workspaceService.createThread).not.toHaveBeenCalled();
+    expect(streamMessageMock).not.toHaveBeenCalled();
+    expect(
+      consoleError.mock.calls.some((args) =>
+        args
+          .map(String)
+          .join(' ')
+          .includes('useClientLookup: Index 0 out of bounds')
+      )
+    ).toBe(true);
+    expect(
+      consoleError.mock.calls
+        .map((args) => args.map(String).join(' '))
+        .filter(
+          (message) =>
+            !/useClientLookup: Index 0 out of bounds|The above error occurred/i.test(
+              message
+            )
+        )
+    ).toEqual([]);
   });
 
   it('a synchronous second handleSubmit call while the first is still in flight only fires streamMessage once', async () => {

@@ -7,6 +7,7 @@ import httpx
 from defusedxml import ElementTree as ET
 
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.research_engine.connectors.provider_http import get
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
@@ -41,7 +42,9 @@ class PubMedConnector(SourceConnector):
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            search_resp = await client.get(ESEARCH_URL, params=search_params)
+            search_resp = await get(
+                client, ESEARCH_URL, provider="pubmed", params=search_params
+            )
             search_resp.raise_for_status()
 
             try:
@@ -67,7 +70,9 @@ class PubMedConnector(SourceConnector):
                 "retmode": "xml",
                 "rettype": "abstract",
             }
-            fetch_resp = await client.get(EFETCH_URL, params=fetch_params)
+            fetch_resp = await get(
+                client, EFETCH_URL, provider="pubmed", params=fetch_params
+            )
             fetch_resp.raise_for_status()
 
             return self._parse_articles(fetch_resp.text)
@@ -92,9 +97,10 @@ class PubMedConnector(SourceConnector):
             if article is None:
                 continue
 
-            title = article.findtext("ArticleTitle", default="")
+            title_el = article.find("ArticleTitle")
+            title = "".join(title_el.itertext()) if title_el is not None else ""
             abstract_parts = [
-                el.text for el in article.findall(".//AbstractText") if el.text
+                "".join(el.itertext()) for el in article.findall(".//AbstractText")
             ]
             abstract = " ".join(abstract_parts)
 
@@ -124,6 +130,13 @@ class PubMedConnector(SourceConnector):
                     metadata={
                         "pmid": pmid,
                         "mesh_terms": mesh_terms,
+                        "doi": article_el.findtext(".//ArticleId[@IdType='doi']"),
+                        "pmcid": article_el.findtext(".//ArticleId[@IdType='pmc']"),
+                        "publication_type": [
+                            el.text
+                            for el in article.findall(".//PublicationType")
+                            if el.text
+                        ],
                     },
                 )
             )

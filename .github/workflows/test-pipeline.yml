@@ -70,7 +70,7 @@ jobs:
       # divergent from the live lane). Direct pip install is faster (no buildx,
       # no remote layer cache) and keeps the linters in sync with the repo.
       - name: Install lint tools (current pins)
-        run: pip install ruff==0.15.15 black==26.5.1 isort==5.13.2 mypy==1.7.1
+        run: pip install ruff==0.15.15 black==26.5.1 isort==5.13.2 mypy==1.7.1 types-redis==4.6.0.20241004
       - name: Run Ruff (blocking)
         run: ruff check backend/src --output-format=github
       - name: Directory docs lint (blocking — carried from the fast lane)
