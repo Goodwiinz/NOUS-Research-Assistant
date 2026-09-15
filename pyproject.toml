@@ -100,12 +100,12 @@ ignore = [
 dev = [
     "bcrypt>=5.0.0",
     "cryptography>=50.0.0",
-    "fastapi>=0.138.1",
+    "fastapi>=0.141.1",
     "httpx>=0.28.1",
-    "pydantic>=2.13.4",
+    "pydantic>=2.13.5",
     "pyjwt>=2.13.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
-    "sqlalchemy>=2.0.50",
+    "sqlalchemy>=2.0.52",
     "starlette>=1.3.1",
 ]
