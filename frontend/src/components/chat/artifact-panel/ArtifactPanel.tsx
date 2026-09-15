@@ -15,14 +15,17 @@ import Link from 'next/link';
 
 import { IconButton } from '@/components/ui/icon-button';
 import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
+import { CitationRenderer } from '@/components/chat/CitationRenderer';
 import { CitationPanelBody } from '@/components/chat/CitationPanelBody';
 import {
   useDraftArtifact,
+  useDraftCitations,
   useNoteArtifact,
 } from '@/components/chat/artifact-panel/useArtifactContent';
 import { DocumentInlineViewer } from '@/components/documents/DocumentInlineViewer';
 import { cn } from '@/lib/utils';
 import { documentService } from '@/services/documentService';
+import type { DraftCitation } from '@/services/projectService';
 import {
   useArtifactPanelStore,
   type Artifact,
@@ -205,10 +208,16 @@ function NoteArtifactBody({
 
 function DraftArtifactBody({
   artifact,
+  onCitationClick,
 }: {
   artifact: Extract<Artifact, { kind: 'draft' }>;
+  onCitationClick: (citation: Citation) => void;
 }): React.ReactElement {
   const { data, isLoading, isError, refetch } = useDraftArtifact(
+    artifact.projectId,
+    artifact.id
+  );
+  const { data: citationData } = useDraftCitations(
     artifact.projectId,
     artifact.id
   );
@@ -239,11 +248,28 @@ function DraftArtifactBody({
           <span className="tabular-nums">{data.citation_count} citations</span>
         )}
       </div>
-      <div className="nous-prose font-nous-body text-sm leading-relaxed text-(--nous-fg-1)">
-        <ChatMarkdown content={data.content} />
-      </div>
+      <CitationRenderer
+        content={data.content}
+        citations={draftCitationsByIndex(citationData?.citations ?? [])}
+        onCitationClick={onCitationClick}
+        className="font-nous-body text-sm leading-relaxed text-(--nous-fg-1)"
+      />
     </div>
   );
+}
+
+function draftCitationsByIndex(citations: DraftCitation[]): Citation[] {
+  const indexed: Citation[] = [];
+  for (const citation of citations) {
+    indexed[citation.citation_index - 1] = {
+      title: `Document ${citation.citation_index}`,
+      documentId: citation.document_id,
+      externalReferenceId: citation.citation_id,
+      content: citation.context || citation.snippet || '',
+      score: 0,
+    };
+  }
+  return indexed;
 }
 
 interface ArtifactPanelProps {
@@ -491,7 +517,10 @@ export function ArtifactPanel({
           )}
           {artifact.kind === 'note' && <NoteArtifactBody artifact={artifact} />}
           {artifact.kind === 'draft' && (
-            <DraftArtifactBody artifact={artifact} />
+            <DraftArtifactBody
+              artifact={artifact}
+              onCitationClick={handleOpenCitedDocument}
+            />
           )}
         </div>
       </aside>
