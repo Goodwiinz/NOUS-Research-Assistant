@@ -1,3 +1,6 @@
+# ARCHIVED REFERENCE — not executed by GitHub (not under .github/workflows/);
+# kept for the DigitalOcean -> AWS cutover transition. Do not modernize or
+# wire this file up; the active workflow is .github/workflows/deploy.yml.
 name: Deploy to Production
 
 on:

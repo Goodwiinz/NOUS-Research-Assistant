@@ -132,6 +132,11 @@ jobs:
             GIT_SHA=${{ steps.identity.outputs.source_sha }}
           cache-from: type=s3,bucket=${{ env.SPACES_BUCKET }},region=${{ env.SPACES_REGION }},endpoint_url=${{ env.SPACES_ENDPOINT }},prefix=buildcache/backend/
           cache-to: type=s3,bucket=${{ env.SPACES_BUCKET }},region=${{ env.SPACES_REGION }},endpoint_url=${{ env.SPACES_ENDPOINT }},prefix=buildcache/backend/,mode=max
+        # Deliberate step-level AWS credential override: these static DO
+        # Spaces keys feed ONLY the BuildKit s3 cache backend above (the
+        # registry push itself uses the OIDC role from configure-aws-
+        # credentials). Do not remove — buildx loses cache access without
+        # them until the s3 cache migrates to an S3 bucket.
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}

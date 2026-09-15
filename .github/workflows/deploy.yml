@@ -77,7 +77,6 @@ jobs:
       inputs.environment == 'staging'
     permissions:
       contents: read
-      packages: read
       id-token: write
     environment:
       name: staging
@@ -107,9 +106,8 @@ jobs:
         with:
           version: "3.13.0"
 
-      - name: Log in to Amazon ECR
-        run: |
-          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ env.REGISTRY }}
+      # No ECR login here: kubelet pulls images via the node instance role.
+      # The deploy job only orchestrates Helm/kubectl against the cluster.
 
       - name: Deploy with Helm
         env:
@@ -159,7 +157,6 @@ jobs:
       inputs.environment == 'production'
     permissions:
       contents: read
-      packages: read
       id-token: write
     environment:
       name: production
