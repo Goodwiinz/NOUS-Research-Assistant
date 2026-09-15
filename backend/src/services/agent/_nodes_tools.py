@@ -552,7 +552,7 @@ async def _execute_single_tool(
             project_id = str(configurable.get("project_id", "") or "")
 
             async def _call_tool(args: dict):
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     tool_executor(
                         tool_name=tool_name,
                         args=args,
@@ -564,6 +564,15 @@ async def _execute_single_tool(
                     ),
                     timeout=timeout,
                 )
+                if isinstance(result, dict) and "error" in result:
+                    from langsmith import get_current_run_tree
+
+                    run = get_current_run_tree()
+                    if run is not None:
+                        # Tool failures returned as data must not produce green spans.
+                        # Keep exception details and tool payloads out of trace errors.
+                        run.end(error=f"{tool_name} returned a tool error")
+                return result
 
             # Wrap with langsmith.traceable so per-tool spans land in LangSmith
             # as run_type="tool". Previously zero tool spans existed because
@@ -658,6 +667,11 @@ async def _execute_single_tool(
             "status": status,
             "result": _safe_json_loads(result_content),
             "duration_ms": duration_ms,
+            "retry_exhausted": bool(
+                status == "failed"
+                and error_info.get("category") == "transient"
+                and TOOL_REGISTRY.has_policy(tool_name, ToolPolicyTag.NO_OUTER_RETRY)
+            ),
         },
         "error_increment": error_increment,
         "error_text": error_text,
