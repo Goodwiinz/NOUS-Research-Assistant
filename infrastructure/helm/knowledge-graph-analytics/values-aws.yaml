@@ -8,16 +8,19 @@
 #   - Frontend is NOT in this chart (Vercel) — no frontend key.
 #   - backend.image.repository is used verbatim by templates/_helpers.tpl
 #     (includes the registry host); worker/beat share it.
+# rationale/rollback levers for per-var values: see values-dev.yaml (identical values)
 
 global:
   # <ACCOUNT_ID> = terraform output account_id (Task 2)
+  # Fill-once pair: when you fill this registry host, backend.image.repository
+  # must be updated in the same change (it embeds the registry host).
   imageRegistry: "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com"
   # ECR auth via the node IAM role (AmazonEC2ContainerRegistryReadOnly) —
   # no imagePullSecrets, unlike the DO do-registry secret.
   imagePullSecrets: []
   storageClass: "gp3"
   dnsZone: "gen-text.app"
-  environment: "dev"
+  environment: "dev" # aws-dev
 
 commonLabels:
   app.kubernetes.io/name: knowledge-graph-analytics
@@ -63,16 +66,21 @@ backend:
     # AWS load balancer controller (installed as cluster addon, Task 3)
     className: "alb"
     annotations:
-      kubernetes.io/ingress.class: alb
       alb.ingress.kubernetes.io/scheme: internet-facing
+      # Shared group: pins this ingress (and any related ones, e.g. websocket)
+      # onto a single ALB instead of one LB per Ingress.
+      alb.ingress.kubernetes.io/group.name: "nous-dev"
       alb.ingress.kubernetes.io/target-type: ip
       alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
       alb.ingress.kubernetes.io/ssl-redirect: "443"
       alb.ingress.kubernetes.io/healthcheck-path: /health
-      # HTTP-01 challenge: cert-manager's solver ingress joins the same ALB
-      # group with higher-priority rules, so /.well-known/acme-challenge
-      # bypasses the ssl-redirect.
-      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      # SSE/streaming: keep the ALB idle timeout at/above the app TIMEOUT (300s)
+      # so server-sent events are not severed mid-stream.
+      alb.ingress.kubernetes.io/idle-timeout: "300"
+      # TLS is AWS ACM (NOT cert-manager): terraform aws_acm_certificate
+      # (Task 3) with DNS validation — the validation CNAME is added manually
+      # in Cloudflare (DNS is on Cloudflare, not Route53).
+      alb.ingress.kubernetes.io/certificate-arn: <ACM_CERT_ARN> # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
       # external-dns stays on the Cloudflare provider (design doc); records
       # dev-api.gen-text.app -> ALB hostname.
       external-dns.alpha.kubernetes.io/hostname: dev-api.gen-text.app
@@ -84,6 +92,8 @@ backend:
       "nginx.ingress.kubernetes.io/proxy-body-size": null
       "nginx.ingress.kubernetes.io/rewrite-target": null
       "nginx.ingress.kubernetes.io/ssl-redirect": null
+      # cert-manager annotation pruned too: TLS is ACM (above), not Let's Encrypt.
+      "cert-manager.io/cluster-issuer": null
     hosts:
       - host: dev-api.gen-text.app
         paths:
@@ -262,6 +272,7 @@ neo4j:
     repository: neo4j
     tag: "5.26-community"
     pullPolicy: IfNotPresent
+  # password: supply via --set neo4j.password=... at deploy time
   advertisedAddress: "dev-neo4j.gen-text.app"
   persistence:
     size: 5Gi
@@ -371,7 +382,8 @@ keda:
   enabled: true
   redis:
     # <ELASTICACHE_ENDPOINT> = terraform output ElastiCache primary endpoint
-    # (Task 2), host only — KEDA wants host:port. ElastiCache default TLS on.
+    # (Task 2). Terraform output is the bare host; :6379 appended here
+    # (KEDA wants host:port). ElastiCache default TLS on.
     address: "<ELASTICACHE_ENDPOINT>:6379"
     username: "default"
     authSecretName: redis-credentials

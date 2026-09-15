@@ -12,6 +12,10 @@
 #
 # Helm-managed runtime (the chart that ArgoCD dev actually deploys) is
 # configured separately via infrastructure/helm/knowledge-graph-analytics/values-aws.yaml.
+#
+# SCAFFOLD — hosts (*.multimodal-rag.example.com), namespace, service refs
+# carried from DO base; Task 5 ArgoCD wiring + cutover update these to
+# gen-text.app / EKS naming. Do not apply before Task 5.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

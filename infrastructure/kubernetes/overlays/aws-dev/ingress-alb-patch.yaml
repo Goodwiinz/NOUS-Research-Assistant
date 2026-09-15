@@ -7,16 +7,20 @@ metadata:
   annotations:
     # Replace the whole annotation map — nginx annotations must not survive.
     $patch: replace
-    kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing
+    # Shared group: pins backend + websocket ingresses onto a single ALB.
+    alb.ingress.kubernetes.io/group.name: "nous-dev"
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
     alb.ingress.kubernetes.io/healthcheck-path: /health
-    # TLS unchanged from base: cert-manager HTTP-01. The ACME solver ingress
-    # joins the same ALB (shared group) with higher-priority rules, so the
-    # challenge path bypasses the ssl-redirect above.
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # SSE/streaming: keep the ALB idle timeout at/above the app TIMEOUT (300s)
+    # so server-sent events are not severed mid-stream.
+    alb.ingress.kubernetes.io/idle-timeout: "300"
+    # TLS is AWS ACM (NOT cert-manager): terraform aws_acm_certificate
+    # (Task 3) with DNS validation — the validation CNAME is added manually
+    # in Cloudflare (DNS is on Cloudflare, not Route53).
+    alb.ingress.kubernetes.io/certificate-arn: <ACM_CERT_ARN> # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
     # Kept from base; external-dns stays on Cloudflare, records -> ALB hostname.
     external-dns.alpha.kubernetes.io/hostname: api.multimodal-rag.example.com
     external-dns.alpha.kubernetes.io/ttl: "300"
