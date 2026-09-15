@@ -151,6 +151,7 @@ SEMANTIC_SCHOLAR_JSON = {
     "data": [
         {
             "paperId": "abc123",
+            "externalIds": {"DOI": "10.1234/abc", "PubMed": "123"},
             "title": "S2 Paper One",
             "abstract": "First abstract.",
             "authors": [{"name": "Dave"}, {"name": "Eve"}],
@@ -193,6 +194,8 @@ class TestSemanticScholarConnector:
         assert results[0].title == "S2 Paper One"
         assert results[0].authors == ["Dave", "Eve"]
         assert results[0].url == "https://semanticscholar.org/paper/abc123"
+        assert results[0].metadata["doi"] == "10.1234/abc"
+        assert results[0].metadata["pmid"] == "123"
 
         assert results[1].title == "S2 Paper Two"
 
@@ -201,7 +204,7 @@ class TestSemanticScholarConnector:
             params={
                 "query": "deep learning",
                 "limit": 10,
-                "fields": "paperId,title,abstract,authors,url",
+                "fields": "paperId,title,abstract,authors,url,externalIds,publicationDate,publicationTypes,openAccessPdf",
             },
             headers={},
         )

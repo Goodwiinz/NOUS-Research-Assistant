@@ -141,10 +141,7 @@ export interface RewriteResponse {
 // ============================================================================
 
 export type SourceConnectorType =
-  | 'arxiv'
-  | 'semantic_scholar'
-  | 'crossref'
-  | 'pubmed';
+  'arxiv' | 'semantic_scholar' | 'openalex' | 'crossref' | 'pubmed';
 
 export interface SourceConnectorOption {
   id: SourceConnectorType;
@@ -245,11 +242,7 @@ export interface OutlineResponse {
 // ============================================================================
 
 export type PipelineStepStatus =
-  | 'completed'
-  | 'active'
-  | 'skipped'
-  | 'upcoming'
-  | 'invalidated';
+  'completed' | 'active' | 'skipped' | 'upcoming' | 'invalidated';
 
 export interface PipelineStep {
   index: number;

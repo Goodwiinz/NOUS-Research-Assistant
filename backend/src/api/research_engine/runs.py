@@ -27,6 +27,7 @@ from src.services.research_engine.connectors import (
     RagStoreConnector,
     SemanticScholarConnector,
 )
+from src.services.research_engine.connectors.registry import build_connectors
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.providers import (
     ClaudeProvider,
@@ -34,6 +35,7 @@ from src.services.research_engine.providers import (
     OpenAIProvider,
     ProviderConfig,
 )
+from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
 
 logger = logging.getLogger(__name__)
@@ -142,6 +144,9 @@ async def _search_rag_store(
     ``hybrid_search_service.search`` runs org-unfiltered and a research run
     would surface (and copy ``full_text`` from) every tenant's documents.
     """
+    if not organization_id:
+        return {"results": []}
+
     from src.models.search_schemas import SearchQuery
     from src.services.search.hybrid_search_service import hybrid_search_service
 
@@ -181,16 +186,8 @@ def _build_connectors(organization_id: Optional[str] = None) -> Dict[str, Any]:
     ``organization_id`` (the run owner's) is bound into the rag_store search so
     the local-index connector only ever returns this tenant's documents.
     """
-    semantic_connector = SemanticScholarConnector()
     rag_search = functools.partial(_search_rag_store, organization_id=organization_id)
-    return {
-        "arxiv": ArxivConnector(),
-        "semantic_scholar": semantic_connector,
-        # Temporary aliases until dedicated connectors are implemented.
-        "pubmed": semantic_connector,
-        "web": semantic_connector,
-        "rag_store": RagStoreConnector(search_fn=rag_search),
-    }
+    return build_connectors(rag_search)
 
 
 def _get_effective_parameters(
@@ -508,6 +505,10 @@ async def stream_run(
                     if output is not None and not isinstance(output, dict):
                         output = {"value": output}
 
+                    if step_def.get("type") == "search" and output:
+                        for source_row in research_source_rows(run_id, output):
+                            db.add(source_row)
+
                     db.add(
                         ResearchStep(
                             run_id=run_id,
@@ -565,6 +566,7 @@ async def stream_run(
             raise
         except Exception as exc:
             # If streaming fails unexpectedly, mark run as failed
+            await db.rollback()
             logger.error(f"Stream error for run {run_id}: {exc}")
             run.status = RunStatus.FAILED.value
             run.total_tokens = total_tokens
