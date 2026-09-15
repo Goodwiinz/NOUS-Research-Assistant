@@ -90,8 +90,7 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
     setError(null);
     try {
       const proj = (await getProject(projectId)) as
-        | (ResearchProject & { blueprint_id?: string })
-        | undefined;
+        (ResearchProject & { blueprint_id?: string }) | undefined;
       if (!proj) {
         setError('Project not found');
         return;
@@ -102,8 +101,7 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
       if (proj.blueprint_id) {
         try {
           const bp = (await getBlueprint(proj.blueprint_id)) as
-            | Blueprint
-            | undefined;
+            Blueprint | undefined;
           if (bp) {
             setBlueprint(bp);
             setBlueprintName(bp.name);
@@ -215,8 +213,7 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
     setError(null);
     try {
       const run = (await startRun(blueprint.id, globalParams)) as
-        | { id: string }
-        | undefined;
+        { id: string } | undefined;
       if (run?.id) {
         router.push(`/research-engine/runs/${run.id}`);
       }
@@ -508,20 +505,26 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
                   selected={
                     (Array.isArray(globalParams.sources)
                       ? globalParams.sources
-                      : [
-                          'arxiv',
-                          'semantic_scholar',
-                          'crossref',
-                          'pubmed',
-                        ]) as SourceConnectorType[]
+                      : (steps.find((step) => step.type === 'search')
+                          ?.parameters.sources ?? [])) as SourceConnectorType[]
                   }
-                  onChange={(sources) =>
+                  onChange={(sources) => {
+                    setSteps((prev) =>
+                      prev.map((step) =>
+                        step.type === 'search'
+                          ? {
+                              ...step,
+                              parameters: { ...step.parameters, sources },
+                            }
+                          : step
+                      )
+                    );
                     setGlobalParams((prev) => {
                       const next = { ...prev, sources };
                       setGlobalParamsText(JSON.stringify(next, null, 2));
                       return next;
-                    })
-                  }
+                    });
+                  }}
                 />
               </div>
             </div>

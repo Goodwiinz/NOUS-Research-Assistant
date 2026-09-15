@@ -7,6 +7,7 @@ from string import Template
 from typing import Any, Dict, List, Optional
 
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.research_engine.discovery import search_sources, source_records
 from src.services.research_engine.providers.base import (
     LLMProvider,
     LLMRequest,
@@ -88,23 +89,33 @@ class StepExecutor:
     async def _execute_search(self, step_def: Dict, context: Dict) -> StepResult:
         """Search across configured source connectors."""
         params = self._get_params(step_def)
-        sources = list(params.get("sources", []) or [])
-        if not sources and params.get("source"):
-            sources = [params["source"]]
+        sources = params.get("sources")
+        if sources is None:
+            sources = (
+                [params["source"]]
+                if params.get("source")
+                else context.get("selected_sources", context.get("sources", []))
+            )
+        if not isinstance(sources, list) or not all(
+            isinstance(name, str) for name in sources
+        ):
+            raise ValueError("sources must be a list of provider names")
         query_template = params.get("query_template", "$query")
         max_results = int(params.get("max_results", 50))
         query = _safe_render(query_template, context)
 
-        all_sources: List[SourceDocument] = []
-        for source_name in sources:
-            connector = self.connectors.get(source_name)
-            if connector is None:
-                continue
-            results = await connector.search(query, max_results=max_results)
-            all_sources.extend(results)
+        all_sources, coverage = await search_sources(
+            self.connectors, sources, query, max_results
+        )
 
         return StepResult(
-            output={"sources": [s.title for s in all_sources], "query": query},
+            output={
+                "sources": [s.title for s in all_sources],
+                "query": query,
+                "source_records": source_records(all_sources),
+                "coverage": coverage,
+                "selected_sources": sources,
+            },
             sources_used=all_sources,
         )
 
