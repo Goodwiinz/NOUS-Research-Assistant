@@ -1,5 +1,6 @@
 """Step executor for research engine workflow steps."""
 
+import copy
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -179,10 +180,20 @@ class StepExecutor:
         if provider is None:
             raise ValueError(f"No provider found for model_id: {model_id}")
 
-        system_prompt = _safe_render(system_prompt_template, context)
+        # Retrieval audit fields identify a particular observation, not evidence
+        # content. Keep them persisted, but do not perturb reproducible prompts.
+        prompt_context = copy.deepcopy(context)
+        coverage = prompt_context.get("coverage")
+        if isinstance(coverage, dict):
+            coverage.pop("retrieved_at", None)
+        for record in prompt_context.get("source_records", []):
+            record.pop("source_id", None)
+            for snapshot in record.get("metadata", {}).get("provenance", []):
+                snapshot.pop("retrieved_at", None)
+        system_prompt = _safe_render(system_prompt_template, prompt_context)
 
         request = LLMRequest(
-            prompt=str(context),
+            prompt=str(prompt_context),
             system_prompt=system_prompt,
             temperature=temperature,
             seed=seed,

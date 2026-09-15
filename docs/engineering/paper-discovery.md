@@ -65,6 +65,10 @@ stored source records, including abstracts and provenance, into later steps.
 Source rows belong to the run; no global public catalog or cross-tenant
 document cache is introduced. No database migration is required.
 
+LLM prompts retain evidence content, content hashes, URLs, and provider metadata,
+but omit per-retrieval row UUIDs and audit timestamps. This keeps identical
+evidence reproducible without removing audit data from stored steps or sources.
+
 Provider requests run concurrently with a 90-second deadline per provider.
 OpenAlex and Semantic Scholar follow pagination up to the configured result
 limit. Shared HTTP handling paces requests, retries transient network/server
