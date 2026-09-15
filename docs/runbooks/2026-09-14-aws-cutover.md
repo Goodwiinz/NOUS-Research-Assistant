@@ -34,8 +34,10 @@ export EKS_CONTEXT=<EKS_CONTEXT>     # nous-dev-cluster
 > errors or output differs from "Expected".
 >
 > `argocd` CLI does NOT follow kubectl contexts — it talks to whatever server it
-> is logged into. Steps 1/9 run against the **DO** ArgoCD, Step 6 against the
-> **EKS** ArgoCD. Re-run `argocd login` (or `argocd context`) when switching.
+> is logged into. Steps 1/9.3 run against the **DO** ArgoCD; the Step 0
+> pre-check, Step 6, and 9.1 run against the **EKS** ArgoCD. On EKS the app
+> names are: `aws-dev` (root app-of-apps) and `nous-dev` (child, Helm release).
+> Re-run `argocd login` (or `argocd context`) when switching.
 
 ---
 
@@ -95,11 +97,11 @@ All boxes must be checked before starting. Any unchecked box = no go.
   kubectl get pods -n external-secrets --context $EKS_CONTEXT
   ```
   Expected: all Running/Ready.
-- [ ] EKS app stack deployed and ArgoCD `aws-dev` app exists but **paused** (sync none) per Task 5. Verify:
+- [ ] EKS app stack deployed and both EKS ArgoCD apps exist but **paused** (sync none) per Task 5: root app-of-apps `aws-dev` and its `nous-dev` child. Verify:
   ```bash
-  argocd app list
+  argocd app list   # (EKS ArgoCD)
   ```
-  Expected: `nous-dev` on EKS with `SyncPolicy: <none>` (manual).
+  Expected: `aws-dev` (root) and `nous-dev` (child) on EKS, both `SyncPolicy: <none>` (manual).
 - [ ] ACM certificate issued (Task 3 terraform; DNS validation CNAME added manually in Cloudflare):
   ```bash
   aws acm list-certificates --region us-east-1 \
@@ -117,6 +119,14 @@ cat /tmp/do-replicas.txt /tmp/do-ingress.txt
 ```
 
 Expected: e.g. `nous-dev-knowledge-graph-analytics-backend 1`, `nous-dev-celery-beat 1`, `nous-dev-celery-worker 1`. `/tmp/do-ingress.txt` shows the current DO LB address behind `dev-api.gen-text.app`.
+
+**Infisical rollback anchor (needed by 9.4):** rollback restores `/database` and
+`/redis` from **Infisical secret version history** — Infisical keeps every prior
+version, so no secret values are copied to disk. Before freezing, record the
+current version number of each secret in `/database` (`DATABASE_URL`,
+`POSTGRES_USER`, `POSTGRES_PASSWORD`) and `/redis` (`REDIS_URL`, `REDIS_PASSWORD`)
+into `/tmp/infisical-versions.txt` (Infisical UI → project `nous-platform`,
+env `dev` → each secret's history), so 9.4 can restore the exact prior versions.
 
 **HALT:** any precondition fails → fix before freeze. Do not enter the window.
 
@@ -187,10 +197,12 @@ export RDS_PORT=5432               # terraform output database_port
 export RDS_USER=raguser            # terraform output database_username (tfvars db_username)
 export RDS_PASSWORD='<RDS_PASSWORD>'
 
-# Helpers — expand on the laptop, run inside the pg-mig pod.
-# NOTE: values are single-quoted; passwords containing ' must be escaped as '\''
-psql_do()  { kubectl exec -i -n rag-dev pg-mig --context $EKS_CONTEXT -- sh -c "PGPASSWORD='$DO_PGPASSWORD' psql -h $DO_PGHOST -p $DO_PGPORT -U $DO_PGUSER -d multimodal_rag $*"; }
-psql_rds() { kubectl exec -i -n rag-dev pg-mig --context $EKS_CONTEXT -- sh -c "PGPASSWORD='$RDS_PASSWORD' psql -h $RDS_HOST -p $RDS_PORT -U $RDS_USER -d multimodal_rag $*"; }
+# Helpers — expand on the laptop, run inside the pg-mig pod. Arguments are
+# passed verbatim to psql (no shell layer inside the pod), so SQL containing
+# quotes, parentheses, or semicolons is safe. Passwords are only parsed by
+# your login shell: keep the export lines single-quoted (escape ' as '\'').
+psql_do()  { kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$DO_PGPASSWORD" psql -h "$DO_PGHOST" -p "$DO_PGPORT" -U "$DO_PGUSER" -d multimodal_rag "$@"; }
+psql_rds() { kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" psql -h "$RDS_HOST" -p "$RDS_PORT" -U "$RDS_USER" -d multimodal_rag "$@"; }
 
 psql_do -c "SELECT version();" && psql_rds -c "SELECT version();"
 ```
@@ -209,8 +221,8 @@ psql_rds -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$RDS_USER';"
 Expected: `1` and `1`. If the db is missing:
 
 ```bash
-kubectl exec -n rag-dev pg-mig --context $EKS_CONTEXT -- sh -c \
-  "PGPASSWORD='$RDS_PASSWORD' psql -h $RDS_HOST -p $RDS_PORT -U $RDS_USER -d postgres -c 'CREATE DATABASE multimodal_rag;'"
+kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" \
+  psql -h "$RDS_HOST" -p "$RDS_PORT" -U "$RDS_USER" -d postgres -c 'CREATE DATABASE multimodal_rag;'
 ```
 
 (The role is the RDS master user — created by terraform.)
@@ -218,9 +230,10 @@ kubectl exec -n rag-dev pg-mig --context $EKS_CONTEXT -- sh -c \
 **2d. Dump DO:**
 
 ```bash
-kubectl exec -n rag-dev pg-mig --context $EKS_CONTEXT -- sh -c \
-  "PGPASSWORD='$DO_PGPASSWORD' pg_dump -Fc -h $DO_PGHOST -p $DO_PGPORT -U $DO_PGUSER -d multimodal_rag -f /tmp/nous.dump && ls -lh /tmp/nous.dump"
-kubectl exec -n rag-dev pg-mig --context $EKS_CONTEXT -- pg_restore --list /tmp/nous.dump | tail -5
+kubectl exec -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$DO_PGPASSWORD" \
+  pg_dump -Fc -h "$DO_PGHOST" -p "$DO_PGPORT" -U "$DO_PGUSER" -d multimodal_rag -f /tmp/nous.dump
+kubectl exec -n rag-dev pg-mig --context "$EKS_CONTEXT" -- ls -lh /tmp/nous.dump
+kubectl exec -n rag-dev pg-mig --context "$EKS_CONTEXT" -- pg_restore --list /tmp/nous.dump | tail -5
 ```
 
 Expected: non-trivial file size; `pg_restore --list` prints TOC entries without error.
@@ -230,8 +243,9 @@ Expected: non-trivial file size; `pg_restore --list` prints TOC entries without 
 **2e. Restore to RDS:**
 
 ```bash
-kubectl exec -n rag-dev pg-mig --context $EKS_CONTEXT -- sh -c \
-  "PGPASSWORD='$RDS_PASSWORD' pg_restore -h $RDS_HOST -p $RDS_PORT -U $RDS_USER -d multimodal_rag --no-owner --no-privileges --exit-on-error -j 2 /tmp/nous.dump"
+kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" \
+  pg_restore -h "$RDS_HOST" -p "$RDS_PORT" -U "$RDS_USER" -d multimodal_rag \
+  --no-owner --no-privileges --exit-on-error -j 2 /tmp/nous.dump
 psql_rds -c "ANALYZE;"
 ```
 
@@ -400,23 +414,24 @@ export QDRANT_SVC=<qdrant-service>      # from svc output above
 **5b. Snapshot every collection on DO** (collections are frozen since Step 1):
 
 ```bash
+mkdir -p /tmp/qdrant-snaps
 kubectl port-forward -n rag-dev --context $DOKS_CONTEXT $QDRANT_POD 6333:6333 &
 curl -s http://localhost:6333/collections | jq -r '.result.collections[].name' | tee /tmp/qdrant-collections.txt
 while read -r c; do
-  curl -s -X POST "http://localhost:6333/collections/$c/snapshots" | jq .
+  curl -s -X POST "http://localhost:6333/collections/$c/snapshots" | jq . | tee "/tmp/qdrant-snaps/${c}.snap.json"
 done < /tmp/qdrant-collections.txt
 ```
 
-Expected: non-empty collection list; each POST returns snapshot info incl. `name` and `size`.
+Expected: non-empty collection list; each POST returns snapshot info incl. `name` and `size`, saved to `/tmp/qdrant-snaps/<collection>.snap.json` (5c downloads the exact snapshot named there).
 
 **HALT:** empty collection list → verify with team (could be legitimately empty; record and continue only on confirmation).
 
 **5c. Download snapshots:**
 
 ```bash
-mkdir -p /tmp/qdrant-snaps
 while read -r c; do
-  snap=$(curl -s "http://localhost:6333/collections/$c/snapshots" | jq -r '.result[0].name')
+  snap=$(jq -r '.result.name' "/tmp/qdrant-snaps/${c}.snap.json")
+  if [ -z "$snap" ]; then echo "MISSING: no snapshot recorded for $c — rerun 5b"; continue; fi
   curl -s "http://localhost:6333/collections/$c/snapshots/$snap" \
     -o "/tmp/qdrant-snaps/${c}.snapshot"
 done < /tmp/qdrant-collections.txt
@@ -450,7 +465,7 @@ while read -r c; do
   dst=$(curl -s "http://localhost:6334/collections/$c" | jq -r '.result.points_count')
   printf '%s src=%s dst=%s\n' "$c" "$src" "$dst"
 done < /tmp/qdrant-collections.txt
-kill %1 %2   # both port-forwards
+kill %1 %2 2>/dev/null   # both port-forwards
 ```
 
 Expected: `src` == `dst` for every collection.
@@ -500,7 +515,8 @@ Expected: secrets saved. (KEDA reads `keda.redis.address` = `<ELASTICACHE_ENDPOI
 ```bash
 kubectl scale deployments --all -n rag-dev --context $EKS_CONTEXT --replicas=1
 kubectl scale statefulset nous-dev-knowledge-graph-analytics-neo4j -n rag-dev --context $EKS_CONTEXT --replicas=1
-argocd app set nous-dev --sync-policy automated   # EKS ArgoCD (aws-dev app)
+argocd app set nous-dev --sync-policy automated   # EKS ArgoCD child app
+argocd app set aws-dev  --sync-policy automated   # EKS ArgoCD root app-of-apps
 kubectl get pods -n rag-dev --context $EKS_CONTEXT -w   # Ctrl-C when settled
 ```
 
@@ -576,13 +592,14 @@ Run all from outside the cluster (real user path, via ALB). Frontend: `https://d
 
 ### Rollback (independently executable — EKS becomes irrelevant)
 
-Requires: `/tmp/do-replicas.txt`, `/tmp/do-ingress.txt` (recorded in Step 0), DO ArgoCD still installed with `nous-root`/`nous-dev` apps present (they were only paused, not deleted).
+Requires: a **fresh shell** — re-export `$DOKS_CONTEXT`/`$EKS_CONTEXT` and `argocd login` to the DO ArgoCD (rollback must not depend on shell state from the cutover window). Also: `/tmp/do-replicas.txt`, `/tmp/do-ingress.txt`, `/tmp/infisical-versions.txt` (recorded in Step 0), DO ArgoCD still installed with `nous-root`/`nous-dev` apps present (they were only paused, not deleted).
 
 **9.1. Scale EKS down** (prevents split-brain writers when DNS flips back):
 
 ```bash
 kubectl scale deployments --all -n rag-dev --context $EKS_CONTEXT --replicas=0
-argocd app set nous-dev --sync-policy none   # EKS app
+argocd app set nous-dev --sync-policy none   # EKS ArgoCD child app
+argocd app set aws-dev  --sync-policy none   # EKS ArgoCD root app-of-apps
 ```
 
 **9.2. DNS back to DO:** in Cloudflare, point the CNAMEs that were moved (e.g. `dev-api`, ws host) back to the DO LB hostname from `/tmp/do-ingress.txt`. TTL 60. (If external-dns on EKS fights the records, scale it to 0 first: `kubectl scale deploy -n kube-system external-dns --context $EKS_CONTEXT --replicas=0`.)
@@ -599,7 +616,7 @@ done < /tmp/do-replicas.txt
 kubectl get pods -n rag-dev --context $DOKS_CONTEXT -w
 ```
 
-**9.4. Revert Infisical:** folder `/database` back to the DO PG values; `/redis` back to DO Valkey values (they are still running — nothing was deleted on DO).
+**9.4. Revert Infisical:** restore `/database` (DO PG values) and `/redis` (DO Valkey values) from **Infisical secret version history** — roll each secret back to the versions recorded in Step 0 (see `/tmp/infisical-versions.txt`); do not retype values from memory. (DO PG/Valkey are still running — nothing was deleted on DO.)
 
 Expected after 9.2-9.4: `curl -s https://dev-api.gen-text.app/health` returns 200 within TTL (60s) + pod-ready time; dev-app login + chat work again.
 
@@ -615,5 +632,5 @@ Expected after 9.2-9.4: `curl -s https://dev-api.gen-text.app/health` returns 20
   - Sentry (`SENTRY_ENVIRONMENT=dev`): new error classes vs pre-cutover baseline
   - `rclone check spaces:rag-system-storage s3:nous-storage-us-east-1` daily for the first week (Spaces must not receive new writes; if it does, some component still points at DO → fix immediately)
 - **DO stays frozen 2 weeks** as the rollback source. Do not delete DO resources in this window. Do not resume `nous-dev`/`nous-root` auto-sync on the DO ArgoCD.
-- After the soak, follow the decommission checklist: `docs/runbooks/aws-decommission.md` (Task 9 — DO LB deletion, snapshot archival to S3 Glacier, DOKS destruction, Spaces key revocation).
+- After the soak, follow the decommission checklist: `docs/runbooks/aws-decommission.md` (written in Task 9 — file does not exist yet; covers DO LB deletion, snapshot archival to S3 Glacier, DOKS destruction, Spaces key revocation).
 - Close-out notes: record actual cutover times, any deviations from this runbook, and the ECR tag ↔ source SHA mapping for the deployed images.
