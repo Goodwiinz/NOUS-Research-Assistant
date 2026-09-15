@@ -592,7 +592,7 @@ Run all from outside the cluster (real user path, via ALB). Frontend: `https://d
 
 ### Rollback (independently executable — EKS becomes irrelevant)
 
-Requires: a **fresh shell** — re-export `$DOKS_CONTEXT`/`$EKS_CONTEXT` and `argocd login` to the DO ArgoCD (rollback must not depend on shell state from the cutover window). Also: `/tmp/do-replicas.txt`, `/tmp/do-ingress.txt`, `/tmp/infisical-versions.txt` (recorded in Step 0), DO ArgoCD still installed with `nous-root`/`nous-dev` apps present (they were only paused, not deleted).
+Requires: a **fresh shell** — re-export `$DOKS_CONTEXT`/`$EKS_CONTEXT` and `argocd login` to **both** ArgoCDs (EKS for 9.1, DO for 9.3; rollback must not depend on shell state from the cutover window). Also: `/tmp/do-replicas.txt`, `/tmp/do-ingress.txt`, `/tmp/infisical-versions.txt` (recorded in Step 0), DO ArgoCD still installed with `nous-root`/`nous-dev` apps present (they were only paused, not deleted).
 
 **9.1. Scale EKS down** (prevents split-brain writers when DNS flips back):
 
