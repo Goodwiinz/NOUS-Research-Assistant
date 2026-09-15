@@ -33,6 +33,8 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+  # TODO(cutover): VAULT_TOKEN is a DigitalOcean-era secret still required by
+  # the backend during the DO->AWS transition; remove once Vault is migrated.
   VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
   SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 
@@ -229,6 +231,9 @@ jobs:
 
     - name: Deploy secrets
       run: |
+        # TODO(cutover): do-api-token / do-kb-* are DigitalOcean secrets still
+        # consumed by the backend during the DO->AWS transition; remove once
+        # the Knowledge Base integration is replaced on AWS.
         kubectl create secret generic rag-secrets \
           --namespace rag-system-${{ needs.prepare-deployment.outputs.environment }} \
           --from-literal=neo4j-uri=bolt://neo4j:7687 \

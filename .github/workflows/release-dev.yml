@@ -30,6 +30,9 @@ concurrency:
 
 permissions:
   contents: read
+  # Caller permissions cap the reusable docker-build workflow; id-token is
+  # required there for GitHub OIDC -> AWS (ECR push).
+  id-token: write
 
 jobs:
   build:

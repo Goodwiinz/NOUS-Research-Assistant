@@ -1,5 +1,9 @@
-name: Deploy to DigitalOcean Kubernetes
+name: Deploy to EKS
 
+# TODO(cutover): staging/production targets below were retired as DO/Argo CD
+# vestiges (see header on the old DigitalOcean version). Registry and cluster
+# auth are migrated to ECR/EKS here; the dispatch jobs themselves stay as-is
+# until the staging/production question is settled.
 on:
   # Legacy staging/production path: manual only, and almost certainly
   # vestigial: the staging and production Argo CD Applications were retired in
@@ -29,9 +33,12 @@ concurrency:
   cancel-in-progress: false  # Don't cancel ongoing deploys
 
 env:
-  REGISTRY: registry.digitalocean.com/ragsystemregistry
+  # TODO(cutover): replace <AWS_ACCOUNT_ID> with the real account ID
+  # (terraform output caller_identity).
+  REGISTRY: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
   HELM_CHART_PATH: infrastructure/helm/knowledge-graph-analytics
-  CLUSTER_NAME: rag-cluster
+  # TODO(cutover): set from `terraform output -raw cluster_name`.
+  CLUSTER_NAME: <EKS_CLUSTER_NAME>
 
 permissions:
   contents: read
@@ -71,6 +78,7 @@ jobs:
     permissions:
       contents: read
       packages: read
+      id-token: write
     environment:
       name: staging
       url: https://staging.gen-text.app
@@ -80,15 +88,17 @@ jobs:
         # v4.2.2 - pinned for security
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - name: Install doctl
-        # v2.2.0 - pinned for security
-        uses: digitalocean/action-doctl@c91e1c6aaa4f9a8e51ed1f52e6a0435e5df0aa24
+      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN> from
+      # `terraform output -raw github_oidc_role_arn`.
+      - name: Configure AWS credentials via GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          role-to-assume: arn:aws:iam::<AWS_ACCOUNT_ID>:role/<GITHUB_OIDC_ROLE_ARN>
+          aws-region: us-east-1
 
-      - name: Configure kubectl
+      - name: Configure kubectl for EKS
         run: |
-          doctl kubernetes cluster kubeconfig save ${{ env.CLUSTER_NAME }}
+          aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region us-east-1
 
       - name: Install Helm
         # v3.0.0 - pinned for security
@@ -96,8 +106,9 @@ jobs:
         with:
           version: "3.13.0"
 
-      - name: Log in to Container Registry
-        run: doctl registry login
+      - name: Log in to Amazon ECR
+        run: |
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ env.REGISTRY }}
 
       - name: Deploy with Helm
         env:
@@ -107,7 +118,7 @@ jobs:
             --namespace rag-staging \
             --create-namespace \
             --set global.environment=staging \
-            --set backend.image.repository=${{ env.REGISTRY }}/backend \
+            --set backend.image.repository=${{ env.REGISTRY }}/nous/backend \
             --set backend.image.tag=$IMAGE_TAG \
             --set backend.replicaCount=1 \
             --wait \
@@ -148,6 +159,7 @@ jobs:
     permissions:
       contents: read
       packages: read
+      id-token: write
     environment:
       name: production
       url: https://gen-text.app
@@ -157,15 +169,17 @@ jobs:
         # v4.2.2 - pinned for security
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - name: Install doctl
-        # v2.2.0 - pinned for security
-        uses: digitalocean/action-doctl@c91e1c6aaa4f9a8e51ed1f52e6a0435e5df0aa24
+      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN> from
+      # `terraform output -raw github_oidc_role_arn`.
+      - name: Configure AWS credentials via GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          role-to-assume: arn:aws:iam::<AWS_ACCOUNT_ID>:role/<GITHUB_OIDC_ROLE_ARN>
+          aws-region: us-east-1
 
-      - name: Configure kubectl
+      - name: Configure kubectl for EKS
         run: |
-          doctl kubernetes cluster kubeconfig save ${{ env.CLUSTER_NAME }}
+          aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region us-east-1
 
       - name: Install Helm
         # v3.0.0 - pinned for security
@@ -186,7 +200,7 @@ jobs:
             --namespace rag-production \
             --create-namespace \
             --set global.environment=production \
-            --set backend.image.repository=${{ env.REGISTRY }}/backend \
+            --set backend.image.repository=${{ env.REGISTRY }}/nous/backend \
             --set backend.image.tag=$IMAGE_TAG \
             --set backend.replicaCount=3 \
             --set backend.autoscaling.enabled=true \
@@ -234,18 +248,21 @@ jobs:
     needs: deploy-production
     permissions:
       contents: read
+      id-token: write
     environment: production
 
     steps:
-      - name: Install doctl
-        # v2.2.0 - pinned for security
-        uses: digitalocean/action-doctl@c91e1c6aaa4f9a8e51ed1f52e6a0435e5df0aa24
+      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN> from
+      # `terraform output -raw github_oidc_role_arn`.
+      - name: Configure AWS credentials via GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          role-to-assume: arn:aws:iam::<AWS_ACCOUNT_ID>:role/<GITHUB_OIDC_ROLE_ARN>
+          aws-region: us-east-1
 
-      - name: Configure kubectl
+      - name: Configure kubectl for EKS
         run: |
-          doctl kubernetes cluster kubeconfig save ${{ env.CLUSTER_NAME }}
+          aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region us-east-1
 
       - name: Rollback Helm release
         run: |
