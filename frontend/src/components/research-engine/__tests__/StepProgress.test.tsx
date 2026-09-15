@@ -3,6 +3,30 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { StepProgress, type StepData } from '../StepProgress';
 
 describe('StepProgress', () => {
+  it('shows partial search coverage before expanding the result', () => {
+    render(
+      <StepProgress
+        step={{
+          stepIndex: 0,
+          stepName: 'Find papers',
+          stepType: 'search',
+          status: 'complete',
+          tokenCount: 0,
+          qualityMarks: [],
+          output: {
+            coverage: {
+              partial: true,
+              providers: { pubmed: { status: 'failed' } },
+            },
+          },
+        }}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /some selected databases could not be searched/i
+    );
+  });
+
   it('renders structured output objects without crashing', () => {
     const step: StepData = {
       stepIndex: 0,
