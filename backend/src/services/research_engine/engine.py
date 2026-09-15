@@ -52,6 +52,12 @@ class WorkflowEngine:
                 }
 
                 try:
+                    if step_def.get("type") == "search":
+                        # Previous search outputs (including resumed ones) contain
+                        # their effective selection, not the blueprint default.
+                        context["selected_sources"] = (
+                            blueprint.get("parameters") or {}
+                        ).get("sources", [])
                     result = await self.step_executor.execute(step_def, context)
                 except Exception as exc:
                     yield {

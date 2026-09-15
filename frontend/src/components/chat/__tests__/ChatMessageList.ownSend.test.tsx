@@ -102,7 +102,12 @@ describe('ChatMessageList auto-scroll while scrolled away', () => {
     );
 
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
-    expect(within(view.container).queryByText('New messages')).toBeNull();
+    // The scroll happens in rAF, but AnimatePresence keeps the jump button
+    // mounted until its exit animation completes. Wait for that visible
+    // outcome separately instead of treating a scroll call as DOM removal.
+    await waitFor(() =>
+      expect(within(view.container).queryByText('New messages')).toBeNull()
+    );
   });
 
   it('still respects the guard for content the user did not initiate', async () => {

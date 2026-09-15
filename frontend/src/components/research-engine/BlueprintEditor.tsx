@@ -63,6 +63,25 @@ export interface BlueprintEditorProps {
   projectId: string;
 }
 
+async function loadProjectBlueprint(projectId: string): Promise<{
+  project: ResearchProject;
+  blueprint?: Blueprint;
+}> {
+  const project = (await getProject(projectId)) as
+    (ResearchProject & { blueprint_id?: string }) | undefined;
+  if (!project) throw new Error('Project not found');
+  if (project.blueprint_id) {
+    try {
+      const blueprint = (await getBlueprint(project.blueprint_id)) as
+        Blueprint | undefined;
+      return { project, blueprint };
+    } catch {
+      // A missing blueprint opens the template selector.
+    }
+  }
+  return { project };
+}
+
 export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
   const router = useRouter();
 
@@ -85,45 +104,26 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const proj = (await getProject(projectId)) as
-        | (ResearchProject & { blueprint_id?: string })
-        | undefined;
-      if (!proj) {
-        setError('Project not found');
-        return;
-      }
-      setProject(proj);
-
-      // Try to load existing blueprint
-      if (proj.blueprint_id) {
-        try {
-          const bp = (await getBlueprint(proj.blueprint_id)) as
-            | Blueprint
-            | undefined;
-          if (bp) {
-            setBlueprint(bp);
-            setBlueprintName(bp.name);
-            setSteps(bp.steps.map(withKey));
-            setGlobalParams(bp.parameters);
-            setGlobalParamsText(JSON.stringify(bp.parameters, null, 2));
-            return;
-          }
-        } catch {
-          // Blueprint may not exist yet, show template selector
+  const fetchData = useCallback(() => {
+    return loadProjectBlueprint(projectId)
+      .then(({ project: proj, blueprint: bp }) => {
+        setError(null);
+        setProject(proj);
+        if (bp) {
+          setBlueprint(bp);
+          setBlueprintName(bp.name);
+          setSteps(bp.steps.map(withKey));
+          setGlobalParams(bp.parameters);
+          setGlobalParamsText(JSON.stringify(bp.parameters, null, 2));
+          setShowTemplateSelector(false);
+        } else {
+          setShowTemplateSelector(true);
         }
-      }
-
-      // No blueprint found, show template selector
-      setShowTemplateSelector(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load project');
-    } finally {
-      setLoading(false);
-    }
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Failed to load project');
+      })
+      .finally(() => setLoading(false));
   }, [projectId]);
 
   useEffect(() => {
@@ -215,8 +215,7 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
     setError(null);
     try {
       const run = (await startRun(blueprint.id, globalParams)) as
-        | { id: string }
-        | undefined;
+        { id: string } | undefined;
       if (run?.id) {
         router.push(`/research-engine/runs/${run.id}`);
       }
@@ -356,7 +355,11 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
             <p className="text-sm text-foreground">{error}</p>
             <button
               type="button"
-              onClick={fetchData}
+              onClick={() => {
+                setLoading(true);
+                setError(null);
+                void fetchData();
+              }}
               className="mt-1 text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded"
             >
               Retry
@@ -508,20 +511,26 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
                   selected={
                     (Array.isArray(globalParams.sources)
                       ? globalParams.sources
-                      : [
-                          'arxiv',
-                          'semantic_scholar',
-                          'crossref',
-                          'pubmed',
-                        ]) as SourceConnectorType[]
+                      : (steps.find((step) => step.type === 'search')
+                          ?.parameters.sources ?? [])) as SourceConnectorType[]
                   }
-                  onChange={(sources) =>
+                  onChange={(sources) => {
+                    setSteps((prev) =>
+                      prev.map((step) =>
+                        step.type === 'search'
+                          ? {
+                              ...step,
+                              parameters: { ...step.parameters, sources },
+                            }
+                          : step
+                      )
+                    );
                     setGlobalParams((prev) => {
                       const next = { ...prev, sources };
                       setGlobalParamsText(JSON.stringify(next, null, 2));
                       return next;
-                    })
-                  }
+                    });
+                  }}
                 />
               </div>
             </div>

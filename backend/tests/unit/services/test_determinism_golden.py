@@ -4,10 +4,12 @@ Verifies that the workflow engine produces deterministic, reproducible results
 when given the same inputs, temperature 0, and seed values.
 """
 
+import copy
 import hashlib
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -22,10 +24,10 @@ from src.services.research_engine.providers.base import (
 from src.services.research_engine.step_executor import StepExecutor
 from src.services.research_engine.verification import run_source_grounding_check
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class DeterministicProvider(LLMProvider):
     """LLM provider that returns deterministic content based on the prompt hash."""
@@ -124,7 +126,9 @@ def _build_engine(
     return WorkflowEngine(step_executor=executor, pause_on_quality_failure=False)
 
 
-async def _collect_events(engine: WorkflowEngine, blueprint: Dict, run_id) -> List[Dict]:
+async def _collect_events(
+    engine: WorkflowEngine, blueprint: Dict, run_id
+) -> List[Dict]:
     """Run the engine and collect all emitted events."""
     events: List[Dict] = []
     async for event in engine.run(blueprint, run_id):
@@ -135,6 +139,7 @@ async def _collect_events(engine: WorkflowEngine, blueprint: Dict, run_id) -> Li
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_same_inputs_produce_same_outputs():
@@ -152,7 +157,54 @@ async def test_same_inputs_produce_same_outputs():
 
     assert len(completes_a) == len(completes_b)
     for ea, eb in zip(completes_a, completes_b):
-        assert ea["output"] == eb["output"]
+        outputs = [copy.deepcopy(event["output"]) for event in (ea, eb)]
+        if ea["step_id"] == "search_step":
+            # Separate retrievals have distinct row identities and audit times;
+            # all evidence content and downstream generated output must match.
+            assert (
+                outputs[0]["source_records"][0]["source_id"]
+                != outputs[1]["source_records"][0]["source_id"]
+            )
+            for output in outputs:
+                assert (
+                    datetime.fromisoformat(
+                        output["coverage"].pop("retrieved_at")
+                    ).tzinfo
+                    is not None
+                )
+                for record in output["source_records"]:
+                    assert UUID(record.pop("source_id"))
+                    for snapshot in record["metadata"]["provenance"]:
+                        assert (
+                            datetime.fromisoformat(snapshot.pop("retrieved_at")).tzinfo
+                            is not None
+                        )
+        assert outputs[0] == outputs[1]
+
+
+@pytest.mark.asyncio
+async def test_prompt_keeps_evidence_but_does_not_mutate_retrieval_audit() -> None:
+    executor = _build_engine().step_executor
+    search = await executor.execute(_make_blueprint()["steps"][0], {})
+    context = search.output
+    original = copy.deepcopy(context)
+    synth = _make_blueprint()["steps"][1]
+    first = await executor.execute(synth, context)
+    assert context == original
+
+    other_retrieval = copy.deepcopy(context)
+    other_retrieval["coverage"]["retrieved_at"] = "2026-01-01T00:00:00+00:00"
+    record = other_retrieval["source_records"][0]
+    record["source_id"] = str(uuid4())
+    record["metadata"]["provenance"][0]["retrieved_at"] = "2026-01-01T00:00:00+00:00"
+    second = await executor.execute(synth, other_retrieval)
+    assert first.inputs_hash == second.inputs_hash
+    assert first.outputs_hash == second.outputs_hash
+
+    record["abstract"] = "A different measured result."
+    changed = await executor.execute(synth, other_retrieval)
+    assert changed.inputs_hash != first.inputs_hash
+    assert changed.outputs_hash != first.outputs_hash
 
 
 @pytest.mark.asyncio
@@ -195,7 +247,11 @@ async def test_temperature_zero_consistent_hashes():
     hashes: List[str] = []
     for _ in range(3):
         events = await _collect_events(engine, blueprint, run_id)
-        synth_events = [e for e in events if e["event"] == "step_complete" and e["step_id"] == "synthesize_step"]
+        synth_events = [
+            e
+            for e in events
+            if e["event"] == "step_complete" and e["step_id"] == "synthesize_step"
+        ]
         assert len(synth_events) == 1
         output_content = synth_events[0]["output"]["content"]
         hashes.append(hashlib.sha256(output_content.encode()).hexdigest())
@@ -280,12 +336,14 @@ async def test_reproducibility_manifest_structure():
     model_ids = set()
     for evt in events:
         if evt["event"] == "step_complete":
-            step_records.append({
-                "step_id": evt["step_id"],
-                "step_index": evt["step_index"],
-                "inputs_hash": None,  # search steps don't have hashes
-                "outputs_hash": None,
-            })
+            step_records.append(
+                {
+                    "step_id": evt["step_id"],
+                    "step_index": evt["step_index"],
+                    "inputs_hash": None,  # search steps don't have hashes
+                    "outputs_hash": None,
+                }
+            )
 
     # Rebuild with executor-level hashes for LLM steps
     executor = engine.step_executor

@@ -365,6 +365,8 @@ async def do_kb_retrieve(
     query: str,
     top_k: int = 8,
     config: RunnableConfig = None,  # type: ignore[assignment]
+    *,
+    document_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Semantic retrieval over the organization's DigitalOcean Knowledge Base.
 
@@ -386,6 +388,10 @@ async def do_kb_retrieve(
         }
         if project_id:
             args["project_id"] = project_id
+        if document_ids is not None:
+            # Presence is meaningful: an explicit empty list is invalid scoped
+            # intent and must reach the dispatcher instead of broadening.
+            args["document_ids"] = document_ids
         return await _tool_do_kb_retrieve(args, db, current_user)
 
 

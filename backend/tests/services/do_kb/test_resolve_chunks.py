@@ -168,6 +168,191 @@ async def test_canonical_text_key_uuid_stem_resolution():
     assert len(chunks_to_emit) == 1
 
 
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_rows", [False, True], ids=["a-first", "b-first"])
+async def test_shared_original_basename_has_no_resolved_identity(
+    reverse_rows: bool,
+) -> None:
+    """A provider basename shared by two documents cannot identify either one."""
+    doc_a = UUID("11111111-1111-4111-8111-111111111111")
+    doc_b = UUID("22222222-2222-4222-8222-222222222222")
+    chunk = _make_chunk(document_id="rate-policy.pdf", text="ambiguous evidence")
+    rows = [
+        (doc_a, "documents/org/a/rate-policy.pdf", "Policy A"),
+        (doc_b, "documents/org/b/rate-policy.pdf", "Policy B"),
+    ]
+    if reverse_rows:
+        rows.reverse()
+    session = _mock_session_with_docs(doc_rows=rows)
+
+    title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
+        chunks=[chunk],
+        org_id=uuid4(),
+        session=session,
+    )
+
+    assert title_by_key == {}
+    assert chunks_to_emit == [chunk]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_rows", [False, True], ids=["a-first", "b-first"])
+async def test_shared_original_basename_is_dropped_before_scoped_filters(
+    reverse_rows: bool,
+) -> None:
+    """Project/allowed-ID filters must not manufacture a unique identity."""
+    doc_a = UUID("11111111-1111-4111-8111-111111111111")
+    doc_b = UUID("22222222-2222-4222-8222-222222222222")
+    rows = [
+        (doc_a, "documents/org/a/rate-policy.pdf", "Policy A"),
+        (doc_b, "documents/org/b/rate-policy.pdf", "Policy B"),
+    ]
+    if reverse_rows:
+        rows.reverse()
+    session = _mock_session_with_docs(doc_rows=rows, membership_doc_ids=[doc_a])
+
+    title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
+        chunks=[_make_chunk(document_id="rate-policy.pdf")],
+        org_id=uuid4(),
+        session=session,
+        project_id=str(uuid4()),
+        allowed_document_ids={doc_a},
+    )
+
+    assert title_by_key == {}
+    assert chunks_to_emit == []
+    assert session.execute.await_count == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_rows", [False, True], ids=["a-first", "b-first"])
+async def test_uuid_canonical_name_competing_with_original_alias_is_ambiguous(
+    reverse_rows: bool,
+) -> None:
+    """A UUID stem cannot outrank another document's matching storage alias."""
+    doc_a = UUID("11111111-1111-4111-8111-111111111111")
+    doc_b = UUID("22222222-2222-4222-8222-222222222222")
+    raw_key = f"{doc_a}.txt"
+    rows = [
+        (doc_a, "documents/org/a/original.pdf", "Policy A"),
+        (doc_b, f"documents/org/b/{raw_key}", "Policy B"),
+    ]
+    if reverse_rows:
+        rows.reverse()
+    session = _mock_session_with_docs(doc_rows=rows)
+
+    title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
+        chunks=[_make_chunk(document_id=raw_key)],
+        org_id=uuid4(),
+        session=session,
+        allowed_document_ids={doc_a},
+    )
+
+    assert title_by_key == {}
+    assert chunks_to_emit == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_exact_full_storage_path_stays_unique_when_leaf_is_shared() -> None:
+    doc_a = UUID("11111111-1111-4111-8111-111111111111")
+    doc_b = UUID("22222222-2222-4222-8222-222222222222")
+    exact_path = "documents/org/a/shared.pdf"
+    chunk = _make_chunk(document_id=exact_path)
+    session = _mock_session_with_docs(
+        doc_rows=[
+            (doc_a, exact_path, "Policy A"),
+            (doc_b, "documents/org/b/shared.pdf", "Policy B"),
+        ]
+    )
+
+    title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
+        chunks=[chunk],
+        org_id=uuid4(),
+        session=session,
+    )
+
+    assert title_by_key == {exact_path: (str(doc_a), "Policy A")}
+    assert chunks_to_emit == [chunk]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_repeated_same_document_aliases_are_not_ambiguous() -> None:
+    doc_id = UUID("11111111-1111-4111-8111-111111111111")
+    raw_key = f"{doc_id}.txt"
+    chunk = _make_chunk(document_id=raw_key)
+    row = (doc_id, f"documents/org/a/{raw_key}", "Policy A")
+    session = _mock_session_with_docs(doc_rows=[row, row])
+
+    title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
+        chunks=[chunk],
+        org_id=uuid4(),
+        session=session,
+    )
+
+    assert title_by_key == {raw_key: (str(doc_id), "Policy A")}
+    assert chunks_to_emit == [chunk]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generic_unresolved_chunk_is_preserved() -> None:
+    chunk = _make_chunk(document_id="unknown-source.pdf")
+    session = _mock_session_with_docs(doc_rows=[])
+
+    title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
+        chunks=[chunk],
+        org_id=uuid4(),
+        session=session,
+    )
+
+    assert title_by_key == {}
+    assert chunks_to_emit == [chunk]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_allowed_document_ids_drop_stronger_provider_distractor():
+    target_id = UUID("11111111-1111-4111-8111-111111111111")
+    distractor_id = UUID("22222222-2222-4222-8222-222222222222")
+    chunks = [
+        _make_chunk(
+            document_id=f"{distractor_id}.txt",
+            text="stronger but unrelated",
+            score=0.99,
+        ),
+        _make_chunk(
+            document_id=f"{target_id}.txt",
+            text="target evidence",
+            score=0.51,
+        ),
+    ]
+    session = _mock_session_with_docs(
+        doc_rows=[
+            (target_id, "target.pdf", "Attention Is All You Need"),
+            (distractor_id, "distractor.pdf", "Unrelated Paper"),
+        ]
+    )
+
+    title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
+        chunks=chunks,
+        org_id=uuid4(),
+        session=session,
+        allowed_document_ids={target_id},
+    )
+
+    assert [chunk.text for chunk in chunks_to_emit] == ["target evidence"]
+    assert title_by_key[f"{target_id}.txt"] == (
+        str(target_id),
+        "Attention Is All You Need",
+    )
+    assert f"{distractor_id}.txt" not in title_by_key
+
+
 # -------------------------------------------------------------------------
 # Test 4: Project scoping filters out non-member docs
 # -------------------------------------------------------------------------

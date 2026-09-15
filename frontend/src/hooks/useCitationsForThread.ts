@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { type Citation, getReferencedCitations } from '@/utils/citationParser';
+import { type Citation, getVisibleCitations } from '@/utils/citationParser';
 import { useChatPersistence } from './useChatPersistence';
 
 export interface CitationItem {
@@ -32,20 +32,19 @@ export function useCitationsForThread() {
 
     currentConv.messages.forEach((msg) => {
       if (msg.role === 'assistant' && msg.citations) {
-        getReferencedCitations(
-          msg.content,
-          msg.citations as Citation[]
-        ).forEach((cit) => {
-          const citationItem: CitationItem = cit;
-          const citId =
-            citationItem.documentId ||
-            citationItem.externalReferenceId ||
-            citationItem.id;
-          if (citId && !seenIds.has(citId)) {
-            seenIds.add(citId);
-            citations.push(citationItem);
+        getVisibleCitations(msg.content, msg.citations as Citation[]).forEach(
+          (cit) => {
+            const citationItem: CitationItem = cit;
+            const citId =
+              citationItem.documentId ||
+              citationItem.externalReferenceId ||
+              citationItem.id;
+            if (citId && !seenIds.has(citId)) {
+              seenIds.add(citId);
+              citations.push(citationItem);
+            }
           }
-        });
+        );
       }
     });
 

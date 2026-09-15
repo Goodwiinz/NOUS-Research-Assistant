@@ -103,6 +103,12 @@ def _assert_shared_rules_present(system_text: str) -> None:
     # Document coreference rule (9d5709f — resolves "it"/"that paper" to a UUID)
     assert "Reusing document IDs from conversation history" in system_text
     assert "Do not ask the user for the document_id" in system_text
+    # Named-source evidence must carry only UUIDs selected by title lookup;
+    # broad semantic substitutes must never be presented as that source.
+    assert "Named local source retrieval" in system_text
+    assert "document_ids" in system_text
+    assert "never substitute broad retrieval" in system_text
+    assert "title-search metadata as evidence" in system_text
     # Always-reply rule (b96bd89 — prevents silent blank after tool success)
     assert "Always reply after a tool call" in system_text
     assert "do not return empty content" in system_text

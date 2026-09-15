@@ -445,6 +445,8 @@ class Settings(BaseSettings):
     # Research Connector APIs
     CROSSREF_MAILTO: Optional[str] = None
     NCBI_API_KEY: Optional[str] = None
+    OPENALEX_API_KEY: Optional[str] = None
+    SEMANTIC_SCHOLAR_API_KEY: Optional[str] = None
 
     # Azure OpenAI Configuration
     AZURE_OPENAI_API_KEY: Optional[str] = None
