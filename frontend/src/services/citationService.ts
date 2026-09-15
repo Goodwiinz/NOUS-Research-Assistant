@@ -9,6 +9,46 @@ import type {
   CitationResponse,
   CitationListResponse,
 } from '@/types/research';
+import type {
+  ApiCitationCreateInput,
+  ApiCitationExtractRequest,
+  ApiCitationListResponse,
+  ApiCitationResponse,
+} from '@/types/api/citation-contract';
+
+const normalizeCitationResponse = (
+  citation: ApiCitationResponse
+): CitationResponse => ({
+  id: citation.id,
+  messageId: citation.message_id,
+  documentId: citation.document_id,
+  externalReferenceId: citation.external_reference_id,
+  documentTitle: citation.document_title,
+  documentType: citation.document_type,
+  authors: citation.authors ?? null,
+  year: citation.year,
+  venue: citation.venue,
+  doi: citation.doi,
+  arxivId: citation.arxiv_id,
+  abstract: citation.abstract,
+  snippet: citation.snippet,
+  pageNumber: citation.page_number,
+  chunkId: citation.chunk_id,
+  chunkIndex: citation.chunk_index,
+  rerankScore: citation.rerank_score,
+  score: citation.score,
+  metadataSource: citation.metadata_source,
+  needsReview: citation.needs_review,
+  createdAt: citation.created_at,
+  updatedAt: citation.updated_at,
+});
+
+const normalizeCitationListResponse = (
+  response: ApiCitationListResponse
+): CitationListResponse => ({
+  ...response,
+  citations: response.citations.map(normalizeCitationResponse),
+});
 
 export const citationService = {
   /**
@@ -16,10 +56,11 @@ export const citationService = {
    */
   async createCitation(data: CitationCreate): Promise<CitationResponse> {
     // Transform camelCase to snake_case for backend API
-    const apiData: Record<string, any> = {};
+    const apiData: ApiCitationCreateInput = {};
     if (data.messageId) apiData.message_id = data.messageId;
     if (data.documentId) apiData.document_id = data.documentId;
-    if (data.externalReferenceId) apiData.external_reference_id = data.externalReferenceId;
+    if (data.externalReferenceId)
+      apiData.external_reference_id = data.externalReferenceId;
     if (data.documentTitle) apiData.document_title = data.documentTitle;
     if (data.documentType) apiData.document_type = data.documentType;
     if (data.authors) apiData.authors = data.authors;
@@ -34,14 +75,18 @@ export const citationService = {
     if (data.metadataSource) apiData.metadata_source = data.metadataSource;
     if (data.needsReview !== undefined) apiData.needs_review = data.needsReview;
 
-    return api.post<CitationResponse>('/citations', apiData);
+    const response = await api.post<ApiCitationResponse>('/citations', apiData);
+    return normalizeCitationResponse(response);
   },
 
   /**
    * Get a single citation by ID
    */
   async getCitation(citationId: string): Promise<CitationResponse> {
-    return api.get<CitationResponse>(`/citations/${citationId}`);
+    const response = await api.get<ApiCitationResponse>(
+      `/citations/${citationId}`
+    );
+    return normalizeCitationResponse(response);
   },
 
   /**
@@ -62,14 +107,20 @@ export const citationService = {
     if (params?.documentId) apiParams.document_id = params.documentId;
     if (params?.arxivId) apiParams.arxiv_id = params.arxivId;
     if (params?.doi) apiParams.doi = params.doi;
-    if (params?.needsReview !== undefined) apiParams.needs_review = params.needsReview;
+    if (params?.needsReview !== undefined)
+      apiParams.needs_review = params.needsReview;
     if (params?.skip !== undefined) apiParams.skip = params.skip;
     if (params?.limit !== undefined) apiParams.limit = params.limit;
 
     const queryString = new URLSearchParams(
-      Object.entries(apiParams).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])
+      Object.entries(apiParams)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
     ).toString();
-    return api.get<CitationListResponse>(`/citations${queryString ? `?${queryString}` : ''}`);
+    const response = await api.get<ApiCitationListResponse>(
+      `/citations${queryString ? `?${queryString}` : ''}`
+    );
+    return normalizeCitationListResponse(response);
   },
 
   /**
@@ -83,7 +134,9 @@ export const citationService = {
   /**
    * Fetch citations for a specific document
    */
-  async getCitationsForDocument(documentId: string): Promise<CitationResponse[]> {
+  async getCitationsForDocument(
+    documentId: string
+  ): Promise<CitationResponse[]> {
     const response = await this.listCitations({ documentId });
     return response.citations;
   },
@@ -105,10 +158,15 @@ export const citationService = {
     documentId?: string,
     strategy: string = 'auto'
   ): Promise<CitationResponse> {
-    return api.post<CitationResponse>('/citations/extract', {
+    const apiData: ApiCitationExtractRequest = {
       document_id: documentId,
       strategy,
-    });
+    };
+    const response = await api.post<ApiCitationResponse>(
+      '/citations/extract',
+      apiData
+    );
+    return normalizeCitationResponse(response);
   },
 
   /**
@@ -127,7 +185,10 @@ export const citationService = {
     if (params.title) queryParams.title = params.title;
 
     const qs = new URLSearchParams(queryParams).toString();
-    return api.post<CitationResponse>(`/citations/lookup${qs ? `?${qs}` : ''}`);
+    const response = await api.post<ApiCitationResponse>(
+      `/citations/lookup${qs ? `?${qs}` : ''}`
+    );
+    return normalizeCitationResponse(response);
   },
 
   /**
@@ -142,14 +203,11 @@ export const citationService = {
     citationIds?: string[],
     projectId?: string
   ): Promise<string> {
-    return api.post<string>(
-      '/citations/export',
-      {
-        format,
-        citation_ids: citationIds,
-        project_id: projectId,
-      }
-    );
+    return api.post<string>('/citations/export', {
+      format,
+      citation_ids: citationIds,
+      project_id: projectId,
+    });
   },
 
   /**
@@ -165,7 +223,11 @@ export const citationService = {
     projectId?: string,
     filename?: string
   ): Promise<void> {
-    const bibliography = await this.exportBibliography(format, citationIds, projectId);
+    const bibliography = await this.exportBibliography(
+      format,
+      citationIds,
+      projectId
+    );
     const extension = format === 'bibtex' ? 'bib' : format;
 
     // Create blob and download
@@ -206,7 +268,10 @@ export const citationService = {
         document_id: params?.documentId,
         depth: String(params?.depth || 2),
         include_external: String(params?.includeExternal ?? true),
-      }).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[1] !== 'undefined')
+      }).filter(
+        (entry): entry is [string, string] =>
+          entry[1] !== undefined && entry[1] !== 'undefined'
+      )
     ).toString();
     return api.get<GraphData>(`/citations/graph${qs ? `?${qs}` : ''}`);
   },
@@ -216,9 +281,7 @@ export const citationService = {
    * @param citationId - Citation ID to get details for
    */
   async getGraphNodeDetails(citationId: string): Promise<GraphNodeDetails> {
-    return api.get<GraphNodeDetails>(
-      `/citations/graph/node/${citationId}`
-    );
+    return api.get<GraphNodeDetails>(`/citations/graph/node/${citationId}`);
   },
 
   /**

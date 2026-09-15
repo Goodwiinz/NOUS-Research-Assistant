@@ -204,6 +204,86 @@ describe('useDocuments', () => {
       expect(calledUrl).toContain('page=1');
       expect(calledUrl).toContain('page_size=20');
     });
+
+    it('refreshes with the latest page, page size, and filters synchronously', async () => {
+      mockGet.mockResolvedValue(createBackendResponse(0));
+
+      const { result } = renderHook(() =>
+        useDocuments({ initialPageSize: 40, autoFetch: false })
+      );
+
+      act(() => {
+        result.current.updateFilters({ search_term: 'Exact Paper Title' });
+      });
+      act(() => {
+        result.current.updatePage(3);
+      });
+      mockGet.mockClear();
+
+      let refreshPromise: Promise<void>;
+      let requestedUrl = '';
+      act(() => {
+        refreshPromise = result.current.fetchDocuments();
+        requestedUrl = mockGet.mock.calls[0]?.[0] as string;
+      });
+
+      const query = new URL(requestedUrl, 'http://localhost').searchParams;
+      expect(query.get('page')).toBe('3');
+      expect(query.get('page_size')).toBe('40');
+      expect(query.get('search')).toBe('Exact Paper Title');
+
+      await act(async () => {
+        await refreshPromise!;
+      });
+    });
+
+    /**
+     * Mutation check: frontend/src/hooks/useDocuments.ts:340 latest-request
+     * guard immediately before the successful response commit. Focused command:
+     * pnpm --dir frontend test src/hooks/__tests__/useDocuments.test.tsx -t
+     * "keeps the newer document page when an older request resolves last"
+     */
+    it('keeps the newer document page when an older request resolves last', async () => {
+      let resolveOlder!: (value: BackendDocumentsResponse) => void;
+      let resolveNewer!: (value: BackendDocumentsResponse) => void;
+      mockGet
+        .mockReturnValueOnce(
+          new Promise<BackendDocumentsResponse>((resolve) => {
+            resolveOlder = resolve;
+          })
+        )
+        .mockReturnValueOnce(
+          new Promise<BackendDocumentsResponse>((resolve) => {
+            resolveNewer = resolve;
+          })
+        );
+
+      const { result } = renderHook(() => useDocuments({ autoFetch: false }));
+
+      let olderRequest!: Promise<void>;
+      let newerRequest!: Promise<void>;
+      act(() => {
+        olderRequest = result.current.fetchDocuments(1, 20);
+        newerRequest = result.current.fetchDocuments(2, 20);
+      });
+
+      await act(async () => {
+        const response = createBackendResponse(1, 2, 20);
+        response.documents[0].title = 'Newer page';
+        resolveNewer(response);
+        await newerRequest;
+      });
+
+      await act(async () => {
+        const response = createBackendResponse(1, 1, 20);
+        response.documents[0].title = 'Older page';
+        resolveOlder(response);
+        await olderRequest;
+      });
+
+      expect(result.current.documents[0]?.title).toBe('Newer page');
+      expect(result.current.pagination.page).toBe(2);
+    });
   });
 
   // =========================================================================
@@ -354,6 +434,47 @@ describe('useDocuments', () => {
         file_types: ['pdf'],
       });
     });
+
+    it('requests an exact title search with the configured page size', () => {
+      mockGet.mockResolvedValue(createBackendResponse(0));
+
+      const { result } = renderHook(() =>
+        useDocuments({ initialPageSize: 50, autoFetch: false })
+      );
+
+      let requestedUrl = '';
+      act(() => {
+        result.current.updateFilters({ status: ['indexed'] });
+        result.current.updateFilters({
+          search_term: 'Attention Is All You Need',
+        });
+        requestedUrl = mockGet.mock.calls[1]?.[0] as string;
+      });
+
+      const query = new URL(requestedUrl, 'http://localhost').searchParams;
+      expect(query.get('page')).toBe('1');
+      expect(query.get('page_size')).toBe('50');
+      expect(query.get('search')).toBe('Attention Is All You Need');
+      expect(query.get('processing_status')).toBe('indexed');
+    });
+
+    it('merges batched filter updates into the second request', () => {
+      mockGet.mockResolvedValue(createBackendResponse(0));
+
+      const { result } = renderHook(() => useDocuments({ autoFetch: false }));
+
+      let secondRequestedUrl = '';
+      act(() => {
+        result.current.updateFilters({ search_term: 'transformers' });
+        result.current.updateFilters({ file_types: ['pdf'] });
+        secondRequestedUrl = mockGet.mock.calls[1]?.[0] as string;
+      });
+
+      const query = new URL(secondRequestedUrl, 'http://localhost')
+        .searchParams;
+      expect(query.get('search')).toBe('transformers');
+      expect(query.get('document_type')).toBe('pdf');
+    });
   });
 
   // =========================================================================
@@ -388,6 +509,50 @@ describe('useDocuments', () => {
 
       expect(result.current.pagination.pageSize).toBe(50);
       expect(result.current.pagination.page).toBe(1);
+    });
+
+    it('requests a new page with the current filters and page size', () => {
+      mockGet.mockResolvedValue(createBackendResponse(0));
+
+      const { result } = renderHook(() =>
+        useDocuments({ initialPageSize: 40, autoFetch: false })
+      );
+      act(() => {
+        result.current.updateFilters({ status: ['indexed'] });
+      });
+      mockGet.mockClear();
+
+      let requestedUrl = '';
+      act(() => {
+        result.current.updatePage(4);
+        requestedUrl = mockGet.mock.calls[0]?.[0] as string;
+      });
+
+      const query = new URL(requestedUrl, 'http://localhost').searchParams;
+      expect(query.get('page')).toBe('4');
+      expect(query.get('page_size')).toBe('40');
+      expect(query.get('processing_status')).toBe('indexed');
+    });
+
+    it('requests a new page size with the current filters', () => {
+      mockGet.mockResolvedValue(createBackendResponse(0));
+
+      const { result } = renderHook(() => useDocuments({ autoFetch: false }));
+      act(() => {
+        result.current.updateFilters({ file_types: ['pdf'] });
+      });
+      mockGet.mockClear();
+
+      let requestedUrl = '';
+      act(() => {
+        result.current.updatePageSize(75);
+        requestedUrl = mockGet.mock.calls[0]?.[0] as string;
+      });
+
+      const query = new URL(requestedUrl, 'http://localhost').searchParams;
+      expect(query.get('page')).toBe('1');
+      expect(query.get('page_size')).toBe('75');
+      expect(query.get('document_type')).toBe('pdf');
     });
   });
 
@@ -474,7 +639,9 @@ describe('useDocuments', () => {
       renderHook(() => useDocuments());
 
       await waitFor(() => {
-        expect(mockGet).toHaveBeenCalledWith(expect.stringContaining('/documents/?'));
+        expect(mockGet).toHaveBeenCalledWith(
+          expect.stringContaining('/documents/?')
+        );
       });
     });
 
@@ -617,9 +784,7 @@ describe('useDocuments', () => {
         await result.current.fetchDocuments();
       });
 
-      expect(result.current.documents[0]?.processing_status).toBe(
-        'processing'
-      );
+      expect(result.current.documents[0]?.processing_status).toBe('processing');
       expect(result.current.isPolling).toBe(true);
       expect(mockGet).toHaveBeenCalledTimes(1);
 
