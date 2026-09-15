@@ -102,12 +102,13 @@ jobs:
           driver-opts: |
             image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 
-      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN> from
-      # `terraform output -raw github_oidc_role_arn`.
+      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN_FULL> with the full role
+      # ARN from: terraform output -raw github_oidc_role_arn (or
+      # github_eks_deploy_role_arn for deploy jobs).
       - name: Configure AWS credentials via GitHub OIDC
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: arn:aws:iam::<AWS_ACCOUNT_ID>:role/<GITHUB_OIDC_ROLE_ARN>
+          role-to-assume: <GITHUB_OIDC_ROLE_ARN_FULL>
           aws-region: us-east-1
 
       - name: Log in to Amazon ECR

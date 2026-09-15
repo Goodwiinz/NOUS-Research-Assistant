@@ -88,12 +88,13 @@ jobs:
         # v4.2.2 - pinned for security
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN> from
-      # `terraform output -raw github_oidc_role_arn`.
+      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN_FULL_EKS_DEPLOY> with the
+      # full role ARN from: terraform output -raw github_eks_deploy_role_arn
+      # (or github_oidc_role_arn for ECR-push jobs like docker-build).
       - name: Configure AWS credentials via GitHub OIDC
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: arn:aws:iam::<AWS_ACCOUNT_ID>:role/<GITHUB_OIDC_ROLE_ARN>
+          role-to-assume: <GITHUB_OIDC_ROLE_ARN_FULL_EKS_DEPLOY>
           aws-region: us-east-1
 
       - name: Configure kubectl for EKS
@@ -169,12 +170,13 @@ jobs:
         # v4.2.2 - pinned for security
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN> from
-      # `terraform output -raw github_oidc_role_arn`.
+      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN_FULL_EKS_DEPLOY> with the
+      # full role ARN from: terraform output -raw github_eks_deploy_role_arn
+      # (or github_oidc_role_arn for ECR-push jobs like docker-build).
       - name: Configure AWS credentials via GitHub OIDC
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: arn:aws:iam::<AWS_ACCOUNT_ID>:role/<GITHUB_OIDC_ROLE_ARN>
+          role-to-assume: <GITHUB_OIDC_ROLE_ARN_FULL_EKS_DEPLOY>
           aws-region: us-east-1
 
       - name: Configure kubectl for EKS
@@ -252,12 +254,13 @@ jobs:
     environment: production
 
     steps:
-      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN> from
-      # `terraform output -raw github_oidc_role_arn`.
+      # TODO(cutover): fill <GITHUB_OIDC_ROLE_ARN_FULL_EKS_DEPLOY> with the
+      # full role ARN from: terraform output -raw github_eks_deploy_role_arn
+      # (or github_oidc_role_arn for ECR-push jobs like docker-build).
       - name: Configure AWS credentials via GitHub OIDC
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: arn:aws:iam::<AWS_ACCOUNT_ID>:role/<GITHUB_OIDC_ROLE_ARN>
+          role-to-assume: <GITHUB_OIDC_ROLE_ARN_FULL_EKS_DEPLOY>
           aws-region: us-east-1
 
       - name: Configure kubectl for EKS
