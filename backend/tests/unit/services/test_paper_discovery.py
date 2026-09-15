@@ -283,6 +283,46 @@ async def test_global_source_selection_survives_multiple_search_steps() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resume", [False, True])
+async def test_step_override_does_not_replace_global_sources(resume: bool) -> None:
+    connectors: dict[str, SourceConnector] = {
+        name: AsyncMock(
+            search=AsyncMock(
+                return_value=[SourceDocument(connector_type=name, title=name)]
+            )
+        )
+        for name in ("pubmed", "openalex")
+    }
+    engine = WorkflowEngine(StepExecutor(connectors, {}))
+    blueprint: dict[str, Any] = {
+        "parameters": {"sources": ["openalex"]},
+        "steps": [
+            {"type": "search", "parameters": {"sources": ["pubmed"]}},
+            {"type": "search"},
+        ],
+    }
+    if resume:
+        first = await engine.step_executor.execute(
+            blueprint["steps"][0], blueprint["parameters"]
+        )
+        events = [
+            e
+            async for e in engine.run(
+                blueprint,
+                uuid4(),
+                start_from_step=1,
+                initial_context=json.loads(json.dumps(first.output)),
+            )
+        ]
+    else:
+        events = [e async for e in engine.run(blueprint, uuid4())]
+    completed = [e["output"] for e in events if e["event"] == "step_complete"]
+    assert events[-1]["event"] == "run_complete"
+    assert completed[-1]["selected_sources"] == ["openalex"]
+    assert completed[-1]["source_records"][0]["connector_type"] == "openalex"
+
+
+@pytest.mark.asyncio
 async def test_all_failed_providers_fail_the_run() -> None:
     executor = StepExecutor(
         {"pubmed": AsyncMock(search=AsyncMock(side_effect=RuntimeError("secret")))}, {}
