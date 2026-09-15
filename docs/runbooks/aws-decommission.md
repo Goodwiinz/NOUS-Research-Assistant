@@ -11,7 +11,7 @@
 | Resource | Identifier | Notes |
 |---|---|---|
 | DOKS cluster | `do-nyc3-rag-system-cluster` (nyc3) | Neo4j + Qdrant STSs inside; archives first |
-| Managed PostgreSQL | db `multimodal_rag` | final snapshot kept through grace period |
+| Managed PostgreSQL | db `multimodal_rag` | final copy = §2a pg_dump, archived to Glacier |
 | Managed Redis/Valkey | `<DO_VALKEY_ID>` | cold start on AWS (nothing to archive) |
 | Spaces bucket | `rag-system-storage` (nyc3) | emptied + synced to S3 first |
 | Container registry | `registry.digitalocean.com/ragsystemregistry` | ECR holds parity images (cutover Step 0) |
@@ -111,7 +111,11 @@ Expected: non-trivial dump size; `aws s3 ls` size == local size.
 
 **HALT:** dump non-zero exit or 0-byte file → fix, retry; nothing has been deleted, DO intact.
 
-**2b. Final Spaces → S3 sync + manifest.**
+**2b. Final Spaces → S3 sync + manifest.** Note the split destination is
+intentional: Spaces objects land in the live `s3:nous-storage-us-east-1`
+bucket (they are the serving copy post-cutover), while every other
+decommission artifact in this runbook (dumps, manifests, state) goes to
+`<ARCHIVE_BUCKET>` under `do-decommission-<YYYY-MM-DD>/`.
 
 ```bash
 rclone sync spaces:rag-system-storage s3:nous-storage-us-east-1 --progress
@@ -244,10 +248,9 @@ Expected: list shows the LB(s), then empty after delete.
 ```bash
 # repo list for the Section 6 audit record (verify subcommand with `doctl registry --help`):
 doctl registry repository list-v2
-# per-repo delete exists on newer doctl as `doctl registry repository delete-v2 <repo> --force` —
-# optional; deleting the whole registry removes all repos/images anyway
-doctl registry delete ragsystemregistry --force
-doctl registry get ragsystemregistry
+# deleting the whole registry removes all repos/images (ECR parity already confirmed in Section 1)
+doctl registry delete --force
+doctl registry get
 ```
 
 Expected: repos listed first (audit line for Section 6); registry deleted; final `get` errors `registry not found`.
@@ -277,24 +280,24 @@ doctl databases list
 
 Expected: list before shows the valkey cluster; after, it is absent (PG may still be present until 4.6).
 
-**4.6. Delete DO managed PostgreSQL — final snapshot first.**
-
-```bash
-doctl databases snapshots create <DO_PG_ID> nous-final-<YYYY-MM-DD>
-# wait for AVAILABLE (poll; verify arg form with `doctl databases snapshots --help` if needed):
-doctl databases snapshots list
-```
-
-Expected: snapshot listed with status `available` and size > 0. **This snapshot is retained through the Section 6 grace period — it is the last copy of DO-side Postgres.** Only then:
+**4.6. Delete DO managed PostgreSQL.** The retained final copy of DO-side
+Postgres is the §2a `pg_dump` (`nous-final.dump`), already verified in S3
+Glacier Deep Archive by the 2e gate — doctl has no database-snapshot API to
+create a server-side final snapshot. (Optional: if you also want a
+server-side copy of the live cluster, fork it first with
+`doctl databases fork` — verify the exact arg/flag form with
+`doctl databases fork --help` on your installed doctl — and record the fork
+ID in §6b; note the fork accrues storage cost until you delete it.)
 
 ```bash
 doctl databases delete <DO_PG_ID> --force
 doctl databases list
 ```
 
-Expected: database absent from list; snapshot still listed.
+Expected: database absent from list.
 
-**HALT:** snapshot not `available` (or 0 bytes) → do NOT delete the database. Investigate snapshot creation before proceeding.
+**HALT:** the §2a PG dump row in the 2e table is not green → stop; that dump
+is the only copy of DO-side Postgres once this delete runs.
 
 **4.7. Delete the DOKS cluster.** (Kills Neo4j/Qdrant PVCs + volumes — archives verified in 2e are the only copies from here.)
 
@@ -326,18 +329,19 @@ doctl compute volume list
 doctl compute droplet list
 ```
 
-Expected: balance shows no accruing resources; every list empty. Console → Billing: no projected recurring charges beyond the retained PG snapshot storage (4.6, until grace period ends) and any Glacier-sized Spaces snapshot storage DO still bills.
+Expected: balance shows no accruing resources; every list empty. Console → Billing: no projected recurring charges — the retained final PG copy (§2a dump) is an AWS-side S3 Glacier object, and DO holds no snapshot storage.
 
 ---
 
 ## 5. AWS side hardening (replaces DO backup cron)
 
 **5.1. EBS snapshot CronJob for Neo4j/Qdrant PVCs** — replaces the DO weekly
-Qdrant backup CronJob (`bcef8931f`,
+Qdrant backup CronJob (added in commit `bcef8931f` at
 `infrastructure/helm/knowledge-graph-analytics/templates/qdrant-backup-cronjob.yaml`,
-removed with DO). Mirror its shape: weekly `0 3 * * 0` UTC, `concurrencyPolicy:
-Forbid`, history limits 3/1. Mechanism differs: CSI `VolumeSnapshot` of the EBS
-PVCs instead of in-DB API snapshots.
+since removed from git in `0e7f85031` — the Qdrant→DO Knowledge Bases cutover —
+i.e. it preceded the AWS migration). Mirror its shape: weekly `0 3 * * 0` UTC,
+`concurrencyPolicy: Forbid`, history limits 3/1. Mechanism differs: CSI
+`VolumeSnapshot` of the EBS PVCs instead of in-DB API snapshots.
 
 Prerequisites (verify before installing):
 
@@ -482,7 +486,7 @@ Expected: either no DO state dir exists (record that here), or the state blob is
 |---|---|---|
 | DOKS cluster | <DOKS_CLUSTER_ID> | `doctl kubernetes cluster get do-nyc3-rag-system-cluster --format ID,Region,Version,Created` (run during Section 1) |
 | Load balancer | <DO_LB_ID> | also in `/tmp/do-ingress.txt` from cutover Step 0 |
-| PostgreSQL | <DO_PG_ID> | final snapshot `nous-final-<YYYY-MM-DD>` |
+| PostgreSQL | <DO_PG_ID> | final copy = §2a dump `nous-final.dump` |
 | Redis/Valkey | <DO_VALKEY_ID> | |
 | Registry | ragsystemregistry | repo list captured in 4.3 audit output |
 | Spaces bucket | rag-system-storage | manifest in 2b |
@@ -492,11 +496,13 @@ Expected: either no DO state dir exists (record that here), or the state blob is
 schedule two calendar reminders:
 
 - **+30 days:** spot-check one archive object (`aws s3 restore` initiate, then
-  `aws s3 ls` shows `ongoing-request=true`); confirm PG final snapshot (4.6)
-  and DO snapshot storage costs are the only remaining DO line items.
-- **+90 days:** if zero retrieval needs surfaced, decide whether to delete the
-  DO PG final snapshot + downgrade/keep the Deep Archive tier. **Grace period
-  ends here — the DO PG snapshot may be deleted only after this review.**
+  `aws s3 ls` shows `ongoing-request=true`); confirm no DO line items remain
+  at all — every DO resource was deleted in Section 4, so any charge means a
+  stray resource survived.
+- **+90 days:** if zero retrieval needs surfaced, decide whether to downgrade
+  or keep the Deep Archive tier. **The §2a PG dump is the final retained copy
+  of DO-side Postgres — it may be deleted only after this review** (and only
+  once AWS RDS + its backups are proven stable).
 
 ---
 
@@ -515,6 +521,6 @@ schedule two calendar reminders:
 > - 4.7 deletes the cluster everything else lived in
 >
 > From the start of Section 4 there is **no path back to DigitalOcean.** The
-> only remaining artifacts are the Glacier archives (Section 2) and the DO PG
-> final snapshot (4.6) — recovery from those is a rebuild, not a rollback.
+> only remaining artifacts are the Glacier archives (Section 2, including the
+> §2a PG dump) — recovery from those is a rebuild, not a rollback.
 > If AWS breaks after decommission, the fix happens on AWS.

@@ -632,5 +632,5 @@ Expected after 9.2-9.4: `curl -s https://dev-api.gen-text.app/health` returns 20
   - Sentry (`SENTRY_ENVIRONMENT=dev`): new error classes vs pre-cutover baseline
   - `rclone check spaces:rag-system-storage s3:nous-storage-us-east-1` daily for the first week (Spaces must not receive new writes; if it does, some component still points at DO → fix immediately)
 - **DO stays frozen 2 weeks** as the rollback source. Do not delete DO resources in this window. Do not resume `nous-dev`/`nous-root` auto-sync on the DO ArgoCD.
-- After the soak, follow the decommission checklist: `docs/runbooks/aws-decommission.md` (written in Task 9 — file does not exist yet; covers DO LB deletion, snapshot archival to S3 Glacier, DOKS destruction, Spaces key revocation).
+- After the soak, follow the decommission checklist: `docs/runbooks/aws-decommission.md` (covers DO LB deletion, final data archive to S3 Glacier, DOKS destruction, Spaces key revocation).
 - Close-out notes: record actual cutover times, any deviations from this runbook, and the ECR tag ↔ source SHA mapping for the deployed images.
