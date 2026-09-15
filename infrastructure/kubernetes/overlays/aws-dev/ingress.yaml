@@ -1,0 +1,114 @@
+# VERBATIM COPY of infrastructure/kubernetes/manifests/ingress.yaml (base kept portable,
+# unedited). Lives inside the overlay root because kustomize load restrictions
+# forbid file resources outside it, and ../../manifests/ cannot be used as a dir
+# base (no kustomization.yaml; contains DO-era legacy: nginx controller,
+# in-cluster databases). If base ingress changes, re-copy here:
+#   cp ../../manifests/ingress.yaml ./ingress.yaml  (then re-add this header)
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend-ingress
+  namespace: multimodal-rag-system
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_connect_timeout 30s;
+      proxy_send_timeout 30s;
+      proxy_read_timeout 86400s;
+      client_max_body_size 10M;
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    external-dns.alpha.kubernetes.io/hostname: api.multimodal-rag.example.com
+    external-dns.alpha.kubernetes.io/ttl: "300"
+    external-dns.alpha.kubernetes.io/provider: cloudflare
+  labels:
+    app: backend
+    component: ingress
+    version: 1.0.0
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - api.multimodal-rag.example.com
+    secretName: multimodal-rag-tls
+  rules:
+  - host: api.multimodal-rag.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: backend-service
+            port:
+              number: 80
+  - host: ws.multimodal-rag.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: backend-service
+            port:
+              number: 8001
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: websocket-ingress
+  namespace: multimodal-rag-system
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_connect_timeout 30s;
+      proxy_send_timeout 86400s;
+      proxy_read_timeout 86400s;
+      client_max_body_size 10M;
+      proxy_cache_bypass $http_upgrade;
+      proxy_set_header X-Connection $connection_upgrade;
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    external-dns.alpha.kubernetes.io/hostname: ws.multimodal-rag.example.com
+    external-dns.alpha.kubernetes.io/ttl: "300"
+    external-dns.alpha.kubernetes.io/provider: cloudflare
+  labels:
+    app: backend
+    component: websocket-ingress
+    version: 1.0.0
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - ws.multimodal-rag.example.com
+    secretName: websocket-tls
+  rules:
+  - host: ws.multimodal-rag.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: backend-service
+            port:
+              number: 8001

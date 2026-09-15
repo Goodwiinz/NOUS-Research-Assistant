@@ -1,0 +1,23 @@
+# ALB patch for the websocket ingress (backend-service:8001). Long-lived
+# connections: raise the ALB idle timeout toward the nginx-era 86400s ceiling
+# (ALB max 4000s). $patch: replace swaps the entire annotation map.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: websocket-ingress
+  annotations:
+    # Replace the whole annotation map — nginx annotations must not survive.
+    $patch: replace
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /ws/health
+    alb.ingress.kubernetes.io/idle-timeout: "4000"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    external-dns.alpha.kubernetes.io/hostname: ws.multimodal-rag.example.com
+    external-dns.alpha.kubernetes.io/ttl: "300"
+    external-dns.alpha.kubernetes.io/provider: cloudflare
+spec:
+  ingressClassName: alb

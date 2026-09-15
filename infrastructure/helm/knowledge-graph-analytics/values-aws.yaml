@@ -1,0 +1,385 @@
+# AWS overlay for NOUS on EKS us-east-1 — fill <PLACEHOLDERS> from terraform outputs (Task 2)
+# Cluster: nous-dev-cluster (lean EKS: 1x t3.large spot, ALB ingress, gp3)
+# Sibling of values-dev.yaml (DO dev) — same chart, AWS-managed infra.
+# Schema notes (differs from the migration-plan sketch):
+#   - The chart has NO postgres.host / redis.host keys: Postgres (RDS) and
+#     Redis (ElastiCache) endpoints are injected via envFrom Secrets synced
+#     from Infisical (/database, /redis). Update those during cutover.
+#   - Frontend is NOT in this chart (Vercel) — no frontend key.
+#   - backend.image.repository is used verbatim by templates/_helpers.tpl
+#     (includes the registry host); worker/beat share it.
+
+global:
+  # <ACCOUNT_ID> = terraform output account_id (Task 2)
+  imageRegistry: "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com"
+  # ECR auth via the node IAM role (AmazonEC2ContainerRegistryReadOnly) —
+  # no imagePullSecrets, unlike the DO do-registry secret.
+  imagePullSecrets: []
+  storageClass: "gp3"
+  dnsZone: "gen-text.app"
+  environment: "dev"
+
+commonLabels:
+  app.kubernetes.io/name: knowledge-graph-analytics
+  app.kubernetes.io/part-of: nous-platform
+  environment: aws-dev
+
+# ──────────────────────────────────────────────
+# Infisical secret sync — dev env
+# During cutover, point /database at the RDS endpoint and /redis at the
+# ElastiCache endpoint (<ELASTICACHE_ENDPOINT>, terraform output Task 2).
+# ──────────────────────────────────────────────
+infisical:
+  enabled: true
+  envSlug: "dev"
+
+# ──────────────────────────────────────────────
+# Frontend deployed via Vercel — no in-cluster manifests (unchanged by AWS move).
+# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# Backend
+# ──────────────────────────────────────────────
+backend:
+  enabled: true
+  replicaCount: 1
+  image:
+    # <ACCOUNT_ID> = terraform output account_id; repos pushed to ECR in Task 2.
+    # tag/digest pinned to the same SHAs currently on DO (re-pushed to ECR).
+    repository: "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
+    tag: "e75d8547dd4c7938864af3b888986162a517f55d"
+    digest: "sha256:e78f7cba32ad854044de016b56186c293e9b5f53f4b1481e895de6306c6e6c10"
+    sourceSha: "e75d8547dd4c7938864af3b888986162a517f55d"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8000
+  ingress:
+    enabled: true
+    # AWS load balancer controller (installed as cluster addon, Task 3)
+    className: "alb"
+    annotations:
+      kubernetes.io/ingress.class: alb
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: "443"
+      alb.ingress.kubernetes.io/healthcheck-path: /health
+      # HTTP-01 challenge: cert-manager's solver ingress joins the same ALB
+      # group with higher-priority rules, so /.well-known/acme-challenge
+      # bypasses the ssl-redirect.
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      # external-dns stays on the Cloudflare provider (design doc); records
+      # dev-api.gen-text.app -> ALB hostname.
+      external-dns.alpha.kubernetes.io/hostname: dev-api.gen-text.app
+      external-dns.alpha.kubernetes.io/ttl: "300"
+      external-dns.alpha.kubernetes.io/provider: cloudflare
+    hosts:
+      - host: dev-api.gen-text.app
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: rag-dev-api-tls
+        hosts:
+          - dev-api.gen-text.app
+  resources:
+    limits:
+      cpu: "2"
+      memory: 2Gi
+    requests:
+      cpu: 250m
+      memory: 1500Mi
+  autoscaling:
+    enabled: false
+  envFrom:
+    - secretRef:
+        name: database-credentials
+    - secretRef:
+        name: app-secrets
+    - secretRef:
+        name: supabase-credentials
+    - secretRef:
+        name: redis-credentials
+    # spaces-credentials intentionally DROPPED on AWS: S3 auth rides the
+    # backend service account IRSA role (Task 3) via the default boto3
+    # credential chain — no static access keys.
+    - secretRef:
+        name: langsmith-credentials
+        optional: true
+    # DigitalOcean Knowledge Base credentials. TODO(cutover): remove once
+    # DO-KB data is migrated / no longer referenced.
+    - secretRef:
+        name: do-kb-credentials
+        optional: true
+  env:
+    - name: ENVIRONMENT
+      value: "dev"
+    - name: AGENT_FAST_PATH_ENABLED
+      value: "true"
+    - name: AGENT_FAST_PATH_DEPLOYMENT
+      value: "gpt-5.6-luna"
+    - name: AGENT_DOKB_COHERE_RERANK
+      value: "true"
+    - name: GUNICORN_WORKERS
+      value: "1"
+    - name: ALLOW_MEMORY_FALLBACK
+      value: "false"
+    - name: RECONCILER_APPLY
+      value: "true"
+    - name: RETENTION_APPLY
+      value: "true"
+    - name: PYTHONPATH
+      value: "/app"
+    - name: LOG_LEVEL
+      value: "DEBUG"
+    - name: WORKERS
+      value: "1"
+    - name: TIMEOUT
+      value: "300"
+    - name: AGENT_DISPATCH_BACKEND
+      value: "background"
+    - name: AGENT_TOOL_REGISTRY_ENFORCEMENT_ENABLED
+      value: "true"
+    - name: PROJECT_SKILL_CATALOG_ENABLED
+      value: "true"
+    - name: PROJECT_SKILL_RUNTIME_ENABLED
+      value: "true"
+    - name: PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS
+      value: "30"
+    - name: MALLOC_ARENA_MAX
+      value: "2"
+    - name: CORS_ORIGINS
+      value: "https://dev-app.gen-text.app,http://localhost:3000,http://127.0.0.1:3000,https://goodwiinz.tech,https://www.goodwiinz.tech"
+    - name: FRONTEND_BASE_URL
+      value: "https://goodwiinz.tech"
+    - name: DB_ASYNC_POOL_SIZE
+      value: "3"
+    - name: DB_ASYNC_MAX_OVERFLOW
+      value: "2"
+    - name: DB_SYNC_POOL_SIZE
+      value: "2"
+    - name: DB_SYNC_MAX_OVERFLOW
+      value: "2"
+    - name: SENTRY_ENVIRONMENT
+      value: "dev"
+    - name: LANGSMITH_PROJECT
+      value: "rag-agent-dev"
+    - name: LANGCHAIN_PROJECT
+      value: "rag-agent-dev"
+    - name: AGENT_CANONICAL_PERSISTENCE
+      value: "true"
+    - name: AGENT_SERVER_SIDE_HISTORY
+      value: "true"
+    - name: SENTRY_TRACES_SAMPLE_RATE
+      value: "1.0"
+    - name: SENTRY_PROFILES_SAMPLE_RATE
+      value: "0.0"
+    - name: NEO4J_URI
+      value: "bolt://nous-dev-knowledge-graph-analytics-neo4j:7687"
+    # ── S3 object storage: AWS S3 proper (replaces DO Spaces) ──
+    # NO S3_ENDPOINT_URL: the AWS SDK default endpoint is used (virtual-hosted
+    # style, us-east-1) — this is what replaces the Spaces path-style setup.
+    - name: STORAGE_BACKEND
+      value: "s3"
+    # <APPLICATION_STORAGE_BUCKET> = terraform output application_storage
+    # bucket name (Task 2).
+    - name: S3_BUCKET_NAME
+      value: "<APPLICATION_STORAGE_BUCKET>"
+    - name: S3_REGION
+      value: "us-east-1"
+    # S3_CDN_ENDPOINT dropped: DO CDN does not exist on AWS. Re-add with a
+    # CloudFront distribution URL if/when one is stood up (Task 5+).
+    # S3_ACCESS_KEY / S3_SECRET_KEY dropped: IRSA (Task 3) via default chain.
+    # ── Azure OpenAI (Chat / Agent) — unchanged ──
+    - name: AZURE_OPENAI_CHAT_ENDPOINT
+      valueFrom:
+        secretKeyRef:
+          name: azure-openai-credentials
+          key: AZURE_OPENAI_CHAT_ENDPOINT
+    - name: AZURE_OPENAI_CHAT_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: azure-openai-credentials
+          key: AZURE_OPENAI_CHAT_API_KEY
+    - name: AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+      valueFrom:
+        secretKeyRef:
+          name: azure-openai-credentials
+          key: AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+    - name: AZURE_OPENAI_CHAT_API_VERSION
+      valueFrom:
+        secretKeyRef:
+          name: azure-openai-credentials
+          key: AZURE_OPENAI_CHAT_API_VERSION
+  healthCheck:
+    enabled: true
+    path: /health
+    livenessPath: /health
+    startupPath: /health
+    readinessPath: /health/readiness
+    startupProbe:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 18
+    initialDelaySeconds: 10
+    periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
+    readinessInitialDelaySeconds: 5
+    readinessPeriodSeconds: 10
+    readinessTimeoutSeconds: 5
+    readinessFailureThreshold: 3
+  initContainers:
+    waitForPostgres: true
+    waitForRedis: false
+    runMigrations: true
+    waitForNeo4j: false
+# ──────────────────────────────────────────────
+# All databases are external (AWS-managed on EKS: RDS Postgres, ElastiCache
+# Redis; Neo4j stays in-cluster on gp3)
+# ──────────────────────────────────────────────
+postgresql:
+  enabled: false
+
+redis:
+  enabled: false
+
+neo4j:
+  enabled: true
+  image:
+    repository: neo4j
+    tag: "5.26-community"
+    pullPolicy: IfNotPresent
+  advertisedAddress: "dev-neo4j.gen-text.app"
+  persistence:
+    size: 5Gi
+  resources:
+    heapSize: "1g"
+    pagecacheSize: "512m"
+    container:
+      limits:
+        cpu: "1"
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 2Gi
+
+celeryWorker:
+  enabled: true
+  replicaCount: 1
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 75
+  livenessProbe:
+    commandTimeout: 60
+    initialDelaySeconds: 60
+    periodSeconds: 180
+    timeoutSeconds: 90
+    failureThreshold: 10
+  resources:
+    limits:
+      cpu: "2"
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 2Gi
+  env:
+    - name: DB_ASYNC_POOL_SIZE
+      value: "1"
+    - name: DB_ASYNC_MAX_OVERFLOW
+      value: "1"
+    - name: DB_SYNC_POOL_SIZE
+      value: "1"
+    - name: DB_SYNC_MAX_OVERFLOW
+      value: "0"
+
+celeryBeat:
+  enabled: true
+  env:
+    - name: DB_ASYNC_POOL_SIZE
+      value: "1"
+    - name: DB_ASYNC_MAX_OVERFLOW
+      value: "1"
+    - name: DB_SYNC_POOL_SIZE
+      value: "1"
+    - name: DB_SYNC_MAX_OVERFLOW
+      value: "0"
+  resources:
+    limits:
+      cpu: 200m
+      memory: 1536Mi
+    requests:
+      cpu: 50m
+      memory: 1536Mi
+
+prometheus:
+  enabled: false
+
+grafana:
+  enabled: false
+
+nginx-ingress-controller:
+  enabled: false
+
+monitoring:
+  enabled: false
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+
+podSecurityPolicy:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+  ingress:
+    enabled: true
+  egress:
+    enabled: false
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+serviceAccount:
+  create: true
+  # IRSA: the EKS maintainer annotates this SA with the S3 access role ARN
+  # (Task 3 <S3_IRSA_ROLE_ARN>). Leave empty here; cluster addons task owns it.
+  annotations: {}
+  name: ""
+
+# KEDA queue-depth worker autoscaling (kept from dev).
+keda:
+  enabled: true
+  redis:
+    # <ELASTICACHE_ENDPOINT> = terraform output ElastiCache primary endpoint
+    # (Task 2), host only — KEDA wants host:port. ElastiCache default TLS on.
+    address: "<ELASTICACHE_ENDPOINT>:6379"
+    username: "default"
+    authSecretName: redis-credentials
+    passwordKey: REDIS_PASSWORD
+    enableTLS: "true" # ElastiCache in-transit encryption (rediss://)
+    databaseIndex: "0"
+
+syntheticTraffic:
+  enabled: true
+  schedule: "*/20 * * * *"
+  args: ["--rotate"]
+  activeDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 8
+  failedJobsHistoryLimit: 4
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 1536Mi

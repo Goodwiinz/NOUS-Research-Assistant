@@ -1,0 +1,37 @@
+# aws-dev overlay — NOUS on EKS us-east-1 (nous-dev-cluster)
+# Patches the portable base manifests (infrastructure/kubernetes/manifests/)
+# for the aws-load-balancer-controller. The base ingress keeps its nginx
+# annotations untouched; this overlay REPLACES the annotation map with ALB
+# equivalents ($patch: replace) while keeping cert-manager TLS and the
+# external-dns Cloudflare provider from base.
+#
+# Note: sibling overlays/production/ is plain multi-doc YAML with no
+# kustomization; this is the first kustomize overlay in the tree, created per
+# docs/plans/2026-09-14-do-to-aws-migration.md Task 4. The ArgoCD app-of-apps
+# for aws-dev (Task 5) points at this directory.
+#
+# Helm-managed runtime (the chart that ArgoCD dev actually deploys) is
+# configured separately via infrastructure/helm/knowledge-graph-analytics/values-aws.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Verbatim copy of ../../manifests/ingress.yaml — see the header in
+  # ingress.yaml for why the copy lives inside this root (kustomize forbids
+  # out-of-root file resources; the manifests/ dir itself is not a usable
+  # kustomize base: no kustomization.yaml + DO-era legacy material).
+  - ingress.yaml
+
+patches:
+  - path: ingress-alb-patch.yaml
+    target:
+      group: networking.k8s.io
+      version: v1
+      kind: Ingress
+      name: backend-ingress
+  - path: websocket-ingress-alb-patch.yaml
+    target:
+      group: networking.k8s.io
+      version: v1
+      kind: Ingress
+      name: websocket-ingress

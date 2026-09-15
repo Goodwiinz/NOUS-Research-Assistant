@@ -1,0 +1,25 @@
+# ALB patch for the backend ingress. $patch: replace swaps the ENTIRE
+# annotation map (nginx annotations must not survive on an ALB ingress).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend-ingress
+  annotations:
+    # Replace the whole annotation map — nginx annotations must not survive.
+    $patch: replace
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    # TLS unchanged from base: cert-manager HTTP-01. The ACME solver ingress
+    # joins the same ALB (shared group) with higher-priority rules, so the
+    # challenge path bypasses the ssl-redirect above.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Kept from base; external-dns stays on Cloudflare, records -> ALB hostname.
+    external-dns.alpha.kubernetes.io/hostname: api.multimodal-rag.example.com
+    external-dns.alpha.kubernetes.io/ttl: "300"
+    external-dns.alpha.kubernetes.io/provider: cloudflare
+spec:
+  ingressClassName: alb
