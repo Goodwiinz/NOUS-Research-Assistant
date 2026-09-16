@@ -1,6 +1,6 @@
 import { render } from "ink";
 import { loadConfig, saveConfig } from "../../frontend/cli/auth/store";
-import { loadTranscript, loadBranches } from "./services";
+import { loadTranscript, loadBranches, type TerminalMessage } from "./services";
 import { reconcileHistory } from "./session";
 import { App } from "./app";
 import { terminalText } from "./adapter";
@@ -27,20 +27,28 @@ async function main() {
     config.thread_id = null;
     saveConfig(config);
   }
-  const initialMessages = config.thread_id
-    ? await loadTranscript(config.thread_id)
-    : [];
   const saved = config.thread_id
     ? await loadBranches(config.thread_id)
     : undefined;
-  const initialHistory = reconcileHistory(
-    initialMessages,
-    saved,
-    config.thread_id,
-  );
+  let initialMessages: TerminalMessage[] = [];
+  let initialHistory = reconcileHistory(undefined, saved, config.thread_id);
+  let initialNotice = "";
+  try {
+    initialMessages = config.thread_id
+      ? await loadTranscript(config.thread_id)
+      : [];
+    initialHistory = reconcileHistory(initialMessages, saved, config.thread_id);
+  } catch {
+    initialNotice =
+      "Could not refresh thread history. Showing saved local history; check your connection or select another thread.";
+  }
   const instance = render(
-    <App initialMessages={initialMessages} initialHistory={initialHistory} />,
-    { exitOnCtrlC: false },
+    <App
+      initialMessages={initialMessages}
+      initialHistory={initialHistory}
+      initialNotice={initialNotice}
+    />,
+    { exitOnCtrlC: false, interactive: true },
   );
   const result = await instance.waitUntilExit();
   if (typeof result === "string") console.log(terminalText(result));

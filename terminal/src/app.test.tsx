@@ -378,7 +378,8 @@ test("a queued turn waits for approval and the preceding response to finish", as
     "Approval blocks the queue",
   );
   assert.equal(paths.length, 1);
-  await delay(30);
+  // Approval mounts and claims focus across multiple React commits.
+  await delay(150);
   const frames = ui.frames.length;
   ui.stdin.write("no");
   await until(() => ui.frames.length > frames, "Decision is typed");
@@ -1046,7 +1047,8 @@ test("sending remains usable after slash help and menu cancellation", async () =
     "Composer ready",
   );
   ui.stdin.write("\x1b");
-  await delay(60);
+  // Let Escape parsing and the input remount finish before typing.
+  await delay(150);
   for (const command of ["/help", "/settings"]) {
     ui.stdin.write(command);
     await delay(40);
@@ -1067,7 +1069,7 @@ test("sending remains usable after slash help and menu cancellation", async () =
       await delay(40);
     }
     ui.stdin.write("\x1b");
-    await delay(60);
+    await delay(150);
     if (command !== "/help") ui.stdin.write("hi");
     await delay(40);
     ui.stdin.write("\r");
@@ -1079,7 +1081,7 @@ test("sending remains usable after slash help and menu cancellation", async () =
       () => !!ui.lastFrame()?.includes(`Answer ${sent.length}`),
       "Answer visible",
     );
-    await delay(60);
+    await delay(150);
   }
   assert.deepEqual(sent, ["hi", "hi"]);
   ui.unmount();
@@ -1121,7 +1123,8 @@ test("dismissed slash reads cannot reopen menus or lock subsequent commands", as
   ui.stdin.write("\r");
   await until(() => !!release, "Read started");
   ui.stdin.write("\x1b");
-  await delay(60);
+  // Let Escape parsing and the input remount finish before typing.
+  await delay(150);
   ui.stdin.write("/documents");
   await delay(40);
   ui.stdin.write("\r");

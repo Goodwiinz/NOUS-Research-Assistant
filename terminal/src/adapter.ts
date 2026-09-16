@@ -172,6 +172,7 @@ export async function* streamReply(
     yield snapshot();
     stream = streamConfirm(confirmation.threadId, approved, {
       signal: abortSignal,
+      onThreadId: options.onThreadId,
     });
   }
 }

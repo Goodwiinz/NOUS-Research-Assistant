@@ -42,16 +42,18 @@ function fromMessages(messages: TerminalMessage[]): BranchHistory {
   };
 }
 
-/** Keep server data current while retaining stable UI IDs and alternate paths. */
+/** Keep server data current while retaining stable UI IDs and alternate paths.
+ * An undefined transcript selects cached history after a failed refresh. */
 export function reconcileHistory(
-  remote: TerminalMessage[],
+  remote: TerminalMessage[] | undefined,
   saved: BranchHistory | undefined,
   threadId: string | null,
 ): BranchHistory {
-  if (!saved) return fromMessages(remote);
+  if (!saved) return fromMessages(remote ?? []);
   const leaf =
     [...saved.nodes].reverse().find((n) => n.message.threadId === threadId)
       ?.message.runtimeId ?? null;
+  if (remote === undefined) return { ...saved, headId: leaf };
   const known = visibleMessages({ ...saved, headId: leaf });
   const nodes = new Map(saved.nodes.map((n) => [n.message.runtimeId, n]));
   let parentId: string | null = null;
@@ -75,6 +77,7 @@ export function reconcileHistory(
 export function useTerminalSession(
   initialMessages: TerminalMessage[],
   initialHistory?: BranchHistory,
+  initialNotice = "",
 ) {
   const [history, setHistory] = useState(
     initialHistory ?? fromMessages(initialMessages),
@@ -82,7 +85,7 @@ export function useTerminalSession(
   const state = useRef(history);
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(initialNotice);
   const active = useRef<AbortController | null>(null);
   const navigation = useRef(0);
   const decision = useRef<{
@@ -155,6 +158,7 @@ export function useTerminalSession(
     const userId = randomUUID();
     const runtimeId = randomUUID();
     const threadId = loadConfig()?.thread_id ?? undefined;
+    let resolvedId = threadId;
     const parentId =
       parentOverride === undefined ? state.current.headId : parentOverride;
     const prior = visibleMessages({ ...state.current, headId: parentId });
@@ -171,7 +175,12 @@ export function useTerminalSession(
         ...state.current,
         headId: runtimeId,
         nodes: state.current.nodes.map((n) =>
-          n.message.runtimeId === runtimeId ? { ...n, message: reply } : n,
+          n.message.runtimeId === runtimeId
+            ? { ...n, message: reply }
+            : n.message.runtimeId === userId &&
+                n.message.threadId !== resolvedId
+              ? { ...n, message: { ...n.message, threadId: resolvedId } }
+              : n,
         ),
       });
     publish({
@@ -218,23 +227,16 @@ export function useTerminalSession(
         controller.signal,
         approve,
         {
+          onThreadId: (id) => {
+            resolvedId = id;
+          },
           clientMessageId: userId,
           attachmentIds,
           history: prior.map(({ role, content }) => ({ role, content })),
         },
       )) {
-        const resolvedId = loadConfig()?.thread_id ?? threadId;
         reply = { ...update, threadId: resolvedId };
         updateReply();
-        if (resolvedId)
-          publish({
-            ...state.current,
-            nodes: state.current.nodes.map((n) =>
-              n.message.runtimeId === userId
-                ? { ...n, message: { ...n.message, threadId: resolvedId } }
-                : n,
-            ),
-          });
       }
     } catch (error) {
       reply = {
@@ -325,7 +327,9 @@ export function useTerminalSession(
       const messages = visibleMessages(state.current);
       const index = messages.findIndex((m) => m.runtimeId === runtimeId);
       const target = messages[index];
-      if (!target?.threadId)
+      if (target?.role !== "assistant")
+        throw new Error("Feedback is only available for assistant messages.");
+      if (!target.threadId)
         throw new Error("Wait for the server to save this message.");
       let serverId = target.serverId;
       if (!serverId) {

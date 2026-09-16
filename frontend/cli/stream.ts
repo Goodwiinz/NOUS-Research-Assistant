@@ -29,6 +29,8 @@ export type StreamEvent =
 
 export interface StreamOptions {
   fetchFn?: typeof fetch;
+  /** Receives server-assigned thread IDs without polling persisted config. */
+  onThreadId?: (threadId: string) => void;
   signal?: AbortSignal;
   idleTimeoutMs?: number;
   clientMessageId?: string;
@@ -254,6 +256,7 @@ export async function* streamAgent(
   const onTrace = (id: string) => {
     threadId = id;
     persistThreadId(id);
+    options.onThreadId?.(id);
   };
   let assistantBuf = '';
   let sawDone = false;
@@ -299,5 +302,8 @@ export async function* streamConfirm(
   }
 
   const idleMs = options.idleTimeoutMs ?? DEFAULT_IDLE_MS;
-  yield* _withIdleTimeout(res.body, idleMs, persistThreadId);
+  yield* _withIdleTimeout(res.body, idleMs, (id) => {
+    persistThreadId(id);
+    options.onThreadId?.(id);
+  });
 }

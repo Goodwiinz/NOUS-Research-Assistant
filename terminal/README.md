@@ -177,3 +177,34 @@ approval; the restored focused test passes:
 ```sh
 pnpm --dir ../frontend exec vitest run src/components/chat/aui/__tests__/ChatRuntimeProvider.test.tsx -t 'queues a follow-up'
 ```
+
+### PR review regressions
+
+The review follow-up covers offline startup with a shared sibling graph, fork
+citation preservation, Unicode title limits, assistant-only feedback, thread-ID
+assignment, and config-free token updates. The real PTY smoke starts with a
+503 transcript response and a saved graph whose head belongs to another thread;
+it verifies the configured thread remains visible and commands still work.
+Run it with `CI=true GITHUB_ACTIONS=true` to exercise Ink's explicit interactive
+mode under the same detection conditions as hosted CI.
+
+Cancellation already has SDK-owned safeguards. The terminal SDK parks queued
+prompts until an explicit send; the older web SDK clears them. Both are preserved
+by `packages/chat-runtime/runtime.ts:158` returning the original queue adapter.
+Mutation verification replaced that returned adapter with a copy whose
+`__internal_notifyCancelled` was undefined and whose `clear` was a no-op. Both
+tests below failed because the pending prompt was dispatched after cancellation,
+then passed after restoring the original adapter:
+
+```sh
+# From terminal/
+node --import ./react-runtime.mjs --import tsx --test --test-name-pattern='Ctrl.C parks queued' src/regressions.test.tsx
+pnpm --dir ../frontend exec vitest run src/components/chat/aui/__tests__/ChatRuntimeProvider.test.tsx -t 'does not dispatch queued'
+```
+
+Follow-up local validation: 42 terminal tests and 2,051 frontend/CLI tests passed;
+both TypeScript checks, the CI-mode PTY smoke, Python formatting/lint, and the
+smoke script's CI-pinned MyPy check passed. The broad local CI wrapper could not
+validate backend OpenAPI/Alembic gates because its Python environment lacked
+`langgraph` and `alembic`; its unrelated backend suite was stopped during
+collection. Hosted CI remains the source of truth for those backend gates.

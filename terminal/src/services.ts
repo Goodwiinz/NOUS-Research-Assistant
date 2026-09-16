@@ -168,7 +168,7 @@ export async function forkThread(
   signal?.throwIfAborted();
   const branch = await request<Thread>("/threads", "POST", {
     conversation_id: source.conversation_id,
-    title: `${source.title || "Chat"} · branch`,
+    title: `${[...(source.title || "Chat")].slice(0, 491).join("")} · branch`,
     ...(source.source_project_id
       ? { project_id: source.source_project_id }
       : {}),
@@ -180,6 +180,7 @@ export async function forkThread(
         thread_id: branch.id,
         role: message.role,
         content: message.content,
+        ...(message.contexts?.length ? { citations: message.contexts } : {}),
         ...(message.attachments?.length
           ? { attachment_ids: message.attachments.map((a) => a.document_id) }
           : {}),

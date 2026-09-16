@@ -154,6 +154,40 @@ describe('ChatRuntimeProvider', () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledWith('next', ['doc-1']));
   });
 
+  it('does not dispatch queued prompts when a run is cancelled', async () => {
+    const onSend = vi.fn();
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+    const view = (isRunning: boolean): React.JSX.Element => (
+      <ChatRuntimeProvider
+        messages={messages}
+        isRunning={isRunning}
+        onSend={onSend}
+        onCancel={onCancel}
+      >
+        <QueueProbe />
+        <CancelProbe />
+      </ChatRuntimeProvider>
+    );
+    const { rerender } = render(view(true));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Follow-up' }),
+      'parked{Enter}'
+    );
+    expect(screen.getByText('parked')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'cancel' }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    rerender(view(false));
+    expect(onSend).not.toHaveBeenCalled();
+    await user.type(
+      screen.getByRole('textbox', { name: 'Follow-up' }),
+      'resume{Enter}'
+    );
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith('resume', ['doc-1'])
+    );
+  });
+
   it('keeps the runtime identity stable when an optimistic row becomes canonical', async () => {
     const optimistic = makeChatPageMessage({
       runtimeId: 'runtime-turn-1',

@@ -14,6 +14,7 @@ import {
   saveBranches,
   withoutThread,
   forgetBranches,
+  forkThread,
 } from "./services";
 import type { useTerminalSession } from "./session";
 let dir: string;
@@ -297,4 +298,241 @@ test("deleting a branch preserves shared prefixes and invalidates saved sibling 
   );
   assert.equal(next.nodes[0].message.threadId, undefined);
   assert.equal(next.nodes[1].parentId, "u1");
+});
+
+for (const title of ["x".repeat(500), "🧪".repeat(500)]) {
+  test(`fork titles fit the backend limit (${[...title][0]})`, async () => {
+    let createdTitle = "";
+    mock.method(
+      globalThis,
+      "fetch",
+      async (_url: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          createdTitle = JSON.parse(String(init.body)).title;
+          return Response.json({ id: "branch" });
+        }
+        return Response.json({ conversation_id: "conversation", title });
+      },
+    );
+    await forkThread("thread-1", []);
+    assert.ok(
+      [...createdTitle].length <= 500,
+      "Branch title exceeds the backend limit",
+    );
+    assert.ok(createdTitle.endsWith(" · branch"));
+    assert.doesNotMatch(createdTitle, /[\uD800-\uDFFF]/u, "Title must not split a Unicode character");
+  });
+}
+
+test("forked assistant messages retain citations on the server", async () => {
+  const citations = [
+    { document_id: "paper-1", document_title: "Evidence", page_number: 3 },
+  ];
+  const copied: Record<string, unknown>[] = [];
+  mock.method(
+    globalThis,
+    "fetch",
+    async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== "POST")
+        return Response.json({
+          conversation_id: "conversation",
+          title: "Source",
+        });
+      if (String(url).endsWith("/messages"))
+        copied.push(JSON.parse(String(init.body)));
+      return Response.json({ id: "branch" });
+    },
+  );
+  await forkThread("thread-1", [{ ...initial[1], contexts: citations }]);
+  assert.deepEqual(copied[0].citations, citations);
+});
+
+for (const command of ["like", "dislike"]) {
+  test(`${command} refuses a persisted user message`, async () => {
+    const writes: string[] = [];
+    mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+      writes.push(String(url));
+      return Response.json({});
+    });
+    const ui = await mount({
+      initialMessages: initial.map((m) => ({
+        ...m,
+        serverId: `server-${m.runtimeId}`,
+      })),
+    });
+    await key(ui, `/${command} 1`);
+    await key(ui, "\r");
+    assert.deepEqual(writes, [], "Feedback must not rate a user's own prompt");
+    assert.match(ui.lastFrame()!, /assistant/i);
+  });
+}
+
+test("Ctrl+C parks queued prompts until an explicit send", async () => {
+  let first!: ReadableStreamDefaultController<Uint8Array>;
+  const prompts: string[] = [];
+  mock.method(
+    globalThis,
+    "fetch",
+    async (_url: RequestInfo | URL, init?: RequestInit) => {
+      prompts.push(JSON.parse(String(init?.body)).messages.at(-1).content);
+      if (prompts.length > 1)
+        return response([
+          ["token", { content: "Resumed answer" }],
+          ["done", {}],
+        ]);
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            first = controller;
+          },
+        }),
+      );
+    },
+  );
+  const ui = await mount();
+  await key(ui, "first");
+  await key(ui, "\r");
+  await until(() => prompts.length === 1);
+  await key(ui, "parked");
+  await key(ui, "\r");
+  assert.match(ui.lastFrame()!, /Queued: parked/);
+  await key(ui, "\x03");
+  first.close();
+  await until(() => !ui.lastFrame()?.includes("Working…"));
+  await delay(100);
+  assert.deepEqual(
+    prompts,
+    ["first"],
+    "Stopping must not dispatch a queued follow-up",
+  );
+  assert.match(ui.lastFrame()!, /Queued: parked/);
+  await key(ui, "resume");
+  await key(ui, "\r");
+  await until(() => prompts.length === 3);
+  assert.deepEqual(prompts, ["first", "parked", "resume"]);
+});
+
+test("stream events do not reread config or recreate the user node", async () => {
+  const fs = await import("node:fs");
+  const { useTerminalSession } = await import("./session");
+  let session!: ReturnType<typeof useTerminalSession>;
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  mock.method(
+    globalThis,
+    "fetch",
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            body = controller;
+          },
+        }),
+      ),
+  );
+  function Probe() {
+    session = useTerminalSession([]);
+    return null;
+  }
+  render(<Probe />);
+  await until(() => !!session);
+  const sending = session.onSend("stream a response");
+  await until(() => !!body);
+  const emit = (event: string, data: unknown) =>
+    body.enqueue(
+      new TextEncoder().encode(
+        `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+      ),
+    );
+  emit("token", { content: "first" });
+  await until(() => session.messages.at(-1)?.content === "first");
+  const user = session.messages[0];
+  // The CJS fs object is also used by the CLI config store.
+  const reads = mock.method(fs.default, "readFileSync");
+  try {
+    for (let i = 0; i < 4; i++) {
+      emit("token", { content: "!" });
+      await until(
+        () => session.messages.at(-1)?.content === "first" + "!".repeat(i + 1),
+      );
+    }
+    const configReads = reads.mock.calls.filter((call) =>
+      String(call.arguments[0]).endsWith("config.json"),
+    );
+    assert.equal(
+      configReads.length,
+      0,
+      "Token updates must not read credentials from disk",
+    );
+    assert.equal(
+      session.messages[0],
+      user,
+      "Unchanged user nodes must retain identity",
+    );
+  } finally {
+    emit("done", {});
+    body.close();
+    await sending;
+  }
+});
+
+test("stream trace IDs reach both message nodes and persisted branches", async () => {
+  const { useTerminalSession } = await import("./session");
+  saveConfig({ ...loadConfig()!, thread_id: null });
+  mock.method(globalThis, "fetch", async () =>
+    response([
+      ["trace", { thread_id: "assigned-thread" }],
+      ["token", { content: "assigned" }],
+      ["trace", { thread_id: "resolved-thread" }],
+      ["token", { content: " answer" }],
+      ["done", {}],
+    ]),
+  );
+  let session!: ReturnType<typeof useTerminalSession>;
+  function Probe() {
+    session = useTerminalSession([]);
+    return null;
+  }
+  render(<Probe />);
+  await until(() => !!session);
+  await session.onSend("first prompt");
+  await until(() => session.messages.at(-1)?.content === "assigned answer");
+  assert.deepEqual(
+    session.messages.map((m) => m.threadId),
+    ["resolved-thread", "resolved-thread"],
+  );
+  assert.equal(loadConfig()?.thread_id, "resolved-thread");
+  assert.equal((await loadBranches("resolved-thread"))?.nodes.length, 2);
+});
+
+test("offline startup selects the configured thread in a shared saved graph", async () => {
+  const { reconcileHistory, visibleMessages } = await import("./session");
+  const saved: BranchHistory = {
+    headId: "sibling",
+    nodes: [
+      { parentId: null, message: initial[0] },
+      { parentId: "u1", message: initial[1] },
+      {
+        parentId: null,
+        message: {
+          ...initial[1],
+          runtimeId: "sibling",
+          threadId: "thread-2",
+          content: "Other branch",
+        },
+      },
+    ],
+  };
+  // Missing hydration is distinct from an authoritative empty server transcript.
+  assert.deepEqual(
+    visibleMessages(reconcileHistory(undefined, saved, "thread-1")),
+    initial,
+  );
+  assert.deepEqual(
+    visibleMessages(reconcileHistory([], saved, "thread-1")),
+    [],
+  );
+  assert.deepEqual(
+    visibleMessages(reconcileHistory(undefined, undefined, "thread-1")),
+    [],
+  );
 });

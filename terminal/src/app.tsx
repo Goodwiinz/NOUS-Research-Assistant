@@ -173,12 +173,18 @@ const InkApprovalToolUI = makeAssistantToolUI({
 export function App({
   initialMessages = [],
   initialHistory,
+  initialNotice,
 }: {
   initialMessages?: TerminalMessage[];
   initialHistory?: BranchHistory;
+  initialNotice?: string;
 }) {
   const { exit } = useApp();
-  const session = useTerminalSession(initialMessages, initialHistory);
+  const session = useTerminalSession(
+    initialMessages,
+    initialHistory,
+    initialNotice,
+  );
   const [threads, setThreads] = useState<Thread[]>([]);
   const [panel, setPanel] = useState<"chat" | "threads" | "help" | "info">(
     "chat",

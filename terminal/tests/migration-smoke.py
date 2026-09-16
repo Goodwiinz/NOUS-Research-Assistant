@@ -1,6 +1,7 @@
 """Real TTY check for native Ink migration; stdlib only, fake local backend/auth."""
 
 import fcntl
+import hashlib
 import json
 import os
 import pty
@@ -80,6 +81,9 @@ class Handler(BaseHTTPRequestHandler):
             }
         elif self.path.startswith("/api/v2/threads/thread-2?"):
             data = {"conversation_id": "conversation", "title": "Saved thread"}
+        elif self.path.startswith("/api/v2/threads/offline-thread/messages?"):
+            self.send_error(503)
+            return
         elif "/messages?" in self.path:
             data = {"messages": [], "has_more": False}
         else:
@@ -141,7 +145,7 @@ def check() -> None:
                     "user_email": "test@example.invalid",
                     "organization_id": "test",
                     "expires_at": "2099-01-01",
-                    "thread_id": None,
+                    "thread_id": "offline-thread",
                 }
             )
         )
@@ -150,6 +154,40 @@ def check() -> None:
             NOUS_CONFIG_DIR=config,
             NOUS_API_URL=f"http://127.0.0.1:{server.server_port}/api/v1",
             TERM="xterm-256color",
+        )
+        branch_dir = Path(config, "branches")
+        branch_dir.mkdir()
+        key = hashlib.sha256(
+            f"{env['NOUS_API_URL']}|test|test@example.invalid|offline-thread".encode()
+        ).hexdigest()
+        Path(branch_dir, f"{key}.json").write_text(
+            json.dumps(
+                {
+                    "headId": "sibling-user",
+                    "nodes": [
+                        {
+                            "parentId": None,
+                            "message": {
+                                "runtimeId": "cached-user",
+                                "threadId": "offline-thread",
+                                "role": "user",
+                                "content": "Locally saved question",
+                                "timestamp": 1,
+                            },
+                        },
+                        {
+                            "parentId": None,
+                            "message": {
+                                "runtimeId": "sibling-user",
+                                "threadId": "sibling-thread",
+                                "role": "user",
+                                "content": "Wrong sibling question",
+                                "timestamp": 2,
+                            },
+                        },
+                    ],
+                }
+            )
         )
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
@@ -204,6 +242,9 @@ def check() -> None:
 
         try:
             wait_for("Ask NOUS")
+            wait_for("Locally saved question")
+            wait_for("Could not refresh")
+            assert b"Wrong sibling question" not in output
             drain(0.3)
             send("/")
             wait_for("Commands (")
@@ -296,7 +337,7 @@ def check() -> None:
             assert proc.returncode == 0
             assert Path(config, "draft.txt").read_text() == "unsent draft"
             print(
-                "PASS: slash discovery/completion, Ink-native project/paper/settings/thread menus, Escape cancellation, sending after /help, edit save/cancel, approval focus, delayed read cancellation, multiline recall, shared context and draft persistence."
+                "PASS: CI TTY startup, offline selected-branch recovery, slash discovery/completion, Ink-native project/paper/settings/thread menus, Escape cancellation, sending after /help, edit save/cancel, approval focus, delayed read cancellation, multiline recall, shared context and draft persistence."
             )
         finally:
             if proc.poll() is None:
