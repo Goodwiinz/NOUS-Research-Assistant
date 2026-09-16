@@ -70,8 +70,15 @@ zero border, wrapping layout and 12px text. The initial utility override did
 not win against the existing stylesheet; the correction edits the owning CSS
 rules instead, removing the obsolete decoration rather than adding overrides.
 
-NOT VERIFIED: exhaustive all-control contrast/keyboard audit, drawer resize
-while open, all empty/loading/error visual permutations, Lighthouse and
+PASS (responsive follow-up): opening history below xl, resizing to desktop,
+then narrowing previously resurrected the hidden modal. The drawer hook now
+closes on the 1280px media-query transition and returns focus to the composer
+instead of the hidden trigger. Browser verification confirmed Message retained
+focus and the modal stayed closed after narrowing. An automated test covers
+the breakpoint, focus transfer, ignored narrow events and listener cleanup.
+
+NOT VERIFIED: exhaustive all-control contrast/keyboard audit,
+all empty/loading/error visual permutations, Lighthouse and
 production Core Web Vitals. Reduced-motion emulation was exercised, but no
 frame-timing certification is claimed. Existing state tests remain passing.
 These are explicitly not converted into passing full-site checks.
@@ -90,7 +97,7 @@ are not marketing decoration. Existing serif is justified by brand preservation.
 
 ## Verification
 
-- Full frontend suite: 295 files, 2045 tests passed including the additional
+- Full frontend suite: 295 files, 2046 tests passed including the additional
   sidebar-breakpoint assertion. Focused checks were rerun after focus styling.
 - TypeScript: pass.
 - Frontend lint and production-exclusion comparators: pass.

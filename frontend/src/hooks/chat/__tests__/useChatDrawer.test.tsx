@@ -10,10 +10,34 @@ function makeFocusable(): HTMLButtonElement {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   document.body.replaceChildren();
 });
 
 describe('useChatDrawer', () => {
+  it('closes at the docked breakpoint, focuses the composer and removes the listener', () => {
+    const media = window.matchMedia('(min-width: 1280px)');
+    const add = vi.spyOn(media, 'addEventListener');
+    const remove = vi.spyOn(media, 'removeEventListener');
+    vi.spyOn(window, 'matchMedia').mockReturnValue(media);
+    const composer = document.createElement('textarea');
+    document.body.appendChild(composer);
+    const focusRef = { current: composer };
+    const { result } = renderHook(() => useChatDrawer(focusRef));
+    act(() => result.current.openDrawer());
+    const onChange = add.mock.calls[0][1] as (
+      event: MediaQueryListEvent
+    ) => void;
+
+    act(() => onChange({ matches: false } as MediaQueryListEvent));
+    expect(result.current.isOpen).toBe(true);
+    act(() => onChange({ matches: true } as MediaQueryListEvent));
+    expect(result.current.isOpen).toBe(false);
+    expect(document.activeElement).toBe(composer);
+    expect(remove).toHaveBeenCalledWith('change', onChange);
+    expect(window.matchMedia).toHaveBeenCalledWith('(min-width: 1280px)');
+  });
+
   it('opens, closes, and toggles', () => {
     const { result } = renderHook(() => useChatDrawer());
     expect(result.current.isOpen).toBe(false);
@@ -38,8 +62,9 @@ describe('useChatDrawer', () => {
     drawerEl.tabIndex = -1;
     document.body.appendChild(drawerEl);
     // Wire the ref the way JSX would (React doesn't render here).
-    (result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>).current =
-      drawerEl;
+    (
+      result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>
+    ).current = drawerEl;
     const focusSpy = vi.spyOn(drawerEl, 'focus');
 
     act(() => result.current.openDrawer());
@@ -70,8 +95,9 @@ describe('useChatDrawer', () => {
     root.appendChild(first);
     root.appendChild(last);
     document.body.appendChild(root);
-    (result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>).current =
-      root;
+    (
+      result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>
+    ).current = root;
     last.focus();
     expect(document.activeElement).toBe(last);
 
@@ -96,8 +122,9 @@ describe('useChatDrawer', () => {
     root.appendChild(first);
     root.appendChild(last);
     document.body.appendChild(root);
-    (result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>).current =
-      root;
+    (
+      result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>
+    ).current = root;
     first.focus();
 
     const preventDefault = vi.fn();
@@ -122,8 +149,9 @@ describe('useChatDrawer', () => {
     root.appendChild(first);
     root.appendChild(last);
     document.body.appendChild(root);
-    (result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>).current =
-      root;
+    (
+      result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>
+    ).current = root;
     root.focus();
     expect(document.activeElement).toBe(root);
 
@@ -145,8 +173,9 @@ describe('useChatDrawer', () => {
     const root = document.createElement('div');
     root.tabIndex = -1;
     document.body.appendChild(root);
-    (result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>).current =
-      root;
+    (
+      result.current.drawerRef as React.MutableRefObject<HTMLDivElement | null>
+    ).current = root;
     root.focus();
 
     const focusSpy = vi.spyOn(root, 'focus');
