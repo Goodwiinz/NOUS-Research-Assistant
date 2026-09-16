@@ -5,7 +5,9 @@ import sys
 import tempfile
 import types
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,23 +39,23 @@ class _ChunkedUpload:
 
 
 class _UploadDB:
-    def __init__(self):
+    def __init__(self) -> None:
         self.commit_calls = 0
         self.rollback_calls = 0
 
-    def add(self, _obj) -> None:
+    def add(self, _obj: Any) -> None:
         pass
 
-    def query(self, *_args, **_kwargs):
+    def query(self, *_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("query is intentionally unavailable in this unit test")
 
     async def commit(self) -> None:
         self.commit_calls += 1
 
-    async def refresh(self, _obj) -> None:
+    async def refresh(self, _obj: Any) -> None:
         pass
 
-    async def execute(self, _statement):
+    async def execute(self, _statement: Any) -> Any:
         return SimpleNamespace(rowcount=1)
 
     async def rollback(self) -> None:
@@ -61,50 +63,58 @@ class _UploadDB:
 
 
 class _S3Recorder:
-    instances = []
+    instances: list[Any] = []
 
-    def __init__(self):
-        self.uploads = []
-        self.__class__.instances.append(self)
+    def __init__(self) -> None:
+        self.uploads: list[Any] = []
+        _S3Recorder.instances.append(self)
 
-    def upload_fileobj(self, fileobj, key, content_type):
+    def upload_fileobj(self, fileobj: Any, key: str, content_type: str) -> str:
         self.uploads.append((fileobj.read(), key, content_type))
         return key
 
 
 class _SupabaseRecorder:
-    instances = []
+    instances: list[Any] = []
 
-    def __init__(self):
-        self.uploads = []
-        self.__class__.instances.append(self)
+    def __init__(self) -> None:
+        self.uploads: list[Any] = []
+        _SupabaseRecorder.instances.append(self)
 
-    def upload_fileobj(self, fileobj, bucket, key, content_type):
+    def upload_fileobj(
+        self, fileobj: Any, bucket: str, key: str, content_type: str
+    ) -> str:
         self.uploads.append((fileobj.read(), bucket, key, content_type))
         return f"{bucket}/{key}"
 
 
-def _make_service(monkeypatch, tmp_path, backend: str) -> FileService:
+def _make_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backend: str
+) -> FileService:
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setattr(settings, "STORAGE_BACKEND", backend)
     monkeypatch.setattr(settings, "SUPABASE_STORAGE_ENABLED", False)
 
-    service = FileService(_UploadDB())
-    service.validate_file = lambda _file, _user, _org: {
-        "mime_type": "text/plain",
-        "file_size": 18,
-        "document_type": DocumentType.TEXT,
-    }
+    service = FileService(cast(Any, _UploadDB()))
+
+    def _validate_file(_file: Any, _user: Any, _org: Any) -> dict[str, Any]:
+        return {
+            "mime_type": "text/plain",
+            "file_size": 18,
+            "document_type": DocumentType.TEXT,
+        }
+
+    setattr(service, "validate_file", _validate_file)
     return service
 
 
-def _patch_supabase_helper(monkeypatch, helper_cls) -> None:
+def _patch_supabase_helper(monkeypatch: pytest.MonkeyPatch, helper_cls: Any) -> None:
     # The repository's root ``supabase/`` migration directory is a namespace
     # package on the test import path, so provide the third-party symbols that
     # ``src.core.supabase_client`` imports before patching its helper class.
     supabase_package = types.ModuleType("supabase")
-    supabase_package.Client = object
-    supabase_package.create_client = MagicMock()
+    setattr(supabase_package, "Client", object)
+    setattr(supabase_package, "create_client", MagicMock())
     monkeypatch.setitem(sys.modules, "supabase", supabase_package)
     monkeypatch.setattr("src.core.supabase_client.StorageHelper", helper_cls)
 
@@ -112,12 +122,12 @@ def _patch_supabase_helper(monkeypatch, helper_cls) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["s3", "supabase"])
 async def test_cloud_upload_lazily_constructs_helper_and_streams_bytes(
-    monkeypatch, tmp_path, backend
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backend: str
+) -> None:
     payload = b"bytes must arrive intact"
     db = _UploadDB()
     service = _make_service(monkeypatch, tmp_path, backend)
-    service.db = db
+    setattr(service, "db", db)
     user = SimpleNamespace(id=uuid.uuid4())
     organization = SimpleNamespace(id=uuid.uuid4())
 
@@ -137,10 +147,13 @@ async def test_cloud_upload_lazily_constructs_helper_and_streams_bytes(
     assert service._storage_helper is None
 
     document = await service.upload_file(
-        _ChunkedUpload(payload), "Sample", user, organization
+        cast(Any, _ChunkedUpload(payload)),
+        "Sample",
+        cast(Any, user),
+        cast(Any, organization),
     )
 
-    recorder_cls = _S3Recorder if backend == "s3" else _SupabaseRecorder
+    recorder_cls: Any = _S3Recorder if backend == "s3" else _SupabaseRecorder
     assert len(recorder_cls.instances) == 1
     helper = recorder_cls.instances[0]
     assert helper.uploads[0][0] == payload
@@ -156,12 +169,12 @@ async def test_cloud_upload_lazily_constructs_helper_and_streams_bytes(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["s3", "supabase"])
 async def test_cloud_helper_failure_rolls_back_and_removes_spool(
-    monkeypatch, tmp_path, backend
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backend: str
+) -> None:
     payload = b"bytes that fail"
     db = _UploadDB()
     service = _make_service(monkeypatch, tmp_path, backend)
-    service.db = db
+    setattr(service, "db", db)
     user = SimpleNamespace(id=uuid.uuid4())
     organization = SimpleNamespace(id=uuid.uuid4())
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
@@ -170,17 +183,19 @@ async def test_cloud_helper_failure_rolls_back_and_removes_spool(
         _S3Recorder.instances = []
 
         class FailingS3(_S3Recorder):
-            def upload_fileobj(self, fileobj, key, content_type):
+            def upload_fileobj(self, fileobj: Any, key: str, content_type: str) -> str:
                 self.uploads.append((fileobj.read(), key, content_type))
                 raise RuntimeError("provider secret must stay private")
 
         monkeypatch.setattr("src.core.s3_client.S3StorageHelper", FailingS3)
-        recorder_cls = FailingS3
+        recorder_cls: Any = FailingS3
     else:
         _SupabaseRecorder.instances = []
 
         class FailingSupabase(_SupabaseRecorder):
-            def upload_fileobj(self, fileobj, bucket, key, content_type):
+            def upload_fileobj(
+                self, fileobj: Any, bucket: str, key: str, content_type: str
+            ) -> str:
                 self.uploads.append((fileobj.read(), bucket, key, content_type))
                 raise RuntimeError("provider secret must stay private")
 
@@ -188,7 +203,12 @@ async def test_cloud_helper_failure_rolls_back_and_removes_spool(
         recorder_cls = FailingSupabase
 
     with pytest.raises(FileStorageError):
-        await service.upload_file(_ChunkedUpload(payload), "Sample", user, organization)
+        await service.upload_file(
+            cast(Any, _ChunkedUpload(payload)),
+            "Sample",
+            cast(Any, user),
+            cast(Any, organization),
+        )
 
     assert len(recorder_cls.instances) == 1
     assert recorder_cls.instances[0].uploads[0][0] == payload
@@ -205,18 +225,22 @@ async def test_cloud_helper_failure_rolls_back_and_removes_spool(
     ],
 )
 async def test_safe_upload_errors_survive_service_cleanup(
-    monkeypatch, tmp_path, safe_error
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, safe_error: Exception
+) -> None:
     service = _make_service(monkeypatch, tmp_path, "s3")
-    service.validate_file = lambda *_args: (_ for _ in ()).throw(safe_error)
+
+    def _raise_safe_error(*_args: Any) -> dict[str, Any]:
+        raise safe_error
+
+    setattr(service, "validate_file", _raise_safe_error)
 
     with pytest.raises(type(safe_error)) as exc_info:
         await service.upload_file(
-            _ChunkedUpload(b"safe error"),
+            cast(Any, _ChunkedUpload(b"safe error")),
             "Sample",
-            SimpleNamespace(id=uuid.uuid4()),
-            SimpleNamespace(id=uuid.uuid4()),
+            cast(Any, SimpleNamespace(id=uuid.uuid4())),
+            cast(Any, SimpleNamespace(id=uuid.uuid4())),
         )
 
     assert str(exc_info.value) == str(safe_error)
-    assert service.db.rollback_calls == 1
+    assert getattr(service.db, "rollback_calls") == 1

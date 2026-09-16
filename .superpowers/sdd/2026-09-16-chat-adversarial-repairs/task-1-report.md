@@ -101,3 +101,37 @@ storage operation was performed.
 ## Commit
 
 `fix(upload): restore lazy cloud storage initialization`
+
+## Review round 1
+
+The added-file mypy gate was rerun with the repository-pinned test versions
+(`mypy==1.11.1`, `numpy==1.26.4`) in the isolated task environment. The new
+test doubles needed explicit annotations and `Any` casts at their fake service
+boundaries; no production typing change was required.
+
+Exact command and output:
+
+```sh
+/tmp/chat-audit-20260916/venv/bin/mypy --ignore-missing-imports \
+  --follow-imports=silent \
+  backend/tests/unit/services/test_file_service_cloud_upload.py \
+  backend/tests/unit/api/test_file_upload_errors.py
+```
+
+```text
+Success: no issues found in 2 source files
+```
+
+After the review changes, the clean timeout-enabled regression run was:
+
+```sh
+PYTHONPATH=backend /tmp/chat-audit-20260916/venv/bin/python -m pytest -q \
+  backend/tests/unit/services/test_file_service_cloud_upload.py \
+  backend/tests/unit/api/test_file_upload_errors.py \
+  backend/tests/test_upload_compensating_delete.py \
+  backend/tests/unit/api/test_audit_pr6_upload_guards.py
+```
+
+```text
+============================== 29 passed in 7.06s ==============================
+```

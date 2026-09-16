@@ -2,6 +2,7 @@
 
 import io
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -43,7 +44,7 @@ def _organization() -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_upload_storage_failure_uses_safe_public_detail(monkeypatch):
+async def test_upload_storage_failure_uses_safe_public_detail() -> None:
     user = _user()
     service = SimpleNamespace(
         upload_file=AsyncMock(
@@ -55,7 +56,7 @@ async def test_upload_storage_failure_uses_safe_public_detail(monkeypatch):
 
     with pytest.raises(HTTPException) as exc_info:
         await files_module.upload_file(
-            file=_upload(),
+            file=cast(Any, _upload()),
             title="Sample",
             description=None,
             tags=None,
@@ -63,9 +64,9 @@ async def test_upload_storage_failure_uses_safe_public_detail(monkeypatch):
             processing_priority="normal",
             enable_quality_check=True,
             custom_metadata=None,
-            current_user=user,
+            current_user=cast(Any, user),
             db=MagicMock(),
-            file_service=service,
+            file_service=cast(Any, service),
         )
 
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -74,7 +75,7 @@ async def test_upload_storage_failure_uses_safe_public_detail(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_upload_preserves_safe_validation_error(monkeypatch):
+async def test_upload_preserves_safe_validation_error() -> None:
     user = _user()
     service = SimpleNamespace(
         upload_file=AsyncMock(
@@ -84,7 +85,7 @@ async def test_upload_preserves_safe_validation_error(monkeypatch):
 
     with pytest.raises(HTTPException) as exc_info:
         await files_module.upload_file(
-            file=_upload(),
+            file=cast(Any, _upload()),
             title="Sample",
             description=None,
             tags=None,
@@ -92,9 +93,9 @@ async def test_upload_preserves_safe_validation_error(monkeypatch):
             processing_priority="normal",
             enable_quality_check=True,
             custom_metadata=None,
-            current_user=user,
+            current_user=cast(Any, user),
             db=MagicMock(),
-            file_service=service,
+            file_service=cast(Any, service),
         )
 
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -102,7 +103,7 @@ async def test_upload_preserves_safe_validation_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_upload_preserves_safe_http_error(monkeypatch):
+async def test_upload_preserves_safe_http_error() -> None:
     user = _user()
     service = SimpleNamespace(
         upload_file=AsyncMock(
@@ -115,7 +116,7 @@ async def test_upload_preserves_safe_http_error(monkeypatch):
 
     with pytest.raises(HTTPException) as exc_info:
         await files_module.upload_file(
-            file=_upload(),
+            file=cast(Any, _upload()),
             title="Sample",
             description=None,
             tags=None,
@@ -123,9 +124,9 @@ async def test_upload_preserves_safe_http_error(monkeypatch):
             processing_priority="normal",
             enable_quality_check=True,
             custom_metadata=None,
-            current_user=user,
+            current_user=cast(Any, user),
             db=MagicMock(),
-            file_service=service,
+            file_service=cast(Any, service),
         )
 
     assert exc_info.value.status_code == status.HTTP_409_CONFLICT
