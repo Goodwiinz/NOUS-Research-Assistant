@@ -72,6 +72,7 @@ const realFetch = global.fetch;
 describe('agentChatService stream resilience', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    refreshSession.mockResolvedValue({ data: {} });
     getSession.mockResolvedValue({
       data: { session: { access_token: 'token-1' } },
     });
@@ -135,10 +136,15 @@ describe('agentChatService stream resilience', () => {
   });
 
   it('retries a 401 once with a refreshed session (M15)', async () => {
-    let call = 0;
-    global.fetch = vi.fn(async () => {
-      call += 1;
-      if (call === 1) {
+    getSession
+      .mockResolvedValueOnce({
+        data: { session: { access_token: 'token-old' } },
+      })
+      .mockResolvedValueOnce({
+        data: { session: { access_token: 'token-new' } },
+      });
+    const fetchMock = vi.fn(async () => {
+      if (fetchMock.mock.calls.length === 1) {
         return {
           ok: false,
           status: 401,
@@ -152,33 +158,126 @@ describe('agentChatService stream resilience', () => {
         status: 200,
         body: readerFrom(['event: done\ndata: {"status":"complete"}\n\n']),
       };
-    }) as unknown as typeof fetch;
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
 
     const onDone = vi.fn();
     const onError = vi.fn();
-    await agentChatService.streamMessage(request, { onDone, onError });
+    const onAuthRefreshAttempt = vi.fn();
+    const onAuthRefreshSuccess = vi.fn();
+    await agentChatService.streamMessage(request, {
+      onDone,
+      onError,
+      onAuthRefreshAttempt,
+      onAuthRefreshSuccess,
+    });
 
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(refreshSession).toHaveBeenCalledTimes(1);
-    expect(onDone).toHaveBeenCalled();
+    expect(onAuthRefreshAttempt).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshSuccess).toHaveBeenCalledTimes(1);
+    expect(
+      (fetchMock.mock.calls[0]?.[1]?.headers as Headers).get('Authorization')
+    ).toBe('Bearer token-old');
+    expect(
+      (fetchMock.mock.calls[1]?.[1]?.headers as Headers).get('Authorization')
+    ).toBe('Bearer token-new');
+    expect(onDone).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
+    expect(onAuthRefreshSuccess.mock.invocationCallOrder[0]).toBeLessThan(
+      onDone.mock.invocationCallOrder[0]
+    );
   });
 
-  it('does not blame the user when the retried 401 still fails', async () => {
-    global.fetch = vi.fn(async () => ({
+  it('reports authentication_required after exactly one failed refresh retry', async () => {
+    const fetchMock = vi.fn(async () => ({
       ok: false,
       status: 401,
       body: null,
       json: async () => ({}),
       text: async () => '',
-    })) as unknown as typeof fetch;
+    }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const onError = vi.fn();
+    const onAuthRefreshAttempt = vi.fn();
+    const onAuthRefreshSuccess = vi.fn();
+    await agentChatService.streamMessage(request, {
+      onError,
+      onAuthRefreshAttempt,
+      onAuthRefreshSuccess,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshAttempt).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshSuccess).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    // The wire-category channel stays undefined: a rejected credential is not
+    // an invalid request. The third argument is explicitly client-local.
+    expect(onError.mock.calls[0][1]).toBeUndefined();
+    expect(onError.mock.calls[0][2]).toBe('authentication_required');
+  });
+
+  it('reports a successful refresh lifecycle on streamConfirm too', async () => {
+    const fetchMock = vi.fn(async () => {
+      if (fetchMock.mock.calls.length === 1) {
+        return { ok: false, status: 401, body: null };
+      }
+      return {
+        ok: true,
+        status: 200,
+        body: readerFrom(['event: done\ndata: {"status":"complete"}\n\n']),
+      };
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const onAuthRefreshAttempt = vi.fn();
+    const onAuthRefreshSuccess = vi.fn();
+
+    await agentChatService.streamConfirm(
+      { thread_id: 'thread-A', confirmed: true },
+      { onAuthRefreshAttempt, onAuthRefreshSuccess }
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshAttempt).toHaveBeenCalledTimes(1);
+    expect(onAuthRefreshSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports permission_denied for 403 without refreshing', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      body: null,
+      text: async () => '',
+    }));
+    global.fetch = fetchMock as unknown as typeof fetch;
 
     const onError = vi.fn();
     await agentChatService.streamMessage(request, { onError });
 
-    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(refreshSession).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
-    // Category stays undefined: an expired session is not an invalid request.
     expect(onError.mock.calls[0][1]).toBeUndefined();
+    expect(onError.mock.calls[0][2]).toBe('permission_denied');
+  });
+
+  it('keeps an initial network failure on the existing exception path', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('network unavailable');
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const onError = vi.fn();
+    await expect(
+      agentChatService.streamMessage(request, { onError })
+    ).rejects.toThrow('network unavailable');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(refreshSession).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it('finishes as soon as the terminal frame arrives, even if EOF never comes', async () => {

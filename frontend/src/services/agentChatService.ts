@@ -22,6 +22,10 @@ export type {
   AgentStreamEvent,
 } from '@/services/agentStreamEvents';
 
+/** Client-only HTTP failures. These values never enter the SSE wire enum. */
+export type AgentStreamLocalFailure =
+  'authentication_required' | 'permission_denied';
+
 /**
  * Client-derived category for an HTTP-level failure — the stream never opened,
  * so there is no server `error` frame and no server-authored category.
@@ -39,6 +43,12 @@ function httpFailureCategory(status: number): AgentErrorCategory | undefined {
   // generic treatment rather than blaming the user's input.
   if (status === 401 || status === 403) return undefined;
   if (status >= 400 && status < 500) return 'invalid_request';
+  return undefined;
+}
+
+function httpLocalFailure(status: number): AgentStreamLocalFailure | undefined {
+  if (status === 401) return 'authentication_required';
+  if (status === 403) return 'permission_denied';
   return undefined;
 }
 
@@ -84,6 +94,10 @@ async function getStreamAuthHeaders(
  * some events (e.g. streamConfirm never emits trace).
  */
 export interface AgentStreamCallbacks {
+  /** Client-only lifecycle marker fired immediately before the one auth retry. */
+  onAuthRefreshAttempt?: () => void;
+  /** The retried HTTP response accepted refreshed auth and is ready to read. */
+  onAuthRefreshSuccess?: () => void;
   onToken?: (content: string) => void;
   /** Provider-authored reasoning summary only; raw reasoning is never sent. */
   onReasoningDelta?: (content: string) => void;
@@ -147,7 +161,11 @@ export interface AgentStreamCallbacks {
    * from the status, and is left `undefined` for 5xx/network — a transport
    * failure carries no server claim, so guessing one would be a lie.
    */
-  onError?: (error: string, category?: AgentErrorCategory) => void;
+  onError?: (
+    error: string,
+    category?: AgentErrorCategory,
+    localFailure?: AgentStreamLocalFailure
+  ) => void;
 }
 
 export type AgentResumeResult =
@@ -235,7 +253,9 @@ export const HANDLED_STREAM_EVENTS: ReadonlySet<AgentStreamEvent> = new Set([
 async function fetchStreamWithAuthRetry(
   url: string,
   init: Omit<RequestInit, 'headers'>,
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  onAuthRefreshAttempt?: () => void,
+  onAuthRefreshSuccess?: () => void
 ): Promise<Response> {
   const open = async (forceRefresh: boolean): Promise<Response> => {
     const headers = new Headers(await getStreamAuthHeaders({ forceRefresh }));
@@ -246,7 +266,10 @@ async function fetchStreamWithAuthRetry(
   };
   const response = await open(false);
   if (response.status !== 401) return response;
-  return open(true);
+  onAuthRefreshAttempt?.();
+  const retriedResponse = await open(true);
+  if (retriedResponse.ok) onAuthRefreshSuccess?.();
+  return retriedResponse;
 }
 
 /**
@@ -649,11 +672,17 @@ class AgentChatService {
 
     let response: Response;
     try {
-      response = await fetchStreamWithAuthRetry(agentStreamUrl('stream'), {
-        method: 'POST',
-        body: JSON.stringify(cappedRequest),
-        signal,
-      });
+      response = await fetchStreamWithAuthRetry(
+        agentStreamUrl('stream'),
+        {
+          method: 'POST',
+          body: JSON.stringify(cappedRequest),
+          signal,
+        },
+        {},
+        callbacks.onAuthRefreshAttempt,
+        callbacks.onAuthRefreshSuccess
+      );
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       throw err;
@@ -665,7 +694,8 @@ class AgentChatService {
         backendMessage
           ? `Stream failed (${response.status}): ${backendMessage}`
           : `Stream failed: ${response.status}`,
-        httpFailureCategory(response.status)
+        httpFailureCategory(response.status),
+        httpLocalFailure(response.status)
       );
       return;
     }
@@ -790,7 +820,10 @@ class AgentChatService {
           method: 'POST',
           body: JSON.stringify(request),
           signal,
-        }
+        },
+        {},
+        callbacks.onAuthRefreshAttempt,
+        callbacks.onAuthRefreshSuccess
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -803,7 +836,8 @@ class AgentChatService {
         backendMessage
           ? `Stream confirm failed (${response.status}): ${backendMessage}`
           : `Stream confirm failed: ${response.status}`,
-        httpFailureCategory(response.status)
+        httpFailureCategory(response.status),
+        httpLocalFailure(response.status)
       );
       return;
     }

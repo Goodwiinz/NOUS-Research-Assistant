@@ -147,6 +147,35 @@ describe('App login page', () => {
     );
   });
 
+  it('shows neutral same-account guidance when a chat draft was saved', async () => {
+    mockSearchParams = new URLSearchParams(
+      'reauth=chat&draft=saved&next=%2Fchat%3Fthread%3Dthread-A&message=attacker-copy'
+    );
+
+    render(<LoginPage />);
+
+    expect(
+      await screen.findByText(
+        "Please sign in again to continue. Sign in to the same account to return to this conversation. Your message text is saved in this tab and won't be sent until you press Send."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/session expired/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('attacker-copy')).not.toBeInTheDocument();
+  });
+
+  it('shows generic recovery guidance when no chat draft was saved', async () => {
+    mockSearchParams = new URLSearchParams(
+      'reauth=chat&next=%2Fchat%3Fthread%3Dthread-A'
+    );
+
+    render(<LoginPage />);
+
+    expect(
+      await screen.findByText('Please sign in again to continue.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/session expired/i)).not.toBeInTheDocument();
+  });
+
   it.each([
     ['//evil.com', '/dashboard'],
     ['http://evil.com', '/dashboard'],

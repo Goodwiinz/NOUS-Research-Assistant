@@ -30,6 +30,7 @@ import {
 } from '@/components/chat/shared/cloudMessageView';
 import { ChatSurface } from '@/components/chat/ChatSurface';
 import { useChatStore } from '@/store/chat-store';
+import { useAuthStore } from '@/stores/authStore';
 import type { UseChatStreamingParams } from '@/hooks/chat/useChatStreaming';
 import type { UseChatSessionReturn } from '@/hooks/chat/useChatSession';
 import type { UseChatThreadActionsReturn } from '@/hooks/chat/useChatThreadActions';
@@ -75,6 +76,27 @@ vi.mock('@/services/workspaceService', () => ({
 
 import { useChatStreaming } from '@/hooks/chat/useChatStreaming';
 import { workspaceService } from '@/services/workspaceService';
+
+const USER_A = { id: 'user-A' } as NonNullable<
+  ReturnType<typeof useAuthStore.getState>['user']
+>;
+const USER_B = { id: 'user-B' } as NonNullable<
+  ReturnType<typeof useAuthStore.getState>['user']
+>;
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function makeParams(): UseChatStreamingParams {
   useChatStore.setState({ currentThreadId: 'thread-A' });
@@ -199,6 +221,13 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
     ).mockResolvedValue({ id: 'conversation-A' } as never);
     Element.prototype.scrollIntoView = vi.fn();
     useChatStore.getState().reset();
+    useAuthStore.setState({
+      user: USER_A,
+      organization: null,
+      isAuthenticated: true,
+      isLoading: false,
+      error: null,
+    });
   });
 
   afterEach(() => {
@@ -379,4 +408,172 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
     expect(result.current.input).toBe('cancel setup');
     expect(result.current.isLoading).toBe(false);
   });
+
+  it.each([
+    ['workspace', 'resolve'],
+    ['workspace', 'reject'],
+    ['conversation', 'resolve'],
+    ['conversation', 'reject'],
+    ['thread', 'resolve'],
+    ['thread', 'reject'],
+  ] as const)(
+    'abandons user A preflight after the %s await %s without touching user B state',
+    async (boundary, outcome) => {
+      const pending = deferred<unknown>();
+      const navigateToThread = vi.fn();
+      const accountAMessage: ChatPageMessage = {
+        runtimeId: 'account-A-history',
+        source: 'db',
+        role: 'user',
+        content: 'account A history',
+        timestamp: 1,
+      };
+      const accountBMessage: ChatPageMessage = {
+        runtimeId: 'account-B-history',
+        source: 'db',
+        role: 'user',
+        content: 'account B history',
+        timestamp: 2,
+      };
+      const accountBConversation = {
+        id: 'thread-B',
+        title: 'Account B thread',
+        messages: [],
+        createdAt: 2,
+        updatedAt: 2,
+        threadId: 'thread-B',
+        conversationId: 'conversation-B',
+      };
+
+      vi.mocked(workspaceService.getOrCreateDefaultWorkspace).mockResolvedValue(
+        {
+          id: 'workspace-A',
+        } as never
+      );
+      vi.mocked(
+        workspaceService.getOrCreateDefaultConversation
+      ).mockResolvedValue({ id: 'conversation-A' } as never);
+      vi.mocked(workspaceService.createThread).mockResolvedValue({
+        id: 'thread-A-new',
+        conversation_id: 'conversation-A',
+        title: 'Account A thread',
+      } as never);
+
+      if (boundary === 'workspace') {
+        vi.mocked(
+          workspaceService.getOrCreateDefaultWorkspace
+        ).mockReturnValueOnce(pending.promise as never);
+      } else if (boundary === 'conversation') {
+        vi.mocked(
+          workspaceService.getOrCreateDefaultConversation
+        ).mockReturnValueOnce(pending.promise as never);
+      } else {
+        vi.mocked(workspaceService.createThread).mockReturnValueOnce(
+          pending.promise as never
+        );
+      }
+
+      useChatStore.setState({ currentThreadId: null });
+      const { result } = renderHook(
+        () => {
+          const [messages, setMessages] = useState<ChatPageMessage[]>([
+            accountAMessage,
+          ]);
+          const [conversations, setConversations] = useState<
+            UseChatStreamingParams['conversations']
+          >([]);
+          const streaming = useChatStreaming({
+            messages,
+            displayedMessages: messages,
+            setMessages,
+            conversations,
+            setConversations,
+            dbConversation:
+              boundary === 'thread'
+                ? ({
+                    id: 'conversation-A',
+                    workspace_id: 'workspace-A',
+                  } as never)
+                : null,
+            workspace:
+              boundary === 'conversation'
+                ? ({ id: 'workspace-A' } as never)
+                : null,
+            enableRAG: false,
+            navigateToThread,
+          });
+          return {
+            streaming,
+            messages,
+            setMessages,
+            conversations,
+            setConversations,
+          };
+        },
+        { wrapper }
+      );
+
+      let submission!: Promise<void>;
+      act(() => {
+        submission = result.current.streaming.handleSubmit(
+          'account A private prompt'
+        );
+      });
+      await waitFor(() => {
+        const call =
+          boundary === 'workspace'
+            ? workspaceService.getOrCreateDefaultWorkspace
+            : boundary === 'conversation'
+              ? workspaceService.getOrCreateDefaultConversation
+              : workspaceService.createThread;
+        expect(call).toHaveBeenCalledOnce();
+      });
+
+      act(() => {
+        useAuthStore.setState({ user: USER_B, isAuthenticated: true });
+        useChatStore.setState({ currentThreadId: 'thread-B' });
+        result.current.setMessages([accountBMessage]);
+        result.current.setConversations([accountBConversation]);
+        result.current.streaming.setInput('account B draft');
+      });
+
+      await act(async () => {
+        if (outcome === 'resolve') {
+          pending.resolve(
+            boundary === 'workspace'
+              ? { id: 'workspace-A' }
+              : boundary === 'conversation'
+                ? { id: 'conversation-A' }
+                : {
+                    id: 'thread-A-new',
+                    conversation_id: 'conversation-A',
+                    title: 'Account A thread',
+                  }
+          );
+        } else {
+          pending.reject(new Error(`account A ${boundary} failed`));
+        }
+        await submission;
+      });
+
+      expect(result.current.streaming.input).toBe('account B draft');
+      expect(result.current.messages).toEqual([accountBMessage]);
+      expect(result.current.conversations).toEqual([accountBConversation]);
+      expect(useChatStore.getState().currentThreadId).toBe('thread-B');
+      expect(useAuthStore.getState()).toEqual(
+        expect.objectContaining({ user: USER_B, isAuthenticated: true })
+      );
+      expect(navigateToThread).not.toHaveBeenCalled();
+      expect(streamMessageMock).not.toHaveBeenCalled();
+
+      if (boundary === 'workspace') {
+        expect(
+          workspaceService.getOrCreateDefaultConversation
+        ).not.toHaveBeenCalled();
+      }
+      if (boundary !== 'thread') {
+        expect(workspaceService.createThread).not.toHaveBeenCalled();
+      }
+    }
+  );
 });

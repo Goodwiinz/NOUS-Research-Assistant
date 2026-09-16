@@ -71,6 +71,11 @@ function indexThreads(threads: Thread[]): void {
   for (const thread of threads) registerThread(thread);
 }
 
+export interface ChatAuthRecoveryRoute {
+  isReady: boolean;
+  threadId: string | null;
+}
+
 export interface UseChatSessionReturn {
   // State
   conversations: ChatConversation[];
@@ -82,6 +87,9 @@ export interface UseChatSessionReturn {
   isInitializing: boolean;
   initError: string | null;
   isLoadingMessages: boolean;
+  /** Draft recovery may read session storage only after the explicit URL
+   * intent and the selected thread converge on a successful initialization. */
+  authRecoveryRoute: ChatAuthRecoveryRoute;
 
   // Refs
   isHydratedRef: React.MutableRefObject<boolean>;
@@ -239,6 +247,27 @@ export function useChatSession(): UseChatSessionReturn {
   // Depend on the primitive value, not the search-params object: local state
   // renders may change object identity before router.push updates ?thread=.
   const threadFromUrl = searchParams.get('thread');
+  const hasNewChatIntent = searchParams.get('new') === '1';
+  const authRecoveryRoute = useMemo<ChatAuthRecoveryRoute>(() => {
+    const routeThreadId = hasNewChatIntent ? null : threadFromUrl;
+    return {
+      threadId: routeThreadId,
+      isReady: Boolean(
+        isAuthenticated &&
+        !isInitializing &&
+        initError === null &&
+        routeThreadId &&
+        activeThreadId === routeThreadId
+      ),
+    };
+  }, [
+    activeThreadId,
+    hasNewChatIntent,
+    initError,
+    isAuthenticated,
+    isInitializing,
+    threadFromUrl,
+  ]);
   const router = useRouter();
   // Read the router through a ref in callbacks/effects: depending on the
   // router object itself re-runs the init chain whenever its identity
@@ -919,6 +948,7 @@ export function useChatSession(): UseChatSessionReturn {
     isInitializing,
     initError,
     isLoadingMessages: isThreadLoadPending,
+    authRecoveryRoute,
 
     // Refs
     isHydratedRef,

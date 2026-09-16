@@ -34,6 +34,7 @@ function ChatPageContent() {
     dbConversation: session.dbConversation,
     workspace: session.workspace,
     enableRAG,
+    authRecoveryRoute: session.authRecoveryRoute,
   });
 
   const threadActions = useChatThreadActions({
