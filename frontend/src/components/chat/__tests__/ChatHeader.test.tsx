@@ -20,11 +20,25 @@ vi.mock('react-hot-toast', () => ({
   default: { error: (...args: unknown[]) => toastErrorMock(...args) },
 }));
 
+const listProcessingJobsMock = vi.fn();
+vi.mock('@/services/entityService', () => ({
+  entityService: {
+    listProcessingJobs: (...args: unknown[]) => listProcessingJobsMock(...args),
+  },
+}));
+
 import { ChatHeader } from '../ChatHeader';
 
 describe('ChatHeader', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    listProcessingJobsMock.mockReset();
+    listProcessingJobsMock.mockResolvedValue({
+      jobs: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    });
   });
 
   afterEach(() => {
@@ -80,6 +94,53 @@ describe('ChatHeader', () => {
     );
     expect(screen.getByLabelText('Copy all messages')).toBeInTheDocument();
     expect(screen.getByLabelText('Export chat')).toBeInTheDocument();
+  });
+
+  it('keeps every header action in the keyboard order with a long title', async () => {
+    vi.useRealTimers();
+    listProcessingJobsMock.mockResolvedValue({
+      jobs: [
+        {
+          id: 'job-1',
+          job_type: 'arxiv_ingest',
+          status: 'running',
+          progress_percentage: 40,
+          created_at: '2026-09-13T12:00:00.000Z',
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    const user = userEvent.setup();
+    const onMobileSidebarToggle = vi.fn();
+    const onCopyAll = vi.fn();
+    const chatTitle =
+      'A deliberately long conversation title about evidence synthesis and retrieval quality';
+
+    render(
+      <ChatHeader
+        chatTitle={chatTitle}
+        messages={[{ role: 'user', content: 'hi', timestamp: 1 }]}
+        onMobileSidebarToggle={onMobileSidebarToggle}
+        onCopyAll={onCopyAll}
+      />
+    );
+
+    const actions = [
+      screen.getByRole('button', { name: 'Toggle chat history' }),
+      await screen.findByRole('button', {
+        name: 'Background jobs: 1 running',
+      }),
+      screen.getByRole('button', { name: 'Copy all messages' }),
+      screen.getByRole('button', { name: 'Export chat' }),
+    ];
+
+    for (const action of actions) {
+      await user.tab();
+      expect(action).toHaveFocus();
+    }
+    expect(screen.getByTitle(chatTitle)).toBeInTheDocument();
   });
 
   describe('export wiring', () => {
