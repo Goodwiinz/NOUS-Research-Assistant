@@ -693,6 +693,11 @@ jobs:
         run: pnpm test:coverage
         env:
           CI: true
+      - name: Check Ink terminal
+        run: |
+          pnpm --dir ../terminal type-check
+          pnpm --dir ../terminal test
+          python3 ../terminal/tests/migration-smoke.py
       # Blocking ratchet: global coverage may never fall below the floors
       # committed in frontend/quality-baseline.json ("coverage" key).
       # Raising or lowering a floor is an intentional, reviewed JSON edit.

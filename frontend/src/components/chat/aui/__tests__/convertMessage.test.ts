@@ -21,6 +21,25 @@ function makeMessage(
 }
 
 describe('convertMessage', () => {
+  it('preserves running, cancelled, error, and completed status for both clients', () => {
+    expect(convertMessage(makeMessage({ isStreaming: true })).status).toEqual({
+      type: 'running',
+    });
+    expect(
+      convertMessage(
+        makeMessage({ isStreaming: true, metadata: { stopped: true } })
+      ).status
+    ).toEqual({ type: 'incomplete', reason: 'cancelled' });
+    expect(
+      convertMessage(makeMessage({ error: { message: 'Stream failed' } }))
+        .status
+    ).toEqual({ type: 'incomplete', reason: 'error', error: 'Stream failed' });
+    expect(convertMessage(makeMessage({ content: '' })).status).toEqual({
+      type: 'complete',
+      reason: 'stop',
+    });
+  });
+
   it('converts a plain assistant message to a single text part', () => {
     const result = convertMessage(makeMessage());
 

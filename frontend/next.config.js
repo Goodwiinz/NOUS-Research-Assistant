@@ -16,6 +16,7 @@ const sentryEnvironment = resolveSentryEnvironment();
 const nextConfig = {
   // Enable React strict mode
   reactStrictMode: true,
+  transpilePackages: ['@nous/chat-runtime'],
 
   // Turbopack configuration (Next.js 16 default)
   turbopack: {},
@@ -71,20 +72,11 @@ const nextConfig = {
   webpack: (config, { isServer }) => {
     config.resolve.alias = {
       ...config.resolve.alias,
-      react: path.resolve(__dirname, 'node_modules/react'),
-      'react/jsx-runtime': path.resolve(
-        __dirname,
-        'node_modules/react/jsx-runtime.js'
-      ),
-      'react/jsx-dev-runtime': path.resolve(
-        __dirname,
-        'node_modules/react/jsx-dev-runtime.js'
-      ),
-      'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
-      'react-dom/client': path.resolve(
-        __dirname,
-        'node_modules/react-dom/client.js'
-      ),
+      react: path.dirname(require.resolve('react/package.json')),
+      'react/jsx-runtime': require.resolve('react/jsx-runtime'),
+      'react/jsx-dev-runtime': require.resolve('react/jsx-dev-runtime'),
+      'react-dom': path.dirname(require.resolve('react-dom/package.json')),
+      'react-dom/client': require.resolve('react-dom/client'),
     };
 
     if (!isServer) {

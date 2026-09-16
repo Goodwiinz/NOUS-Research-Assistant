@@ -1,5 +1,7 @@
 'use client';
 
+import { extractConfirmationPreview } from '@nous/chat-runtime/message';
+
 import type {
   ActivityStep,
   ChatPageMessage,
@@ -94,44 +96,6 @@ export function parseCreatedNoteResult(
   } catch {
     return null;
   }
-}
-
-/** Tool name + args preview from an interrupt's confirmation payload — flat
- * (tool_name/tool_args) or the first entry of a `tools` list. Mirrors the
- * page-level banner's extractToolCall (P4). */
-function extractConfirmationPreview(
-  confirmation: Record<string, unknown> | undefined
-): { tools: Array<{ name: string; args: Record<string, unknown> }> } {
-  if (!confirmation) return { tools: [{ name: 'this action', args: {} }] };
-  const rawTools = Array.isArray(confirmation.tools) ? confirmation.tools : [];
-  const tools = rawTools.flatMap((raw) => {
-    if (!raw || typeof raw !== 'object') return [];
-    const item = raw as Record<string, unknown>;
-    if (typeof item.name !== 'string' || !item.name.trim()) return [];
-    const args =
-      item.args && typeof item.args === 'object' && !Array.isArray(item.args)
-        ? (item.args as Record<string, unknown>)
-        : {};
-    return [{ name: item.name, args }];
-  });
-  if (tools.length > 0) return { tools };
-
-  const flatName = confirmation.tool_name;
-  const rawArgs = confirmation.tool_args ?? confirmation.args;
-  if (typeof flatName === 'string' && flatName.trim()) {
-    return {
-      tools: [
-        {
-          name: flatName,
-          args:
-            rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)
-              ? (rawArgs as Record<string, unknown>)
-              : {},
-        },
-      ],
-    };
-  }
-  return { tools: [{ name: 'this action', args: {} }] };
 }
 
 export function toCitationCreate(ctx: Record<string, unknown>): CitationCreate {

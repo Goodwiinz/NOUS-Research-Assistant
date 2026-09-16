@@ -1,6 +1,10 @@
 import { expect, test, vi } from 'vitest';
 import type { MockedFunction } from 'vitest';
-import { getCliAuthHeaders, safeFetch } from '../../services/client';
+import {
+  getApiBase,
+  getCliAuthHeaders,
+  safeFetch,
+} from '../../services/client';
 
 vi.mock('../../auth/store');
 
@@ -39,4 +43,26 @@ test('safeFetch wraps fetch failures with the URL in the message', async () => {
     message: expect.stringContaining('http://example.test/x'),
     code: 'ECONNREFUSED',
   });
+});
+
+test('explicit backend overrides saved settings, which override the launcher default', () => {
+  const api = process.env.NOUS_API_URL;
+  const fallback = process.env.NOUS_DEFAULT_API_URL;
+  try {
+    process.env.NOUS_DEFAULT_API_URL = 'https://default.invalid/api/v1';
+    delete process.env.NOUS_API_URL;
+    mockLoadConfig.mockReturnValue(null);
+    expect(getApiBase()).toBe(process.env.NOUS_DEFAULT_API_URL);
+    mockLoadConfig.mockReturnValue({
+      api_url: 'https://saved.invalid/api/v1',
+    } as ReturnType<typeof loadConfig>);
+    expect(getApiBase()).toBe('https://saved.invalid/api/v1');
+    process.env.NOUS_API_URL = 'https://override.invalid/api/v1';
+    expect(getApiBase()).toBe(process.env.NOUS_API_URL);
+  } finally {
+    if (api === undefined) delete process.env.NOUS_API_URL;
+    else process.env.NOUS_API_URL = api;
+    if (fallback === undefined) delete process.env.NOUS_DEFAULT_API_URL;
+    else process.env.NOUS_DEFAULT_API_URL = fallback;
+  }
 });
