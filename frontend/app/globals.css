@@ -345,34 +345,17 @@
   /* Tool/source strip — compact chip strip above assistant content */
   .nous-tool-strip {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     margin-bottom: 10px;
-    padding: 7px 11px;
-    background: var(--nous-bg-2);
-    border: 1px solid var(--nous-border-1);
-    border-radius: var(--nous-radius-md);
+    padding: 4px 0;
     font-family: var(--nous-font-mono);
-    font-size: 10px;
-    color: var(--nous-fg-3);
+    font-size: 12px;
+    color: var(--nous-fg-2);
     letter-spacing: 0.04em;
     width: fit-content;
     max-width: 100%;
-    transition:
-      border-color 150ms,
-      box-shadow 150ms;
-  }
-  .nous-tool-strip:hover {
-    border-color: rgba(212, 160, 57, 0.3);
-    box-shadow: 0 1px 4px rgba(212, 160, 57, 0.06);
-  }
-  .dark .nous-tool-strip {
-    background: var(--nous-obsidian);
-    border-color: var(--nous-shade);
-  }
-  .dark .nous-tool-strip:hover {
-    border-color: rgba(232, 184, 74, 0.3);
-    box-shadow: 0 1px 6px rgba(232, 184, 74, 0.08);
   }
   .nous-tool-strip-icon {
     display: grid;
@@ -401,17 +384,12 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 7px;
-    background: var(--nous-bg-1);
-    border: 1px solid var(--nous-border-1);
-    border-radius: 3px;
+    padding: 2px 4px;
     color: var(--nous-fg-2);
-    font-size: 9px;
+    font-size: 12px;
     letter-spacing: 0.06em;
   }
   .dark .nous-tool-strip-chip {
-    background: var(--nous-nyx);
-    border-color: var(--nous-shade);
     color: var(--nous-parchment);
   }
   /* Streaming pill — gold dots with label */

@@ -269,7 +269,7 @@ export const ChatSidebar = memo(function ChatSidebar({
             key={f.key}
             onClick={() => setActiveFilter(f.key)}
             className={cn(
-              'inline-flex items-center px-[9px] py-2 md:py-[3px] rounded-full border text-[10px] whitespace-nowrap transition-colors',
+              'inline-flex items-center px-[9px] py-2 rounded-full border text-[12px] whitespace-nowrap transition-colors',
               activeFilter === f.key
                 ? 'bg-(--nous-sol) text-(--nous-erebus) border-(--nous-sol) dark:bg-(--nous-helios) dark:text-(--nous-nyx) dark:border-(--nous-helios)'
                 : 'bg-transparent border-(--nous-border-1) dark:border-(--nous-shade) text-(--nous-fg-2) hover:border-(--nous-sol) hover:text-(--nous-sol-safe)'
@@ -414,7 +414,7 @@ export const ChatSidebar = memo(function ChatSidebar({
 
                     {/* Snippet */}
                     <div
-                      className="text-[11px] leading-normal text-(--nous-fg-3) truncate"
+                      className="text-[12px] leading-normal text-(--nous-fg-2) truncate"
                       style={{ fontFamily: 'var(--nous-font-body)' }}
                     >
                       {snippet}
@@ -437,7 +437,7 @@ export const ChatSidebar = memo(function ChatSidebar({
                           </span>
                         )}
                       </div>
-                      <span className="text-[9px] text-(--nous-fg-3) shrink-0">
+                      <span className="text-[12px] text-(--nous-fg-2) shrink-0">
                         {timeStr}
                       </span>
                     </div>
