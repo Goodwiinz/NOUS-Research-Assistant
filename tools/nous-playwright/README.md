@@ -33,7 +33,7 @@ pnpm test:headed
 ## What the test checks
 
 1. The source exists, is ready for retrieval, and its summary mentions attention mechanisms.
-2. A new chat returns an **assistant** answer about self-attention with a link naming the source and containing its document ID. User text cannot satisfy the answer assertion.
+2. A new chat returns an **assistant** answer about self-attention with a numbered source button. Opening that source and then its document must show the expected title and a full-page URL containing the exact document ID. User text cannot satisfy the answer assertion.
 3. The project-creation approval contains the unique requested project name and no extra actions.
 4. The attachment approval refers to the expected paper. A separate browser page verifies that the target project has the expected name and is still empty before attachment approval.
 5. The real project-documents API response and the UI both show the paper after approval.
@@ -52,11 +52,11 @@ Treat authenticated traces, videos, and session files as private. The test never
 
 ## Scope and validation
 
-The selectors and workflow were derived from the live NOUS walkthrough and checked against the current repository components. This package has been checked with Playwright test discovery; the automated authenticated test has **not** been run here. The earlier manual walkthrough is separate evidence.
+The authenticated Chromium workflow passed against `https://goodwiinz.tech` on 2026-09-13: **1 passed (1.8m)**, using Node 24 and pnpm 10.18.2. It exercised real retrieval, the source-to-document viewer, both exact approval gates, and single-document persistence after reload. See `CODEX_HANDOFF.md` for the run history and remaining scope.
 
 This is a real-service integration test with a three-minute budget per agent transition. If the model asks an extra clarification, proposes another tool, chooses the wrong document, fails to finish, or duplicates final assistant rows, the test fails rather than accepting a different workflow. Inspect its trace before changing an assertion.
 
-It does not prove broad answer faithfulness, measure latency percentiles, or validate the citation link's navigation destination. During the manual walkthrough the dedicated Search page returned no result for a sentence query; this test exercises the working Chat route.
+It does not prove broad answer faithfulness or measure latency percentiles. It checks the citation-to-document viewer transition and its full-page URL, but does not navigate that full-page link. During the manual walkthrough the dedicated Search page returned no result for a sentence query; this test exercises the Chat route.
 
 This is standalone and does not invoke the repository's older global setup, teardown, web-server startup, or seeded default credentials. Invoke this folder's own config. See `CODEX_HANDOFF.md` for continuation and eventual integration into `tests/e2e/`.
 
