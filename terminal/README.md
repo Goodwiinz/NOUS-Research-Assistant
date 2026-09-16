@@ -208,3 +208,18 @@ smoke script's CI-pinned MyPy check passed. The broad local CI wrapper could not
 validate backend OpenAPI/Alembic gates because its Python environment lacked
 `langgraph` and `alembic`; its unrelated backend suite was stopped during
 collection. Hosted CI remains the source of truth for those backend gates.
+
+### Thread discovery regression
+
+Thread discovery uses paginated workspace thread lists rather than requesting
+threads for every conversation. Pages appear as they arrive; the full operation
+has a 30-second deadline and Escape cancels it without discarding the draft.
+
+Mutation checks removed `src/services.ts:68` (reject cancelled page results) and
+`src/app.tsx:910` (retain submissions while a command is busy). The focused tests
+failed with a late page publication and an erased slash draft respectively,
+then passed after restoration. Run from `terminal/`:
+
+```sh
+node --import ./react-runtime.mjs --import tsx --test --test-name-pattern='cancelled thread pages|thread loading preserves drafts' src/regressions.test.tsx
+```

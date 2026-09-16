@@ -320,7 +320,11 @@ for (const title of ["x".repeat(500), "🧪".repeat(500)]) {
       "Branch title exceeds the backend limit",
     );
     assert.ok(createdTitle.endsWith(" · branch"));
-    assert.doesNotMatch(createdTitle, /[\uD800-\uDFFF]/u, "Title must not split a Unicode character");
+    assert.doesNotMatch(
+      createdTitle,
+      /[\uD800-\uDFFF]/u,
+      "Title must not split a Unicode character",
+    );
   });
 }
 
@@ -535,4 +539,144 @@ test("offline startup selects the configured thread in a shared saved graph", as
     visibleMessages(reconcileHistory(undefined, undefined, "thread-1")),
     [],
   );
+});
+
+test("thread discovery paginates workspaces directly and publishes each page", async () => {
+  const { listThreads } = await import("./services");
+  const calls: string[] = [];
+  const pages: string[][] = [];
+  mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+    const path = new URL(String(url)).pathname + new URL(String(url)).search;
+    calls.push(path);
+    if (path.endsWith("/workspaces"))
+      return Response.json([{ id: "first" }, { id: "second" }]);
+    assert.match(
+      path,
+      /\/workspaces\/(first|second)\/threads\?limit=100&page=\d/,
+    );
+    const firstPage = path.includes("first") && path.endsWith("page=1");
+    return Response.json({
+      threads: [
+        {
+          id: firstPage ? "older" : path.includes("first") ? "newer" : "fork",
+          updated_at: firstPage ? "2025" : "2026",
+        },
+      ],
+      has_more: firstPage,
+    });
+  });
+  const result = await listThreads(undefined, (entries) =>
+    pages.push(entries.map((t) => t.id)),
+  );
+  assert.equal(calls.length, 4, "Listing must not walk every conversation");
+  assert.deepEqual(pages, [
+    ["older"],
+    ["newer", "older"],
+    ["newer", "fork", "older"],
+  ]);
+  assert.equal(result.length, 3);
+});
+
+test("thread loading preserves drafts and Escape restores sending", async () => {
+  let release!: () => void;
+  const sent: string[] = [];
+  mock.method(
+    globalThis,
+    "fetch",
+    async (url: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith("/workspaces"))
+        return Response.json([{ id: "workspace" }]);
+      if (path.endsWith("page=1"))
+        return Response.json({
+          threads: [
+            {
+              id: "thread-2",
+              title: "First page thread",
+              status: "active",
+              updated_at: "2026",
+            },
+          ],
+          has_more: true,
+        });
+      if (path.endsWith("page=2")) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return Response.json({
+          threads: [
+            {
+              id: "late",
+              title: "Late thread",
+              status: "active",
+              updated_at: "2026",
+            },
+          ],
+          has_more: false,
+        });
+      }
+      assert.ok(path.endsWith("/agent/stream"));
+      sent.push(JSON.parse(String(init?.body)).messages.at(-1).content);
+      return response([
+        ["token", { content: "Received your draft" }],
+        ["done", {}],
+      ]);
+    },
+  );
+  const ui = await mount();
+  await key(ui, "/threads");
+  await key(ui, "\r");
+  await until(
+    () => !!release && !!ui.lastFrame()?.includes("First page thread"),
+  );
+  assert.match(ui.lastFrame()!, /Loading threads… 1 loaded/);
+  await key(ui, "/history 5");
+  await key(ui, "\r");
+  assert.match(ui.lastFrame()!, /Your draft is retained/);
+  assert.match(
+    ui.lastFrame()!,
+    /\/history 5/,
+    "A busy command must not erase the next slash draft",
+  );
+  assert.deepEqual(sent, []);
+  await key(ui, "\x1b");
+  release();
+  await delay(100);
+  assert.doesNotMatch(ui.lastFrame()!, /Late thread|Loading threads/);
+  await key(ui, "\x15");
+  await key(ui, "hi");
+  await key(ui, "\r");
+  await until(() => sent.length === 1);
+  assert.deepEqual(sent, ["hi"]);
+});
+
+test("cancelled thread pages never publish late results", async () => {
+  const { listThreads } = await import("./services");
+  const controller = new AbortController();
+  let release!: () => void;
+  let pages = 0;
+  mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+    if (String(url).endsWith("/workspaces"))
+      return Response.json([{ id: "workspace" }]);
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return Response.json({
+      threads: [{ id: "late", updated_at: "2026" }],
+      has_more: false,
+    });
+  });
+  const result = listThreads(controller.signal, () => {
+    pages++;
+  }).catch((error) => error);
+  await until(() => !!release);
+  controller.abort();
+  release();
+  const error = await result;
+  assert.equal(
+    pages,
+    0,
+    "Cancelled thread pages must not publish into the next command",
+  );
+  assert.ok(error instanceof Error);
 });

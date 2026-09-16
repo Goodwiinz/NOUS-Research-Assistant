@@ -260,7 +260,7 @@ export function App({
   };
   const loadThreads = async () => {
     const signal = operation.current?.controller.signal;
-    const entries = await listThreads(signal);
+    const entries = await listThreads(signal, setThreads);
     signal?.throwIfAborted();
     setThreads(entries);
   };
@@ -531,8 +531,8 @@ export function App({
           });
           break;
         }
-        await loadThreads();
         setPanel("threads");
+        await loadThreads();
         break;
       case "thread":
         requireIdle();
@@ -907,6 +907,12 @@ export function App({
     return true;
   };
   const submit = (text: string) => {
+    if (operation.current) {
+      session.setNotice(
+        "Wait for the command, or press Esc to cancel. Your draft is retained.",
+      );
+      return;
+    }
     if (text.trim().startsWith("/")) {
       runtime.thread.composer.setText("");
       void runOperation(() => command(text));
@@ -1038,7 +1044,14 @@ export function App({
           Enter sends or queues · Ctrl+J newline · Tab controls · /help · Ctrl+C
           stop/exit
         </Text>
-        {commandBusy && <Text color="yellow">Working on command…</Text>}
+        {commandBusy && (
+          <Text color="yellow">
+            {panel === "threads"
+              ? `Loading threads… ${threads.length} loaded`
+              : "Working on command…"}{" "}
+            · Esc to cancel
+          </Text>
+        )}
         {session.notice && (
           <Text color="yellow">{terminalText(session.notice)}</Text>
         )}
@@ -1168,8 +1181,8 @@ export function App({
                     <Button
                       onPress={() =>
                         void runOperation(async () => {
-                          await loadThreads();
                           setPanel("threads");
+                          await loadThreads();
                         })
                       }
                     >

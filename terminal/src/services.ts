@@ -40,41 +40,39 @@ export async function request<T>(
   return response.status === 204 ? (undefined as T) : response.json();
 }
 
-/** Follow the existing paginated workspace API, including non-agent fork threads. */
-export async function listThreads(signal?: AbortSignal): Promise<Thread[]> {
+/** Workspace pages include every conversation and fork without a per-conversation walk. */
+export async function listThreads(
+  signal?: AbortSignal,
+  onPage?: (threads: Thread[]) => void,
+): Promise<Thread[]> {
+  const timeout = AbortSignal.timeout(30000);
+  const listingSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const workspaces = await request<Schemas["WorkspaceResponse"][]>(
     "/workspaces",
     "GET",
     undefined,
-    signal,
+    listingSignal,
   );
   const result: Thread[] = [];
   for (const workspace of workspaces) {
     for (let page = 1; ; page++) {
-      const conversations = await request<Schemas["ConversationListResponse"]>(
-        `/workspaces/${encodeURIComponent(workspace.id)}/conversations?limit=100&page=${page}`,
+      listingSignal.throwIfAborted();
+      const threads = await request<
+        Schemas["src__schemas__chat__ThreadListResponse"]
+      >(
+        `/workspaces/${encodeURIComponent(workspace.id)}/threads?limit=100&page=${page}`,
         "GET",
         undefined,
-        signal,
+        listingSignal,
       );
-      for (const conversation of conversations.conversations) {
-        for (let threadPage = 1; ; threadPage++) {
-          const threads = await request<
-            Schemas["src__schemas__chat__ThreadListResponse"]
-          >(
-            `/conversations/${encodeURIComponent(conversation.id)}/threads?limit=100&page=${threadPage}`,
-            "GET",
-            undefined,
-            signal,
-          );
-          result.push(...threads.threads);
-          if (!threads.has_more || !threads.threads.length) break;
-        }
-      }
-      if (!conversations.has_more || !conversations.conversations.length) break;
+      listingSignal.throwIfAborted();
+      result.push(...threads.threads);
+      result.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      onPage?.([...result]);
+      if (!threads.has_more || !threads.threads.length) break;
     }
   }
-  return result.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  return result;
 }
 
 export const updateThread = (id: string, data: Schemas["ThreadUpdate"]) =>
