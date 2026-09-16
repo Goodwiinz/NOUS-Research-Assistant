@@ -96,6 +96,8 @@ async def test_writing_node_injects_retrieved_context() -> None:
     assert "[Doc 1]" in system_text
     assert "title: Project paper" in system_text
     assert "The project studies grounded retrieval systems." in system_text
+    assert "00000000-0000-0000-0000-000000000001" in system_text
+    assert "use this project_id" in system_text
 
 
 @pytest.mark.unit
