@@ -140,3 +140,8 @@ output "github_eks_deploy_role_arn" {
   description = "IAM role assumed by GitHub Actions (OIDC) to deploy to EKS"
   value       = aws_iam_role.github_eks_deploy.arn
 }
+
+output "cluster_admin_role_arn" {
+  description = "Assume this role for cluster-admin kubectl access: aws sts assume-role --role-arn <value> --role-session-name cluster-admin"
+  value       = aws_iam_role.cluster_admin.arn
+}
