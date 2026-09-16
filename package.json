@@ -6,7 +6,9 @@
   "packageManager": "pnpm@10.18.2",
   "workspaces": [
     "frontend",
-    "tests/e2e"
+    "tests/e2e",
+    "terminal",
+    "packages/chat-runtime"
   ],
   "scripts": {
     "dev": "pnpm --filter multimodal-rag-frontend dev",

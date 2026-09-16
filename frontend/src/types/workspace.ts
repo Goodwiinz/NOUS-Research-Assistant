@@ -1,3 +1,4 @@
+import type { RuntimeAttachment } from '@nous/chat-runtime/types';
 /**
  * TypeScript types for NOUS thread-centric chat system
  * Based on backend/src/schemas/chat.py
@@ -154,15 +155,7 @@ export interface Citation {
   document_type?: string;
 }
 
-export interface MessageAttachment {
-  id: string;
-  document_id: string;
-  display_name?: string;
-  thumbnail_url?: string;
-  document_title?: string;
-  document_type?: string;
-  mime_type?: string;
-}
+export type MessageAttachment = RuntimeAttachment;
 
 // Citation input for creating messages with RAG sources
 export interface CitationCreate {

@@ -13,6 +13,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY frontend/package.json frontend/package.json
+COPY packages/chat-runtime/package.json packages/chat-runtime/package.json
 COPY tests/e2e/package.json tests/e2e/package.json
 
 FROM base AS dependencies
@@ -22,6 +23,7 @@ RUN pnpm install --frozen-lockfile --filter multimodal-rag-frontend...
 FROM dependencies AS development
 
 COPY frontend/ frontend/
+COPY packages/chat-runtime/ packages/chat-runtime/
 
 WORKDIR /app/frontend
 
