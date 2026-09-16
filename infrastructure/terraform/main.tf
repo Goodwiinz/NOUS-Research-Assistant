@@ -32,13 +32,15 @@ terraform {
     }
   }
 
-  backend "s3" {
-    bucket         = var.terraform_state_bucket
-    key            = "knowledge-graph-analytics/terraform.tfstate"
-    region         = var.aws_region
-    encrypt        = true
-    dynamodb_table = var.terraform_lock_table
-  }
+  # Backend values are passed via -backend-config flags (variables are not
+  # allowed in the backend block):
+  #   terraform init \
+  #     -backend-config="bucket=nous-tfstate-us-east-1" \
+  #     -backend-config="key=knowledge-graph-analytics/terraform.tfstate" \
+  #     -backend-config="region=us-east-1" \
+  #     -backend-config="encrypt=true" \
+  #     -backend-config="dynamodb_table=nous-tfstate-lock"
+  backend "s3" {}
 }
 
 # =============================================================================
