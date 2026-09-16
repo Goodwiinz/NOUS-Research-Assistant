@@ -28,7 +28,12 @@ from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.organization import Organization
 from src.models.processing import JobStatus, ProcessingJob
 from src.models.user import User, UserRole
-from src.services.documents.file_service import FileService, get_file_service
+from src.services.documents.file_service import (
+    FileService,
+    FileStorageError,
+    FileValidationError,
+    get_file_service,
+)
 from src.shared.enums import ApiDocumentStatus
 from src.shared.pagination import Page, PaginationParams
 
@@ -244,8 +249,21 @@ async def upload_file(
     except HTTPException:
         # R2-M10: intentional 4xx (validation/quota) must not be re-wrapped.
         raise
-    except Exception as e:
+    except FileValidationError as e:
+        # FileService validation messages are intentionally safe and actionable.
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except FileStorageError:
+        logger.error("File upload failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File upload failed",
+        )
+    except Exception:
+        logger.error("Unexpected file upload failure", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File upload failed",
+        )
 
 
 @router.get("/", response_model=FileListResponse)
