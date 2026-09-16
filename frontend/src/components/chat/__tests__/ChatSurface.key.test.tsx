@@ -19,9 +19,7 @@ import { useEffect, type ComponentProps, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatSurface } from '@/components/chat/ChatSurface';
-import {
-  type ChatPageMessage,
-} from '@/components/chat/shared/cloudMessageView';
+import { type ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
 import type { UseChatSessionReturn } from '@/hooks/chat/useChatSession';
 import type { UseChatStreamingReturn } from '@/hooks/chat/useChatStreaming';
 import type { UseChatThreadActionsReturn } from '@/hooks/chat/useChatThreadActions';
@@ -144,6 +142,16 @@ const makeProps = (
   }) as ComponentProps<typeof ChatSurface>;
 
 describe('ChatSurface runtime key (F2)', () => {
+  it('docks history only when there is room for both side panels', () => {
+    const { getByTestId } = render(
+      <ChatSurface {...makeProps(makeSession())} />
+    );
+    expect(getByTestId('chat-sidebar').parentElement).toHaveClass(
+      'hidden',
+      'xl:block'
+    );
+  });
+
   beforeEach(() => {
     runtimeMounts = 0;
     runtimeUnmounts = 0;
@@ -168,9 +176,7 @@ describe('ChatSurface runtime key (F2)', () => {
       ...msg('opt-1'),
       source: 'optimistic' as const,
     };
-    const initial = makeProps(
-      makeSession({ displayedMessages: [optimistic] })
-    );
+    const initial = makeProps(makeSession({ displayedMessages: [optimistic] }));
     const { rerender } = render(<ChatSurface {...initial} />);
 
     const created = makeProps(
@@ -190,9 +196,7 @@ describe('ChatSurface runtime key (F2)', () => {
       ...msg('opt-1'),
       source: 'optimistic' as const,
     };
-    const initial = makeProps(
-      makeSession({ displayedMessages: [optimistic] })
-    );
+    const initial = makeProps(makeSession({ displayedMessages: [optimistic] }));
     const { rerender } = render(<ChatSurface {...initial} />);
 
     rerender(

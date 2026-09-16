@@ -44,7 +44,7 @@ function ChatPageContent() {
     setCurrentThread: session.setCurrentThread,
   });
 
-  const drawer = useChatDrawer();
+  const drawer = useChatDrawer(streaming.chatInputRef);
 
   const citationPanel = useCitationPanel();
 

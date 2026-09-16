@@ -107,7 +107,7 @@ export const ChatHeader = memo(function ChatHeader({
           <button
             type="button"
             onClick={onMobileSidebarToggle}
-            className="md:hidden h-9 w-9 shrink-0 flex items-center justify-center text-(--nous-fg-3) hover:text-(--nous-sol) hover:bg-(--nous-sol)/8 transition-all rounded-xl"
+            className="xl:hidden h-11 w-11 shrink-0 flex items-center justify-center text-(--nous-fg-2) hover:text-(--nous-sol) hover:bg-(--nous-sol)/8 transition-colors rounded-lg"
             aria-label="Toggle chat history"
           >
             <Menu className="w-5 h-5" />

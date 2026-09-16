@@ -30,6 +30,13 @@ vi.mock('@/services/entityService', () => ({
 import { ChatHeader } from '../ChatHeader';
 
 describe('ChatHeader', () => {
+  it('keeps history accessible until the desktop sidebar is docked', () => {
+    render(<ChatHeader onMobileSidebarToggle={() => undefined} />);
+    expect(
+      screen.getByRole('button', { name: 'Toggle chat history' })
+    ).toHaveClass('xl:hidden', 'h-11', 'w-11');
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     listProcessingJobsMock.mockReset();

@@ -400,7 +400,7 @@ export function ChatInput({
 
   return (
     <div
-      className="z-40 px-2 sm:px-6 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-4 border-t"
+      className="@container z-40 px-2 sm:px-4 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t"
       style={{
         background: 'var(--nous-bg-1)',
         borderColor: 'var(--nous-border-1)',
@@ -420,12 +420,10 @@ export function ChatInput({
           style={{
             background: 'var(--nous-bg-2)',
             border: `1px solid ${
-              isFocused
-                ? 'rgba(var(--nous-sol-rgb), 0.4)'
-                : 'var(--nous-border-1)'
+              isFocused ? 'var(--nous-sol-safe)' : 'var(--nous-border-1)'
             }`,
             boxShadow: isFocused
-              ? '0 0 0 3px rgba(var(--nous-sol-rgb), 0.10), 0 8px 24px rgba(var(--nous-erebus-rgb), 0.06)'
+              ? '0 0 0 2px var(--nous-sol-safe)'
               : '0 1px 2px rgba(var(--nous-erebus-rgb), 0.04)',
             transition:
               'border-color 260ms var(--nous-ease-out), box-shadow 260ms var(--nous-ease-out)',
@@ -488,7 +486,7 @@ export function ChatInput({
             </div>
 
             <div
-              className="inline-flex items-center gap-2 font-nous-mono text-[10px] tabular-nums whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-2 font-nous-mono text-[12px] tabular-nums whitespace-nowrap shrink-0"
               style={{
                 color: isOverLimit
                   ? 'var(--nous-mars)'
@@ -529,7 +527,7 @@ export function ChatInput({
 
           {/* Body — serif input */}
           <div
-            className="px-4 pt-3.5 pb-3"
+            className="px-3 pt-2.5 pb-2"
             style={{ background: 'var(--nous-bg-2)' }}
           >
             {attachments.length > 0 && submittedDraft === null && (
@@ -666,6 +664,7 @@ export function ChatInput({
                 onFocus={() => setIsFocused(true)}
                 onBlur={() => setIsFocused(false)}
                 placeholder="Ask anything, or paste a passage to discuss…"
+                aria-label="Message"
                 rows={1}
                 disabled={isDisabled}
                 aria-expanded={menu.isOpen}
@@ -676,7 +675,7 @@ export function ChatInput({
                 aria-autocomplete="list"
                 aria-invalid={isOverLimit || undefined}
                 aria-describedby={isOverLimit ? 'nous-input-limit' : undefined}
-                className="w-full bg-transparent resize-none outline-hidden font-nous-body text-[16px]"
+                className="w-full bg-transparent resize-none outline-hidden font-nous-body text-[16px] placeholder:text-(--nous-fg-3)"
                 style={{
                   color: 'var(--nous-fg-1)',
                   lineHeight: '1.6',
@@ -699,7 +698,7 @@ export function ChatInput({
             )}
 
             <div
-              className="flex flex-wrap items-center justify-between gap-2 mt-2.5 pt-2.5 border-t"
+              className="flex flex-wrap items-center justify-between gap-2 mt-1.5 pt-1.5"
               style={{ borderColor: 'var(--nous-border-1)' }}
             >
               <div className="flex items-center gap-0.5">
@@ -807,7 +806,7 @@ export function ChatInput({
                     onChange('/');
                     textareaRef.current?.focus();
                   }}
-                  className="hidden sm:inline-flex items-center gap-1.5 rounded-md ml-1.5 min-h-[44px] text-[12px] cursor-pointer transition-colors hover:bg-(--nous-aurum)"
+                  className="hidden @min-[480px]:inline-flex items-center gap-1.5 rounded-md ml-1.5 min-h-[44px] text-[12px] cursor-pointer transition-colors hover:bg-(--nous-aurum)"
                   style={{
                     padding: '4px 8px',
                     border: '1px solid var(--nous-border-1)',

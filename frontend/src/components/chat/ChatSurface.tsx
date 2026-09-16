@@ -282,7 +282,7 @@ export function ChatSurface({
       {/* Mobile sidebar backdrop + drawer */}
       <AnimatePresence>
         {mobileSidebarOpen && (
-          <div className="fixed inset-0 z-50 md:hidden">
+          <div className="fixed inset-0 z-50 xl:hidden">
             <motion.div
               className="absolute inset-0 bg-(--nous-erebus)/50"
               initial={{ opacity: 0 }}
@@ -325,7 +325,7 @@ export function ChatSurface({
       </AnimatePresence>
 
       {/* Desktop sidebar */}
-      <div className="hidden md:block h-full shrink-0">
+      <div className="hidden xl:block h-full shrink-0">
         <ChatSidebar
           conversations={conversations}
           activeId={activeThreadId}
