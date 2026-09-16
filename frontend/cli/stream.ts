@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { components } from '../src/types/generated/api';
 import { loadConfig, saveConfig } from './auth/store';
 import { getApiBase, getCliAuthHeaders } from './services/client';
 import { appendTurn } from './services/messageStore';
@@ -30,6 +31,13 @@ export interface StreamOptions {
   fetchFn?: typeof fetch;
   signal?: AbortSignal;
   idleTimeoutMs?: number;
+  clientMessageId?: string;
+  history?: Array<
+    Pick<components['schemas']['AgentMessage'], 'role' | 'content'>
+  >;
+  attachmentIds?: NonNullable<
+    components['schemas']['AgentExecuteRequest']['attachment_ids']
+  >;
 }
 
 const DEFAULT_IDLE_MS = (() => {
@@ -85,14 +93,24 @@ async function* _parseSseBody(
               yield {
                 type: 'tool_start',
                 tool: data.tool,
-                args: typeof data.args === 'string' ? data.args : '',
+                args:
+                  typeof data.args === 'string'
+                    ? data.args
+                    : data.args == null
+                      ? ''
+                      : JSON.stringify(data.args),
               };
             } else if (eventType === 'tool_end') {
               yield {
                 type: 'tool_end',
                 tool: data.tool,
                 isError: data.is_error ?? false,
-                result: typeof data.result === 'string' ? data.result : '',
+                result:
+                  typeof data.result === 'string'
+                    ? data.result
+                    : data.result == null
+                      ? ''
+                      : JSON.stringify(data.result),
               };
             } else if (eventType === 'confirmation') {
               yield {
@@ -194,13 +212,31 @@ export async function* streamAgent(
 
   const { fetchFn = fetch, signal } = options;
   const headers = getCliAuthHeaders();
-  const cmid = randomUUID();
+  const cmid = options.clientMessageId ?? randomUUID();
+  // Both terminal clients select papers as document IDs. PageContext's schema
+  // has no paper_id field, so send the selection through the supported attachment contract.
+  const attachmentIds = [
+    ...new Set([
+      ...(options.attachmentIds ?? []),
+      ...(typeof pageContext.paper_id === 'string'
+        ? [pageContext.paper_id]
+        : []),
+    ]),
+  ];
+  if (attachmentIds.length > 10)
+    throw new Error(
+      'Attach at most 10 documents, including the selected paper.'
+    );
 
   const res = await fetchFn(`${getApiBase()}/agent/stream`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      messages: [{ role: 'user', content: message, client_message_id: cmid }],
+      messages: [
+        ...(options.history ?? []).slice(-49),
+        { role: 'user', content: message, client_message_id: cmid },
+      ],
+      ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
       page_context: pageContext,
       thread_id: config.thread_id ?? undefined,
       model: config.model ?? '',

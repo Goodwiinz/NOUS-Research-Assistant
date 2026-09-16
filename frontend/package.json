@@ -89,7 +89,8 @@
     "uuid": "^11.1.1",
     "vis-network": "^9.1.6",
     "zod": "^4.4.3",
-    "zustand": "^5.0.12"
+    "zustand": "^5.0.12",
+    "@nous/chat-runtime": "workspace:*"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.2",

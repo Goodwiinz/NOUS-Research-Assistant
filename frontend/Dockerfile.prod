@@ -14,6 +14,7 @@ WORKDIR /app
 # manifest before install so pnpm can construct deterministic workspace links.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY frontend/package.json frontend/package.json
+COPY packages/chat-runtime/package.json packages/chat-runtime/package.json
 COPY tests/e2e/package.json tests/e2e/package.json
 
 FROM base AS dependencies
@@ -56,6 +57,7 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY frontend/ frontend/
+COPY packages/chat-runtime/ packages/chat-runtime/
 
 # Keep public present even when the application has no checked-in public assets
 # so the runner copy remains deterministic.

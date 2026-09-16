@@ -399,3 +399,50 @@ test('emits IDLE_TIMEOUT sentinel error when no events arrive within idleTimeout
     message: expect.stringMatching(/^IDLE_TIMEOUT:0$/),
   });
 });
+
+test('preserves structured tools and sends selected documents and bounded branch history', async () => {
+  const fetchFn = vi.fn().mockResolvedValue(
+    sseResponse([
+      {
+        event: 'tool_start',
+        data: { tool: 'search', args: { query: 'paper' } },
+      },
+      { event: 'tool_end', data: { tool: 'search', result: { count: 2 } } },
+      { event: 'done', data: {} },
+    ])
+  );
+  const events = [];
+  for await (const event of streamAgent(
+    'Continue',
+    { paper_id: 'doc-1' },
+    {
+      fetchFn,
+      attachmentIds: ['doc-1', 'doc-2'],
+      clientMessageId: 'turn-1',
+      history: Array.from({ length: 55 }, (_, i) => ({
+        role: 'user' as const,
+        content: `Old ${i}`,
+      })),
+    }
+  ))
+    events.push(event);
+  const body = JSON.parse(fetchFn.mock.calls[0][1].body);
+  expect(body.attachment_ids).toEqual(['doc-1', 'doc-2']);
+  expect(body.messages).toHaveLength(50);
+  expect(body.messages.at(-1)).toEqual({
+    role: 'user',
+    content: 'Continue',
+    client_message_id: 'turn-1',
+  });
+  expect(events[0]).toEqual({
+    type: 'tool_start',
+    tool: 'search',
+    args: '{"query":"paper"}',
+  });
+  expect(events[1]).toEqual({
+    type: 'tool_end',
+    tool: 'search',
+    result: '{"count":2}',
+    isError: false,
+  });
+});

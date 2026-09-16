@@ -125,6 +125,21 @@ describe('ChatRuntimeProvider', () => {
     expect(onSend).not.toHaveBeenCalled();
     expect(screen.getByText('next')).toBeInTheDocument();
 
+    // Mutation check: removing isSendDisabled from the busy expression in
+    // packages/chat-runtime/runtime.ts must dispatch early and fail here.
+    rerender(
+      <ChatRuntimeProvider
+        messages={messages}
+        isRunning={false}
+        isSendDisabled
+        onSend={onSend}
+        onCancel={vi.fn()}
+      >
+        <QueueProbe />
+      </ChatRuntimeProvider>
+    );
+    expect(onSend).not.toHaveBeenCalled();
+
     rerender(
       <ChatRuntimeProvider
         messages={messages}

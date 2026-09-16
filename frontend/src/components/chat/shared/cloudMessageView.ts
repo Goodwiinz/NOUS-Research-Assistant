@@ -10,24 +10,8 @@ import type { PlanStep } from '@/types/agent-chat';
 import type { AgentProgressStep } from '@/services/agentStreamEvents';
 import { toolLabel } from '@/components/context-rail/toolLabels';
 
-/** A single agent tool execution captured during a streaming turn. */
-export interface ActivityStep {
-  /** Invocation identity when the producer supplies one. */
-  id?: string;
-  tool: string;
-  label: string;
-  status: 'running' | 'done' | 'error' | 'cancelled';
-  durationMs?: number;
-  /** Compact one-line summary of the tool's arguments (e.g. the query). */
-  argsSummary?: string;
-  /** Structured (already backend-redacted) tool arguments, for declarative
-   * per-tool renderers that want fields rather than the one-line summary. */
-  args?: Record<string, unknown>;
-  /** Compact one-line summary of the result, or the error text on failure. */
-  resultSummary?: string;
-  /** Structured, backend-redacted result for registered per-tool renderers. */
-  result?: unknown;
-}
+import type { ActivityStep } from '@nous/chat-runtime/types';
+export type { ActivityStep } from '@nous/chat-runtime/types';
 
 const SUMMARY_MAX = 140;
 

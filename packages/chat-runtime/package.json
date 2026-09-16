@@ -1,0 +1,13 @@
+{
+  "name": "@nous/chat-runtime",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./runtime.ts",
+    "./message": "./message.ts",
+    "./types": "./types.ts"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1 || ^19.0.0"
+  }
+}
