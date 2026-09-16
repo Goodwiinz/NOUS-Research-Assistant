@@ -124,8 +124,7 @@ const transformDocument = (backendDoc: BackendDocument): Document => {
     description: backendDoc.description,
     tags: backendDoc.tags,
     custom_fields: (backendDoc.custom_fields || backendDoc.custom_metadata) as
-      | Record<string, unknown>
-      | undefined,
+      Record<string, unknown> | undefined,
   };
 };
 
@@ -221,6 +220,20 @@ export const useDocuments = (
     selectedDocuments: new Set(),
   });
 
+  // The request cursor is intentionally limited to client-owned inputs. It
+  // lets callbacks construct an API request synchronously (including several
+  // updates batched in one React event) without duplicating response data or
+  // relying on side effects inside a deferred setState updater.
+  const requestInputsRef = useRef<{
+    page: number;
+    pageSize: number;
+    filters: DocumentFilters;
+  }>({
+    page: 1,
+    pageSize: initialPageSize,
+    filters: {},
+  });
+
   // Track if component is mounted to prevent state updates after unmount
   const mountedRef = useRef(true);
 
@@ -249,17 +262,17 @@ export const useDocuments = (
         return;
       }
 
-      let actualPage: number = page ?? 1;
-      let actualPageSize: number = pageSize ?? 20;
-      let actualFilters: DocumentFilters = filters ?? {};
+      const currentInputs = requestInputsRef.current;
+      const actualPage = page ?? currentInputs.page;
+      const actualPageSize = pageSize ?? currentInputs.pageSize;
+      const actualFilters = filters ?? currentInputs.filters;
 
-      // Get current values and set loading state atomically
-      setState((prev) => {
-        actualPage = page ?? prev.pagination.page;
-        actualPageSize = pageSize ?? prev.pagination.pageSize;
-        actualFilters = filters ?? prev.filters;
-        return { ...prev, loading: true, error: null };
-      });
+      requestInputsRef.current = {
+        page: actualPage,
+        pageSize: actualPageSize,
+        filters: actualFilters,
+      };
+      setState((prev) => ({ ...prev, loading: true, error: null }));
 
       const requestToken = ++fetchTokenRef.current;
       const isStale = (): boolean =>
@@ -290,7 +303,9 @@ export const useDocuments = (
         const queryString = new URLSearchParams(
           Object.entries(params).map(([k, v]) => [k, String(v)])
         ).toString();
-        const response = (await api.get(`/documents/?${queryString}`)) as DocumentsApiResponse;
+        const response = (await api.get(
+          `/documents/?${queryString}`
+        )) as DocumentsApiResponse;
 
         // Check if response has the expected structure
         if (!response) {
@@ -323,6 +338,12 @@ export const useDocuments = (
         // A newer fetch started (or the component unmounted) while this
         // request was in flight — drop this result entirely (R6-M16).
         if (isStale()) return;
+
+        requestInputsRef.current = {
+          ...requestInputsRef.current,
+          page: response.pagination.page,
+          pageSize: response.pagination.page_size,
+        };
 
         setState((prev) => ({
           ...prev,
@@ -410,51 +431,44 @@ export const useDocuments = (
 
   const updateFilters = useCallback(
     (newFilters: Partial<DocumentFilters>) => {
-      let mergedFilters: DocumentFilters = {};
-      let pageSize = 20;
-      setState((prev) => {
-        mergedFilters = { ...prev.filters, ...newFilters };
-        pageSize = prev.pagination.pageSize;
-        return {
-          ...prev,
-          filters: mergedFilters,
-          pagination: { ...prev.pagination, page: 1 },
-        };
-      });
-      // Fetch outside setState to avoid side effects in updater
-      fetchDocuments(1, pageSize, mergedFilters);
+      const nextInputs = {
+        ...requestInputsRef.current,
+        page: 1,
+        filters: { ...requestInputsRef.current.filters, ...newFilters },
+      };
+      requestInputsRef.current = nextInputs;
+      setState((prev) => ({
+        ...prev,
+        filters: nextInputs.filters,
+        pagination: { ...prev.pagination, page: 1 },
+      }));
+      fetchDocuments(nextInputs.page, nextInputs.pageSize, nextInputs.filters);
     },
     [fetchDocuments]
   );
 
   const updatePage = useCallback(
     (page: number) => {
-      let pageSize = 20;
-      let filters: DocumentFilters = {};
-      setState((prev) => {
-        pageSize = prev.pagination.pageSize;
-        filters = prev.filters;
-        return {
-          ...prev,
-          pagination: { ...prev.pagination, page },
-        };
-      });
-      fetchDocuments(page, pageSize, filters);
+      const nextInputs = { ...requestInputsRef.current, page };
+      requestInputsRef.current = nextInputs;
+      setState((prev) => ({
+        ...prev,
+        pagination: { ...prev.pagination, page },
+      }));
+      fetchDocuments(nextInputs.page, nextInputs.pageSize, nextInputs.filters);
     },
     [fetchDocuments]
   );
 
   const updatePageSize = useCallback(
     (pageSize: number) => {
-      let filters: DocumentFilters = {};
-      setState((prev) => {
-        filters = prev.filters;
-        return {
-          ...prev,
-          pagination: { ...prev.pagination, pageSize, page: 1 },
-        };
-      });
-      fetchDocuments(1, pageSize, filters);
+      const nextInputs = { ...requestInputsRef.current, page: 1, pageSize };
+      requestInputsRef.current = nextInputs;
+      setState((prev) => ({
+        ...prev,
+        pagination: { ...prev.pagination, pageSize, page: 1 },
+      }));
+      fetchDocuments(nextInputs.page, nextInputs.pageSize, nextInputs.filters);
     },
     [fetchDocuments]
   );
@@ -503,7 +517,10 @@ export const useDocuments = (
             isAuth: true,
           };
         }
-        return { message: error.error.message || 'Request failed', isAuth: false };
+        return {
+          message: error.error.message || 'Request failed',
+          isAuth: false,
+        };
       }
 
       const errorMessage =
@@ -594,7 +611,10 @@ export const useDocuments = (
             // Mark the remaining, un-attempted ids as skipped rather than
             // silently dropping them from the failure report.
             for (const skippedId of documentIds.slice(i + 1)) {
-              failures.push({ id: skippedId, reason: 'skipped: session expired' });
+              failures.push({
+                id: skippedId,
+                reason: 'skipped: session expired',
+              });
             }
             break;
           }
@@ -638,9 +658,7 @@ export const useDocuments = (
       setState((prev) => ({ ...prev, loading: true, error: null }));
 
       try {
-        const result = await api.post(
-          `/documents/${documentId}/reprocess`
-        );
+        const result = await api.post(`/documents/${documentId}/reprocess`);
 
         // Refresh documents list to get updated status
         await fetchDocuments();

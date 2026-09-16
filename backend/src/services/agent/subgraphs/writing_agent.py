@@ -79,7 +79,10 @@ def _build_writing_system_prompt() -> str:
 async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     """Writing-specialized LLM node."""
     from src.core.config import get_settings
-    from src.services.agent.graph import AGENT_LLM_TIMEOUT_SECONDS
+    from src.services.agent.graph import (
+        AGENT_LLM_TIMEOUT_SECONDS,
+        _build_page_context_line,
+    )
 
     sanitized = _sanitize_messages(state["messages"])
     if (
@@ -121,6 +124,9 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
                         ]
                     }
     messages = [SystemMessage(content=_build_writing_system_prompt())]
+    context_line = _build_page_context_line(state.get("page_context", {}))
+    if context_line:
+        messages.append(SystemMessage(content=context_line))
     retrieved = state.get("retrieved_contexts", [])
     if retrieved:
         from src.services.agent._nodes_llm import _retrieval_context_part

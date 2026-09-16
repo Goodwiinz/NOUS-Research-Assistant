@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.research_engine.connectors.provider_http import get
 
 JATS_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
 MAX_RESULTS_LIMIT = 200
@@ -29,8 +30,10 @@ class CrossrefConnector(SourceConnector):
             headers["User-Agent"] = f"RAGSystem/2.1 (mailto:{self.mailto})"
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(
+            response = await get(
+                client,
                 "https://api.crossref.org/works",
+                provider="crossref",
                 params=params,
                 headers=headers,
             )

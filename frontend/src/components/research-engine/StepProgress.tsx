@@ -37,6 +37,13 @@ interface StepProgressProps {
 
 export function StepProgress({ step }: StepProgressProps) {
   const [expanded, setExpanded] = useState(false);
+  const coverage =
+    typeof step.output === 'object' ? step.output?.coverage : null;
+  const partialCoverage =
+    coverage !== null &&
+    typeof coverage === 'object' &&
+    'partial' in coverage &&
+    coverage.partial === true;
   const outputPreview = (() => {
     if (!step.output) return null;
     if (typeof step.output === 'string') return step.output;
@@ -75,10 +82,7 @@ export function StepProgress({ step }: StepProgressProps) {
         );
       case 'complete':
         return (
-          <Check
-            aria-hidden="true"
-            className="h-4 w-4 text-(--nous-terra)"
-          />
+          <Check aria-hidden="true" className="h-4 w-4 text-(--nous-terra)" />
         );
       case 'error':
         return (
@@ -196,6 +200,13 @@ export function StepProgress({ step }: StepProgressProps) {
         )}
       </button>
 
+      {partialCoverage && (
+        <p role="alert" className="px-4 pb-3 text-sm text-muted-foreground">
+          Some selected databases could not be searched. These results have
+          partial coverage.
+        </p>
+      )}
+
       {/* Expandable details */}
       {expanded && (
         <div className="space-y-3 border-t border-border px-4 pb-4">
@@ -205,9 +216,7 @@ export function StepProgress({ step }: StepProgressProps) {
               role="alert"
               className="mt-3 rounded-lg border border-(--nous-mars)/30 bg-(--nous-mars)/10 p-3"
             >
-              <p className="text-xs text-(--nous-mars)">
-                {step.errorMessage}
-              </p>
+              <p className="text-xs text-(--nous-mars)">{step.errorMessage}</p>
             </div>
           )}
 

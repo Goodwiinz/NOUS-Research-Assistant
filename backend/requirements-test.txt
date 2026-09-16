@@ -5,9 +5,9 @@ pytest-cov==7.1.0
 pytest-mock==3.15.1
 pytest-xdist==3.8.0
 pytest-repeat==0.9.4
-pytest-rerunfailures==16.3
+pytest-rerunfailures==16.6.1
 pytest-timeout==2.4.0
-pytest-benchmark==5.2.3
+pytest-benchmark==5.3.0
 pytest-html==4.2.0
 pytest-json-report==1.5.0
 pytest-base-url==2.1.0
@@ -15,24 +15,24 @@ pytest-base-url==2.1.0
 # Test Factories & Fixtures
 factory-boy==3.3.3
 faker==25.2.0
-model-bakery==1.23.4
+model-bakery==1.24.0
 
 # HTTP Testing
 httpx==0.28.1
 requests-mock==1.12.1
-responses==0.26.1
-aioresponses==0.7.8
+responses==0.26.3
+aioresponses==0.7.9
 respx==0.23.1
 
 # Database Testing
 pytest-postgresql==6.1.0
 pytest-redis==3.1.2
 freezegun==1.5.5
-hypothesis==6.155.1
+hypothesis==6.168.0
 sqlalchemy-utils==0.42.1
 
 # Async Testing
-anyio==4.13.0
+anyio==4.15.1
 pytest-asyncio==1.4.0
 
 # Performance Testing
@@ -65,15 +65,15 @@ sphinx==7.4.7
 sphinx-rtd-theme==2.0.0
 
 # Monitoring & Observability Testing
-prometheus-client==0.25.0
+prometheus-client==0.26.0
 opentelemetry-test==0.45b0
 
 # Integration Testing
-docker==7.1.0
+docker==7.2.0
 testcontainers==3.7.1
 
 # Data Testing
-pandas==3.0.3
+pandas==3.0.5
 numpy==1.26.4
 
 # API Testing
@@ -88,7 +88,7 @@ pytest-clarity==1.0.1
 pytest-parallel==0.1.1
 
 # Environment Variables
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 
 # Utils
 tenacity==9.1.4

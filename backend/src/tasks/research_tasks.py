@@ -23,6 +23,7 @@ from src.services.research_engine.connectors import (
     RagStoreConnector,
     SemanticScholarConnector,
 )
+from src.services.research_engine.connectors.registry import build_connectors
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.providers import (
     ClaudeProvider,
@@ -165,14 +166,7 @@ def _build_connectors(organization_id: Optional[str] = None) -> dict:
     mirrors ``api/research_engine/runs.py::_build_connectors``.
     """
     rag_search = functools.partial(_search_rag_store, organization_id=organization_id)
-    return {
-        "arxiv": ArxivConnector(),
-        "semantic_scholar": SemanticScholarConnector(),
-        "crossref": CrossrefConnector(mailto=settings.CROSSREF_MAILTO),
-        "pubmed": PubMedConnector(api_key=settings.NCBI_API_KEY),
-        "web": SemanticScholarConnector(),  # fallback alias
-        "rag_store": RagStoreConnector(search_fn=rag_search),
-    }
+    return build_connectors(rag_search)
 
 
 def _resolve_run_organization_id(db: Any, blueprint: Any) -> Optional[str]:

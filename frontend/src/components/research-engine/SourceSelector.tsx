@@ -20,6 +20,7 @@ interface SourceDefinition {
 const SOURCES: SourceDefinition[] = [
   { id: 'arxiv', label: 'ArXiv Preprints', icon: FileText },
   { id: 'semantic_scholar', label: 'Semantic Scholar', icon: Search },
+  { id: 'openalex', label: 'OpenAlex', icon: Globe },
   { id: 'crossref', label: 'Crossref', icon: Globe },
   { id: 'pubmed', label: 'PubMed', icon: HeartPulse },
 ];

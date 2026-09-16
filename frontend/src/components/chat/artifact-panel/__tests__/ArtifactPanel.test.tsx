@@ -25,6 +25,7 @@ vi.mock('@/services/projectService', () => ({
   projectService: {
     getNote: vi.fn(),
     getDraft: vi.fn(),
+    getDraftCitations: vi.fn(),
   },
 }));
 
@@ -47,6 +48,10 @@ const docArtifact: Artifact = {
 describe('ArtifactPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(projectService.getDraftCitations).mockResolvedValue({
+      citations: [],
+      total: 0,
+    });
     act(() => {
       useArtifactPanelStore.setState({
         artifact: docArtifact,
@@ -253,6 +258,55 @@ describe('ArtifactPanel', () => {
     expect(screen.getByText(/v3/)).toBeInTheDocument();
     expect(screen.getByText('1200 words')).toBeInTheDocument();
     expect(screen.getByText('14 citations')).toBeInTheDocument();
+  });
+
+  it('opens the document referenced by a draft [Doc N] citation', async () => {
+    vi.mocked(projectService.getDraft).mockResolvedValue({
+      id: 'draft-1',
+      project_id: 'proj-1',
+      version: 4,
+      title: 'Transformer survey',
+      content: 'Deep transitions increase representational depth [Doc 6].',
+      themes: [],
+      word_count: 8,
+      citation_count: 6,
+      is_current: true,
+      created_at: '2026-09-15',
+    });
+    vi.mocked(projectService.getDraftCitations).mockResolvedValue({
+      citations: [
+        {
+          id: 'draft-citation-6',
+          citation_index: 6,
+          document_id: 'doc-6',
+          snippet: 'Deep transition architectures',
+          context: 'Representational depth between sequential states.',
+        },
+      ],
+      total: 1,
+    });
+    const artifact: Artifact = {
+      kind: 'draft',
+      projectId: 'proj-1',
+      id: 'draft-1',
+      title: 'Transformer survey',
+    };
+    const { user } = render(<ArtifactPanel artifact={artifact} />);
+
+    const citation = await screen.findByRole('button', {
+      name: 'Source 6: Document 6',
+    });
+    await user.click(citation);
+
+    expect(projectService.getDraftCitations).toHaveBeenCalledWith(
+      'proj-1',
+      'draft-1'
+    );
+    expect(useArtifactPanelStore.getState().artifact).toEqual({
+      kind: 'document',
+      id: 'doc-6',
+      title: 'Document 6',
+    });
   });
 
   it('shows an error state when a note fetch fails', async () => {

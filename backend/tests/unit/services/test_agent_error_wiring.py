@@ -83,6 +83,41 @@ class TestErrorRecoveryWiring:
         assert result["message"].status == "success"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("failed", [False, True])
+    async def test_tool_span_records_returned_failure_without_payload(
+        self, failed: bool
+    ) -> None:
+        from langsmith import get_current_run_tree, tracing_context
+
+        from src.services.agent._nodes_tools import _execute_single_tool
+
+        payload = (
+            {"error": "request timed out at secret-host"} if failed else {"papers": []}
+        )
+        spans = []
+
+        async def execute(**kwargs):
+            spans.append(get_current_run_tree())
+            return payload
+
+        with (
+            patch("src.services.agent.graph._get_execute_tool", return_value=execute),
+            tracing_context(enabled="local"),
+        ):
+            result = await _execute_single_tool(
+                {"name": "search_arxiv", "args": {"query": "test"}, "id": "traced"},
+                {"configurable": {}},
+                {},
+            )
+
+        assert len(spans) == 1
+        assert spans[0] is not None
+        assert spans[0].error == (
+            "search_arxiv returned a tool error" if failed else None
+        )
+        assert result["execution"]["retry_exhausted"] is failed
+
+    @pytest.mark.asyncio
     async def test_error_count_resets_on_success(self):
         """tool_node should reset error_count to 0 after a successful tool call."""
         from src.services.agent.graph import tool_node

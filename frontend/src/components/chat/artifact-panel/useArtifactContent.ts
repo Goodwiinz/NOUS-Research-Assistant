@@ -3,6 +3,7 @@ import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import {
   projectService,
   type Draft,
+  type DraftCitationsResponse,
   type ProjectNote,
 } from '@/services/projectService';
 
@@ -31,5 +32,15 @@ export function useDraftArtifact(
   return useQuery<Draft>({
     queryKey: ['project', projectId, 'drafts', draftId],
     queryFn: () => projectService.getDraft(projectId, draftId),
+  });
+}
+
+export function useDraftCitations(
+  projectId: string,
+  draftId: string
+): UseQueryResult<DraftCitationsResponse> {
+  return useQuery<DraftCitationsResponse>({
+    queryKey: ['project', projectId, 'drafts', draftId, 'citations'],
+    queryFn: () => projectService.getDraftCitations(projectId, draftId),
   });
 }
