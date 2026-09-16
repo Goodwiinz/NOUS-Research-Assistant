@@ -26,12 +26,14 @@ vi.mock('next/navigation', () => ({
 
 const streamMessageMock = vi.fn();
 const streamConfirmMock = vi.fn();
+const cancelActiveRunMock = vi.fn();
 vi.mock('@/services/agentChatService', () => ({
   agentChatService: {
     streamMessage: (...args: unknown[]) => streamMessageMock(...args),
     streamConfirm: (...args: unknown[]) => streamConfirmMock(...args),
     resumeStream: vi.fn().mockResolvedValue({ status: 'idle' }),
     cancelPendingConfirmation: vi.fn().mockResolvedValue(undefined),
+    cancelActiveRun: (...args: unknown[]) => cancelActiveRunMock(...args),
   },
 }));
 
@@ -53,6 +55,7 @@ import { workspaceService } from '@/services/workspaceService';
 
 type StreamCallbacks = {
   onToken: (t: string) => void;
+  onRunId?: (runId: string) => void;
   onConfirmation: (
     threadId: string,
     confirmation: Record<string, unknown>
@@ -83,6 +86,7 @@ describe('useChatStreaming stream ownership', () => {
   beforeEach(() => {
     streamMessageMock.mockReset();
     streamConfirmMock.mockReset();
+    cancelActiveRunMock.mockReset();
     useChatStore.getState().reset();
     useAgentActivityStore.setState({ runs: {}, currentThreadId: null });
     vi.mocked(workspaceService.listMessages).mockResolvedValue({
@@ -291,5 +295,41 @@ describe('useChatStreaming stream ownership', () => {
 
     const run = useAgentActivityStore.getState().runs['thread-A'];
     expect(run?.state).toBe('error');
+  });
+
+  it('sends a durable Stop for the accepted run before aborting the stream', async () => {
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks, signal?: AbortSignal) => {
+        cb.onRunId?.('run-1');
+        return new Promise<void>((resolve) => {
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }
+    );
+    cancelActiveRunMock.mockResolvedValue(undefined);
+
+    const params = makeParams();
+    const { result } = renderHook(
+      () =>
+        useChatStreaming(
+          params as unknown as Parameters<typeof useChatStreaming>[0]
+        ),
+      { wrapper }
+    );
+
+    let submitPromise: Promise<void> | undefined;
+    await act(async () => {
+      submitPromise = result.current.handleSubmit('hello');
+      await waitFor(() => expect(streamMessageMock).toHaveBeenCalled());
+    });
+
+    await act(async () => {
+      result.current.handleStop();
+      await Promise.resolve();
+    });
+    expect(cancelActiveRunMock).toHaveBeenCalledWith('thread-A', 'run-1');
+    await act(async () => {
+      await submitPromise;
+    });
   });
 });

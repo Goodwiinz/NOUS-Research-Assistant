@@ -130,6 +130,8 @@ export interface AgentStreamCallbacks {
    * readout on the pre-first-token thinking pill. */
   onHeartbeat?: (elapsedMs: number) => void;
   onStatus?: (phase: AgentStreamPhase, detail?: string) => void;
+  /** Durable run id from the accepted status frame, used by Stop. */
+  onRunId?: (runId: string) => void;
   onUsage?: (inputTokens: number, outputTokens: number) => void;
   /** Fires for every frame carrying an `id: <seq>` line — the resumable-SSE
    * cursor. Persist the latest value to resume after a disconnect. */
@@ -360,6 +362,13 @@ async function consumeSse(
           callbacks.onHeartbeat?.(Number(data.elapsed_ms) || 0);
           break;
         case 'status':
+          if (
+            data.phase === 'accepted' &&
+            typeof data.run_id === 'string' &&
+            data.run_id
+          ) {
+            callbacks.onRunId?.(data.run_id);
+          }
           callbacks.onStatus?.(
             data.phase as AgentStreamPhase,
             typeof data.detail === 'string' ? data.detail : undefined
@@ -860,6 +869,35 @@ class AgentChatService {
     const response = await fetch(
       agentStreamUrl(`stream/cancel/${encodeURIComponent(threadId)}`),
       { method: 'POST', headers }
+    );
+    if (!response.ok) {
+      const backendMessage = await readErrorBody(response);
+      throw new Error(
+        backendMessage
+          ? `Stream cancellation failed (${response.status}): ${backendMessage}`
+          : `Stream cancellation failed: ${response.status}`
+      );
+    }
+  }
+
+  async cancelActiveRun(
+    threadId: string,
+    expectedRunId?: string
+  ): Promise<void> {
+    const headers = await getStreamAuthHeaders();
+    const response = await fetch(
+      agentStreamUrl(`stream/cancel/${encodeURIComponent(threadId)}`),
+      {
+        method: 'POST',
+        headers,
+        // An explicit JSON body distinguishes normal-run Stop from the
+        // legacy no-body parked-confirmation cancellation. The run id is
+        // optional only for the pre-accepted race; when present it fences a
+        // stale browser request from cancelling a newer run.
+        body: JSON.stringify(
+          expectedRunId ? { expected_run_id: expectedRunId } : {}
+        ),
+      }
     );
     if (!response.ok) {
       const backendMessage = await readErrorBody(response);

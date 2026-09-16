@@ -210,6 +210,17 @@ describe('agentChatService.streamMessage SSE parsing', () => {
     );
   });
 
+  it('forwards the accepted durable run id', async () => {
+    global.fetch = fetchWith([
+      'event: status\ndata: {"phase":"accepted","run_id":"run-1"}\n\n',
+    ]);
+    const onRunId = vi.fn();
+
+    await agentChatService.streamMessage(request, { onRunId });
+
+    expect(onRunId).toHaveBeenCalledWith('run-1');
+  });
+
   it('defaults missing token counts to zero on the usage event', async () => {
     global.fetch = fetchWith(['event: usage\ndata: {}\n\n']);
     const onUsage = vi.fn();
@@ -371,6 +382,30 @@ describe('agentChatService.cancelPendingConfirmation', () => {
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/agent/stream/cancel/thread%2Fwith%20space'),
       expect.objectContaining({ method: 'POST' })
+    );
+  });
+});
+
+describe('agentChatService.cancelActiveRun', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  it('posts the expected active run identity to the cancellation endpoint', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 204,
+    })) as unknown as typeof fetch;
+
+    await agentChatService.cancelActiveRun('thread/with space', 'run-1');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/agent/stream/cancel/thread%2Fwith%20space'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ expected_run_id: 'run-1' }),
+      })
     );
   });
 });

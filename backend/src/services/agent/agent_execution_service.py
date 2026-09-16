@@ -2119,6 +2119,56 @@ async def _persist_assistant_message_safe(
         return None
 
 
+async def _mark_assistant_message_stopped_safe(
+    *,
+    thread_id: str,
+    message_id: str,
+) -> bool:
+    """Mark an already-written assistant row as the stopped partial.
+
+    A durable Stop can win in the small window after a producer writes the
+    answer row but before it commits ``run.completed``. Reusing the insert
+    helper would dedupe and leave ``stopped=false``; this focused projection
+    keeps the backend as the sole writer while preserving the row identity.
+    """
+    from uuid import UUID
+
+    from sqlalchemy import update
+
+    from src.models.chat_message import ChatMessage, MessageRole
+
+    try:
+        message_uuid = UUID(message_id)
+        thread_uuid = UUID(thread_id)
+    except (ValueError, AttributeError, TypeError):
+        # Unit doubles and degraded, threadless streams can carry opaque ids;
+        # there is no valid database row to project onto in that case.
+        return False
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                update(ChatMessage)
+                .where(
+                    ChatMessage.id == message_uuid,
+                    ChatMessage.thread_id == thread_uuid,
+                    ChatMessage.role == MessageRole.ASSISTANT,
+                )
+                .values(stopped=True)
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            return bool(result.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to mark assistant row stopped for thread %s: %s",
+            thread_id,
+            exc,
+            exc_info=exc,
+        )
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Background graph runner
 # ---------------------------------------------------------------------------

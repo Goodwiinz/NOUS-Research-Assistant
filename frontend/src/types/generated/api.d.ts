@@ -197,7 +197,12 @@ export interface paths {
         put?: never;
         /**
          * Cancel Stream Confirmation
-         * @description Durably abandon a caller-owned graph parked on HITL confirmation.
+         * @description Request durable cancellation of a caller-owned stream run.
+         *
+         *     An omitted body preserves the parked-confirmation endpoint contract. A
+         *     body identifies a normal running turn; its producer must observe the
+         *     ``stopping`` marker and acknowledge cancellation before the response can
+         *     become terminal.
          */
         post: operations["cancel_stream_confirmation_api_v1_agent_stream_cancel__thread_id__post"];
         delete?: never;
@@ -13605,6 +13610,14 @@ export interface components {
          * @enum {string}
          */
         StepType: "search" | "screen" | "extract" | "synthesize" | "verify" | "export";
+        /** StreamCancelRequest */
+        StreamCancelRequest: {
+            /**
+             * Expected Run Id
+             * @description The active run the caller intends to stop
+             */
+            expected_run_id?: string | null;
+        };
         /** StreamConfirmRequest */
         StreamConfirmRequest: {
             /** Confirmed */
@@ -15421,7 +15434,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StreamCancelRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {
@@ -15439,7 +15456,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPErrorResponse"];
                 };
             };
-            /** @description Run is not awaiting confirmation */
+            /** @description Run is no longer the expected active run */
             409: {
                 headers: {
                     [name: string]: unknown;

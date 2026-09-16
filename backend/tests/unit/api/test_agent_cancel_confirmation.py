@@ -104,6 +104,166 @@ def test_cancel_rejects_a_run_that_is_actively_executing() -> None:
     abandon.assert_not_awaited()
 
 
+def test_cancel_body_without_identity_cannot_stop_a_newer_running_run() -> None:
+    client, _db = _client()
+    active = SimpleNamespace(job_id="run-new", status=JobStatus.RUNNING.value)
+    stop = AsyncMock()
+
+    with (
+        patch.object(
+            execute_mod, "get_active_run_for_thread", new=AsyncMock(return_value=active)
+        ),
+        patch.object(execute_mod, "request_run_cancellation", new=stop),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={},
+        )
+
+    assert response.status_code == 409
+    stop.assert_not_awaited()
+
+
+def test_cancel_reports_an_already_completed_exact_run() -> None:
+    client, _db = _client()
+    completed = SimpleNamespace(status=JobStatus.COMPLETED.value)
+
+    with (
+        patch.object(
+            execute_mod, "get_active_run_for_thread", new=AsyncMock(return_value=None)
+        ),
+        patch.object(execute_mod, "get_run", new=AsyncMock(return_value=completed)),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={"expected_run_id": "run-completed"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Run is already complete"
+
+
+def test_repeated_cancel_of_an_exact_cancelled_run_is_idempotent() -> None:
+    client, _db = _client()
+    cancelled = SimpleNamespace(status=JobStatus.CANCELLED.value)
+
+    with (
+        patch.object(
+            execute_mod, "get_active_run_for_thread", new=AsyncMock(return_value=None)
+        ),
+        patch.object(execute_mod, "get_run", new=AsyncMock(return_value=cancelled)),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={"expected_run_id": "run-cancelled"},
+        )
+
+    assert response.status_code == 204
+
+
+def test_cancel_running_run_claims_durable_stop_with_expected_identity() -> None:
+    client, db = _client()
+    active = SimpleNamespace(job_id="run-1", status=JobStatus.RUNNING.value)
+    stop = AsyncMock(
+        return_value=SimpleNamespace(
+            run_id="run-1", status=JobStatus.STOPPING, claimed=True
+        )
+    )
+
+    with (
+        patch.object(
+            execute_mod, "get_active_run_for_thread", new=AsyncMock(return_value=active)
+        ),
+        patch.object(execute_mod, "request_run_cancellation", new=stop),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={"expected_run_id": "run-1"},
+        )
+
+    assert response.status_code == 204
+    stop.assert_awaited_once_with(
+        db,
+        run_id="run-1",
+        thread_id=UUID(THREAD_ID),
+        organization_id=ORG_ID,
+        user_id=USER_ID,
+        reason="user_requested",
+        request_id=None,
+    )
+    db.commit.assert_awaited_once()
+
+
+def test_cancel_rejects_stale_identity_without_touching_newer_run() -> None:
+    client, _db = _client()
+    active = SimpleNamespace(job_id="run-2", status=JobStatus.RUNNING.value)
+    stop = AsyncMock()
+
+    with (
+        patch.object(
+            execute_mod, "get_active_run_for_thread", new=AsyncMock(return_value=active)
+        ),
+        patch.object(execute_mod, "request_run_cancellation", new=stop),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={"expected_run_id": "run-1"},
+        )
+
+    assert response.status_code == 409
+    stop.assert_not_awaited()
+
+
+def test_repeated_running_stop_is_idempotent_after_ack_claim() -> None:
+    client, db = _client()
+    active = SimpleNamespace(job_id="run-1", status=JobStatus.STOPPING.value)
+    stop = AsyncMock(
+        return_value=SimpleNamespace(
+            run_id="run-1", status=JobStatus.STOPPING, claimed=False
+        )
+    )
+
+    with (
+        patch.object(
+            execute_mod, "get_active_run_for_thread", new=AsyncMock(return_value=active)
+        ),
+        patch.object(execute_mod, "request_run_cancellation", new=stop),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={"expected_run_id": "run-1"},
+        )
+
+    assert response.status_code == 204
+    stop.assert_awaited_once()
+    db.commit.assert_awaited_once()
+
+
+def test_cancel_reports_completion_when_terminal_race_wins_after_lookup() -> None:
+    client, db = _client()
+    active = SimpleNamespace(job_id="run-1", status=JobStatus.RUNNING.value)
+    stop = AsyncMock(
+        return_value=SimpleNamespace(
+            run_id="run-1", status=JobStatus.COMPLETED, claimed=False
+        )
+    )
+
+    with (
+        patch.object(
+            execute_mod, "get_active_run_for_thread", new=AsyncMock(return_value=active)
+        ),
+        patch.object(execute_mod, "request_run_cancellation", new=stop),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={"expected_run_id": "run-1"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Run is already complete"
+    db.commit.assert_awaited_once()
+
+
 def test_cancel_does_not_report_success_when_confirmation_wins_the_race() -> None:
     client, _db = _client()
     awaiting = SimpleNamespace(

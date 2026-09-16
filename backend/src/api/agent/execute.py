@@ -21,6 +21,7 @@ from uuid import UUID
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     Depends,
     Header,
     HTTPException,
@@ -66,9 +67,13 @@ from src.services.agent.agent_execution_service import (  # noqa: F401
 from src.services.agent.agent_run_service import (
     claim_awaiting_run_for_confirmation,
     get_active_run_for_thread,
+    get_run,
     release_confirmation_claim,
 )
-from src.services.agent.agent_submission_service import abandon_awaiting_submission
+from src.services.agent.agent_submission_service import (
+    abandon_awaiting_submission,
+    request_run_cancellation,
+)
 
 # Wire models moved to the service layer (audit B5) so the graph runner can
 # build them without importing src.api. Re-exported here so every existing
@@ -228,6 +233,15 @@ class ConfirmationRequest(BaseModel):
 class StreamConfirmRequest(BaseModel):
     thread_id: StrictUUIDString
     confirmed: bool
+
+
+class StreamCancelRequest(BaseModel):
+    expected_run_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="The active run the caller intends to stop",
+    )
 
 
 _SSE_RESPONSE = {
@@ -881,7 +895,7 @@ async def stream_confirm_agent(
         404: {"model": HTTPErrorResponse, "description": "Thread not found"},
         409: {
             "model": HTTPErrorResponse,
-            "description": "Run is not awaiting confirmation",
+            "description": "Run is no longer the expected active run",
         },
         503: {
             "model": HTTPErrorResponse,
@@ -891,10 +905,18 @@ async def stream_confirm_agent(
 )
 async def cancel_stream_confirmation(
     thread_id: _uuid.UUID,
+    request: Request,
+    cancellation: Optional[StreamCancelRequest] = Body(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Durably abandon a caller-owned graph parked on HITL confirmation."""
+    """Request durable cancellation of a caller-owned stream run.
+
+    An omitted body preserves the parked-confirmation endpoint contract. A
+    body identifies a normal running turn; its producer must observe the
+    ``stopping`` marker and acknowledge cancellation before the response can
+    become terminal.
+    """
     await _enforce_rate_limit(
         _agent_read_rate_limiter, str(current_user.id), _AGENT_READ_PREFIX
     )
@@ -918,6 +940,69 @@ async def cancel_stream_confirmation(
         user_id=current_user.id,
     )
     if active is None:
+        # A body carrying an exact identity is an acknowledged cancellation
+        # command, rather than the legacy parked-confirmation probe. Preserve
+        # the distinction between a repeated stop of an already-cancelled run
+        # (idempotent success) and a late stop after completion (conflict).
+        expected_run_id = cancellation.expected_run_id if cancellation else None
+        if cancellation is not None and expected_run_id is not None:
+            terminal = await get_run(
+                db,
+                expected_run_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+            )
+            if terminal is not None and terminal.status != JobStatus.CANCELLED.value:
+                raise HTTPException(status_code=409, detail="Run is already complete")
+        return Response(status_code=204)
+    expected_run_id = cancellation.expected_run_id if cancellation else None
+    if expected_run_id is not None and expected_run_id != active.job_id:
+        raise HTTPException(status_code=409, detail="Run is no longer active")
+    if (
+        cancellation is not None
+        and active.status != JobStatus.AWAITING_CONFIRMATION.value
+    ):
+        if expected_run_id is None:
+            raise HTTPException(status_code=409, detail="Run identity is required")
+        request_id = getattr(getattr(request, "state", None), "request_id", None)
+        try:
+            requested = await request_run_cancellation(
+                db,
+                run_id=expected_run_id,
+                thread_id=thread_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+                reason="user_requested",
+                request_id=request_id,
+            )
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("Failed to request cancellation of agent stream")
+            raise HTTPException(
+                status_code=503,
+                detail="Cancellation is temporarily unavailable; please retry",
+            ) from exc
+        if requested is None:
+            # The exact run disappeared between the active lookup and claim;
+            # a newer owner must never be cancelled by this stale request.
+            raced = await get_active_run_for_thread(
+                db,
+                thread_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+            )
+            if raced is not None and raced.job_id != expected_run_id:
+                raise HTTPException(status_code=409, detail="Run is no longer active")
+            return Response(status_code=204)
+        if requested.status == JobStatus.AWAITING_CONFIRMATION:
+            raise HTTPException(
+                status_code=409, detail="Run is already awaiting confirmation"
+            )
+        if requested.status.is_terminal:
+            if requested.status != JobStatus.CANCELLED:
+                raise HTTPException(status_code=409, detail="Run is already complete")
+            return Response(status_code=204)
         return Response(status_code=204)
     if active.status != JobStatus.AWAITING_CONFIRMATION.value:
         raise HTTPException(status_code=409, detail="Run is not awaiting confirmation")

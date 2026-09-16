@@ -40,6 +40,8 @@ from src.services.agent import agent_submission_service as submission_mod
 from src.services.agent.agent_run_service import ActiveRunConflict
 from src.services.agent.agent_submission_service import (
     accept_submission,
+    mark_submission_dispatched,
+    request_run_cancellation,
     stream_idempotency_key,
 )
 from src.services.agent.run_event_types import RunEventType
@@ -425,6 +427,125 @@ async def test_fresh_turn_atomically_abandons_awaiting_confirmation(
         RunEventType.RUN_CANCELLED.value,
     ]
     assert events[-1].payload == {"reason": "superseded_by_new_turn"}
+
+
+async def test_running_run_stop_claim_is_durable_and_idempotent(
+    db: AsyncSession,
+) -> None:
+    """A normal running turn claims stopping exactly once before acknowledgement."""
+    accepted = await accept_submission(
+        db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+    )
+    run = await db.get(AgentRun, accepted.run_id)
+    assert run is not None
+    assert await mark_submission_dispatched(
+        db,
+        run_id=accepted.run_id,
+        outbox_id=accepted.outbox_id,
+        organization_id=ORG_A,
+        user_id=USER_A,
+    )
+
+    first = await request_run_cancellation(
+        db,
+        run_id=accepted.run_id,
+        thread_id=THREAD_ID,
+        organization_id=ORG_A,
+        user_id=USER_A,
+        reason="user_requested",
+        request_id="stop-1",
+    )
+    assert first is not None and first.claimed is True
+    await db.commit()
+
+    second = await request_run_cancellation(
+        db,
+        run_id=accepted.run_id,
+        thread_id=THREAD_ID,
+        organization_id=ORG_A,
+        user_id=USER_A,
+        reason="user_requested",
+        request_id="stop-2",
+    )
+    assert second is not None and second.claimed is False
+    await db.commit()
+
+    await db.refresh(run)
+    assert run.status == JobStatus.STOPPING.value
+    assert run.cancel_requested_at is not None
+    events = (
+        (
+            await db.execute(
+                select(AgentRunEvent)
+                .where(AgentRunEvent.run_id == accepted.run_id)
+                .order_by(AgentRunEvent.seq)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [event.event_type for event in events] == [
+        RunEventType.RUN_CREATED.value,
+        RunEventType.RUN_STARTED.value,
+        RunEventType.RUN_STOPPING.value,
+    ]
+    assert events[-1].payload == {"reason": "user_requested", "request_id": "stop-1"}
+
+
+async def test_completion_cannot_overwrite_a_durable_stop(
+    db: AsyncSession,
+) -> None:
+    """The completion/cancel race leaves the stop claim for producer acknowledgement."""
+    accepted = await accept_submission(
+        db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+    )
+    run = await db.get(AgentRun, accepted.run_id)
+    assert run is not None
+    assert await mark_submission_dispatched(
+        db,
+        run_id=accepted.run_id,
+        outbox_id=accepted.outbox_id,
+        organization_id=ORG_A,
+        user_id=USER_A,
+    )
+
+    stop = await request_run_cancellation(
+        db,
+        run_id=accepted.run_id,
+        thread_id=THREAD_ID,
+        organization_id=ORG_A,
+        user_id=USER_A,
+        reason="user_requested",
+        request_id="stop-race",
+    )
+    assert stop is not None and stop.claimed is True
+    await db.commit()
+
+    finalized = await submission_mod.finalize_submission(
+        db,
+        run_id=accepted.run_id,
+        status=JobStatus.COMPLETED,
+        organization_id=ORG_A,
+        event_type=RunEventType.RUN_COMPLETED,
+        payload={},
+    )
+    assert finalized is False
+    await db.refresh(run)
+    assert run.status == JobStatus.STOPPING.value
+    events = (
+        (
+            await db.execute(
+                select(AgentRunEvent)
+                .where(AgentRunEvent.run_id == accepted.run_id)
+                .order_by(AgentRunEvent.seq)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [event.event_type for event in events].count(
+        RunEventType.RUN_COMPLETED.value
+    ) == 0
 
 
 async def test_a_failed_write_leaves_nothing_behind(

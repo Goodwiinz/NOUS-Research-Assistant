@@ -474,6 +474,10 @@ export function useChatStreaming(
   // Run-correlation id per thread (envelope stream_id) — persisted with the
   // seq cursor so resume pins to the run the cursor came from.
   const streamIdByThreadRef = useRef<Record<string, string>>({});
+  // Durable AgentRun id from the accepted status frame. Stop sends this as an
+  // expected identity so a delayed browser action cannot cancel a newer run
+  // that has since taken ownership of the same thread.
+  const runIdByThreadRef = useRef<Record<string, string>>({});
   // Flush-then-cancel for the seq rAF at terminals: the last streamed seq is
   // the resume cursor, so a pending value must be committed synchronously —
   // cancelling the frame alone would drop it.
@@ -941,6 +945,12 @@ export function useChatStreaming(
         // Fresh turn — record the thread so Stop can finalize this run's
         // activity indicator. (No stop-flag reset needed: a previous turn's
         // stop target can't match this turn's claim.)
+        if (currentThreadId) {
+          // The previous turn's id is no longer a safe cancellation target
+          // once this new producer owns the thread. Wait for this turn's
+          // accepted frame before allowing Stop to issue a run command.
+          delete runIdByThreadRef.current[currentThreadId];
+        }
         activeRunThreadRef.current = currentThreadId || null;
 
         const streamAbort = new AbortController();
@@ -985,6 +995,10 @@ export function useChatStreaming(
                 streamingStatusDetail: detail ?? null,
                 streamingProgress: [...turnProgress],
               });
+            },
+            onRunId: (runId) => {
+              if (!currentThreadId) return;
+              runIdByThreadRef.current[currentThreadId] = runId;
             },
             onStreamId: (sid) => {
               if (!currentThreadId) return;
@@ -1846,13 +1860,31 @@ export function useChatStreaming(
     // wipe and would otherwise commit + persist a stopped RAG answer with
     // zero sources.
     stopCitationsRef.current = useChatStore.getState().streamingCitations;
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
 
     // Close out the agent activity indicator — onDone won't fire on abort.
     // 'stopped', not 'done': a user abort must not strike through the
     // remaining plan items as if they completed.
     const runThread = activeRunThreadRef.current;
+    const normalRunStop = Boolean(
+      runThread && (!pendingConfirmation || confirmLockRef.current)
+    );
+    const expectedRunId = runThread
+      ? runIdByThreadRef.current[runThread]
+      : undefined;
+    if (normalRunStop && runThread && expectedRunId) {
+      // Issue the durable command before aborting the local transport. The
+      // local Stop remains immediate; the producer independently acknowledges
+      // this marker and owns the persisted partial/terminal transition.
+      void agentChatService
+        .cancelActiveRun(runThread, expectedRunId)
+        .catch((error) => {
+          console.error('[Chat] Failed to cancel active agent run:', error);
+          toast.error('Could not stop this response. Please try again.');
+        });
+    }
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+
     if (runThread) {
       useAgentActivityStore.getState().finishRun(runThread, 'stopped');
     }

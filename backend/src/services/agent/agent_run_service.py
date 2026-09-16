@@ -257,6 +257,37 @@ async def get_run(
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def is_run_cancellation_requested(
+    db: AsyncSession,
+    job_id: str,
+    *,
+    organization_id: Any,
+    user_id: Any,
+) -> bool:
+    """Read the durable stop marker for one caller-owned run.
+
+    The producer polls scalar columns rather than an ORM instance so a
+    long-lived stream session cannot reuse stale identity-map state after the
+    HTTP Stop request commits in another session.
+    """
+    row = (
+        await db.execute(
+            select(AgentRun.status, AgentRun.cancel_requested_at)
+            .where(
+                AgentRun.job_id == job_id,
+                AgentRun.organization_id == _coerce_uuid(organization_id),
+                AgentRun.user_id == _coerce_uuid(user_id),
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).one_or_none()
+    if row is None:
+        return False
+    return bool(
+        row.cancel_requested_at is not None or row.status == JobStatus.STOPPING.value
+    )
+
+
 async def get_active_run_for_thread(
     db: AsyncSession,
     thread_id: Any,
