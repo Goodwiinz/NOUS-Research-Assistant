@@ -41,6 +41,22 @@ The production backend dependency stage built on Python 3.11.16 and rendered a
 the final image build and CI results are recorded on the source PR. Neither local
 build proves that the live deployment has changed.
 
+The subsequent full image check exposed existing recipe defects despite passing
+PDF, Torch, OpenCV and spaCy smoke checks: the CPU build resolved a CUDA Torch
+wheel and then removed two of its dependencies, while the 3.7.1 spaCy model
+downgraded spaCy and NumPy against declared requirements. `pip check` reported
+four conflicts, so this initial image is not the release candidate.
+
+The corrected production recipe resolves CPU Torch with all requirements in one
+transaction using the [official CPU wheel index](https://docs.pytorch.org/get-started/previous-versions/),
+asserts that it has no CUDA dependency, and propagates installation failures.
+It installs model 3.8.0 without re-resolving application dependencies; that model's
+[published compatibility](https://github.com/explosion/spacy-models/blob/master/meta/en_core_web_sm-3.8.0.json)
+matches pinned spaCy 3.8.16. The final image must pass `pip check`, model loading,
+library imports and native PDF generation during its build. Preserve the normal
+non-CPU install path. Require fresh final-image evidence on the PR before release;
+the earlier image's successful build alone is insufficient.
+
 Each following test passed before mutation, failed for the named defect with the
 mutation applied, and passed after byte-for-byte source restoration. Run from the
 repository root with `PYTHONPATH=backend python -m pytest -q <test> --timeout=30`.
@@ -112,6 +128,10 @@ Production deployment, not a verified alias mapping.
    `chat_messages.reasoning_summary` column must exist before new ORM reads.
    Runtime configuration gives `SUPABASE_DB_URL` precedence over `DATABASE_URL`;
    verify the intended database by identity without copying secret values.
+   Preserve the current `AGENT_DISPATCH_BACKEND=background` setting for this
+   rollout. The API init container owns migrations; worker and beat deployments
+   do not run that init step. Enabling Celery chat dispatch later requires a
+   separate migration-before-consumer rollout assessment.
 6. Observe backend, worker and beat rollout and `/health/readiness`, then complete
    the authenticated smoke checks below against the deployed frontend/backend
    pair. Confirm the actual pod image digest and source SHA; a green source CI run
