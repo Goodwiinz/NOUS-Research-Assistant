@@ -339,6 +339,11 @@ async def test_confirm_partial_persistence_retains_carried_context_order() -> No
             "claim_awaiting_run_for_confirmation",
             new=AsyncMock(return_value=True),
         ),
+        patch.object(
+            streaming,
+            "is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
         patch.object(streaming, "_finalize_run_id", new=AsyncMock(return_value=True)),
         patch.object(
             streaming,
@@ -456,6 +461,11 @@ async def test_confirm_partial_persistence_uses_latest_resumed_context_snapshot(
             streaming,
             "claim_awaiting_run_for_confirmation",
             new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            streaming,
+            "is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
         ),
         patch.object(streaming, "_finalize_run_id", new=AsyncMock(return_value=True)),
         patch.object(

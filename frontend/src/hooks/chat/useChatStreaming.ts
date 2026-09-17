@@ -2767,7 +2767,7 @@ export function useChatStreaming(
                   : 'confirmation-rejected'
             );
           }
-        } catch (err) {
+        } catch {
           const msg: ChatPageMessage = {
             runtimeId: crypto.randomUUID(),
             source: 'local-only',
