@@ -582,14 +582,46 @@ from src.services.agent.stream_buffer import BufferedFrame
 THREAD_ID = str(uuid4())
 
 
-def _client(owns_thread=True):
+def _client(owns_thread=True, *, run_stream_id=None):
     app = FastAPI()
     app.include_router(execute_mod.router)
 
     user = Mock(id="user-1", organization_id="org-1")
-    thread = SimpleNamespace(id=THREAD_ID) if owns_thread else None
+    workspace = SimpleNamespace(
+        is_deleted=False,
+        is_public=False,
+        owner_id="workspace-owner",
+        is_member=lambda user_id: user_id == user.id,
+        can_user_edit=lambda user_id: user_id == user.id,
+    )
+    conversation = SimpleNamespace(
+        id=f"conversation-{THREAD_ID}",
+        workspace_id=f"workspace-{THREAD_ID}",
+        is_deleted=False,
+        workspace=workspace,
+    )
+    thread = (
+        SimpleNamespace(
+            id=THREAD_ID,
+            is_deleted=False,
+            conversation_id=conversation.id,
+            conversation=conversation,
+        )
+        if owns_thread
+        else None
+    )
     db = AsyncMock()
-    db.execute.return_value = Mock(scalar_one_or_none=Mock(return_value=thread))
+    thread_result = Mock()
+    thread_result.scalars.return_value.first.return_value = thread
+    if run_stream_id is None:
+        db.execute.return_value = thread_result
+    else:
+        run_result = Mock()
+        run_result.scalar_one_or_none.return_value = SimpleNamespace(
+            job_id=f"run-{run_stream_id}",
+            status="running",
+        )
+        db.execute.side_effect = [thread_result, run_result]
 
     async def override_db():
         yield db
@@ -658,6 +690,11 @@ def test_resume_just_finished_named_stream_replays(monkeypatch):
         "thread_id_for_stream",
         AsyncMock(return_value=THREAD_ID),
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value=sid),
+    )
 
     async def read_after(stream_id, after_seq, start_index=None):
         assert stream_id == sid
@@ -665,7 +702,9 @@ def test_resume_just_finished_named_stream_replays(monkeypatch):
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
 
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={sid}")
+    resp = _client(run_stream_id=sid).get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={sid}"
+    )
 
     assert resp.status_code == 200
     assert "event: done" in resp.text
@@ -681,10 +720,17 @@ def test_resume_finished_stream_rejects_wrong_thread_mapping(monkeypatch):
         "thread_id_for_stream",
         AsyncMock(return_value=str(uuid4())),
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value=sid),
+    )
     read_after = AsyncMock(return_value=_frames())
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
 
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={sid}")
+    resp = _client(run_stream_id=sid).get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={sid}"
+    )
 
     assert resp.status_code == 204
     read_after.assert_not_awaited()
@@ -694,13 +740,20 @@ def test_resume_replays_frames_and_stops_after_done(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value="sid-1")
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value="sid-1"),
+    )
 
     async def read_after(sid, after_seq, start_index=None):
         assert sid == "sid-1"
         return [f for f in _frames() if f.seq > after_seq]
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+    resp = _client(run_stream_id="sid-1").get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}"
+    )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
     body = resp.text
@@ -719,12 +772,19 @@ def test_resume_excludes_frames_at_or_below_after(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value="sid-1")
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value="sid-1"),
+    )
 
     async def read_after(sid, after_seq, start_index=None):
         return [f for f in _frames() if f.seq > after_seq]
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?after=2")
+    resp = _client(run_stream_id="sid-1").get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?after=2"
+    )
     assert "id: 1" not in resp.text and "id: 2\n" not in resp.text
     assert "event: done" in resp.text
 
@@ -733,6 +793,11 @@ def test_resume_uses_last_event_id_header_as_cursor(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value="sid-1")
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value="sid-1"),
+    )
     cursors: list[int] = []
 
     async def read_after(sid, after_seq, start_index=None):
@@ -740,7 +805,7 @@ def test_resume_uses_last_event_id_header_as_cursor(monkeypatch):
         return [f for f in _frames() if f.seq > after_seq]
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
-    resp = _client().get(
+    resp = _client(run_stream_id="sid-1").get(
         f"/api/v1/agent/stream/resume/{THREAD_ID}?after=1",
         headers={"Last-Event-ID": "2"},
     )
@@ -776,6 +841,11 @@ def test_resume_token_containing_terminal_text_does_not_stop_replay(monkeypatch)
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value="sid-1")
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value="sid-1"),
+    )
     frames = [
         BufferedFrame(
             seq=1,
@@ -789,7 +859,9 @@ def test_resume_token_containing_terminal_text_does_not_stop_replay(monkeypatch)
         return [f for f in frames if f.seq > after_seq]
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+    resp = _client(run_stream_id="sid-1").get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}"
+    )
     body = resp.text
     assert "id: 2\n" in body  # replay continued past the decoy token frame
     assert body.rstrip().endswith("event: done\ndata: {}")
@@ -842,10 +914,17 @@ def test_resume_mismatched_stream_param_returns_204(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value=active)
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value=active),
+    )
     read_after = AsyncMock(return_value=_frames())
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
 
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={stale}")
+    resp = _client(run_stream_id=active).get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={stale}"
+    )
 
     assert resp.status_code == 204
     read_after.assert_not_awaited()
@@ -856,6 +935,11 @@ def test_resume_matching_stream_param_replays(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value=active)
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value=active),
+    )
 
     async def read_after(sid, after_seq, start_index=None):
         assert sid == active
@@ -863,7 +947,9 @@ def test_resume_matching_stream_param_replays(monkeypatch):
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
 
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={active}")
+    resp = _client(run_stream_id=active).get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={active}"
+    )
 
     assert resp.status_code == 200
     assert "event: done" in resp.text
