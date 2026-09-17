@@ -8,28 +8,37 @@ Provides REST API endpoints for:
 - Managing arXiv-specific features
 """
 
+import asyncio
 import logging
+import re
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.core.config import get_settings
-from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.services.arxiv.arxiv_service import ArXivIngestionService
 from src.services.arxiv.persistence import persist_arxiv_documents
-from src.services.documents.file_service import FileService
+from src.services.expensive_work_admission import admit_expensive_work
 from src.shared.schemas import UserResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/arxiv", tags=["arxiv"])
 settings = get_settings()
+
+MAX_ARXIV_INGEST_PAPERS = 50
+MAX_ARXIV_DATASET_WORK = 500
+ARXIV_BACKGROUND_DEADLINE_SECONDS = 5 * 60
+_ARXIV_ID_PATTERN = re.compile(
+    r"^(?:arxiv:)?(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-z][a-z0-9-]*(?:\.[a-z]{2})?/\d{7}(?:v\d+)?)$",
+    re.IGNORECASE,
+)
 
 
 # Pydantic models
@@ -46,12 +55,25 @@ class ArXivSearchRequest(BaseModel):
 
 
 class ArXivIngestRequest(BaseModel):
-    paper_ids: List[str] = Field(..., description="List of arXiv paper IDs to ingest")
+    paper_ids: List[str] = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_ARXIV_INGEST_PAPERS,
+        description="List of arXiv paper IDs to ingest",
+    )
     download_pdfs: bool = Field(True, description="Whether to download PDFs")
     extract_content: bool = Field(
         True, description="Whether to extract full text content"
     )
     batch_size: int = Field(10, ge=1, le=50, description="Batch size for processing")
+
+    @field_validator("paper_ids")
+    @classmethod
+    def validate_paper_ids(cls, value: List[str]) -> List[str]:
+        normalized = [paper_id.strip() for paper_id in value]
+        if any(not _ARXIV_ID_PATTERN.fullmatch(paper_id) for paper_id in normalized):
+            raise ValueError("paper_ids contains an invalid arXiv identifier")
+        return normalized
 
 
 class ArXivPaperResponse(BaseModel):
@@ -71,13 +93,44 @@ class ArXivPaperResponse(BaseModel):
 
 class EvaluationDatasetRequest(BaseModel):
     query: str = Field(
-        "machine learning", description="Query to find papers for dataset"
+        "machine learning",
+        max_length=1000,
+        description="Query to find papers for dataset",
     )
     num_papers: int = Field(50, ge=1, le=200, description="Number of papers to include")
     questions_per_paper: int = Field(5, ge=1, le=10, description="Questions per paper")
     difficulty_levels: List[str] = Field(
-        ["easy", "medium", "hard"], description="Difficulty levels"
+        ["easy", "medium", "hard"],
+        min_length=1,
+        max_length=3,
+        description="Difficulty levels",
     )
+
+    @model_validator(mode="after")
+    def validate_aggregate_work(self):
+        if self.num_papers * self.questions_per_paper > MAX_ARXIV_DATASET_WORK:
+            raise ValueError(
+                f"dataset work exceeds the {MAX_ARXIV_DATASET_WORK}-question limit"
+            )
+        return self
+
+
+def _get_verified_organization_id(current_user: Any) -> Any:
+    """Return only the authenticated user's server-side organization ID."""
+    organization_id = getattr(current_user, "organization_id", None)
+    if not organization_id:
+        organization = getattr(current_user, "organization", None)
+        organization_id = getattr(organization, "id", None)
+    if not organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="No organization associated with this account",
+        )
+    return organization_id
+
+
+def _background_deadline() -> float:
+    return time.monotonic() + ARXIV_BACKGROUND_DEADLINE_SECONDS
 
 
 # Dependency injection
@@ -155,15 +208,26 @@ async def ingest_arxiv_papers(
     Starts a background task to download and process the specified papers.
     """
     try:
+        organization_id = _get_verified_organization_id(current_user)
+        if not await admit_expensive_work(
+            user_id=current_user.id,
+            organization_id=organization_id,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many expensive research jobs; retry later",
+            )
+
         # Add to background tasks
         background_tasks.add_task(
             _process_arxiv_ingestion,
             paper_ids=request.paper_ids,
             user_id=current_user.id,
-            organization_id=current_user.organization_id,
+            organization_id=organization_id,
             download_pdfs=request.download_pdfs,
             extract_content=request.extract_content,
             batch_size=request.batch_size,
+            deadline=_background_deadline(),
         )
 
         return {
@@ -172,6 +236,8 @@ async def ingest_arxiv_papers(
             "status": "processing",
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -188,8 +254,18 @@ async def create_evaluation_dataset(
     Generates questions and evaluation data for testing the RAG system.
     """
     try:
+        organization_id = _get_verified_organization_id(current_user)
+        if not await admit_expensive_work(
+            user_id=current_user.id,
+            organization_id=organization_id,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many expensive research jobs; retry later",
+            )
+
         # Start dataset creation in background
-        task_id = f"arxiv_dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        task_id = f"arxiv_dataset_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
         background_tasks.add_task(
             _create_arxiv_dataset,
@@ -199,6 +275,8 @@ async def create_evaluation_dataset(
             questions_per_paper=request.questions_per_paper,
             difficulty_levels=request.difficulty_levels,
             user_id=current_user.id,
+            organization_id=organization_id,
+            deadline=_background_deadline(),
         )
 
         return {
@@ -207,6 +285,8 @@ async def create_evaluation_dataset(
             "status": "processing",
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -363,49 +443,91 @@ async def _process_arxiv_ingestion(
     download_pdfs: bool,
     extract_content: bool,
     batch_size: int,
+    deadline: Optional[float] = None,
 ):
     """Background task to process arXiv paper ingestion"""
     try:
-        async with ArXivIngestionService() as arxiv_service:
-            # First, get paper metadata
-            papers = []
-            for paper_id in paper_ids:
-                # Search for specific paper ID
-                search_results = await arxiv_service.search_papers(
-                    query=f"id:{paper_id}", max_results=1
-                )
-                if search_results:
-                    papers.extend(search_results)
+        if (
+            not paper_ids
+            or len(paper_ids) > MAX_ARXIV_INGEST_PAPERS
+            or any(
+                not _ARXIV_ID_PATTERN.fullmatch(str(paper_id).strip())
+                for paper_id in paper_ids
+            )
+        ):
+            logger.warning("Background arXiv ingestion exceeded paper limit")
+            return
+        if not user_id or not organization_id:
+            logger.warning("Background arXiv ingestion missing verified actor scope")
+            return
+        effective_deadline = (
+            deadline if deadline is not None else _background_deadline()
+        )
+        remaining = effective_deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError
+        await asyncio.wait_for(
+            _process_arxiv_ingestion_work(
+                paper_ids=paper_ids,
+                user_id=user_id,
+                organization_id=organization_id,
+                download_pdfs=download_pdfs,
+                extract_content=extract_content,
+                batch_size=batch_size,
+            ),
+            timeout=remaining,
+        )
 
-            if papers:
-                # Ingest papers
-                documents = await arxiv_service.ingest_papers(
-                    papers=papers,
-                    download_pdfs=download_pdfs,
-                    extract_content=extract_content,
-                    batch_size=batch_size,
-                )
-
-                persisted = await persist_arxiv_documents(
-                    documents,
-                    user_id=user_id,
-                    organization_id=organization_id,
-                )
-                if persisted.document_ids:
-                    logger.info(
-                        f"arXiv ingestion persisted/reused "
-                        f"{len(persisted.document_ids)}/{len(documents)} "
-                        f"documents for org {organization_id}"
-                    )
-                if persisted.failed_papers:
-                    logger.warning(
-                        "arXiv ingestion skipped papers after durable-storage "
-                        "failures: %s",
-                        sorted(persisted.failed_papers),
-                    )
-
+    except asyncio.TimeoutError:
+        logger.warning("Background arXiv ingestion exceeded its deadline")
     except Exception as e:
         logger.error(f"Background arXiv ingestion failed: {e}")
+
+
+async def _process_arxiv_ingestion_work(
+    *,
+    paper_ids: List[str],
+    user_id: str,
+    organization_id: "str | UUID",
+    download_pdfs: bool,
+    extract_content: bool,
+    batch_size: int,
+):
+    async with ArXivIngestionService() as arxiv_service:
+        # First, get paper metadata
+        papers = []
+        for paper_id in paper_ids:
+            search_results = await arxiv_service.search_papers(
+                query=f"id:{paper_id}", max_results=1
+            )
+            if search_results:
+                papers.extend(search_results)
+
+        if papers:
+            documents = await arxiv_service.ingest_papers(
+                papers=papers,
+                download_pdfs=download_pdfs,
+                extract_content=extract_content,
+                batch_size=batch_size,
+            )
+
+            persisted = await persist_arxiv_documents(
+                documents,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
+            if persisted.document_ids:
+                logger.info(
+                    "arXiv ingestion persisted/reused %d/%d documents for org %s",
+                    len(persisted.document_ids),
+                    len(documents),
+                    organization_id,
+                )
+            if persisted.failed_papers:
+                logger.warning(
+                    "arXiv ingestion skipped papers after durable-storage failures: %s",
+                    sorted(persisted.failed_papers),
+                )
 
 
 async def _create_arxiv_dataset(
@@ -415,28 +537,63 @@ async def _create_arxiv_dataset(
     questions_per_paper: int,
     difficulty_levels: List[str],
     user_id: str,
+    organization_id: Optional["str | UUID"] = None,
+    deadline: Optional[float] = None,
 ):
     """Background task to create evaluation dataset"""
     try:
-        async with ArXivIngestionService() as arxiv_service:
-            # Search for papers
-            papers = await arxiv_service.search_papers(
-                query=query, max_results=num_papers
-            )
+        if (
+            num_papers < 1
+            or questions_per_paper < 1
+            or num_papers * questions_per_paper > MAX_ARXIV_DATASET_WORK
+        ):
+            logger.warning("Background dataset creation exceeded aggregate work limit")
+            return
+        if not user_id or not organization_id:
+            logger.warning("Background dataset creation missing verified actor scope")
+            return
+        effective_deadline = (
+            deadline if deadline is not None else _background_deadline()
+        )
+        remaining = effective_deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError
+        await asyncio.wait_for(
+            _create_arxiv_dataset_work(
+                task_id=task_id,
+                query=query,
+                num_papers=num_papers,
+                questions_per_paper=questions_per_paper,
+                difficulty_levels=difficulty_levels,
+            ),
+            timeout=remaining,
+        )
 
-            if papers:
-                # Create evaluation dataset
-                dataset = await arxiv_service.create_evaluation_dataset(
-                    papers=papers,
-                    num_questions=questions_per_paper,
-                    difficulty_levels=difficulty_levels,
-                )
-
-                # Store dataset metadata
-                # This could be saved to a database or file system
-                logger.info(
-                    f"Created evaluation dataset {task_id} with {len(dataset['test_cases'])} test cases"
-                )
-
+    except asyncio.TimeoutError:
+        logger.warning("Background dataset creation exceeded its deadline")
     except Exception as e:
         logger.error(f"Background dataset creation failed: {e}")
+
+
+async def _create_arxiv_dataset_work(
+    *,
+    task_id: str,
+    query: str,
+    num_papers: int,
+    questions_per_paper: int,
+    difficulty_levels: List[str],
+):
+    async with ArXivIngestionService() as arxiv_service:
+        papers = await arxiv_service.search_papers(query=query, max_results=num_papers)
+
+        if papers:
+            dataset = await arxiv_service.create_evaluation_dataset(
+                papers=papers,
+                num_questions=questions_per_paper,
+                difficulty_levels=difficulty_levels,
+            )
+            logger.info(
+                "Created evaluation dataset %s with %d test cases",
+                task_id,
+                len(dataset["test_cases"]),
+            )

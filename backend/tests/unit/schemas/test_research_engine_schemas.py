@@ -26,7 +26,6 @@ from src.schemas.research_engine import (
     StepType,
 )
 
-
 # ============================================================================
 # Enum Tests
 # ============================================================================
@@ -194,23 +193,15 @@ class TestBlueprintStepDefinition:
 
     def test_temperature_min(self):
         with pytest.raises(ValidationError):
-            BlueprintStepDefinition(
-                type=StepType.SEARCH, name="s", temperature=-0.1
-            )
+            BlueprintStepDefinition(type=StepType.SEARCH, name="s", temperature=-0.1)
 
     def test_temperature_max(self):
         with pytest.raises(ValidationError):
-            BlueprintStepDefinition(
-                type=StepType.SEARCH, name="s", temperature=2.1
-            )
+            BlueprintStepDefinition(type=StepType.SEARCH, name="s", temperature=2.1)
 
     def test_temperature_boundaries(self):
-        s0 = BlueprintStepDefinition(
-            type=StepType.SEARCH, name="s", temperature=0.0
-        )
-        s2 = BlueprintStepDefinition(
-            type=StepType.SEARCH, name="s", temperature=2.0
-        )
+        s0 = BlueprintStepDefinition(type=StepType.SEARCH, name="s", temperature=0.0)
+        s2 = BlueprintStepDefinition(type=StepType.SEARCH, name="s", temperature=2.0)
         assert s0.temperature == 0.0
         assert s2.temperature == 2.0
 
@@ -244,6 +235,39 @@ class TestBlueprintCreate:
         with pytest.raises(ValidationError):
             BlueprintCreate(steps=[self._step()])
 
+    def test_step_count_is_server_bounded(self):
+        with pytest.raises(ValidationError):
+            BlueprintCreate(
+                name="BP",
+                steps=[self._step(str(index)) for index in range(33)],
+            )
+
+    def test_nested_parameters_are_server_bounded(self):
+        with pytest.raises(ValidationError):
+            BlueprintCreate(
+                name="BP",
+                steps=[
+                    BlueprintStepDefinition(
+                        type=StepType.SEARCH,
+                        name="Search",
+                        parameters={"nested": {"payload": "x" * 40_000}},
+                    )
+                ],
+            )
+
+    def test_nested_prompt_is_server_bounded(self):
+        with pytest.raises(ValidationError):
+            BlueprintCreate(
+                name="BP",
+                steps=[
+                    BlueprintStepDefinition(
+                        type=StepType.SYNTHESIZE,
+                        name="Synthesize",
+                        parameters={"system_prompt_template": "x" * 20_000},
+                    )
+                ],
+            )
+
 
 class TestBlueprintUpdate:
     def test_all_optional(self):
@@ -251,6 +275,18 @@ class TestBlueprintUpdate:
         assert b.name is None
         assert b.steps is None
         assert b.parameters is None
+
+    def test_oversized_prompt_is_rejected_on_update(self):
+        with pytest.raises(ValidationError):
+            BlueprintUpdate(
+                steps=[
+                    BlueprintStepDefinition(
+                        type=StepType.SYNTHESIZE,
+                        name="Synthesize",
+                        system_prompt_template="x" * 20_000,
+                    )
+                ]
+            )
 
 
 class TestBlueprintResponse:
@@ -291,6 +327,10 @@ class TestRunCreate:
     def test_with_overrides(self):
         r = RunCreate(parameters_override={"max_results": 10})
         assert r.parameters_override["max_results"] == 10
+
+    def test_oversized_nested_override_is_rejected(self):
+        with pytest.raises(ValidationError):
+            RunCreate(parameters_override={"nested": ["x" * 40_000]})
 
 
 class TestRunResponse:

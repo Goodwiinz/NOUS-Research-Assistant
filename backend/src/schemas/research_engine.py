@@ -1,11 +1,73 @@
 """Pydantic v2 schemas for the research engine API."""
 
+import json
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
+
+# These limits are deliberately server-owned.  They protect both newly
+# validated blueprints and the legacy JSONB rows that are revalidated by the
+# execution path before a paid call is made.
+MAX_BLUEPRINT_STEPS = 32
+MAX_NESTED_PAYLOAD_BYTES = 32 * 1024
+MAX_PROMPT_TEMPLATE_CHARS = 16 * 1024
+
+
+def _serialized_size(value: Any) -> int:
+    """Return the compact JSON size used for request/runtime accounting."""
+    try:
+        return len(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("payload must be JSON serializable") from exc
+
+
+def _bounded_payload(value: Any, field_name: str) -> Any:
+    if _serialized_size(value) > MAX_NESTED_PAYLOAD_BYTES:
+        raise ValueError(
+            f"{field_name} exceeds the {MAX_NESTED_PAYLOAD_BYTES}-byte limit"
+        )
+    return value
+
+
+def _bounded_step_parameters(value: Dict[str, Any]) -> Dict[str, Any]:
+    _bounded_payload(value, "step parameters")
+    prompt = value.get("system_prompt_template")
+    if prompt is not None and len(str(prompt)) > MAX_PROMPT_TEMPLATE_CHARS:
+        raise ValueError(
+            f"system prompt exceeds the {MAX_PROMPT_TEMPLATE_CHARS}-character limit"
+        )
+    return value
+
+
+def validate_blueprint_runtime(blueprint: Dict[str, Any]) -> None:
+    """Validate limits again for legacy JSONB rows before execution."""
+    steps = blueprint.get("steps") or []
+    if not isinstance(steps, list) or len(steps) > MAX_BLUEPRINT_STEPS:
+        raise ValueError(f"blueprint exceeds the {MAX_BLUEPRINT_STEPS}-step limit")
+    _bounded_payload(blueprint.get("parameters") or {}, "blueprint parameters")
+    for step in steps:
+        if not isinstance(step, dict):
+            raise ValueError("blueprint step must be an object")
+        params = step.get("params") or step.get("parameters") or {}
+        _bounded_payload(params, "step parameters")
+        prompt = step.get("system_prompt_template")
+        if prompt is None:
+            prompt = params.get("system_prompt_template")
+        if prompt is not None and len(str(prompt)) > MAX_PROMPT_TEMPLATE_CHARS:
+            raise ValueError(
+                f"system prompt exceeds the {MAX_PROMPT_TEMPLATE_CHARS}-character limit"
+            )
+
 
 # ============================================================================
 # Enums
@@ -101,7 +163,14 @@ class BlueprintStepDefinition(BaseModel):
     mode: ExecutionMode = ExecutionMode.DETERMINISTIC
     temperature: float = Field(default=0.0, ge=0, le=2)
     seed: Optional[int] = None
-    system_prompt_template: Optional[str] = None
+    system_prompt_template: Optional[str] = Field(
+        default=None, max_length=MAX_PROMPT_TEMPLATE_CHARS
+    )
+
+    @field_validator("parameters")
+    @classmethod
+    def parameters_are_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return _bounded_step_parameters(value)
 
 
 class BlueprintCreate(BaseModel):
@@ -109,7 +178,9 @@ class BlueprintCreate(BaseModel):
 
     name: str
     template_source: Optional[str] = None
-    steps: List[BlueprintStepDefinition] = Field(..., min_length=1)
+    steps: List[BlueprintStepDefinition] = Field(
+        ..., min_length=1, max_length=MAX_BLUEPRINT_STEPS
+    )
     parameters: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("steps")
@@ -121,13 +192,29 @@ class BlueprintCreate(BaseModel):
             raise ValueError("steps must not be empty")
         return v
 
+    @field_validator("parameters")
+    @classmethod
+    def parameters_are_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return _bounded_payload(value, "blueprint parameters")
+
 
 class BlueprintUpdate(BaseModel):
     """Schema for updating a research blueprint."""
 
     name: Optional[str] = None
-    steps: Optional[List[BlueprintStepDefinition]] = None
+    steps: Optional[List[BlueprintStepDefinition]] = Field(
+        default=None, max_length=MAX_BLUEPRINT_STEPS
+    )
     parameters: Optional[Dict[str, Any]] = None
+
+    @field_validator("parameters")
+    @classmethod
+    def parameters_are_bounded(
+        cls, value: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        return _bounded_payload(value, "blueprint parameters")
 
 
 class BlueprintResponse(BaseModel):
@@ -156,6 +243,11 @@ class RunCreate(BaseModel):
     """Schema for creating a research run."""
 
     parameters_override: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("parameters_override")
+    @classmethod
+    def parameters_are_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return _bounded_payload(value, "run parameters")
 
 
 class RunResponse(BaseModel):
