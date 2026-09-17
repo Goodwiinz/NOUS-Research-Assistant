@@ -2024,6 +2024,7 @@ async def stream_event_generator(
             page_context=page_context,
             use_rag=request_body.use_rag,
             max_input_chars=settings.AGENT_FAST_PATH_MAX_INPUT_CHARS,
+            has_attachments=bool(request_body.attachment_ids),
         )
         if (
             settings.AGENT_FAST_PATH_ENABLED
@@ -2181,6 +2182,10 @@ async def stream_event_generator(
             "messages": messages,
             "page_context": page_context,
             "retrieved_contexts": [],
+            "attachment_ids": [
+                str(document_id) for document_id in (request_body.attachment_ids or [])
+            ],
+            "attachment_status": [],
             "tool_executions": [],
             "thread_id": request_body.thread_id or "",
             "thread_persistence": (

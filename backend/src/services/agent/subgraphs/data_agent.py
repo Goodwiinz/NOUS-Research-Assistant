@@ -67,6 +67,7 @@ async def data_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     from langchain_core.messages import ToolMessage
 
     from src.core.config import get_settings
+    from src.services.agent._nodes_llm import _attachment_status_part
     from src.services.agent.graph import AGENT_LLM_TIMEOUT_SECONDS
 
     sanitized = _sanitize_messages(state["messages"])
@@ -74,12 +75,19 @@ async def data_llm_node(state: AgentState, config: RunnableConfig) -> dict:
 
     messages = [
         SystemMessage(content=_build_data_system_prompt()),
+    ]
+    attachment_status_prompt = _attachment_status_part(
+        state.get("attachment_status", [])
+    )
+    if attachment_status_prompt:
+        messages.append(SystemMessage(content=attachment_status_prompt))
+    messages.append(
         SystemMessage(
             content=render_retrieval_prompt(
                 state.get("retrieved_contexts", []), sanitized
             )
-        ),
-    ]
+        )
+    )
     from src.services.agent.runtime_snapshot import render_project_skill_catalog
 
     skill_catalog_prompt = render_project_skill_catalog(

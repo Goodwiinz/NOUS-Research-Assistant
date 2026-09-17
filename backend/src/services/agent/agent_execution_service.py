@@ -2405,6 +2405,11 @@ async def _run_agent_graph(
                 "messages": messages,
                 "page_context": page_context,
                 "retrieved_contexts": [],
+                "attachment_ids": [
+                    str(document_id)
+                    for document_id in (getattr(request, "attachment_ids", None) or [])
+                ],
+                "attachment_status": [],
                 "tool_executions": [],
                 "thread_id": request.thread_id or "",
                 "thread_persistence": (

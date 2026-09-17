@@ -206,6 +206,137 @@ describe('useChatPersistence initialization', () => {
     });
   });
 
+  it('preserves an explicit deep-linked thread selected while layout init is in flight', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    window.history.replaceState({}, '', '/chat?thread=thread-1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    // useChatSession can restore the URL target while this layout-owned
+    // initializer is still waiting for its conversation page. The later
+    // setCurrentConversation call must not erase that newer selection.
+    // Mutation check: neutralizing the deep-link restore branch in
+    // `src/hooks/useChatPersistence.ts` makes this test fail with
+    // `pnpm --dir frontend exec vitest run src/hooks/__tests__/useChatPersistence.initialization.test.tsx -t "preserves an explicit deep-linked thread" --reporter=dot`.
+    await act(async () => {
+      conversations.resolve(conversationPage([conversation]));
+      useChatStore.getState().setCurrentThread(thread.id);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe(thread.id);
+  });
+
+  it('preserves a newer sidebar selection made before the URL catches up', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    serviceMocks.listThreads.mockResolvedValue(threadPage([thread]));
+    window.history.replaceState({}, '', '/chat?thread=thread-1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    await act(async () => {
+      // The sidebar selection is newer than the A URL, but router.push has
+      // not committed B yet. setCurrentConversation must not erase B while
+      // resetting the downstream conversation selection.
+      useChatStore.getState().setCurrentThread('thread-2');
+      conversations.resolve(conversationPage([conversation]));
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe('thread-2');
+  });
+
+  it('keeps a newer sidebar selection when the URL changes during thread loading', async () => {
+    const conversations = deferred<never>();
+    const threads = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    serviceMocks.listThreads.mockReturnValue(threads.promise);
+    window.history.replaceState({}, '', '/chat?thread=thread-1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    // The URL-owned selection is captured before the conversation switch
+    // clears it. The sidebar can then select a different thread while the
+    // resulting thread page is still loading; that newer choice owns the UI.
+    await act(async () => {
+      useChatStore.getState().setCurrentThread(thread.id);
+      conversations.resolve(conversationPage([conversation]));
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(serviceMocks.listThreads).toHaveBeenCalledWith('conversation-1')
+    );
+
+    window.history.replaceState({}, '', '/chat?thread=thread-2');
+    act(() => {
+      useChatStore.getState().setCurrentThread('thread-2');
+    });
+
+    await act(async () => {
+      threads.resolve(threadPage([thread]));
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe('thread-2');
+  });
+
+  it('honors new-chat intent when a stale thread query is also present', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    serviceMocks.listThreads.mockResolvedValue(threadPage([thread]));
+    window.history.replaceState({}, '', '/chat?thread=thread-1&new=1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    // This is the selection that previously caused the post-conversation
+    // restoration branch to override the explicit new-chat intent.
+    await act(async () => {
+      useChatStore.getState().setCurrentThread(thread.id);
+      conversations.resolve(conversationPage([conversation]));
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBeNull();
+  });
+
   it('resolves null selections without reads and starts non-awaited selection reads', async () => {
     const conversations = deferred<never>();
     serviceMocks.listConversations.mockReturnValue(conversations.promise);

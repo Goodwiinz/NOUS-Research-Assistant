@@ -14,6 +14,7 @@ def _decide(
     page_type: str = "chat",
     project_id: str | None = None,
     history: list | None = None,
+    has_attachments: bool = False,
 ):
     from src.services.agent.fast_path import classify_fast_path_turn
 
@@ -23,6 +24,7 @@ def _decide(
         page_context={"type": page_type, "project_id": project_id},
         use_rag=use_rag,
         max_input_chars=8_000,
+        has_attachments=has_attachments,
     )
 
 
@@ -56,6 +58,17 @@ def test_explicit_rag_fails_closed_for_non_conversational_question():
 
     assert decision.eligible is False
     assert decision.reason == "rag_requested"
+
+
+def test_attachment_turn_fails_closed_to_grounded_graph_path_when_rag_is_off():
+    decision = _decide(
+        "What is the launch code?",
+        use_rag=False,
+        has_attachments=True,
+    )
+
+    assert decision.eligible is False
+    assert decision.reason == "attachments_require_grounding"
 
 
 @pytest.mark.parametrize("page_type", ["project", "documents"])
