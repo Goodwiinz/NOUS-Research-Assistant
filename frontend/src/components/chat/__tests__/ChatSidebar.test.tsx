@@ -113,7 +113,15 @@ describe('ChatSidebar', () => {
 
   it('keeps older-thread pagination reachable while a search is active', () => {
     const onLoadMoreThreads = vi.fn();
-    render(
+    const pageTwoMatch = {
+      id: 'conv-page-two',
+      title: 'Older retrieval thread',
+      messages: [{ role: 'user', content: 'Loaded from the next page' }],
+      threadId: 'thread-page-two',
+      updatedAt: Date.now() - 7200000,
+      messageCount: 1,
+    };
+    const { rerender } = render(
       <ChatSidebar
         {...defaultProps}
         hasMoreThreads
@@ -121,7 +129,7 @@ describe('ChatSidebar', () => {
       />
     );
     fireEvent.change(screen.getByPlaceholderText('Search threads...'), {
-      target: { value: 'older' },
+      target: { value: 'older retrieval' },
     });
 
     expect(
@@ -131,6 +139,17 @@ describe('ChatSidebar', () => {
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show older threads' }));
     expect(onLoadMoreThreads).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ChatSidebar
+        {...defaultProps}
+        conversations={[...mockConversations, pageTwoMatch]}
+        hasMoreThreads
+        onLoadMoreThreads={onLoadMoreThreads}
+      />
+    );
+    expect(screen.getByDisplayValue('older retrieval')).toBeInTheDocument();
+    expect(screen.getByText(pageTwoMatch.title)).toBeInTheDocument();
   });
 
   it('shows "No messages yet" for empty conversations', () => {

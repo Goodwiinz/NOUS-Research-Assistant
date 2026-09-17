@@ -127,7 +127,7 @@ function FixtureShell(): ReactElement {
   const drawer = useChatDrawer(chatInputRef);
   const pendingUploadsRef = useRef<
     Array<{
-      files: FileList;
+      files: File[];
       resolve: (outcomes: { ok: boolean; documentId?: string }[]) => void;
     }>
   >([]);
@@ -179,17 +179,19 @@ function FixtureShell(): ReactElement {
   const handleAttach = useCallback(
     (files: FileList): Promise<{ ok: boolean; documentId?: string }[]> =>
       new Promise((resolve) => {
-        pendingUploadsRef.current.push({ files, resolve });
+        // ChatInput clears the native file input as soon as it receives this
+        // promise. Snapshot the entries before that reset; retaining the live
+        // FileList would make the delayed fixture resolve an empty batch.
+        const upload = { files: Array.from(files), resolve };
+        pendingUploadsRef.current.push(upload);
         // The timeout leaves a deterministic Uploading window for browser
         // evidence. QA can settle immediately through the exposed resolver.
         window.setTimeout(() => {
-          const index = pendingUploadsRef.current.findIndex(
-            (entry) => entry.files === files
-          );
+          const index = pendingUploadsRef.current.indexOf(upload);
           if (index < 0) return;
           pendingUploadsRef.current.splice(index, 1);
           resolve(
-            Array.from(files).map((file, fileIndex) => ({
+            upload.files.map((file, fileIndex) => ({
               ok: !file.name.toLowerCase().includes('fail'),
               ...(!file.name.toLowerCase().includes('fail')
                 ? { documentId: `visual-upload-${file.name}-${fileIndex}` }

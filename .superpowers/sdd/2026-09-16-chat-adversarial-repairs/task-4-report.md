@@ -26,8 +26,10 @@ the root browser matrix can exercise the intermediate columns and drawer.
 - The gated visual fixture seeds completed provenance/reasoning/tool state and
   live planner/provider state, includes a real context rail at `md` widths,
   uses the production drawer with the composer focus ref, and exposes delayed
-  attachment success/failure settlement for browser races. Its send preflight
-  is side-effect free so one visual send creates one turn.
+  attachment success/failure settlement for browser races. The fixture
+  snapshots `File[]` before the native input reset, so delayed settlement
+  retains the selected files. Its send preflight is side-effect free so one
+  visual send creates one turn.
 - The visual E2E expectation follows the production history docking breakpoint
   at 1280px. It fills the initially empty composer and uses a bounded
   target-complete 60-tab traversal so the permanent app rail and mobile drawer
@@ -79,6 +81,10 @@ contrast, and drawer/context-rail checks. Preliminary root feedback found the
 full composition and 13 viewport pointer checks working, then identified and
 prompted the selected-row contrast repair; that feedback is not claimed as the
 final frozen browser result here.
+
+The follow-up browser review also verified the search flow with a unique
+page-two match and fixed the fixture-only FileList lifetime in the delayed
+attachment resolver. The production upload path was unchanged.
 
 No server, account credentials, auth bypass, or external model call was added.
 Root-authored audit and plan documents remain untracked for the final docs
