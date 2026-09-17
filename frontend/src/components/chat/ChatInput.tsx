@@ -692,7 +692,7 @@ export function ChatInput({
                 aria-label="Message"
                 rows={1}
                 disabled={isDisabled}
-                aria-expanded={menu.isOpen}
+                aria-haspopup={menu.isOpen ? 'listbox' : undefined}
                 aria-controls={menu.isOpen ? SLASH_LISTBOX_ID : undefined}
                 aria-activedescendant={
                   activeCommand ? slashOptionId(activeCommand.id) : undefined

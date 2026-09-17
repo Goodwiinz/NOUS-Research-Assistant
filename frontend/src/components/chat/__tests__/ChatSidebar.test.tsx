@@ -102,6 +102,37 @@ describe('ChatSidebar', () => {
     expect(screen.queryByText('Gamma Query')).not.toBeInTheDocument();
   });
 
+  it('trims surrounding whitespace before matching a thread search', () => {
+    render(<ChatSidebar {...defaultProps} />);
+    const searchInput = screen.getByPlaceholderText('Search threads...');
+    fireEvent.change(searchInput, { target: { value: '  Alpha Chat  ' } });
+
+    expect(screen.getByText('Alpha Chat')).toBeInTheDocument();
+    expect(screen.queryByText('Beta Discussion')).not.toBeInTheDocument();
+  });
+
+  it('keeps older-thread pagination reachable while a search is active', () => {
+    const onLoadMoreThreads = vi.fn();
+    render(
+      <ChatSidebar
+        {...defaultProps}
+        hasMoreThreads
+        onLoadMoreThreads={onLoadMoreThreads}
+      />
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search threads...'), {
+      target: { value: 'older' },
+    });
+
+    expect(
+      screen.getByText(
+        'Search covers loaded threads. Load older threads to search more.'
+      )
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show older threads' }));
+    expect(onLoadMoreThreads).toHaveBeenCalledTimes(1);
+  });
+
   it('shows "No messages yet" for empty conversations', () => {
     render(<ChatSidebar {...defaultProps} />);
     const noMsgElements = screen.getAllByText('No messages yet');

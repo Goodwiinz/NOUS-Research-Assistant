@@ -132,8 +132,8 @@ export const ChatSidebar = memo(function ChatSidebar({
 
   const filteredConversations = useMemo(() => {
     let list = conversations;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
       list = list.filter((c) => c.title.toLowerCase().includes(q));
     }
     if (activeFilter === 'pinned') list = list.filter((c) => c.pinned);
@@ -144,6 +144,7 @@ export const ChatSidebar = memo(function ChatSidebar({
     () => groupByDate(filteredConversations),
     [filteredConversations]
   );
+  const hasSearchQuery = searchQuery.trim().length > 0;
 
   const pinnedCount = useMemo(
     () => conversations.filter((c) => c.pinned).length,
@@ -232,7 +233,7 @@ export const ChatSidebar = memo(function ChatSidebar({
             New chat
           </span>
           <kbd
-            className="ml-auto px-[5px] py-px rounded-[3px] bg-(--nous-erebus)/10 text-(--nous-erebus)/70 text-[9px] font-semibold"
+            className="ml-auto px-[5px] py-px rounded-[3px] bg-(--nous-erebus)/10 text-(--nous-erebus) text-[9px] font-semibold"
             style={{ fontFamily: 'var(--nous-font-mono)' }}
           >
             ⌘N
@@ -244,6 +245,7 @@ export const ChatSidebar = memo(function ChatSidebar({
           <Search className="absolute left-[10px] top-1/2 -translate-y-1/2 w-[13px] h-[13px] text-(--nous-fg-3) pointer-events-none" />
           <input
             type="text"
+            aria-label="Search threads"
             placeholder="Search threads..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -487,16 +489,24 @@ export const ChatSidebar = memo(function ChatSidebar({
               className="text-[11px] text-(--nous-fg-3)"
               style={{ fontFamily: 'var(--nous-font-body)' }}
             >
-              {searchQuery ? 'No matching threads' : 'No conversations yet'}
+              {hasSearchQuery ? 'No matching threads' : 'No conversations yet'}
             </p>
           </div>
         )}
 
-        {/* CX8: more threads exist server-side than the current page. Hidden
-            while searching — the client-side filter only covers loaded
-            threads, so "load more" wouldn't visibly help a filtered view. */}
-        {hasMoreThreads && !searchQuery && (
+        {/* CX8: filtering is explicitly over the currently loaded page. Keep
+            the paging action visible during a search so a matching older
+            thread can be brought into the client-side result set. */}
+        {hasMoreThreads && (
           <div className="px-2.5 pb-2.5 pt-1">
+            {hasSearchQuery && (
+              <p
+                className="px-1 pb-2 text-[10px] leading-normal text-(--nous-fg-3)"
+                style={{ fontFamily: 'var(--nous-font-ui)' }}
+              >
+                Search covers loaded threads. Load older threads to search more.
+              </p>
+            )}
             <button
               type="button"
               onClick={handleLoadMore}

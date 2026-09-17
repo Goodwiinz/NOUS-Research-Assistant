@@ -57,7 +57,11 @@ export function ChatDialogs({
               Rename thread
             </AlertDialogTitle>
           </AlertDialogHeader>
+          <label htmlFor="rename-thread" className="sr-only">
+            Thread name
+          </label>
           <Input
+            id="rename-thread"
             className="text-sm bg-(--nous-bg-1) border-(--nous-border-1) text-(--nous-fg-1)"
             style={{ fontFamily: 'var(--nous-font-ui)' }}
             value={renameDialog.value}

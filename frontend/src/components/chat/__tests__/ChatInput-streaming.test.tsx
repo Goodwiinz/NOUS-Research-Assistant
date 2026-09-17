@@ -227,6 +227,19 @@ describe('ChatInput streaming behavior', () => {
       expect(screen.getByText('/projects')).toBeInTheDocument();
     });
 
+    it('uses valid textarea autocomplete semantics while the menu is open', () => {
+      renderWithChatRuntime(<ChatInput {...defaultProps} value="/" />);
+      const textarea = screen.getByRole('textbox');
+
+      expect(textarea).not.toHaveAttribute('aria-expanded');
+      expect(textarea).toHaveAttribute('aria-haspopup', 'listbox');
+      expect(textarea).toHaveAttribute('aria-autocomplete', 'list');
+      expect(textarea).toHaveAttribute(
+        'aria-controls',
+        'slash-command-listbox'
+      );
+    });
+
     it('does not show the menu for normal text', () => {
       renderWithChatRuntime(<ChatInput {...defaultProps} value="hello" />);
       expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
