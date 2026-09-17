@@ -69,6 +69,7 @@ def classify_fast_path_turn(
     page_context: Mapping[str, Any] | None,
     use_rag: bool,
     max_input_chars: int,
+    has_attachments: bool = False,
 ) -> FastPathDecision:
     """Return a deterministic, explainable routing decision.
 
@@ -87,6 +88,13 @@ def classify_fast_path_turn(
     )
     if latest_user is None:
         return FastPathDecision(False, "missing_user_message")
+
+    # Luna's evidence-independent path has no document loader. Explicit
+    # attachments therefore always take the graph path, including when the
+    # RAG toggle is off: direct user-selected content remains usable while
+    # broad retrieval stays disabled.
+    if has_attachments:
+        return FastPathDecision(False, "attachments_require_grounding")
 
     user_text = _content(latest_user).strip()
     if _BARE_CONVERSATION_RE.fullmatch(user_text):

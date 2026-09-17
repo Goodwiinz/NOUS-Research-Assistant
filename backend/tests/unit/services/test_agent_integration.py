@@ -620,6 +620,7 @@ class TestSSEStreamPersistence:
             "model": "model-router",
             "use_rag": True,
             "max_context_docs": 5,
+            "attachment_ids": ["44444444-4444-4444-8444-444444444444"],
         }
 
         async def _empty_events():
@@ -672,6 +673,8 @@ class TestSSEStreamPersistence:
             "project_name": None,
         }
         assert initial_state["page_context"] == expected_context
+        assert initial_state["attachment_ids"] == payload["attachment_ids"]
+        assert initial_state["attachment_status"] == []
         assert config["configurable"]["page_context"] == expected_context
 
     def test_stream_confirm_persists_resumed_messages(self, client, mock_user_a):

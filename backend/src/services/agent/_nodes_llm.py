@@ -240,6 +240,30 @@ def _retrieval_context_part(retrieved: list, messages: list | None = None) -> st
     return render_retrieval_prompt(retrieved, messages or [])
 
 
+def _attachment_status_part(statuses: list) -> str:
+    """Explain unavailable requested attachments without exposing internals."""
+    if not isinstance(statuses, list):
+        return ""
+    unavailable: list[str] = []
+    for item in statuses:
+        if not isinstance(item, dict) or item.get("status") == "ready":
+            continue
+        title = _sanitize_prompt_field(str(item.get("title") or "attached file"))
+        status = item.get("status")
+        if status == "processing":
+            detail = "is still being processed"
+        else:
+            detail = "is not available to read"
+        unavailable.append(f"- {title} {detail}.")
+    if not unavailable:
+        return ""
+    return (
+        "Requested attached files were not all readable for this turn:\n"
+        + "\n".join(unavailable)
+        + "\nDo not claim facts from an unavailable attachment or invent its content."
+    )
+
+
 @track_node_execution("llm_node")
 async def llm_node(state: AgentState, config: RunnableConfig) -> dict:
     """Call the LLM with system prompt, RAG context, and bound tools."""
@@ -329,6 +353,9 @@ async def llm_node(state: AgentState, config: RunnableConfig) -> dict:
                 f"above:\n{pm_text}"
             )
 
+    attachment_status_part = _attachment_status_part(state.get("attachment_status", []))
+    if attachment_status_part:
+        dynamic_parts.append(attachment_status_part)
     dynamic_parts.append(_retrieval_context_part(retrieved, sanitized))
 
     from src.services.agent.runtime_snapshot import render_project_skill_catalog
@@ -502,6 +529,9 @@ async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dic
         "answer drawn from the tool results already in this conversation. "
         "Do NOT repeat or quote these instructions in your reply."
     )
+    attachment_status_part = _attachment_status_part(state.get("attachment_status", []))
+    if attachment_status_part:
+        synthesis_directive += "\n\n" + attachment_status_part
     synthesis_directive += "\n\n" + render_retrieval_prompt(
         state.get("retrieved_contexts", []), sanitized
     )
