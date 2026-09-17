@@ -206,6 +206,40 @@ describe('useChatPersistence initialization', () => {
     });
   });
 
+  it('preserves an explicit deep-linked thread selected while layout init is in flight', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    window.history.replaceState({}, '', '/chat?thread=thread-1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    // useChatSession can restore the URL target while this layout-owned
+    // initializer is still waiting for its conversation page. The later
+    // setCurrentConversation call must not erase that newer selection.
+    // Mutation check: neutralizing the restore at
+    // `src/hooks/useChatPersistence.ts:524` makes this test fail with
+    // `pnpm --dir frontend exec vitest run src/hooks/__tests__/useChatPersistence.initialization.test.tsx -t "preserves an explicit deep-linked thread" --reporter=dot`.
+    await act(async () => {
+      conversations.resolve(conversationPage([conversation]));
+      useChatStore.getState().setCurrentThread(thread.id);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe(thread.id);
+  });
+
   it('resolves null selections without reads and starts non-awaited selection reads', async () => {
     const conversations = deferred<never>();
     serviceMocks.listConversations.mockReturnValue(conversations.promise);

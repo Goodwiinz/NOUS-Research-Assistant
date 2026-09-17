@@ -494,6 +494,21 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           );
         }
 
+        const urlParams =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search)
+            : null;
+        const isNewChat = urlParams?.get('new') === '1';
+        const requestedThreadId = urlParams?.get('thread');
+        // The chat route restores an explicit deep link in parallel with this
+        // layout initializer. `setCurrentConversation` normally clears the
+        // downstream thread selection, so remember a URL-owned selection that
+        // landed while the conversation read was in flight and restore it
+        // after that reset completes.
+        const selectedThreadBeforeConversationLoad = requestedThreadId
+          ? useChatStore.getState().currentThreadId
+          : null;
+
         await setCurrentConversation(conversationId);
 
         debugLog(
@@ -506,16 +521,22 @@ export function useChatPersistence(): UseChatPersistenceReturn {
 
         const threadsState = useChatStore.getState();
         const conversationThreads = threadsState.threads[conversationId] || [];
+        if (
+          requestedThreadId &&
+          selectedThreadBeforeConversationLoad === requestedThreadId &&
+          threadsState.currentThreadId !== requestedThreadId
+        ) {
+          debugLog(
+            '[useChatPersistence] Restoring deep-linked thread after conversation init:',
+            requestedThreadId
+          );
+          setCurrentThread(requestedThreadId);
+        }
         // An explicit "new chat" (?new=1) must land on a blank composer.
         // useChatSession already honors this; without the same check here
         // this hook writes a stale thread id into the store, and the next
         // send appends to that previous thread instead of starting a new
         // one (and the URL never becomes ?thread=).
-        const urlParams =
-          typeof window !== 'undefined'
-            ? new URLSearchParams(window.location.search)
-            : null;
-        const isNewChat = urlParams?.get('new') === '1';
         const hasExplicitThreadIntent = Boolean(urlParams?.get('thread'));
         if (
           conversationThreads.length > 0 &&
