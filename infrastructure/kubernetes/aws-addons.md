@@ -22,7 +22,7 @@ re-export and retry the failed step.
 
 | Resource | File |
 |---|---|
-| ACM cert `*.gen-text.app` + validation | `infrastructure/terraform/acm.tf` |
+| ACM cert `*.goodwiinz.tech` + validation | `infrastructure/terraform/acm.tf` |
 | ALB controller IRSA role + official v2.13.4 IAM policy | `infrastructure/terraform/alb-irsa.tf`, `alb-controller-iam-policy.json` |
 | Cluster Autoscaler IRSA role + policy | `infrastructure/terraform/cluster-autoscaler-irsa.tf` |
 
@@ -152,7 +152,7 @@ helm upgrade --install external-dns external-dns/external-dns \
   --set txtOwnerId=nous-eks \
   --set 'sources[0]=ingress' \
   --set 'sources[1]=service' \
-  --set 'domainFilters[0]=gen-text.app'
+  --set 'domainFilters[0]=goodwiinz.tech'
 ```
 
 ## Verify

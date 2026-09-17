@@ -20,9 +20,9 @@ metadata:
     # TLS is AWS ACM (NOT cert-manager): terraform aws_acm_certificate
     # (Task 3) with DNS validation — the validation CNAME is added manually
     # in Cloudflare (DNS is on Cloudflare, not Route53).
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:267685730035:certificate/4597607e-7aa4-4e43-960d-9ec80c8d34c7 # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:267685730035:certificate/2fabe0a2-44f1-4e59-8160-69ccc5b4c8bb # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
     # Kept from base; external-dns stays on Cloudflare, records -> ALB hostname.
-    external-dns.alpha.kubernetes.io/hostname: dev-api.gen-text.app
+    external-dns.alpha.kubernetes.io/hostname: dev-api.goodwiinz.tech
     external-dns.alpha.kubernetes.io/ttl: "300"
     external-dns.alpha.kubernetes.io/provider: cloudflare
 spec:

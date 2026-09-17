@@ -85,8 +85,8 @@ Enterprise-grade multimodal RAG system that retrieves, reasons, and generates ac
 
 | Component     | Status     | Details                                       |
 | ------------- | ---------- | --------------------------------------------- |
-| Frontend      | Running    | `dev-app.gen-text.app`, Next.js rewrite proxy |
-| Backend       | Running    | `dev-api.gen-text.app`, FastAPI               |
+| Frontend      | Running    | `dev-app.goodwiinz.tech`, Next.js rewrite proxy |
+| Backend       | Running    | `dev-api.goodwiinz.tech`, FastAPI               |
 | PostgreSQL    | External   | DO managed, `multimodal_rag` database         |
 | Neo4j         | In-cluster | StatefulSet, 5Gi, 128m heap                   |
 | Qdrant        | In-cluster | StatefulSet, 5Gi, weekly backup CronJob       |

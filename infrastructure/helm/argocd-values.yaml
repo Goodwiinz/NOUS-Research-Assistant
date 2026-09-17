@@ -27,7 +27,16 @@ repoServer:
       memory: 128Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
+  # The rag repo pack is ~1.3 GiB — the default 90s git fetch timeout
+  # (ARGOCD_GIT_REQUEST_TIMEOUT) is not enough from the EKS node, so every
+  # refresh died with `git fetch origin --tags --force --prune failed
+  # timeout after 1m30s` (Task 5). Wired via argocd-cmd-params-cm below —
+  # setting repoServer.env directly would duplicate the chart's
+  # configMapKeyRef entry.
+  configs:
+    params:
+      "reposerver.git.request.timeout": "600"
   # copyutil init container
   copyutil:
     resources:

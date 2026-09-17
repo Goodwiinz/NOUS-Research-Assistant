@@ -45,9 +45,9 @@ All boxes checked before anything destructive. Any unchecked box = no go.
   ```
   Expected: Deployments `0/N`; Neo4j + Qdrant StatefulSets `1/1`.
 - [ ] **Zero rollback events during soak.** No one ran cutover Step 9; confirm via close-out notes + `kubectl get pods -n rag-dev --context $EKS_CONTEXT` uptime (no mass restarts aligned with a rollback).
-- [ ] **AWS side healthy — smoke suite green.** Re-run every row of cutover Step 8 (login, upload→embed→search, chat SSE, WebSocket, entities page, Celery beat/worker, KEDA, S3 round-trip, synthetic CronJob) against `https://dev-api.gen-text.app`. Expected: all pass on the first clean run.
+- [ ] **AWS side healthy — smoke suite green.** Re-run every row of cutover Step 8 (login, upload→embed→search, chat SSE, WebSocket, entities page, Celery beat/worker, KEDA, S3 round-trip, synthetic CronJob) against `https://dev-api.goodwiinz.tech`. Expected: all pass on the first clean run.
   ```bash
-  curl -s https://dev-api.gen-text.app/health
+  curl -s https://dev-api.goodwiinz.tech/health
   ```
   Expected: 200.
 - [ ] **AWS session active:**
@@ -195,9 +195,9 @@ Expected: 4 objects, all sizes matching the table. **Do not start Section 4 unti
 Run before teardown — proves nothing resolves to DO anymore.
 
 ```bash
-dig +short dev-api.gen-text.app
-dig +short dev-app.gen-text.app
-dig +short dev-api.gen-text.app | grep -i digitalocean; echo "do-refs=$?"
+dig +short dev-api.goodwiinz.tech
+dig +short dev-app.goodwiinz.tech
+dig +short dev-api.goodwiinz.tech | grep -i digitalocean; echo "do-refs=$?"
 ```
 
 Expected:

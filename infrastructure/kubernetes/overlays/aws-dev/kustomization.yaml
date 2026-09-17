@@ -13,8 +13,8 @@
 # Helm-managed runtime (the chart that ArgoCD dev actually deploys) is
 # configured separately via infrastructure/helm/knowledge-graph-analytics/values-aws.yaml.
 #
-# WIREUP (Task 5): hosts cut over to dev-api.gen-text.app (backend) and
-# dev-ws.gen-text.app (websocket); namespace stays multimodal-rag-system —
+# WIREUP (Task 5): hosts cut over to dev-api.goodwiinz.tech (backend) and
+# dev-ws.goodwiinz.tech (websocket); namespace stays multimodal-rag-system —
 # the ArgoCD apps target it.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

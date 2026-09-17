@@ -20,7 +20,7 @@
 | Object storage | Spaces `rag-system-storage` (nyc3) | S3 `nous-storage-us-east-1` |
 | Images | DO registry | ECR `nous/backend`, `nous/frontend` |
 | DNS | Cloudflare (external-dns) | Cloudflare (external-dns) → ALB group `nous-dev` |
-| Frontend | Vercel `dev-app.gen-text.app` | unchanged |
+| Frontend | Vercel `dev-app.goodwiinz.tech` | unchanged |
 
 **Working contexts** (set once, verify per step):
 
@@ -72,7 +72,7 @@ All boxes must be checked before starting. Any unchecked box = no go.
   ```
   Expected: real email(s); `cluster_admin_role_arns = ["arn:aws:iam::<account>:role/<admin>", ...]`.
 - [ ] Terraform outputs recorded (`terraform output > /tmp/nous-aws-outputs.txt`, Task 2). Needed values: `database_endpoint`, `database_port`, `database_name`, `database_username`, `redis_endpoint`, `storage_bucket_name`, `caller_identity.account_id`.
-- [ ] Task 5 wiring done: `infrastructure/helm/knowledge-graph-analytics/values-aws.yaml` placeholders filled (`<ACCOUNT_ID>`, `<APPLICATION_STORAGE_BUCKET>`, `<ELASTICACHE_ENDPOINT>`, `<ACM_CERT_ARN>`) and `infrastructure/kubernetes/overlays/aws-dev/` scaffold hosts (`*.multimodal-rag.example.com`) replaced with the real `*.gen-text.app` hosts. Verify:
+- [ ] Task 5 wiring done: `infrastructure/helm/knowledge-graph-analytics/values-aws.yaml` placeholders filled (`<ACCOUNT_ID>`, `<APPLICATION_STORAGE_BUCKET>`, `<ELASTICACHE_ENDPOINT>`, `<ACM_CERT_ARN>`) and `infrastructure/kubernetes/overlays/aws-dev/` scaffold hosts (`*.multimodal-rag.example.com`) replaced with the real `*.goodwiinz.tech` hosts. Verify:
   ```bash
   grep -rn "example.com\|ACCOUNT_ID\|ELASTICACHE_ENDPOINT>\|APPLICATION_STORAGE_BUCKET>\|ACM_CERT_ARN>" \
     infrastructure/helm/knowledge-graph-analytics/values-aws.yaml \
@@ -107,7 +107,7 @@ All boxes must be checked before starting. Any unchecked box = no go.
   aws acm list-certificates --region us-east-1 \
     --query "CertificateSummaryList[?Status=='ISSUED'].[CertificateArn,DomainName]"
   ```
-  Expected: cert for `*.gen-text.app` (or `dev-api.gen-text.app` + ws host) `ISSUED`. ARN must equal `<ACM_CERT_ARN>` used in values-aws/overlay.
+  Expected: cert for `*.goodwiinz.tech` (or `dev-api.goodwiinz.tech` + ws host) `ISSUED`. ARN must equal `<ACM_CERT_ARN>` used in values-aws/overlay.
 
 **Record for rollback (Step 9)** — run now and keep the output:
 
@@ -118,7 +118,7 @@ kubectl get ingress -n rag-dev --context $DOKS_CONTEXT -o wide > /tmp/do-ingress
 cat /tmp/do-replicas.txt /tmp/do-ingress.txt
 ```
 
-Expected: e.g. `nous-dev-knowledge-graph-analytics-backend 1`, `nous-dev-celery-beat 1`, `nous-dev-celery-worker 1`. `/tmp/do-ingress.txt` shows the current DO LB address behind `dev-api.gen-text.app`.
+Expected: e.g. `nous-dev-knowledge-graph-analytics-backend 1`, `nous-dev-celery-beat 1`, `nous-dev-celery-worker 1`. `/tmp/do-ingress.txt` shows the current DO LB address behind `dev-api.goodwiinz.tech`.
 
 **Infisical rollback anchor (needed by 9.4):** rollback restores `/database` and
 `/redis` from **Infisical secret version history** — Infisical keeps every prior
@@ -162,7 +162,7 @@ Expected: every Deployment `0/1`; Neo4j and Qdrant StatefulSets still `1/1` Read
 **1c. Confirm quiescence externally** (pods are gone, so check through the LB):
 
 ```bash
-sleep 60 && curl -sS -m 5 https://dev-api.gen-text.app/health; echo "exit=$?"
+sleep 60 && curl -sS -m 5 https://dev-api.goodwiinz.tech/health; echo "exit=$?"
 ```
 
 Expected: non-200 / connection failure — no backend is running, so no writers can reach PG/Neo4j/Qdrant.
@@ -536,10 +536,10 @@ kubectl get ingress -n rag-dev --context $EKS_CONTEXT
 
 Expected: `backend-ingress` (+ `websocket-ingress`) ADDRESS = `k8s-nousdev-...us-east-1.elb.amazonaws.com`.
 
-**7b. Verify external-dns created the CNAMEs** (records per the `external-dns.alpha.kubernetes.io/hostname` annotations, e.g. `dev-api.gen-text.app` and the wired ws host):
+**7b. Verify external-dns created the CNAMEs** (records per the `external-dns.alpha.kubernetes.io/hostname` annotations, e.g. `dev-api.goodwiinz.tech` and the wired ws host):
 
 ```bash
-dig +short CNAME dev-api.gen-text.app
+dig +short CNAME dev-api.goodwiinz.tech
 ```
 
 Expected: the ALB hostname from 7a. external-dns may take a few minutes (TTL annotation 300; if it stays absent >10 min: `kubectl logs -n kube-system deploy/external-dns --context $EKS_CONTEXT | tail`).
@@ -549,8 +549,8 @@ Expected: the ALB hostname from 7a. external-dns may take a few minutes (TTL ann
 **7d. Confirm ACM cert in use:**
 
 ```bash
-curl -svI https://dev-api.gen-text.app/health -o /dev/null 2>&1 | grep -E "subject:|issuer:|HTTP/"
-curl -s https://dev-api.gen-text.app/health
+curl -svI https://dev-api.goodwiinz.tech/health -o /dev/null 2>&1 | grep -E "subject:|issuer:|HTTP/"
+curl -s https://dev-api.goodwiinz.tech/health
 ```
 
 Expected: issuer `Amazon`, HTTP 200 (or the app's health response), no cert warnings.
@@ -561,7 +561,7 @@ Expected: issuer `Amazon`, HTTP 200 (or the app's health response), no cert warn
 
 ## 8. Smoke tests
 
-Run all from outside the cluster (real user path, via ALB). Frontend: `https://dev-app.gen-text.app` (Vercel, unchanged).
+Run all from outside the cluster (real user path, via ALB). Frontend: `https://dev-app.goodwiinz.tech` (Vercel, unchanged).
 
 | # | Test | Command / action | Expected |
 |---|---|---|---|
@@ -618,7 +618,7 @@ kubectl get pods -n rag-dev --context $DOKS_CONTEXT -w
 
 **9.4. Revert Infisical:** restore `/database` (DO PG values) and `/redis` (DO Valkey values) from **Infisical secret version history** — roll each secret back to the versions recorded in Step 0 (see `/tmp/infisical-versions.txt`); do not retype values from memory. (DO PG/Valkey are still running — nothing was deleted on DO.)
 
-Expected after 9.2-9.4: `curl -s https://dev-api.gen-text.app/health` returns 200 within TTL (60s) + pod-ready time; dev-app login + chat work again.
+Expected after 9.2-9.4: `curl -s https://dev-api.goodwiinz.tech/health` returns 200 within TTL (60s) + pod-ready time; dev-app login + chat work again.
 
 **9.5. Decision point:** schedule retry window; bring `nous.dump`, `/tmp/nous-neo4j.dump`, `/tmp/qdrant-snaps/` forward (re-dump in the next window — do not reuse stale dumps). RCA the failure before re-entry.
 

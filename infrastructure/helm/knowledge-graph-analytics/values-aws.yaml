@@ -19,7 +19,7 @@ global:
   # no imagePullSecrets, unlike the DO do-registry secret.
   imagePullSecrets: []
   storageClass: "gp3"
-  dnsZone: "gen-text.app"
+  dnsZone: "goodwiinz.tech"
   environment: "dev" # aws-dev
 
 commonLabels:
@@ -80,10 +80,10 @@ backend:
       # TLS is AWS ACM (NOT cert-manager): terraform aws_acm_certificate
       # (Task 3) with DNS validation — the validation CNAME is added manually
       # in Cloudflare (DNS is on Cloudflare, not Route53).
-      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:267685730035:certificate/4597607e-7aa4-4e43-960d-9ec80c8d34c7 # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
+      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:267685730035:certificate/2fabe0a2-44f1-4e59-8160-69ccc5b4c8bb # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
       # external-dns stays on the Cloudflare provider (design doc); records
-      # dev-api.gen-text.app -> ALB hostname.
-      external-dns.alpha.kubernetes.io/hostname: dev-api.gen-text.app
+      # dev-api.goodwiinz.tech -> ALB hostname.
+      external-dns.alpha.kubernetes.io/hostname: dev-api.goodwiinz.tech
       external-dns.alpha.kubernetes.io/ttl: "300"
       external-dns.alpha.kubernetes.io/provider: cloudflare
       # Helm deep-merges this map over the chart defaults, so the chart's
@@ -95,14 +95,14 @@ backend:
       # cert-manager annotation pruned too: TLS is ACM (above), not Let's Encrypt.
       "cert-manager.io/cluster-issuer": null
     hosts:
-      - host: dev-api.gen-text.app
+      - host: dev-api.goodwiinz.tech
         paths:
           - path: /
             pathType: Prefix
     tls:
       - secretName: rag-dev-api-tls
         hosts:
-          - dev-api.gen-text.app
+          - dev-api.goodwiinz.tech
   resources:
     limits:
       cpu: "2"
@@ -170,7 +170,7 @@ backend:
     - name: MALLOC_ARENA_MAX
       value: "2"
     - name: CORS_ORIGINS
-      value: "https://dev-app.gen-text.app,http://localhost:3000,http://127.0.0.1:3000,https://goodwiinz.tech,https://www.goodwiinz.tech"
+      value: "https://dev-app.goodwiinz.tech,http://localhost:3000,http://127.0.0.1:3000,https://goodwiinz.tech,https://www.goodwiinz.tech"
     - name: FRONTEND_BASE_URL
       value: "https://goodwiinz.tech"
     - name: DB_ASYNC_POOL_SIZE
@@ -273,7 +273,7 @@ neo4j:
     tag: "5.26-community"
     pullPolicy: IfNotPresent
   # password: supply via --set neo4j.password=... at deploy time
-  advertisedAddress: "dev-neo4j.gen-text.app"
+  advertisedAddress: "dev-neo4j.goodwiinz.tech"
   persistence:
     size: 5Gi
   resources:

@@ -1,9 +1,9 @@
 # =============================================================================
-# ACM Certificate for *.gen-text.app (Cloudflare DNS, validation out-of-band)
+# ACM Certificate for *.goodwiinz.tech (Cloudflare DNS, validation out-of-band)
 # =============================================================================
 
 resource "aws_acm_certificate" "cluster" {
-  domain_name       = "*.gen-text.app"
+  domain_name       = "*.goodwiinz.tech"
   validation_method = "DNS"
 
   lifecycle {
@@ -41,6 +41,6 @@ output "acm_validation_record" {
 }
 
 output "acm_certificate_arn" {
-  description = "ARN of the *.gen-text.app certificate (for ALB ingress annotations)"
+  description = "ARN of the *.goodwiinz.tech certificate (for ALB ingress annotations)"
   value       = aws_acm_certificate.cluster.arn
 }

@@ -5,9 +5,9 @@
 # in-cluster databases). If base ingress changes, re-copy here:
 #   cp ../../manifests/ingress.yaml ./ingress.yaml  (then re-add this header)
 #
-# WIREUP (Task 5): hosts cut over to the gen-text.app dev domains:
-#   api.multimodal-rag.example.com -> dev-api.gen-text.app (backend/SSE)
-#   ws.multimodal-rag.example.com  -> dev-ws.gen-text.app  (websocket, :8001)
+# WIREUP (Task 5): hosts cut over to the goodwiinz.tech dev domains:
+#   api.multimodal-rag.example.com -> dev-api.goodwiinz.tech (backend/SSE)
+#   ws.multimodal-rag.example.com  -> dev-ws.goodwiinz.tech  (websocket, :8001)
 # TLS secretNames are placeholders — the ALB terminates TLS via ACM
 # (certificate-arn in the sibling *-alb-patch.yaml) and ignores spec.tls;
 # they only keep the manifests schema-valid.
@@ -34,7 +34,7 @@ metadata:
       proxy_read_timeout 86400s;
       client_max_body_size 10M;
     cert-manager.io/cluster-issuer: letsencrypt-prod
-    external-dns.alpha.kubernetes.io/hostname: dev-api.gen-text.app
+    external-dns.alpha.kubernetes.io/hostname: dev-api.goodwiinz.tech
     external-dns.alpha.kubernetes.io/ttl: "300"
     external-dns.alpha.kubernetes.io/provider: cloudflare
   labels:
@@ -45,10 +45,10 @@ spec:
   ingressClassName: nginx
   tls:
   - hosts:
-    - dev-api.gen-text.app
-    secretName: dev-api-gen-text-app-tls
+    - dev-api.goodwiinz.tech
+    secretName: dev-api-goodwiinz-tech-tls
   rules:
-  - host: dev-api.gen-text.app
+  - host: dev-api.goodwiinz.tech
     http:
       paths:
       - path: /
@@ -58,7 +58,7 @@ spec:
             name: backend-service
             port:
               number: 80
-  - host: dev-ws.gen-text.app
+  - host: dev-ws.goodwiinz.tech
     http:
       paths:
       - path: /
@@ -95,7 +95,7 @@ metadata:
       proxy_cache_bypass $http_upgrade;
       proxy_set_header X-Connection $connection_upgrade;
     cert-manager.io/cluster-issuer: letsencrypt-prod
-    external-dns.alpha.kubernetes.io/hostname: dev-ws.gen-text.app
+    external-dns.alpha.kubernetes.io/hostname: dev-ws.goodwiinz.tech
     external-dns.alpha.kubernetes.io/ttl: "300"
     external-dns.alpha.kubernetes.io/provider: cloudflare
   labels:
@@ -106,10 +106,10 @@ spec:
   ingressClassName: nginx
   tls:
   - hosts:
-    - dev-ws.gen-text.app
-    secretName: dev-ws-gen-text-app-tls
+    - dev-ws.goodwiinz.tech
+    secretName: dev-ws-goodwiinz-tech-tls
   rules:
-  - host: dev-ws.gen-text.app
+  - host: dev-ws.goodwiinz.tech
     http:
       paths:
       - path: /
