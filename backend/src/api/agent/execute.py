@@ -1248,6 +1248,22 @@ async def _pending_confirmation_frame(
         snapshot = await graph.aget_state(config)
         if snapshot is None:
             return None
+        if db is not None:
+            checkpoint_values = getattr(snapshot, "values", None)
+            checkpoint_user_id = (
+                checkpoint_values.get("user_id")
+                if isinstance(checkpoint_values, dict)
+                else None
+            )
+            if checkpoint_user_id is None or str(checkpoint_user_id) != str(
+                current_user.id
+            ):
+                logger.warning(
+                    "Suppressing parked confirmation owned by another or unknown "
+                    "user for thread %s",
+                    thread_id,
+                )
+                return None
 
         confirmation: Dict[str, Any] = {}
         for task in snapshot.tasks or ():

@@ -29,10 +29,12 @@ _CONFIRMATION = {
 }
 
 
-def _snapshot_with_interrupt(value: dict) -> SimpleNamespace:
+def _snapshot_with_interrupt(
+    value: dict, *, user_id: Optional[str] = None
+) -> SimpleNamespace:
     """A checkpoint snapshot parked on a single ``interrupt()``."""
     return SimpleNamespace(
-        values={},
+        values={} if user_id is None else {"user_id": user_id},
         tasks=(SimpleNamespace(interrupts=(SimpleNamespace(value=value),)),),
     )
 
@@ -120,7 +122,9 @@ async def test_resume_confirmation_carries_durable_run_id_after_reload() -> None
     thread_id = str(_uuid.uuid4())
     run_id = str(_uuid.uuid4())
     current_user = Mock(id="user-1", organization_id="org-1")
-    patches = _graph_patches(_snapshot_with_interrupt(_CONFIRMATION))
+    patches = _graph_patches(
+        _snapshot_with_interrupt(_CONFIRMATION, user_id=current_user.id)
+    )
     db = object()
 
     with (
@@ -288,6 +292,84 @@ async def test_resume_confirmation_frame_absent_without_interrupt() -> None:
         )
 
     assert frame is None
+
+
+async def _resume_with_checkpoint(snapshot: SimpleNamespace, current_user: Mock) -> Any:
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    db = _resume_db()
+    graph_patches = _graph_patches(snapshot)
+    with (
+        graph_patches[0],
+        graph_patches[1],
+        graph_patches[2],
+        patch.object(
+            execute_mod,
+            "_resolve_thread",
+            new=AsyncMock(return_value=(SimpleNamespace(id=thread_id), "conversation")),
+        ),
+        patch.object(
+            execute_mod._stream_buffer,
+            "active_stream_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod,
+            "get_active_run_for_thread",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod,
+            "get_latest_run_for_thread",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        return await execute_mod.resume_stream(
+            _resume_request(),
+            thread_id=thread_id,
+            after=0,
+            stream=None,
+            last_event_id=None,
+            current_user=current_user,
+            db=db,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_does_not_redeliver_foreign_checkpoint_to_editable_member() -> (
+    None
+):
+    """Editable thread access must not expose another user's parked HITL."""
+    current_user = Mock(id="editor-b", organization_id="org-1")
+    response = await _resume_with_checkpoint(
+        _snapshot_with_interrupt(_CONFIRMATION, user_id="editor-a"), current_user
+    )
+
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_resume_redelivers_checkpoint_to_its_owner() -> None:
+    """The checkpoint owner can still recover a parked confirmation."""
+    current_user = Mock(id="editor-a", organization_id="org-1")
+    response = await _resume_with_checkpoint(
+        _snapshot_with_interrupt(_CONFIRMATION, user_id=current_user.id),
+        current_user,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_resume_denies_checkpoint_without_owner_identity() -> None:
+    """A checkpoint without durable ownership is fail-closed on DB-backed resume."""
+    current_user = Mock(id="editor-a", organization_id="org-1")
+    response = await _resume_with_checkpoint(
+        _snapshot_with_interrupt(_CONFIRMATION), current_user
+    )
+
+    assert response.status_code == 204
 
 
 def _resume_db() -> AsyncMock:
