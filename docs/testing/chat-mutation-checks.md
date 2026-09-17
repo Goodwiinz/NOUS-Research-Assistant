@@ -234,3 +234,20 @@ service. Frontend commands run from `frontend/` with Node 24 and pnpm 10.18.2.
 - **Mutation:** removing `cleanup_task.result()` made the test fail with
   `Failed: DID NOT RAISE RuntimeError`; restoring the exact source bytes made
   it pass. The shield-success companion test also passes with the guard.
+
+## 2026-09-17 public summary ownership verification amendment
+
+Verified against `9927b2138`. The confirmation completion regression now
+drives `onReasoningDelta` after switching from thread A to B and asserts that
+A's summary never enters B's displayed messages.
+
+- Source: `frontend/src/hooks/chat/useChatStreaming.ts`.
+- Guard: `isConfirmDisplayed` calls `confirmationBelongsToThread` with the
+  pending confirmation and current displayed thread.
+- Mutation: replace the predicate with `() => true`.
+- Command (from `frontend/`, Node 24, pnpm 10.18.2):
+  `pnpm exec vitest run --project unit src/hooks/__tests__/useChatStreaming.streamOwnership.test.tsx -t "clears a settled confirmation from its own thread"`.
+- Observed failure: the new summary isolation assertion failed with
+  `AssertionError: expected true to be false` (exit 1).
+- Exact source bytes were restored in `finally`; the same command then
+  passed (1 passed, 8 skipped). No product source change remains.
