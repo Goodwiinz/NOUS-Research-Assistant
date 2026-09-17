@@ -511,13 +511,17 @@ export function useChatPersistence(): UseChatPersistenceReturn {
         // this hook writes a stale thread id into the store, and the next
         // send appends to that previous thread instead of starting a new
         // one (and the URL never becomes ?thread=).
-        const isNewChat =
-          typeof window !== 'undefined' &&
-          new URLSearchParams(window.location.search).get('new') === '1';
+        const urlParams =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search)
+            : null;
+        const isNewChat = urlParams?.get('new') === '1';
+        const hasExplicitThreadIntent = Boolean(urlParams?.get('thread'));
         if (
           conversationThreads.length > 0 &&
           !threadsState.currentThreadId &&
-          !isNewChat
+          !isNewChat &&
+          !hasExplicitThreadIntent
         ) {
           const firstThread = conversationThreads[0];
           debugLog(

@@ -907,6 +907,8 @@ describe('useChatStreaming exhausted-auth recovery', () => {
       expect(latest?.session.authRecoveryRoute).toEqual({
         isReady: false,
         threadId: THREAD_ID,
+        isInitializing: false,
+        isNewChatIntent: false,
       });
       expect(latest?.streaming.input).toBe('');
       expect(storedRecovery()?.state).toBe('ready');

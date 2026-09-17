@@ -146,6 +146,18 @@ const RESUME_BACKOFF_MS = [1_000, 4_000];
 const MAX_PROGRESS_STEPS = 16;
 const MAX_REASONING_SUMMARY_CHARS = 8_000;
 
+function chatDraftContextKey(
+  userId: string | null | undefined,
+  workspaceId: string | null | undefined,
+  threadId: string | null | undefined
+): string {
+  return JSON.stringify([
+    userId ?? 'anonymous',
+    workspaceId ?? 'workspace-pending',
+    threadId ?? 'new-chat',
+  ]);
+}
+
 export function appendProgressStep(
   steps: AgentProgressStep[],
   phase: AgentStreamPhase,
@@ -320,6 +332,16 @@ export function replacePreservingApproval(
   };
 }
 
+function withoutReplacementMarkers(
+  messages: ChatPageMessage[]
+): ChatPageMessage[] {
+  return messages.map((message) => {
+    if (!message.replacesClientMessageId) return message;
+    const { replacesClientMessageId: _replaced, ...withoutMarker } = message;
+    return withoutMarker;
+  });
+}
+
 export function confirmationBelongsToThread(
   pending: PendingConfirmation | null,
   displayedThreadId: string | null
@@ -422,7 +444,18 @@ export function useChatStreaming(
     : undefined;
 
   // ---- State ----
-  const [input, setInput] = useState('');
+  const draftValuesRef = useRef(new Map<string, string>());
+  const pendingPreflightDraftsRef = useRef(new Map<string, string>());
+  const draftContextKeyRef = useRef<string | null>(null);
+  const draftContextMetaRef = useRef<{
+    userId: string | null;
+    workspaceId: string | null;
+    threadId: string | null;
+  } | null>(null);
+  const inputContextKeyRef = useRef<string | null>(null);
+  const draftWorkspaceIdRef = useRef<string | null>(null);
+  const inputValueRef = useRef('');
+  const [input, setInputState] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pendingConfirmations, setPendingConfirmations] = useState<
     Record<string, PendingConfirmation>
@@ -532,6 +565,111 @@ export function useChatStreaming(
   const activeThreadId = useChatStore((state) => state.currentThreadId);
   const authIsAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const authenticatedUserId = useAuthStore((state) => state.user?.id ?? null);
+  const draftWorkspaceId =
+    workspace?.id ?? dbConversation?.workspace_id ?? null;
+  // During the initial URL/workspace handoff, the store can still contain a
+  // warm selection from a previous route. Draft text entered in that window
+  // belongs to the explicit URL intent and must follow the selection that the
+  // session initializer will publish. Once initialization settles, the live
+  // store selection owns drafts so a deliberate sidebar navigation cannot be
+  // mistaken for stale URL intent.
+  const initialRouteOwnsDraft = authRecoveryRoute?.isInitializing === true;
+  const draftThreadId = initialRouteOwnsDraft
+    ? authRecoveryRoute?.isNewChatIntent
+      ? null
+      : (authRecoveryRoute?.threadId ?? activeThreadId ?? null)
+    : (activeThreadId ?? authRecoveryRoute?.threadId ?? null);
+  const liveDraftThreadId = useCallback((): string | null => {
+    if (initialRouteOwnsDraft) {
+      return authRecoveryRoute?.isNewChatIntent
+        ? null
+        : (authRecoveryRoute?.threadId ??
+            useChatStore.getState().currentThreadId ??
+            null);
+    }
+    return useChatStore.getState().currentThreadId ?? null;
+  }, [
+    initialRouteOwnsDraft,
+    authRecoveryRoute?.isNewChatIntent,
+    authRecoveryRoute?.threadId,
+  ]);
+  const draftContextKey = chatDraftContextKey(
+    authenticatedUserId,
+    draftWorkspaceId,
+    draftThreadId
+  );
+  const setInput = useCallback<React.Dispatch<React.SetStateAction<string>>>(
+    (nextValue) => {
+      const next =
+        typeof nextValue === 'function'
+          ? nextValue(inputValueRef.current)
+          : nextValue;
+      inputValueRef.current = next;
+      // Store writes can change the account/thread before React has rendered
+      // this hook again (for example when a preflight is superseded). Resolve
+      // the owner from the live stores so a draft entered in the new context
+      // cannot be written under the old callback's key.
+      const contextKey = chatDraftContextKey(
+        useAuthStore.getState().user?.id,
+        workspace?.id ??
+          dbConversation?.workspace_id ??
+          draftWorkspaceIdRef.current,
+        liveDraftThreadId()
+      );
+      inputContextKeyRef.current = contextKey;
+      if (contextKey) {
+        if (next) draftValuesRef.current.set(contextKey, next);
+        else draftValuesRef.current.delete(contextKey);
+      }
+      setInputState(next);
+    },
+    [dbConversation?.workspace_id, liveDraftThreadId, workspace?.id]
+  );
+
+  useEffect(() => {
+    draftWorkspaceIdRef.current = draftWorkspaceId;
+    const previousContextKey = draftContextKeyRef.current;
+    const previousContextMeta = draftContextMetaRef.current;
+    const currentContextMeta = {
+      userId: authenticatedUserId,
+      workspaceId: draftWorkspaceId,
+      threadId: draftThreadId,
+    };
+    let carriedDraft: string | undefined;
+    if (previousContextKey && previousContextKey !== draftContextKey) {
+      const previousDraft = inputValueRef.current;
+      const workspaceBecameKnown =
+        previousContextMeta?.userId === currentContextMeta.userId &&
+        previousContextMeta.threadId === currentContextMeta.threadId &&
+        previousContextMeta.workspaceId === null &&
+        currentContextMeta.workspaceId !== null;
+      if (workspaceBecameKnown && previousDraft) {
+        carriedDraft = previousDraft;
+      } else if (inputContextKeyRef.current === previousContextKey) {
+        if (previousDraft) {
+          draftValuesRef.current.set(previousContextKey, previousDraft);
+        } else {
+          draftValuesRef.current.delete(previousContextKey);
+        }
+      }
+    }
+
+    draftContextKeyRef.current = draftContextKey;
+    draftContextMetaRef.current = currentContextMeta;
+    inputContextKeyRef.current = draftContextKey;
+    const restoredDraft =
+      draftValuesRef.current.get(draftContextKey) ??
+      pendingPreflightDraftsRef.current.get(draftContextKey) ??
+      carriedDraft ??
+      '';
+    if (pendingPreflightDraftsRef.current.has(draftContextKey)) {
+      pendingPreflightDraftsRef.current.delete(draftContextKey);
+    }
+    if (inputValueRef.current !== restoredDraft) {
+      inputValueRef.current = restoredDraft;
+      setInputState(restoredDraft);
+    }
+  }, [authenticatedUserId, draftContextKey, draftThreadId, draftWorkspaceId]);
   const pendingConfirmation = activeThreadId
     ? (pendingConfirmations[activeThreadId] ?? null)
     : null;
@@ -697,10 +835,9 @@ export function useChatStreaming(
       threadId: recoveryThreadId,
     });
     if (restoredPrompt !== null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInput(restoredPrompt);
     }
-  }, [authIsAuthenticated, authenticatedUserId, authRecoveryRoute]);
+  }, [authIsAuthenticated, authenticatedUserId, authRecoveryRoute, setInput]);
 
   // Refetch the Working-folders queries once a project-mutating tool
   // succeeds, so the rail shows agent-created sources/notes/drafts without
@@ -1290,7 +1427,10 @@ export function useChatStreaming(
               };
               if (isTurnDisplayed())
                 setMessages(
-                  replacePreservingApproval([...newMessages, errorMsg])
+                  replacePreservingApproval([
+                    ...withoutReplacementMarkers(newMessages),
+                    errorMsg,
+                  ])
                 );
             },
           },
@@ -1352,12 +1492,17 @@ export function useChatStreaming(
               },
             };
             if (isTurnDisplayed())
-              setMessages([...newMessages, emptyResponseMessage]);
+              setMessages([
+                ...withoutReplacementMarkers(newMessages),
+                emptyResponseMessage,
+              ]);
           } else if (isTurnDisplayed()) {
             // Quiet/stopped unwind with no content: drop the placeholder so no
             // empty streaming bubble is left behind — but keep any pending
             // approval, which this path used to delete on every HITL pause.
-            setMessages(replacePreservingApproval(newMessages));
+            setMessages(
+              replacePreservingApproval(withoutReplacementMarkers(newMessages))
+            );
           }
           resetStreamingTurnState();
           if (isStoppedByUser()) {
@@ -1498,7 +1643,7 @@ export function useChatStreaming(
 
           if (isTurnDisplayed())
             setMessages([
-              ...newMessages,
+              ...withoutReplacementMarkers(newMessages),
               {
                 runtimeId: crypto.randomUUID(),
                 source: 'local-only',
@@ -1619,8 +1764,27 @@ export function useChatStreaming(
       // installs the live stream controller.
       const preflightAbort = new AbortController();
       abortControllerRef.current = preflightAbort;
+      const preflightOwner = {
+        threadId: useChatStore.getState().currentThreadId,
+        contextKey: draftContextKey,
+      };
+      const preflightDraftContextKey = draftContextKey;
+      const currentPreflightContextKey = (): string =>
+        chatDraftContextKey(
+          useAuthStore.getState().user?.id,
+          draftWorkspaceIdRef.current,
+          initialRouteOwnsDraft
+            ? authRecoveryRoute?.isNewChatIntent
+              ? null
+              : (authRecoveryRoute?.threadId ??
+                useChatStore.getState().currentThreadId ??
+                null)
+            : (useChatStore.getState().currentThreadId ?? null)
+        );
       const ownsPreflight = (): boolean =>
-        useAuthStore.getState().user?.id === ownerUserId;
+        useAuthStore.getState().user?.id === ownerUserId &&
+        useChatStore.getState().currentThreadId === preflightOwner.threadId &&
+        currentPreflightContextKey() === preflightOwner.contextKey;
       const abandonPreflight = (): void => {
         setIsLoading(false);
         submitLockRef.current = false;
@@ -1632,6 +1796,8 @@ export function useChatStreaming(
           return;
         }
         setMessages(messages);
+        pendingPreflightDraftsRef.current.delete(preflightDraftContextKey);
+        pendingPreflightDraftsRef.current.delete(preflightOwner.contextKey);
         setInput(content);
         abandonPreflight();
       };
@@ -1664,6 +1830,9 @@ export function useChatStreaming(
           role: 'user',
           content,
           timestamp: Date.now(),
+          ...(supersedesClientMessageId
+            ? { replacesClientMessageId: supersedesClientMessageId }
+            : {}),
         };
 
         // CX2: build the turn from the RECONCILED view (local ∪ store) — the
@@ -1689,6 +1858,13 @@ export function useChatStreaming(
         ];
         setMessages(newMessages);
         setInput('');
+        // The optimistic clear above must not erase the originating context's
+        // draft before a Stop/preflight failure can restore it. A later
+        // switch to another context never reads this entry.
+        pendingPreflightDraftsRef.current.set(
+          preflightDraftContextKey,
+          content
+        );
         setIsLoading(true);
         preflightAbort.signal.addEventListener('abort', rollbackPreflight, {
           once: true,
@@ -1744,6 +1920,12 @@ export function useChatStreaming(
 
             currentConversationId = newThread.id;
             currentThreadId = newThread.id;
+            preflightOwner.threadId = newThread.id;
+            preflightOwner.contextKey = chatDraftContextKey(
+              ownerUserId,
+              draftWorkspaceIdRef.current,
+              newThread.id
+            );
 
             const newConv: ChatConversation = {
               id: newThread.id,
@@ -1793,6 +1975,9 @@ export function useChatStreaming(
           rollbackPreflight();
           return;
         }
+
+        pendingPreflightDraftsRef.current.delete(preflightDraftContextKey);
+        pendingPreflightDraftsRef.current.delete(preflightOwner.contextKey);
 
         const authRecoveryAttempt: StreamAuthRecoveryAttempt = {
           attemptId: crypto.randomUUID(),
@@ -1908,9 +2093,14 @@ export function useChatStreaming(
       input,
       isLoading,
       storeIsStreaming,
+      draftContextKey,
+      initialRouteOwnsDraft,
+      authRecoveryRoute?.isNewChatIntent,
+      authRecoveryRoute?.threadId,
       messages,
       displayedMessages,
       setMessages,
+      setInput,
       dbConversation,
       workspace,
       setConversations,

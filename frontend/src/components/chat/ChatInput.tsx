@@ -136,6 +136,17 @@ export function ChatInput({
     documentId?: string;
   };
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const attachmentStatus = attachments.reduce(
+    (status, attachment) => {
+      return {
+        uploading: status.uploading || attachment.state === 'uploading',
+        error: status.error || attachment.state === 'error',
+      };
+    },
+    { uploading: false, error: false }
+  );
+  const hasUnsettledAttachments =
+    attachmentStatus.uploading || attachmentStatus.error;
   const [submittedDraft, setSubmittedDraft] = useState<string | null>(null);
   const submittedDraftBecameBusyRef = useRef(false);
   // Monotonic counter behind each chip's id — see addFiles.
@@ -357,13 +368,14 @@ export function ChatInput({
   };
 
   const prepareSubmission = (e: React.SyntheticEvent): boolean => {
-    if (isDisabled || !value.trim() || isOverLimit) {
+    if (isDisabled || !value.trim() || isOverLimit || hasUnsettledAttachments) {
       e.preventDefault();
       console.warn('[Chat] Composer submit swallowed', {
         isLoading,
         disabled,
         empty: !value.trim(),
         isOverLimit,
+        hasUnsettledAttachments,
       });
       return false;
     }
@@ -620,6 +632,19 @@ export function ChatInput({
               </ul>
             )}
 
+            {hasUnsettledAttachments && submittedDraft === null && (
+              <p
+                role="status"
+                aria-live="polite"
+                className="mb-3 font-nous-mono text-[10px]"
+                style={{ color: 'var(--nous-fg-3)' }}
+              >
+                {attachmentStatus.uploading
+                  ? 'Wait for attachments to finish uploading before sending.'
+                  : 'Remove failed attachments before sending.'}
+              </p>
+            )}
+
             <ComposerPrimitive.Queue>
               {({ queueItem }) => (
                 <div
@@ -852,14 +877,21 @@ export function ChatInput({
                   </ComposerPrimitive.Cancel>
                 )}
                 <ComposerPrimitive.Send
-                  disabled={!value.trim() || isDisabled || isOverLimit}
+                  disabled={
+                    !value.trim() ||
+                    isDisabled ||
+                    isOverLimit ||
+                    hasUnsettledAttachments
+                  }
                   onClick={prepareSubmission}
                   title={
                     isOverLimit
                       ? `Message is over the ${maxChars}-character limit`
-                      : isLoading
-                        ? 'Queue follow-up (Enter)'
-                        : 'Send (Enter)'
+                      : hasUnsettledAttachments
+                        ? 'Finish or remove attachments before sending'
+                        : isLoading
+                          ? 'Queue follow-up (Enter)'
+                          : 'Send (Enter)'
                   }
                   className="group inline-flex min-h-11 items-center gap-2 font-semibold rounded-lg transition-colors active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
                   style={{

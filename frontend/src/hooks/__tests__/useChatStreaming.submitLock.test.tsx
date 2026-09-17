@@ -247,7 +247,11 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
       title: 'Visible before preflight',
     } as never);
     streamMessageMock.mockResolvedValue(undefined);
-    useChatStore.setState({ currentThreadId: null });
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
 
     render(<OptimisticFirstSendHarness />, { wrapper });
     fireEvent.change(
@@ -287,6 +291,37 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
             )
         )
     ).toEqual([]);
+  });
+
+  it('keeps drafts isolated by thread, account, and workspace', async () => {
+    const params = makeParams();
+    const { result, rerender } = renderHook(
+      ({ workspaceId }: { workspaceId: string }) =>
+        useChatStreaming({
+          ...params,
+          workspace: { id: workspaceId, name: workspaceId } as never,
+        }),
+      { initialProps: { workspaceId: 'workspace-A' }, wrapper }
+    );
+
+    act(() => result.current.setInput('thread A draft'));
+    act(() => useChatStore.setState({ currentThreadId: 'thread-B' }));
+    await waitFor(() => expect(result.current.input).toBe(''));
+
+    act(() => result.current.setInput('thread B draft'));
+    act(() => useChatStore.setState({ currentThreadId: 'thread-A' }));
+    await waitFor(() => expect(result.current.input).toBe('thread A draft'));
+
+    act(() => useAuthStore.setState({ user: USER_B }));
+    await waitFor(() => expect(result.current.input).toBe(''));
+
+    act(() => result.current.setInput('account B draft'));
+    rerender({ workspaceId: 'workspace-B' });
+    await waitFor(() => expect(result.current.input).toBe(''));
+
+    act(() => result.current.setInput('workspace B draft'));
+    rerender({ workspaceId: 'workspace-A' });
+    await waitFor(() => expect(result.current.input).toBe('account B draft'));
   });
 
   it('a synchronous second handleSubmit call while the first is still in flight only fires streamMessage once', async () => {
@@ -349,7 +384,11 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
       displayedMessages: originalMessages,
       dbConversation: { id: 'conversation-A' } as never,
     };
-    useChatStore.setState({ currentThreadId: null });
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
     const { result } = renderHook(() => useChatStreaming(params), { wrapper });
 
     let submission!: Promise<void>;
@@ -576,4 +615,120 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
       }
     }
   );
+
+  it('keeps the originating draft when a superseded preflight settles late', async () => {
+    const pendingWorkspace = deferred<{ id: string }>();
+    vi.mocked(workspaceService.getOrCreateDefaultWorkspace).mockReturnValueOnce(
+      pendingWorkspace.promise as never
+    );
+    const params = makeParams();
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.handleSubmit('originating draft');
+    });
+    await waitFor(() =>
+      expect(
+        workspaceService.getOrCreateDefaultWorkspace
+      ).toHaveBeenCalledOnce()
+    );
+
+    act(() => {
+      useAuthStore.setState({ user: USER_B });
+      useChatStore.setState({ currentThreadId: 'thread-B' });
+      result.current.setInput('account B draft');
+    });
+    expect(result.current.input).toBe('account B draft');
+
+    act(() => result.current.handleStop());
+    await act(async () => {
+      pendingWorkspace.resolve({ id: 'workspace-A' });
+      await submission;
+    });
+
+    expect(result.current.input).toBe('account B draft');
+    expect(streamMessageMock).not.toHaveBeenCalled();
+
+    act(() => {
+      useAuthStore.setState({ user: USER_A });
+      useChatStore.setState({ currentThreadId: null });
+    });
+    await waitFor(() => expect(result.current.input).toBe('originating draft'));
+  });
+
+  it('keeps the originating draft when the same account changes threads mid-preflight', async () => {
+    const pendingWorkspace = deferred<{ id: string }>();
+    vi.mocked(workspaceService.getOrCreateDefaultWorkspace).mockReturnValueOnce(
+      pendingWorkspace.promise as never
+    );
+    const params = makeParams();
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.handleSubmit('originating draft');
+    });
+    await waitFor(() =>
+      expect(
+        workspaceService.getOrCreateDefaultWorkspace
+      ).toHaveBeenCalledOnce()
+    );
+
+    act(() => {
+      useChatStore.setState({ currentThreadId: 'thread-B' });
+      result.current.setInput('thread B draft');
+    });
+    expect(result.current.input).toBe('thread B draft');
+
+    act(() => result.current.handleStop());
+    await act(async () => {
+      pendingWorkspace.resolve({ id: 'workspace-A' });
+      await submission;
+    });
+
+    expect(result.current.input).toBe('thread B draft');
+    expect(streamMessageMock).not.toHaveBeenCalled();
+
+    act(() => useChatStore.setState({ currentThreadId: null }));
+    await waitFor(() => expect(result.current.input).toBe('originating draft'));
+  });
+
+  it('does not resurrect a sent first-chat prompt after starting New chat', async () => {
+    vi.mocked(workspaceService.createThread).mockResolvedValueOnce({
+      id: 'thread-created',
+      conversation_id: 'conversation-A',
+      title: 'Sent prompt',
+    } as never);
+    streamMessageMock.mockResolvedValue(undefined);
+    const params = {
+      ...makeParams(),
+      workspace: { id: 'workspace-A' } as never,
+      dbConversation: { id: 'conversation-A' } as never,
+    };
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+
+    await act(async () => {
+      await result.current.handleSubmit('already sent');
+    });
+    expect(streamMessageMock).toHaveBeenCalledOnce();
+
+    act(() => useChatStore.setState({ currentThreadId: null }));
+    await waitFor(() => expect(result.current.input).toBe(''));
+  });
 });
