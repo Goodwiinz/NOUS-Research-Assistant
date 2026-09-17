@@ -3124,7 +3124,10 @@ async def stream_event_generator(
                 acceptance,
                 current_user,
                 status=JobStatus.AWAITING_CONFIRMATION,
-                run_metadata={"progress_steps": emitter.progress_steps},
+                run_metadata={
+                    "progress_steps": emitter.progress_steps,
+                    "reasoning_summary": reasoning_summary or None,
+                },
             )
         except Exception:
             parked = None

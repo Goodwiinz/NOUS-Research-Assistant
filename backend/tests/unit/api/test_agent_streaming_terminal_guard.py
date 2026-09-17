@@ -45,19 +45,27 @@ _CONFIRMATION = {
 async def test_graph_park_failure_keeps_confirmation_terminal_and_never_fails_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_finalize_run(AWAITING_CONFIRMATION) raising after the CONFIRMATION
-    frame must not emit ERROR nor write FAILED."""
+    """A parking storage error must take the stream's exception path.
+
+    The actual ``_finalize_run`` wrapper calls the service boundary here; only
+    that boundary is fault-injected, so a service exception cannot be confused
+    with the guarded ``False`` result used for a competing terminalizer.
+    """
     from src.api.agent import streaming as streaming_mod
     from src.services.agent import agent_execution_service as jobs_mod
+    from src.services.agent.agent_submission_service import AcceptedSubmission
+    from src.shared.enums import JobStatus
 
     thread = SimpleNamespace(id="t-park-1", conversation_id="c-park-1")
     user = Mock(id="user-1", organization_id="org-1")
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    finalize_calls: list[Any] = []
-
-    async def exploding_finalize(*args: Any, **kwargs: Any) -> None:
-        finalize_calls.append(kwargs.get("status"))
-        raise RuntimeError("db gone")
+    acceptance = AcceptedSubmission(
+        run_id="run-park-failure",
+        thread_id="t-park-1",
+        user_message_id="user-message-park-failure",
+        outbox_id="outbox-park-failure",
+        idempotency_key="idem-park-failure",
+    )
 
     body = SimpleNamespace(
         messages=[SimpleNamespace(role="user", content="hi")],
@@ -82,7 +90,11 @@ async def test_graph_park_failure_keeps_confirmation_terminal_and_never_fails_ru
         astream_events=_no_stream,
         aupdate_state=AsyncMock(),
     )
-    fake_session = SimpleNamespace(close=AsyncMock())
+    fake_session = SimpleNamespace(
+        execute=AsyncMock(side_effect=RuntimeError("db gone")),
+        rollback=AsyncMock(),
+        close=AsyncMock(),
+    )
 
     with (
         patch.object(streaming_mod, "AsyncSessionLocal", return_value=fake_session),
@@ -94,9 +106,21 @@ async def test_graph_park_failure_keeps_confirmation_terminal_and_never_fails_ru
             "_persist_user_message_guarded",
             new=AsyncMock(return_value=True),
         ),
-        patch.object(streaming_mod, "_accept_eligible", new=Mock(return_value=False)),
+        patch.object(streaming_mod, "_accept_eligible", new=Mock(return_value=True)),
         patch.object(
-            streaming_mod, "accept_submission", new=AsyncMock(return_value=None)
+            streaming_mod,
+            "accept_submission",
+            new=AsyncMock(return_value=acceptance),
+        ),
+        patch.object(
+            streaming_mod,
+            "mark_submission_dispatched",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            streaming_mod,
+            "is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
         ),
         patch.object(
             streaming_mod,
@@ -108,7 +132,6 @@ async def test_graph_park_failure_keeps_confirmation_terminal_and_never_fails_ru
             "start_stream",
             new=AsyncMock(side_effect=RuntimeError("redis down")),
         ),
-        patch.object(streaming_mod, "_finalize_run", new=exploding_finalize),
         patch(
             "src.services.agent.checkpointer.get_checkpointer",
             new=AsyncMock(return_value=object()),
@@ -127,7 +150,10 @@ async def test_graph_park_failure_keeps_confirmation_terminal_and_never_fails_ru
     events = [_frame_event(f) for f in frames]
     assert events[-1] == "confirmation", events
     assert "error" not in events[1:], "no ERROR after terminal"
-    assert all(s == "awaiting_confirmation" for s in finalize_calls), finalize_calls
+    fake_session.execute.assert_awaited_once()
+    statement = fake_session.execute.await_args.args[0]
+    assert statement.compile().params["status"] == JobStatus.AWAITING_CONFIRMATION.value
+    fake_session.rollback.assert_awaited_once()
     payload = json.loads(
         next(l for l in frames[-1].splitlines() if l.startswith("data: ")).removeprefix(
             "data: "

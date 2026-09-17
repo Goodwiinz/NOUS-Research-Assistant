@@ -162,6 +162,28 @@ async def test_terminal_finalize_failure_propagates_after_rollback(
     db.rollback.assert_awaited_once()
 
 
+async def test_nonterminal_finalize_failure_propagates_after_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A parking write error is distinct from a zero-row race result."""
+    import src.services.agent.agent_submission_service as svc
+
+    monkeypatch.setattr(svc, "append_event", AsyncMock())
+    db = _spy_db()
+    db.commit.side_effect = RuntimeError("db unavailable")
+
+    with pytest.raises(RuntimeError, match="db unavailable"):
+        await finalize_submission(
+            db,
+            run_id=str(uuid.uuid4()),
+            status=JobStatus.AWAITING_CONFIRMATION,
+            organization_id=str(uuid.uuid4()),
+            run_metadata={"progress_steps": []},
+        )
+
+    db.rollback.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # lost-connection retry — Sentry JAVASCRIPT-NEXTJS-4W
 # ---------------------------------------------------------------------------

@@ -58,15 +58,16 @@ def _client(*, owns_thread: bool = True) -> tuple[TestClient, AsyncMock]:
     return TestClient(app), db
 
 
-def test_cancel_awaiting_confirmation_is_durable_and_clears_checkpoint() -> None:
+def test_cancel_awaiting_confirmation_does_not_clear_shared_checkpoint() -> None:
     client, db = _client()
     active = SimpleNamespace(
         job_id="run-1", status=JobStatus.AWAITING_CONFIRMATION.value
     )
-    graph = object()
     abandon = AsyncMock(return_value="run-1")
-    clear = AsyncMock(return_value=["create_note"])
     mirror = AsyncMock(return_value="claimed")
+    get_checkpointer = AsyncMock(return_value=object())
+    get_memory_store = AsyncMock(return_value=object())
+    compile_graph = Mock(return_value=object())
 
     with (
         patch.object(
@@ -77,16 +78,15 @@ def test_cancel_awaiting_confirmation_is_durable_and_clears_checkpoint() -> None
             "src.services.agent.job_store.compare_and_set_status",
             new=mirror,
         ),
-        patch.object(execute_mod, "_clear_stale_pending_confirmation", new=clear),
         patch(
             "src.services.agent.checkpointer.get_checkpointer",
-            new=AsyncMock(return_value=object()),
+            new=get_checkpointer,
         ),
         patch(
             "src.services.agent.memory.get_memory_store",
-            new=AsyncMock(return_value=object()),
+            new=get_memory_store,
         ),
-        patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
+        patch("src.services.agent.graph.compile_agent_graph", new=compile_graph),
     ):
         response = client.post(f"/api/v1/agent/stream/cancel/{THREAD_ID}")
 
@@ -97,9 +97,12 @@ def test_cancel_awaiting_confirmation_is_durable_and_clears_checkpoint() -> None
         organization_id=ORG_ID,
         user_id=USER_ID,
         reason="user_stopped_confirmation",
+        expected_run_id="run-1",
     )
     db.commit.assert_awaited_once()
-    clear.assert_awaited_once()
+    get_checkpointer.assert_not_awaited()
+    get_memory_store.assert_not_awaited()
+    compile_graph.assert_not_called()
     mirror.assert_awaited_once_with(
         "run-1",
         JobStatus.AWAITING_CONFIRMATION,

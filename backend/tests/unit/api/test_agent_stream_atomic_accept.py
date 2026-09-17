@@ -94,6 +94,52 @@ class _FakeGraph:
         return None
 
 
+class _InterruptGraph:
+    """Emit a public reasoning prefix, then propagate a persisted interrupt."""
+
+    def __init__(self, summary: str) -> None:
+        self.summary = summary
+
+    async def astream_events(
+        self, *_args: Any, **_kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        yield {
+            "event": "on_chat_model_stream",
+            "name": "llm",
+            "metadata": {"langgraph_node": "llm_node"},
+            "data": {
+                "chunk": SimpleNamespace(
+                    content=[
+                        {
+                            "type": "reasoning",
+                            "summary": [{"type": "summary_text", "text": self.summary}],
+                        }
+                    ]
+                )
+            },
+        }
+        raise GraphInterrupt(
+            (Interrupt(value={"message": "Confirm this action"}, id="interrupt-1"),)
+        )
+
+    async def aget_state(self, _config: Any) -> Any:
+        return SimpleNamespace(
+            values={"messages": []},
+            tasks=(
+                SimpleNamespace(
+                    interrupts=(
+                        SimpleNamespace(
+                            value={"message": "Confirm this action"},
+                        ),
+                    )
+                ),
+            ),
+        )
+
+    async def aupdate_state(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
 class _AdvancingClock:
     """Deterministic monotonic clock advanced by the patched replay sleep."""
 
@@ -396,6 +442,24 @@ async def test_unsaved_interrupt_closes_the_durable_run(
         ).scalar_one()
         assert failed.payload["code"] == "interrupt_not_checkpointed"
         assert set(failed.payload) == {"code", "message"}
+
+
+@pytest.mark.asyncio
+async def test_propagated_interrupt_parks_public_reasoning_summary(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    summary = "I compared the evidence before asking for approval."
+    frames = await _drive_stream(
+        session_factory,
+        graph=_InterruptGraph(summary),
+    )
+
+    assert frames_of_type(frames, "confirmation")
+    async with session_factory() as verify:
+        run = (await verify.execute(select(AgentRun))).scalar_one()
+        assert run.status == JobStatus.AWAITING_CONFIRMATION.value
+        assert run.run_metadata["reasoning_summary"] == summary
+        assert run.run_metadata["progress_steps"]
 
 
 @pytest.mark.asyncio

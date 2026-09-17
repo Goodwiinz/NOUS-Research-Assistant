@@ -53,7 +53,6 @@ from src.services.agent.agent_execution_service import (  # noqa: F401
     AgentThreadResolutionError,
     _actor_fields,
     _cleanup_jobs,
-    _clear_stale_pending_confirmation,
     _get_job,
     _get_latest_user_content,
     _jobs,
@@ -1038,6 +1037,7 @@ async def cancel_stream_confirmation(
             organization_id=current_user.organization_id,
             user_id=current_user.id,
             reason="user_stopped_confirmation",
+            expected_run_id=active.job_id,
         )
         await db.commit()
     except Exception as exc:
@@ -1079,33 +1079,11 @@ async def cancel_stream_confirmation(
             exc_info=True,
         )
 
-    # The durable terminal write above is authoritative. Checkpoint cleanup is
-    # best-effort; a fresh turn repeats it before invoking the graph.
-    try:
-        from src.services.agent.checkpointer import get_checkpointer
-        from src.services.agent.graph import compile_agent_graph
-        from src.services.agent.memory import get_memory_store
-
-        graph = compile_agent_graph(
-            checkpointer=await get_checkpointer(),
-            store=await get_memory_store(),
-        )
-        await _clear_stale_pending_confirmation(
-            graph,
-            {
-                "configurable": {
-                    "thread_id": str(thread_id),
-                    "user_id": str(current_user.id),
-                    "organization_id": str(current_user.organization_id or ""),
-                }
-            },
-        )
-    except Exception:
-        logger.warning(
-            "Cancelled HITL run but could not clear checkpoint for thread %s",
-            str(thread_id),
-            exc_info=True,
-        )
+    # Do not clear the shared thread checkpoint here. A newer turn may have
+    # replaced this parked run between the durable cancellation commit and
+    # this point; clearing now could erase that newer producer's checkpoint.
+    # The durable cancelled status suppresses stale resume/confirm paths, and
+    # the producer/new-turn path owns cleanup after it claims the replacement.
     return Response(status_code=204)
 
 

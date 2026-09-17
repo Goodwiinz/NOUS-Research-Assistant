@@ -49,7 +49,8 @@ race, and the loser re-reads the winner.
 per thread" a database invariant. A new submission rejects while another run
 is queued, running, or stopping. A parked ``awaiting_confirmation`` run is safe
 to abandon because no graph invocation is active; it is cancelled atomically
-with accepting the fresh turn, then the caller clears the stale checkpoint.
+with accepting the fresh turn, then the producer/new-turn path clears any
+stale checkpoint after claiming the replacement.
 
 **Tenancy.** ``organization_id`` is nullable (org-less users exist), compared
 null-safely, and NEVER stringified — ``str(None) == "None"`` has merged tenants
@@ -423,22 +424,28 @@ async def abandon_awaiting_submission(
     organization_id: Any,
     user_id: Any,
     reason: str,
+    expected_run_id: Optional[str] = None,
 ) -> Optional[str]:
     """Cancel one caller-owned parked run without committing.
 
     The guarded UPDATE is the claim: concurrent Stop/new-turn requests cannot
-    both close the same run or append two terminal ledger events.
+    both close the same run or append two terminal ledger events. When a Stop
+    route has already selected a parked run, ``expected_run_id`` keeps a later
+    run that replaced it from being cancelled by the stale request.
     """
     now = _utcnow()
+    predicates = [
+        AgentRun.thread_id == _coerce_uuid(thread_id),
+        AgentRun.organization_id == _coerce_uuid(organization_id),
+        AgentRun.user_id == _coerce_uuid(user_id),
+        AgentRun.status == JobStatus.AWAITING_CONFIRMATION.value,
+    ]
+    if expected_run_id is not None:
+        predicates.append(AgentRun.job_id == expected_run_id)
     row = (
         await db.execute(
             update(AgentRun)
-            .where(
-                AgentRun.thread_id == _coerce_uuid(thread_id),
-                AgentRun.organization_id == _coerce_uuid(organization_id),
-                AgentRun.user_id == _coerce_uuid(user_id),
-                AgentRun.status == JobStatus.AWAITING_CONFIRMATION.value,
-            )
+            .where(*predicates)
             .values(
                 status=JobStatus.CANCELLED.value,
                 completed_at=now,
@@ -982,8 +989,10 @@ async def finalize_submission(
     ledger must stay OPEN — the run genuinely continues on ``/stream/confirm``.
 
     Terminal failures propagate so callers cannot emit ``done`` while the
-    thread's single-writer slot is still held. Non-terminal HITL parking stays
-    best-effort: the checkpoint remains the authoritative resume state.
+    thread's single-writer slot is still held. Non-terminal HITL parking also
+    propagates an unknown storage failure; callers can distinguish that from a
+    ``False`` guarded-update result, which means another writer won the race.
+    The checkpoint remains the authoritative resume state for the former.
     """
     now = _utcnow()
     values: dict[str, Any] = {
@@ -1096,9 +1105,7 @@ async def finalize_submission(
             logger.warning(
                 "finalize_submission failed for run %s", run_id, exc_info=True
             )
-            if status in TERMINAL_JOB_STATUSES:
-                raise
-            return False
+            raise
     return False
 
 
