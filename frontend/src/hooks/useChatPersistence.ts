@@ -413,6 +413,12 @@ export function useChatPersistence(): UseChatPersistenceReturn {
       initializationRef.current.started = true;
 
       _initInFlight = (async () => {
+        // Keep the selection that existed when this shared initialization run
+        // began. A sidebar click can select a different thread while the
+        // conversation page is pending; that newer choice must survive the
+        // downstream reset performed by setCurrentConversation.
+        const threadSelectionAtInitializationStart =
+          useChatStore.getState().currentThreadId;
         debugLog('[useChatPersistence] Starting initialization...');
         let initialized = false;
         let initializationError: unknown;
@@ -511,6 +517,10 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           requestedThreadIdAtInitialization
             ? useChatStore.getState().currentThreadId
             : null;
+        const selectionChangedDuringInitialization =
+          selectedThreadBeforeConversationLoad !== null &&
+          selectedThreadBeforeConversationLoad !==
+            threadSelectionAtInitializationStart;
 
         await setCurrentConversation(conversationId);
 
@@ -541,7 +551,28 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           selectedThreadAfterConversationLoad === null ||
           selectedThreadAfterConversationLoad ===
             requestedThreadIdAtInitialization;
-        if (
+        const newerSelectionBeforeConversationReset =
+          selectionChangedDuringInitialization &&
+          selectedThreadBeforeConversationLoad !==
+            requestedThreadIdAtInitialization
+            ? selectedThreadBeforeConversationLoad
+            : null;
+        const liveRouteStillOwnsSelection =
+          liveRequestedThreadId === requestedThreadIdAtInitialization ||
+          liveRequestedThreadId === newerSelectionBeforeConversationReset;
+        const shouldRestoreNewerSelection =
+          newerSelectionBeforeConversationReset !== null &&
+          !isNewChatAtInitialization &&
+          !liveIsNewChat &&
+          liveRouteStillOwnsSelection &&
+          selectedThreadAfterConversationLoad === null;
+        if (shouldRestoreNewerSelection) {
+          debugLog(
+            '[useChatPersistence] Restoring newer thread selection after conversation init:',
+            newerSelectionBeforeConversationReset
+          );
+          setCurrentThread(newerSelectionBeforeConversationReset);
+        } else if (
           requestedThreadIdAtInitialization &&
           !isNewChatAtInitialization &&
           liveRequestedThreadId === requestedThreadIdAtInitialization &&

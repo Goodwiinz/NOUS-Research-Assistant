@@ -224,8 +224,8 @@ describe('useChatPersistence initialization', () => {
     // useChatSession can restore the URL target while this layout-owned
     // initializer is still waiting for its conversation page. The later
     // setCurrentConversation call must not erase that newer selection.
-    // Mutation check: neutralizing the restore at
-    // `src/hooks/useChatPersistence.ts:524` makes this test fail with
+    // Mutation check: neutralizing the deep-link restore branch in
+    // `src/hooks/useChatPersistence.ts` makes this test fail with
     // `pnpm --dir frontend exec vitest run src/hooks/__tests__/useChatPersistence.initialization.test.tsx -t "preserves an explicit deep-linked thread" --reporter=dot`.
     await act(async () => {
       conversations.resolve(conversationPage([conversation]));
@@ -238,6 +238,34 @@ describe('useChatPersistence initialization', () => {
     });
 
     expect(useChatStore.getState().currentThreadId).toBe(thread.id);
+  });
+
+  it('preserves a newer sidebar selection made before the URL catches up', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    serviceMocks.listThreads.mockResolvedValue(threadPage([thread]));
+    window.history.replaceState({}, '', '/chat?thread=thread-1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    await act(async () => {
+      // The sidebar selection is newer than the A URL, but router.push has
+      // not committed B yet. setCurrentConversation must not erase B while
+      // resetting the downstream conversation selection.
+      useChatStore.getState().setCurrentThread('thread-2');
+      conversations.resolve(conversationPage([conversation]));
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe('thread-2');
   });
 
   it('keeps a newer sidebar selection when the URL changes during thread loading', async () => {
