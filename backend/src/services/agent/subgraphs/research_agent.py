@@ -164,8 +164,8 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     if direct_search is not None:
         return {"messages": [direct_search]}
 
-    from src.services.agent.retrieval_provenance import render_retrieval_prompt
     from src.services.agent._nodes_llm import _attachment_status_part
+    from src.services.agent.retrieval_provenance import render_retrieval_prompt
 
     messages = [
         SystemMessage(content=_build_research_system_prompt()),

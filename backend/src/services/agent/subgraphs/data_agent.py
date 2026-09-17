@@ -67,8 +67,8 @@ async def data_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     from langchain_core.messages import ToolMessage
 
     from src.core.config import get_settings
-    from src.services.agent.graph import AGENT_LLM_TIMEOUT_SECONDS
     from src.services.agent._nodes_llm import _attachment_status_part
+    from src.services.agent.graph import AGENT_LLM_TIMEOUT_SECONDS
 
     sanitized = _sanitize_messages(state["messages"])
     from src.services.agent.retrieval_provenance import render_retrieval_prompt

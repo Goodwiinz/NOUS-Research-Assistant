@@ -79,11 +79,11 @@ def _build_writing_system_prompt() -> str:
 async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     """Writing-specialized LLM node."""
     from src.core.config import get_settings
+    from src.services.agent._nodes_llm import _attachment_status_part
     from src.services.agent.graph import (
         AGENT_LLM_TIMEOUT_SECONDS,
         _build_page_context_line,
     )
-    from src.services.agent._nodes_llm import _attachment_status_part
 
     sanitized = _sanitize_messages(state["messages"])
     if (
