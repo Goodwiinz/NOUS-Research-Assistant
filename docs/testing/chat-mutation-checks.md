@@ -164,3 +164,59 @@ Run from `frontend/`.
   rollback assertion receives the optimistic user message instead of the
   original empty list; without the post-`createThread` signal check,
   `setConversations` is called once and publishes the canceled thread.
+
+## 2026-09-17 durable Stop verification amendment
+
+Verified against the Task 2 follow-up to `533fdeabf`. These are new checks;
+the earlier dated evidence above remains unchanged. Each mutation was applied
+individually, the focused test failed by assertion (exit 1), and the original
+source bytes were restored in a `finally` block. The five restored backend
+tests passed together (5 passed in 3.30s).
+
+Backend commands run from the repository root with the project Python test
+environment active and `PYTHONPATH=backend`; the audit used an isolated Redis
+service. Frontend commands run from `frontend/` with Node 24 and pnpm 10.18.2.
+
+### stop-claim
+
+- Source: `backend/src/services/agent/agent_submission_service.py`.
+- Guard: `AgentRun.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),`; mutant: `True,`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/services/agent/test_agent_submission_service.py::test_running_run_stop_claim_is_durable_and_idempotent --timeout=20 --tb=short`.
+- Observed failure: `E   AssertionError: assert (RunCancellationResult(run_id='45d4614f-6228-45d9-8127-ecd4238c173a', status=<JobStatus.STOPPING: 'stopping'>, claimed=True) is not None and True is False)`.
+
+### completion-stop
+
+- Source: `backend/src/services/agent/agent_submission_service.py`.
+- Guard: `else [AgentRun.status != JobStatus.STOPPING.value]`; mutant: `else []`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/services/agent/test_agent_submission_service.py::test_completion_cannot_overwrite_a_durable_stop --timeout=20 --tb=short`.
+- Observed failure: `E   assert True is False`.
+
+### terminal-once
+
+- Source: `backend/src/services/agent/agent_submission_service.py`.
+- Guard: `AgentRun.status.notin_(_TERMINAL_RUN_STATUSES),`; mutant: `True,`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/services/agent/test_agent_submission_service.py::test_producer_ack_closes_stopping_run_once --timeout=20 --tb=short`.
+- Observed failure: `E   assert True is False`.
+
+### expected-run
+
+- Source: `backend/src/api/agent/execute.py`.
+- Guard: `if expected_run_id is not None and expected_run_id != active.job_id:`; mutant: `if False and expected_run_id is not None and expected_run_id != active.job_id:`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/api/test_agent_cancel_confirmation.py::test_cancel_rejects_stale_identity_without_touching_newer_run --timeout=20 --tb=short`.
+- Observed failure: `E   AssertionError: Expected mock to not have been awaited. Awaited 1 times.`.
+
+### lost-park
+
+- Source: `backend/src/api/agent/streaming.py`.
+- Guard: `if parked is False:`; mutant: `if False and parked is False:`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/api/test_agent_streaming_terminal_guard.py::test_graph_park_stop_race_finalizes_cancelled_before_confirmation --timeout=20 --tb=short`.
+- Observed failure: `E   AssertionError: assert 'confirmation' not in ['status', 'status', 'trace', 'confirmation']`.
+
+### Late producer acknowledgement
+
+- Source: `frontend/src/hooks/chat/useChatStreaming.ts`.
+- Guard: `if (current?.runId === runId) {`; mutant: `if (current) {`.
+- Command: `pnpm exec vitest run --project unit src/hooks/__tests__/useChatStreaming.streamOwnership.test.tsx -t "does not let a late ACK stop a newer run"`.
+- Mutation makes an older run's ACK mark the newer activity `stopped` instead
+  of retaining `running`. The focused test fails, and passes after exact
+  restoration (1 passed, 8 skipped).

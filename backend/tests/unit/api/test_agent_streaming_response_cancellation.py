@@ -70,6 +70,36 @@ async def test_interrupted_cleanup_shields_request_cancel_scope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_cleanup_surfaces_terminal_ack_failure_after_all_steps() -> None:
+    from src.api.agent import streaming as streaming_mod
+
+    calls: list[str] = []
+
+    async def close_events() -> None:
+        calls.append("close")
+
+    async def persist_partial() -> None:
+        calls.append("persist")
+
+    async def finish_emitter() -> None:
+        calls.append("finish")
+
+    async def finalize_cancelled() -> None:
+        calls.append("finalize")
+        raise RuntimeError("durable cancellation ACK failed")
+
+    with pytest.raises(RuntimeError, match="durable cancellation ACK failed"):
+        await streaming_mod._run_cancel_cleanup(
+            ("close", close_events),
+            ("persist", persist_partial),
+            ("finish", finish_emitter),
+            ("finalize", finalize_cancelled),
+        )
+
+    assert calls == ["close", "persist", "finish", "finalize"]
+
+
+@pytest.mark.asyncio
 async def test_iterator_close_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.api.agent import streaming as streaming_mod
 
@@ -186,6 +216,11 @@ async def test_streaming_response_abort_finalizes_cancelled_without_completion(
             streaming_mod,
             "mark_submission_dispatched",
             new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            streaming_mod,
+            "is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
         ),
         patch.object(
             streaming_mod,
@@ -365,6 +400,11 @@ async def test_repeated_cancellation_waits_for_graph_cleanup() -> None:
             streaming_mod,
             "mark_submission_dispatched",
             new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            streaming_mod,
+            "is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
         ),
         patch.object(
             streaming_mod,

@@ -111,6 +111,100 @@ async def test_resume_confirmation_seq_continues_from_client_cursor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_confirmation_carries_durable_run_id_after_reload() -> None:
+    """A cold-load confirmation must retain the exact Stop identity."""
+    from src.api.agent import execute as execute_mod
+    from src.api.agent.execute import _pending_confirmation_frame
+
+    thread_id = str(_uuid.uuid4())
+    run_id = str(_uuid.uuid4())
+    current_user = Mock(id="user-1", organization_id="org-1")
+    patches = _graph_patches(_snapshot_with_interrupt(_CONFIRMATION))
+    db = object()
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patch.object(
+            execute_mod,
+            "get_active_run_for_thread",
+            new=AsyncMock(return_value=SimpleNamespace(job_id=run_id)),
+        ),
+    ):
+        frame = await _pending_confirmation_frame(thread_id, current_user, db=db)  # type: ignore[arg-type]
+
+    assert frame is not None
+    assert sse_data(frame)["run_id"] == run_id
+
+
+@pytest.mark.asyncio
+async def test_resume_confirmation_does_not_resurrect_acknowledged_stop() -> None:
+    """A stale checkpoint cannot re-arm HITL after a terminal run ACK."""
+    from src.api.agent import execute as execute_mod
+    from src.api.agent.execute import _pending_confirmation_frame
+
+    thread_id = str(_uuid.uuid4())
+    current_user = Mock(id="user-1", organization_id="org-1")
+    patches = _graph_patches(_snapshot_with_interrupt(_CONFIRMATION))
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patch.object(
+            execute_mod,
+            "get_active_run_for_thread",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod,
+            "get_latest_run_for_thread",
+            new=AsyncMock(return_value=SimpleNamespace(status="cancelled")),
+        ),
+    ):
+        frame = await _pending_confirmation_frame(
+            thread_id,
+            current_user,
+            db=object(),  # type: ignore[arg-type]
+        )
+
+    assert frame is None
+
+
+@pytest.mark.asyncio
+async def test_resume_confirmation_does_not_resurrect_stopping_run() -> None:
+    """A pending Stop claim suppresses the old checkpoint before ACK."""
+    from src.api.agent import execute as execute_mod
+    from src.api.agent.execute import _pending_confirmation_frame
+    from src.shared.enums import JobStatus
+
+    thread_id = str(_uuid.uuid4())
+    current_user = Mock(id="user-1", organization_id="org-1")
+    patches = _graph_patches(_snapshot_with_interrupt(_CONFIRMATION))
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patch.object(
+            execute_mod,
+            "get_active_run_for_thread",
+            new=AsyncMock(
+                return_value=SimpleNamespace(status=JobStatus.STOPPING.value)
+            ),
+        ),
+    ):
+        frame = await _pending_confirmation_frame(
+            thread_id,
+            current_user,
+            db=object(),  # type: ignore[arg-type]
+        )
+
+    assert frame is None
+
+
+@pytest.mark.asyncio
 async def test_resume_confirmation_response_uses_sse_headers() -> None:
     """The single-frame resume response must carry the shared SSE headers."""
     from src.api.agent import execute as execute_mod

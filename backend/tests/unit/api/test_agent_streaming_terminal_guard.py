@@ -137,6 +137,129 @@ async def test_graph_park_failure_keeps_confirmation_terminal_and_never_fails_ru
 
 
 @pytest.mark.asyncio
+async def test_graph_park_stop_race_finalizes_cancelled_before_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost RUNNING -> AWAITING park must let the producer ACK Stop.
+
+    The Stop request can claim ``STOPPING`` after the pre-park poll. The
+    guarded park then returns False; publishing a confirmation at that point
+    would exit the only producer and leave the run stopping forever.
+    """
+    from src.api.agent import streaming as streaming_mod
+    from src.services.agent import agent_execution_service as jobs_mod
+    from src.services.agent.agent_submission_service import AcceptedSubmission
+    from src.shared.enums import JobStatus
+
+    thread = SimpleNamespace(id="t-park-race", conversation_id="c-park-race")
+    user = Mock(id="user-1", organization_id="org-1")
+    request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
+    acceptance = AcceptedSubmission(
+        run_id="run-park-race",
+        thread_id="t-park-race",
+        user_message_id="user-message-park-race",
+        outbox_id="outbox-park-race",
+        idempotency_key="idem-park-race",
+    )
+    body = SimpleNamespace(
+        messages=[SimpleNamespace(role="user", content="hi")],
+        use_rag=False,
+        thread_id="t-park-race",
+        page_context={"type": "chat"},
+        model="",
+        client_message_id=None,
+    )
+    finalize_statuses: list[Any] = []
+
+    async def finalize(*_args: Any, **kwargs: Any) -> bool:
+        status = kwargs["status"]
+        finalize_statuses.append(status)
+        return status is not JobStatus.AWAITING_CONFIRMATION
+
+    from src.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "AGENT_FAST_PATH_ENABLED", False)
+
+    async def _no_stream(*_a: Any, **_k: Any) -> AsyncIterator[dict[str, Any]]:
+        return
+        yield  # pragma: no cover
+
+    graph = SimpleNamespace(
+        aget_state=AsyncMock(return_value=_snapshot_with_interrupt(_CONFIRMATION)),
+        astream_events=_no_stream,
+        aupdate_state=AsyncMock(),
+    )
+    fake_session = SimpleNamespace(close=AsyncMock())
+
+    with (
+        patch.object(streaming_mod, "AsyncSessionLocal", return_value=fake_session),
+        patch.object(
+            streaming_mod,
+            "_resolve_thread",
+            new=AsyncMock(return_value=(thread, None)),
+        ),
+        patch.object(
+            streaming_mod,
+            "_accept_eligible",
+            new=Mock(return_value=True),
+        ),
+        patch.object(
+            streaming_mod,
+            "accept_submission",
+            new=AsyncMock(return_value=acceptance),
+        ),
+        patch.object(
+            streaming_mod,
+            "mark_submission_dispatched",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            streaming_mod,
+            "is_run_cancellation_requested",
+            new=AsyncMock(side_effect=[False, False, False, False, True]),
+        ),
+        patch.object(
+            streaming_mod,
+            "_persist_user_message_guarded",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            streaming_mod,
+            "_resolve_and_bind_project",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            streaming_mod._stream_buffer,
+            "start_stream",
+            new=AsyncMock(side_effect=RuntimeError("redis down")),
+        ),
+        patch.object(streaming_mod, "_finalize_run", new=finalize),
+        patch.object(jobs_mod, "_persist_assistant_message_safe", new=AsyncMock()),
+        patch(
+            "src.services.agent.checkpointer.get_checkpointer",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch(
+            "src.services.agent.memory.get_memory_store",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
+    ):
+        frames = [
+            f async for f in streaming_mod.stream_event_generator(body, request, user)
+        ]
+
+    events = [_frame_event(f) for f in frames]
+    assert "confirmation" not in events
+    assert finalize_statuses == [
+        JobStatus.AWAITING_CONFIRMATION,
+        JobStatus.CANCELLED,
+    ]
+    fake_session.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_confirm_park_failure_after_nested_confirmation_stays_clean(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,6 +320,11 @@ async def test_confirm_park_failure_after_nested_confirmation_stays_clean(
             streaming_mod,
             "claim_awaiting_run_for_confirmation",
             new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            streaming_mod,
+            "is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
         ),
         patch.object(streaming_mod, "_finalize_run_id", new=exploding_finalize_id),
         patch.object(

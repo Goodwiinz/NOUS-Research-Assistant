@@ -67,6 +67,7 @@ from src.services.agent.agent_execution_service import (  # noqa: F401
 from src.services.agent.agent_run_service import (
     claim_awaiting_run_for_confirmation,
     get_active_run_for_thread,
+    get_latest_run_for_thread,
     get_run,
     release_confirmation_claim,
 )
@@ -1138,7 +1139,11 @@ async def _single_frame(frame: str):
 
 
 async def _pending_confirmation_frame(
-    thread_id: str, current_user: User, *, after: int = 0
+    thread_id: str,
+    current_user: User,
+    *,
+    after: int = 0,
+    db: Optional[AsyncSession] = None,
 ) -> Optional[str]:
     """SSE ``confirmation`` frame when the graph is parked on a HITL interrupt.
 
@@ -1158,6 +1163,47 @@ async def _pending_confirmation_frame(
     without one the client's Last-Event-ID cursor never advances past this
     frame and a reconnect replays from a stale position.
     """
+    active_run = None
+    if db is not None:
+        # Check durable ownership before opening the graph/checkpointer. A
+        # cancelled/completed run can leave its checkpoint parked on the old
+        # interrupt; probing that checkpoint first would both waste a cold
+        # reload and risk resurrecting an approval after a terminal ACK.
+        try:
+            active_run = await get_active_run_for_thread(
+                db,
+                thread_id,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            if (
+                active_run is not None
+                and getattr(active_run, "status", None) == JobStatus.STOPPING.value
+            ):
+                # A Stop claim is already durable, but the producer may not
+                # have written the terminal ACK yet. Do not re-arm the stale
+                # checkpoint's approval card during that short window.
+                return None
+            if active_run is None:
+                latest_run = await get_latest_run_for_thread(
+                    db,
+                    thread_id,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+                if latest_run is not None:
+                    return None
+        except Exception:
+            logger.warning(
+                "Failed to resolve parked run id for thread %s",
+                thread_id,
+                exc_info=True,
+            )
+            # Without a tenant-scoped durable answer, a checkpoint interrupt
+            # cannot be distinguished from a stale terminal run. Fail closed
+            # for cold resume rather than rearming an approval that may already
+            # have been cancelled or completed.
+            return None
     try:
         from src.services.agent.checkpointer import get_checkpointer
         from src.services.agent.graph import compile_agent_graph
@@ -1191,6 +1237,8 @@ async def _pending_confirmation_frame(
             return None
 
         payload = {"thread_id": thread_id, "confirmation": confirmation}
+        if active_run is not None:
+            payload["run_id"] = str(active_run.job_id)
         logger.info(
             "Re-delivering pending HITL confirmation on resume for thread %s",
             thread_id,
@@ -1295,7 +1343,12 @@ async def resume_stream(
         # forever while the run sat waiting for an answer. The user sees a
         # turn that produced nothing, re-sends, and the pending interrupt is
         # discarded as abandoned. Re-deliver it instead.
-        frame = await _pending_confirmation_frame(thread_id, current_user, after=after)
+        frame = await _pending_confirmation_frame(
+            thread_id,
+            current_user,
+            after=after,
+            db=db,
+        )
         if frame is not None:
             return StreamingResponse(
                 _single_frame(frame),

@@ -29,6 +29,10 @@ def _allow_durable_confirm():
             "src.api.agent.streaming._finalize_run_id",
             new=AsyncMock(return_value=True),
         ),
+        patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
     ):
         yield
 

@@ -332,4 +332,158 @@ describe('useChatStreaming stream ownership', () => {
       await submitPromise;
     });
   });
+
+  it('does not finish the activity run until the producer ACK resolves', async () => {
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks, signal?: AbortSignal) => {
+        cb.onRunId?.('run-ack');
+        return new Promise<void>((resolve) => {
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }
+    );
+    let resolveCancel!: () => void;
+    cancelActiveRunMock.mockImplementation(
+      () => new Promise<void>((resolve) => (resolveCancel = resolve))
+    );
+
+    const params = makeParams();
+    const { result } = renderHook(
+      () =>
+        useChatStreaming(
+          params as unknown as Parameters<typeof useChatStreaming>[0]
+        ),
+      { wrapper }
+    );
+
+    let submitPromise: Promise<void> | undefined;
+    await act(async () => {
+      submitPromise = result.current.handleSubmit('hello');
+      await waitFor(() => expect(streamMessageMock).toHaveBeenCalled());
+    });
+
+    act(() => result.current.handleStop());
+    expect(useAgentActivityStore.getState().runs['thread-A']?.state).toBe(
+      'running'
+    );
+
+    resolveCancel();
+    await waitFor(() =>
+      expect(useAgentActivityStore.getState().runs['thread-A']?.state).toBe(
+        'stopped'
+      )
+    );
+    await act(async () => {
+      await submitPromise;
+    });
+  });
+
+  it('does not let a late ACK stop a newer run on the same thread', async () => {
+    let streamCalls = 0;
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks, signal?: AbortSignal) => {
+        streamCalls += 1;
+        cb.onRunId?.(streamCalls === 1 ? 'run-old' : 'run-new');
+        return new Promise<void>((resolve) => {
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }
+    );
+    let resolveOldCancel!: () => void;
+    cancelActiveRunMock
+      .mockImplementationOnce(
+        () => new Promise<void>((resolve) => (resolveOldCancel = resolve))
+      )
+      .mockResolvedValue(undefined);
+
+    const params = makeParams();
+    const { result } = renderHook(
+      () =>
+        useChatStreaming(
+          params as unknown as Parameters<typeof useChatStreaming>[0]
+        ),
+      { wrapper }
+    );
+
+    let firstSubmit: Promise<void> | undefined;
+    await act(async () => {
+      firstSubmit = result.current.handleSubmit('first');
+      await waitFor(() => expect(streamCalls).toBe(1));
+    });
+    act(() => result.current.handleStop());
+    await act(async () => {
+      await firstSubmit;
+    });
+
+    let secondSubmit: Promise<void> | undefined;
+    await act(async () => {
+      secondSubmit = result.current.handleSubmit('second');
+      await waitFor(() => expect(streamCalls).toBe(2));
+    });
+    expect(useAgentActivityStore.getState().runs['thread-A']).toMatchObject({
+      state: 'running',
+      runId: 'run-new',
+    });
+
+    await act(async () => {
+      resolveOldCancel();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(useAgentActivityStore.getState().runs['thread-A']).toMatchObject({
+      state: 'running',
+      runId: 'run-new',
+    });
+
+    act(() => result.current.handleStop());
+    await act(async () => {
+      await secondSubmit;
+    });
+  });
+
+  it('fences Stop during confirmation continuation to the parked run id', async () => {
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks) => {
+        cb.onConfirmation(
+          'agent-thread-1',
+          { tool: 'create_note' },
+          'run-confirm'
+        );
+        cb.onDone({});
+        return Promise.resolve();
+      }
+    );
+    streamConfirmMock.mockImplementation(
+      (_req: unknown, _cb: StreamCallbacks, signal?: AbortSignal) =>
+        new Promise<void>((resolve) => {
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        })
+    );
+    cancelActiveRunMock.mockResolvedValue(undefined);
+
+    const params = makeParams();
+    const { result } = renderHook(
+      () =>
+        useChatStreaming(
+          params as unknown as Parameters<typeof useChatStreaming>[0]
+        ),
+      { wrapper }
+    );
+
+    await act(async () => {
+      await result.current.handleSubmit('create a note');
+    });
+    await waitFor(() =>
+      expect(result.current.pendingConfirmation).not.toBeNull()
+    );
+
+    await act(async () => {
+      void result.current.handleConfirmation(true);
+      await waitFor(() => expect(streamConfirmMock).toHaveBeenCalled());
+    });
+    act(() => result.current.handleStop());
+
+    expect(cancelActiveRunMock).toHaveBeenCalledWith('thread-A', 'run-confirm');
+    expect(result.current.pendingConfirmation).toBeNull();
+  });
 });

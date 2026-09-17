@@ -548,6 +548,74 @@ async def test_completion_cannot_overwrite_a_durable_stop(
     ) == 0
 
 
+async def test_producer_ack_closes_stopping_run_once(
+    db: AsyncSession,
+) -> None:
+    """The producer ACK is the single terminal cancellation ledger event."""
+    accepted = await accept_submission(
+        db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+    )
+    run = await db.get(AgentRun, accepted.run_id)
+    assert run is not None
+    assert await mark_submission_dispatched(
+        db,
+        run_id=accepted.run_id,
+        outbox_id=accepted.outbox_id,
+        organization_id=ORG_A,
+        user_id=USER_A,
+    )
+    stop = await request_run_cancellation(
+        db,
+        run_id=accepted.run_id,
+        thread_id=THREAD_ID,
+        organization_id=ORG_A,
+        user_id=USER_A,
+        reason="user_requested",
+        request_id="stop-ack",
+    )
+    assert stop is not None and stop.claimed is True
+    await db.commit()
+
+    first = await submission_mod.finalize_submission(
+        db,
+        run_id=accepted.run_id,
+        status=JobStatus.CANCELLED,
+        organization_id=ORG_A,
+        event_type=RunEventType.RUN_CANCELLED,
+        payload={"reason": "user_requested"},
+    )
+    second = await submission_mod.finalize_submission(
+        db,
+        run_id=accepted.run_id,
+        status=JobStatus.CANCELLED,
+        organization_id=ORG_A,
+        event_type=RunEventType.RUN_CANCELLED,
+        payload={"reason": "user_requested"},
+    )
+
+    assert first is True
+    assert second is False
+    await db.refresh(run)
+    assert run.status == JobStatus.CANCELLED.value
+    events = (
+        (
+            await db.execute(
+                select(AgentRunEvent)
+                .where(AgentRunEvent.run_id == accepted.run_id)
+                .order_by(AgentRunEvent.seq)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [event.event_type for event in events].count(
+        RunEventType.RUN_STOPPING.value
+    ) == 1
+    assert [event.event_type for event in events].count(
+        RunEventType.RUN_CANCELLED.value
+    ) == 1
+
+
 async def test_a_failed_write_leaves_nothing_behind(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

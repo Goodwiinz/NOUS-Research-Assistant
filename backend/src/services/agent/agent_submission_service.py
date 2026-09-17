@@ -1042,9 +1042,10 @@ async def finalize_submission(
             if transition_result is None:
                 # A few lightweight test doubles model execute() as a write
                 # with no result object. Real SQLAlchemy UPDATE..RETURNING
-                # always supplies one; treating the double as a successful
-                # transition preserves the pre-returning contract.
-                transitioned = True
+                # always supplies one. An absent result cannot prove that the
+                # guarded UPDATE claimed the row, so fail closed: do not
+                # append a terminal event or report a successful transition.
+                transitioned = None
             else:
                 first = getattr(transition_result, "first", None)
                 transitioned = first() if callable(first) else transition_result

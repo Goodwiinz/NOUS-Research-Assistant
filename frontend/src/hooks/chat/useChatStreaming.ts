@@ -208,6 +208,8 @@ export interface PendingConfirmation {
   /** Stable identities for reconciliation across the interrupt/resume split. */
   userRuntimeId?: string;
   assistantRuntimeId?: string;
+  /** Durable AgentRun id used to fence Stop after remount/resume. */
+  runId?: string;
 }
 
 interface StreamAuthRecoveryAttempt {
@@ -478,6 +480,11 @@ export function useChatStreaming(
   // expected identity so a delayed browser action cannot cancel a newer run
   // that has since taken ownership of the same thread.
   const runIdByThreadRef = useRef<Record<string, string>>({});
+  // One Stop command per durable run. The producer may take a few polling
+  // intervals to turn `stopping` into `cancelled`; sharing this promise keeps
+  // an accepted-frame race from issuing duplicate commands and prevents a
+  // late ACK from closing a newer run on the same thread.
+  const durableStopByRunRef = useRef<Record<string, Promise<void>>>({});
   // Flush-then-cancel for the seq rAF at terminals: the last streamed seq is
   // the resume cursor, so a pending value must be committed synchronously —
   // cancelling the frame alone would drop it.
@@ -607,6 +614,37 @@ export function useChatStreaming(
       router.replace(`/login?${recoveryParams.toString()}`);
     },
     [router]
+  );
+
+  const requestDurableStop = useCallback(
+    (threadId: string, runId: string): Promise<void> => {
+      const existing = durableStopByRunRef.current[runId];
+      if (existing) return existing;
+
+      let request: Promise<void>;
+      request = agentChatService
+        .cancelActiveRun(threadId, runId)
+        .then(() => {
+          // A delayed ACK from an older run must never stop a newer run that
+          // has taken ownership of this thread in the meantime.
+          const current = useAgentActivityStore.getState().runs[threadId];
+          if (current?.runId === runId) {
+            useAgentActivityStore.getState().finishRun(threadId, 'stopped');
+          }
+        })
+        .catch((error) => {
+          console.error('[Chat] Failed to cancel active agent run:', error);
+          toast.error('Could not stop this response. Please try again.');
+        })
+        .then(() => {
+          if (durableStopByRunRef.current[runId] === request) {
+            delete durableStopByRunRef.current[runId];
+          }
+        });
+      durableStopByRunRef.current[runId] = request;
+      return request;
+    },
+    []
   );
 
   // Recovery is once per activation, not once per component lifetime. A
@@ -787,6 +825,8 @@ export function useChatStreaming(
        * re-activating the thread can try again — the run itself may well
        * still be alive on the backend. */
       keepRunOnFailure?: boolean;
+      /** Resume: retain the accepted AgentRun id when replay starts after it. */
+      preserveRunId?: boolean;
       authRecoveryAttempt?: StreamAuthRecoveryAttempt;
       start: (
         callbacks: AgentStreamCallbacks,
@@ -801,6 +841,7 @@ export function useChatStreaming(
         quietWhenEmpty,
         suppressCommit,
         keepRunOnFailure,
+        preserveRunId,
         authRecoveryAttempt,
         start,
       } = opts;
@@ -945,7 +986,7 @@ export function useChatStreaming(
         // Fresh turn — record the thread so Stop can finalize this run's
         // activity indicator. (No stop-flag reset needed: a previous turn's
         // stop target can't match this turn's claim.)
-        if (currentThreadId) {
+        if (currentThreadId && !preserveRunId) {
           // The previous turn's id is no longer a safe cancellation target
           // once this new producer owns the thread. Wait for this turn's
           // accepted frame before allowing Stop to issue a run command.
@@ -997,8 +1038,18 @@ export function useChatStreaming(
               });
             },
             onRunId: (runId) => {
-              if (!currentThreadId) return;
+              if (!currentThreadId || streamOwnerRef.current !== streamOwner) {
+                return;
+              }
               runIdByThreadRef.current[currentThreadId] = runId;
+              useAgentActivityStore.getState().setRunId(currentThreadId, runId);
+              // Stop can race the accepted frame while the server is still
+              // opening the response. Once the producer gives us its exact
+              // identity, issue the fenced command instead of losing the
+              // durable stop behind the local abort.
+              if (isStoppedByUser()) {
+                void requestDurableStop(currentThreadId, runId);
+              }
             },
             onStreamId: (sid) => {
               if (!currentThreadId) return;
@@ -1131,9 +1182,20 @@ export function useChatStreaming(
               pendingStreamContentRef.current = '';
               useChatStore.setState({ streamingContent: '' });
             },
-            onConfirmation: (threadId, confirmation) => {
+            onConfirmation: (threadId, confirmation, runId) => {
               console.log('[Agent] HITL confirmation needed:', confirmation);
               streamHadConfirmation = true;
+              const confirmationRunId =
+                runId ??
+                (currentThreadId
+                  ? runIdByThreadRef.current[currentThreadId]
+                  : undefined);
+              if (currentThreadId && confirmationRunId) {
+                runIdByThreadRef.current[currentThreadId] = confirmationRunId;
+                useAgentActivityStore
+                  .getState()
+                  .setRunId(currentThreadId, confirmationRunId);
+              }
               setPendingConfirmation({
                 threadId,
                 workspaceThreadId: currentThreadId || '',
@@ -1151,6 +1213,7 @@ export function useChatStreaming(
                 citations: useChatStore.getState().streamingCitations,
                 userRuntimeId,
                 assistantRuntimeId,
+                runId: confirmationRunId,
               });
             },
             onAuthRefreshAttempt: () => {
@@ -1511,6 +1574,7 @@ export function useChatStreaming(
       invalidateProjectDataForTool,
       maybeAutoFocusCreatedNote,
       setPendingConfirmation,
+      requestDurableStop,
       displayedMessages.length,
     ]
   );
@@ -1861,33 +1925,33 @@ export function useChatStreaming(
     // zero sources.
     stopCitationsRef.current = useChatStore.getState().streamingCitations;
 
-    // Close out the agent activity indicator — onDone won't fire on abort.
-    // 'stopped', not 'done': a user abort must not strike through the
-    // remaining plan items as if they completed.
-    const runThread = activeRunThreadRef.current;
+    // Stop during a confirmation continuation has no main-stream active ref;
+    // use the pending gate's workspace thread while the confirm lock owns the
+    // producer. The parked (legacy) confirmation path stays no-body below.
+    const runThread =
+      activeRunThreadRef.current ??
+      (confirmLockRef.current
+        ? pendingConfirmation?.workspaceThreadId || null
+        : null);
     const normalRunStop = Boolean(
       runThread && (!pendingConfirmation || confirmLockRef.current)
     );
+    const activityRun = runThread
+      ? useAgentActivityStore.getState().runs[runThread]
+      : undefined;
     const expectedRunId = runThread
-      ? runIdByThreadRef.current[runThread]
+      ? (runIdByThreadRef.current[runThread] ??
+        activityRun?.runId ??
+        pendingConfirmation?.runId)
       : undefined;
     if (normalRunStop && runThread && expectedRunId) {
       // Issue the durable command before aborting the local transport. The
-      // local Stop remains immediate; the producer independently acknowledges
-      // this marker and owns the persisted partial/terminal transition.
-      void agentChatService
-        .cancelActiveRun(runThread, expectedRunId)
-        .catch((error) => {
-          console.error('[Chat] Failed to cancel active agent run:', error);
-          toast.error('Could not stop this response. Please try again.');
-        });
+      // activity rail stays running until the producer's `cancelled` ACK is
+      // observed; a failed or timed-out command remains visibly retryable.
+      void requestDurableStop(runThread, expectedRunId);
     }
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
-
-    if (runThread) {
-      useAgentActivityStore.getState().finishRun(runThread, 'stopped');
-    }
 
     // A parked confirmation has no live graph task for AbortController to
     // cancel. Close its durable run explicitly; if confirmation execution has
@@ -1924,6 +1988,7 @@ export function useChatStreaming(
   }, [
     pendingConfirmation,
     setPendingConfirmation,
+    requestDurableStop,
     storeIsStreaming,
     storeStopStreaming,
   ]);
@@ -1965,6 +2030,7 @@ export function useChatStreaming(
       quietWhenEmpty: true,
       suppressCommit: () => replayGapSeen,
       keepRunOnFailure: true,
+      preserveRunId: true,
       start: async (streamCallbacks, signal) => {
         // The buffer trims old frames: if the replay starts past our cursor,
         // whatever we rebuild locally is missing a prefix of the answer. The
@@ -2076,7 +2142,7 @@ export function useChatStreaming(
         threadId,
         0,
         {
-          onConfirmation: (agentThreadId, confirmation) => {
+          onConfirmation: (agentThreadId, confirmation, runId) => {
             // A submit fired while the probe was in flight aborts it; a
             // confirmation frame that raced the abort must not arm a gate for
             // an interrupt the new turn just abandoned server-side.
@@ -2089,15 +2155,17 @@ export function useChatStreaming(
               approvalId: crypto.randomUUID(),
               confirmation,
               // No userRuntimeId/assistantRuntimeId here (unlike the live path):
-              // the SSE confirmation frame carries only {thread_id, confirmation}
-              // — the interrupted turn's ids live in the server-side run ledger,
-              // which this probe never sees. Deriving them from the last
+              // the SSE confirmation frame carries thread_id/confirmation and
+              // the durable run_id when one exists; the interrupted turn's
+              // message ids live in the server-side run ledger, which this
+              // probe never sees. Deriving them from the last
               // displayed user row is unsafe: legacy rows have no
               // client_message_id (their runtimeId is the persisted db id, not a
               // cmid), so a guessed identity could be WRONG, which mis-targets
               // reconciliation — absence degrades gracefully instead (the
               // confirm stream's done.client_message_id stays the primary key,
               // and confirmRuntimeId falls back to crypto.randomUUID()).
+              runId,
             });
             probeAbort.abort();
           },
@@ -2155,6 +2223,23 @@ export function useChatStreaming(
           );
         const confirmationThreadId =
           pendingConfirmation.workspaceThreadId || null;
+        // The confirmation continuation is still the same durable AgentRun.
+        // Keep its thread/id live while streamConfirm is open so Stop can send
+        // the exact fenced command even though the main stream has ended.
+        activeRunThreadRef.current = confirmationThreadId;
+        const carriedRunId =
+          pendingConfirmation.runId ??
+          (confirmationThreadId
+            ? (runIdByThreadRef.current[confirmationThreadId] ??
+              useAgentActivityStore.getState().runs[confirmationThreadId]
+                ?.runId)
+            : undefined);
+        if (confirmationThreadId && carriedRunId) {
+          runIdByThreadRef.current[confirmationThreadId] = carriedRunId;
+          useAgentActivityStore
+            .getState()
+            .setRunId(confirmationThreadId, carriedRunId);
+        }
         const confirmationDiagnostic = (terminalReason: string) => ({
           terminalReason,
           localCount: messages.length,
@@ -2363,6 +2448,21 @@ export function useChatStreaming(
                   streamingProgress: [...confirmProgress],
                 });
               },
+              onRunId: (runId) => {
+                if (
+                  !confirmationThreadId ||
+                  streamOwnerRef.current !== confirmStreamOwner
+                ) {
+                  return;
+                }
+                runIdByThreadRef.current[confirmationThreadId] = runId;
+                useAgentActivityStore
+                  .getState()
+                  .setRunId(confirmationThreadId, runId);
+                if (isConfirmStopped()) {
+                  void requestDurableStop(confirmationThreadId, runId);
+                }
+              },
               // Same resume-cursor bookkeeping as the primary stream. Without
               // it the cursor froze at whatever seq the pre-interrupt turn
               // reached, so a disconnect mid-resume replayed the buffer from a
@@ -2497,7 +2597,7 @@ export function useChatStreaming(
                     .setPlan(pendingConfirmation.workspaceThreadId, items);
                 }
               },
-              onConfirmation: (threadId, confirmation) => {
+              onConfirmation: (threadId, confirmation, runId) => {
                 nestedConfirmation = {
                   threadId,
                   workspaceThreadId: pendingConfirmation.workspaceThreadId,
@@ -2510,6 +2610,12 @@ export function useChatStreaming(
                   progress: [...confirmProgress],
                   userRuntimeId: pendingConfirmation.userRuntimeId,
                   assistantRuntimeId: pendingConfirmation.assistantRuntimeId,
+                  runId:
+                    runId ??
+                    carriedRunId ??
+                    (confirmationThreadId
+                      ? runIdByThreadRef.current[confirmationThreadId]
+                      : undefined),
                 };
               },
               onUsage: (inputTokens, outputTokens) => {
@@ -2682,12 +2788,15 @@ export function useChatStreaming(
             !confirmFailed &&
             pendingConfirmation.workspaceThreadId
           ) {
-            useAgentActivityStore
-              .getState()
-              .finishRun(
-                pendingConfirmation.workspaceThreadId,
-                isConfirmStopped() ? 'stopped' : 'done'
-              );
+            // A user Stop is closed by requestDurableStop only after the
+            // producer reports `cancelled`. The normal completion path can
+            // finish immediately because onDone is the producer's terminal
+            // acknowledgement.
+            if (!isConfirmStopped()) {
+              useAgentActivityStore
+                .getState()
+                .finishRun(pendingConfirmation.workspaceThreadId, 'done');
+            }
           }
           // A nested interrupt re-arms the banner with the new confirmation
           // (carrying the turn's accumulated provenance).
@@ -2740,6 +2849,9 @@ export function useChatStreaming(
           if (streamOwnerRef.current === confirmStreamOwner) {
             resetStreamingTurnState();
           }
+          if (activeRunThreadRef.current === confirmationThreadId) {
+            activeRunThreadRef.current = null;
+          }
         }
       } catch (err) {
         // A throw between lock-set and the try/finally used to leave the
@@ -2761,6 +2873,7 @@ export function useChatStreaming(
       invalidateProjectDataForTool,
       maybeAutoFocusCreatedNote,
       setPendingConfirmation,
+      requestDurableStop,
     ]
   );
 

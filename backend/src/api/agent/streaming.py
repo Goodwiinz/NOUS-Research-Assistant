@@ -431,11 +431,7 @@ async def _stream_luna_fast_path(
         )
 
     async def cancel_fast_path(reason: str = "client_disconnected") -> None:
-        with contextlib.suppress(BaseException):
-            await persist_partial()
-        with contextlib.suppress(BaseException):
-            await emitter.finish()
-        with contextlib.suppress(BaseException):
+        async def finalize_cancelled() -> None:
             cancelled_payload: Dict[str, Any] = {
                 "reason": reason,
                 "request_id": emitter.trace_id,
@@ -454,6 +450,12 @@ async def _stream_luna_fast_path(
                 event_type=RunEventType.RUN_CANCELLED,
                 payload=cancelled_payload,
             )
+
+        await _run_cancel_cleanup(
+            ("persist_partial", persist_partial),
+            ("finish_emitter", emitter.finish),
+            ("finalize_cancelled", finalize_cancelled),
+        )
 
     async def durable_stop_requested() -> bool:
         if acceptance is None:
@@ -718,7 +720,13 @@ async def _stream_luna_fast_path(
             ),
         )
         if finalized is False:
-            await cancel_fast_path(reason="user_requested")
+            if await durable_stop_requested():
+                await cancel_fast_path(reason="user_requested")
+            else:
+                # Another producer already reached a terminal state. Its
+                # durable status is authoritative; do not manufacture a
+                # cancellation ACK for an ordinary completed run.
+                await emitter.finish()
             return
         yield await emitter.emit(AgentStreamEvent.DONE, done_payload)
         await emitter.finish()
@@ -744,6 +752,8 @@ async def _stream_luna_fast_path(
                 "message": client_safe_error(exc),
             },
         )
+        if finalized is False and await durable_stop_requested():
+            await cancel_fast_path(reason="user_requested")
         try:
             from langsmith.run_helpers import get_current_run_tree
 
@@ -1509,6 +1519,29 @@ async def _run_interrupted_cleanup(cleanup: Any) -> None:
             continue
 
 
+async def _run_cancel_cleanup(
+    *steps: tuple[str, Callable[[], Awaitable[Any]]],
+) -> None:
+    """Run every cancellation step and surface a failed durable ACK.
+
+    Partial persistence and emitter cleanup are best-effort individually, but
+    the terminal ``run.cancelled`` finalizer must remain observable. Running
+    all steps before raising preserves stopped-output cleanup while ensuring a
+    permanent database failure cannot be mistaken for an acknowledged Stop.
+    ``_run_interrupted_cleanup`` shields this helper from ASGI cancellation.
+    """
+    first_error: Optional[BaseException] = None
+    for label, step in steps:
+        try:
+            await step()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+            logger.error("Durable cancellation step failed: %s", label, exc_info=exc)
+    if first_error is not None:
+        raise first_error
+
+
 def _cancel_current_task_on_disconnect(request: Any) -> Optional[asyncio.Task]:
     signal = _get_disconnect_signal(request)
     stream_task = asyncio.current_task()
@@ -2234,9 +2267,8 @@ async def stream_event_generator(
             )
             if dispatch_claimed is False:
                 if await durable_stop_requested():
-                    with contextlib.suppress(BaseException):
-                        await emitter.finish()
-                    with contextlib.suppress(BaseException):
+
+                    async def finalize_queued_cancel() -> None:
                         await _finalize_run(
                             db,
                             acceptance,
@@ -2248,6 +2280,11 @@ async def stream_event_generator(
                                 "request_id": emitter.trace_id,
                             },
                         )
+
+                    await _run_cancel_cleanup(
+                        ("finish_emitter", emitter.finish),
+                        ("finalize_cancelled", finalize_queued_cancel),
+                    )
                     return
                 yield await emitter.emit(
                     AgentStreamEvent.ERROR,
@@ -2363,15 +2400,17 @@ async def stream_event_generator(
                 )
 
         async def cancel_current_stream(reason: str = "client_disconnected") -> None:
-            """Best-effort durable cleanup for polling and ASGI cancellation."""
-            if event_stream_iter is not None:
-                with contextlib.suppress(BaseException):
-                    await _close_async_iterator(event_stream_iter)
-            with contextlib.suppress(BaseException):
-                await persist_partial_stop(force_inline=True)
-            with contextlib.suppress(BaseException):
-                await emitter.finish()
-            with contextlib.suppress(BaseException):
+            """Durably clean up a stopped graph stream."""
+
+            async def close_graph_events() -> None:
+                if event_stream_iter is not None:
+                    # ASGI may cancel the child iterator while it is already
+                    # being closed. That is expected transport cleanup; the
+                    # durable finalizer below is the ACK-bearing step.
+                    with contextlib.suppress(asyncio.CancelledError, GeneratorExit):
+                        await _close_async_iterator(event_stream_iter)
+
+            async def finalize_cancelled() -> None:
                 cancelled_payload: Dict[str, Any] = {
                     "reason": reason,
                     "request_id": emitter.trace_id,
@@ -2389,6 +2428,16 @@ async def stream_event_generator(
                     event_type=RunEventType.RUN_CANCELLED,
                     payload=cancelled_payload,
                 )
+
+            await _run_cancel_cleanup(
+                ("close_graph_events", close_graph_events),
+                (
+                    "persist_partial_stop",
+                    lambda: persist_partial_stop(force_inline=True),
+                ),
+                ("finish_emitter", emitter.finish),
+                ("finalize_cancelled", finalize_cancelled),
+            )
 
         if acceptance is not None and await durable_stop_requested():
             await cancel_current_stream(reason="user_requested")
@@ -2675,20 +2724,14 @@ async def stream_event_generator(
                         break
 
                 thread_id = config["configurable"]["thread_id"]
-                frame = await emitter.emit(
-                    AgentStreamEvent.CONFIRMATION,
-                    {"thread_id": thread_id, "confirmation": confirmation_details},
-                )
-                terminal_frame_sent = True
-                if not client_disconnected:
-                    yield frame
-                await emitter.finish()
-                # Parked, not finished: the run resumes on /stream/confirm, so
-                # its ledger stays OPEN (no terminal event) and only the status
-                # moves. It keeps holding the thread's active-run slot until it
-                # resumes or the next submission supersedes it.
+                # Park the durable run before publishing the confirmation. A
+                # Stop request can claim RUNNING -> STOPPING between the poll
+                # above and this write; a guarded park then returns False. In
+                # that race the producer is the only actor that can publish
+                # the cancellation ACK, so clean it up here and never leave a
+                # client-facing approval card for a run that is stopping.
                 try:
-                    await _finalize_run(
+                    parked = await _finalize_run(
                         db,
                         acceptance,
                         current_user,
@@ -2696,14 +2739,40 @@ async def stream_event_generator(
                         run_metadata={"progress_steps": emitter.progress_steps},
                     )
                 except Exception:
-                    # Audit S2-M3: CONFIRMATION terminal already on the wire —
-                    # a failed park must not fall through to the generic
-                    # handler (ERROR after terminal + FAILED racing the park).
+                    parked = None
+                    # Preserve the existing best-effort HITL behavior for a
+                    # transient bookkeeping failure: the checkpoint remains
+                    # recoverable and the confirmation can be retried. A
+                    # guarded False is handled above because it is a known
+                    # competing terminal transition, rather than an unknown
+                    # database failure.
                     logger.error(
                         "Failed to park stream run AWAITING_CONFIRMATION",
                         exc_info=True,
                         extra={"thread_id": thread_id},
                     )
+                if parked is False:
+                    if acceptance is not None and await durable_stop_requested():
+                        await cancel_current_stream(reason="user_requested")
+                    else:
+                        await emitter.finish()
+                    return
+                confirmation_payload = {
+                    "thread_id": thread_id,
+                    "confirmation": confirmation_details,
+                }
+                if acceptance is not None:
+                    # Keep the parked run identity on the wire. A resumed
+                    # browser must use this exact id when issuing Stop.
+                    confirmation_payload["run_id"] = acceptance.run_id
+                frame = await emitter.emit(
+                    AgentStreamEvent.CONFIRMATION,
+                    confirmation_payload,
+                )
+                terminal_frame_sent = True
+                if not client_disconnected:
+                    yield frame
+                await emitter.finish()
                 return
 
             # Turn-scoped (computed above): "" when this turn produced no AI
@@ -2877,7 +2946,13 @@ async def stream_event_generator(
             # refuses the late completion; reuse the cancellation path to mark
             # the already-written assistant row stopped and append exactly one
             # cancellation event.
-            await cancel_current_stream(reason="user_requested")
+            if await durable_stop_requested():
+                await cancel_current_stream(reason="user_requested")
+            else:
+                # A different producer already closed the run. Keep its
+                # terminal status authoritative instead of turning an ordinary
+                # completed race into a false cancellation acknowledgement.
+                await emitter.finish()
             return
         frame = await emitter.emit(AgentStreamEvent.DONE, done_payload)
         terminal_frame_sent = True
@@ -2890,15 +2965,16 @@ async def stream_event_generator(
         # the client aborts the fetch. Shield the cleanup so that cancellation
         # cannot leave the graph running or the durable run non-terminal.
         async def cleanup_cancelled_response() -> None:
-            if event_stream_iter is not None:
-                with contextlib.suppress(BaseException):
-                    await _close_async_iterator(event_stream_iter)
-            if persist_partial_stop is not None:
-                with contextlib.suppress(BaseException):
+            async def close_graph_events() -> None:
+                if event_stream_iter is not None:
+                    with contextlib.suppress(asyncio.CancelledError, GeneratorExit):
+                        await _close_async_iterator(event_stream_iter)
+
+            async def persist_stopped() -> None:
+                if persist_partial_stop is not None:
                     await persist_partial_stop(force_inline=True)
-            with contextlib.suppress(BaseException):
-                await emitter.finish()
-            with contextlib.suppress(BaseException):
+
+            async def finalize_cancelled() -> None:
                 cancelled_payload: Dict[str, Any] = {
                     "reason": "client_disconnected",
                     "request_id": emitter.trace_id,
@@ -2916,6 +2992,13 @@ async def stream_event_generator(
                     event_type=RunEventType.RUN_CANCELLED,
                     payload=cancelled_payload,
                 )
+
+            await _run_cancel_cleanup(
+                ("close_graph_events", close_graph_events),
+                ("persist_partial_stop", persist_stopped),
+                ("finish_emitter", emitter.finish),
+                ("finalize_cancelled", finalize_cancelled),
+            )
 
         await _run_interrupted_cleanup(cleanup_cancelled_response)
         raise cancellation_exc
@@ -2961,27 +3044,9 @@ async def stream_event_generator(
             )
             if not client_disconnected:
                 yield frame
-        else:
-            frame = await emitter.emit(
-                AgentStreamEvent.CONFIRMATION,
-                {"thread_id": thread_id, "confirmation": confirmation_details},
-            )
-            terminal_frame_sent = True
-            if not client_disconnected:
-                yield frame
-        await emitter.finish()
-        try:
-            if checkpoint_ok:
-                # Parked on a confirmation — ledger stays open (see above).
-                await _finalize_run(
-                    db,
-                    acceptance,
-                    current_user,
-                    status=JobStatus.AWAITING_CONFIRMATION,
-                    run_metadata={"progress_steps": emitter.progress_steps},
-                )
-            else:
-                await _finalize_run(
+            await emitter.finish()
+            try:
+                failed = await _finalize_run(
                     db,
                     acceptance,
                     current_user,
@@ -2994,10 +3059,60 @@ async def stream_event_generator(
                     error_code="interrupt_not_checkpointed",
                     error="Interrupt state could not be saved. Please retry.",
                 )
+                if (
+                    failed is False
+                    and acceptance is not None
+                    and await durable_stop_requested()
+                ):
+                    await cancel_current_stream(reason="user_requested")
+            except Exception:
+                # Audit S2-M3: the wire outcome above is final; bookkeeping
+                # failures must not cascade into a second terminal.
+                logger.error("Failed to finalize drained interrupt run", exc_info=True)
+            return
+
+        # Park before publishing the confirmation. If a concurrent Stop has
+        # already claimed STOPPING, the guarded update returns False and this
+        # producer must publish the cancellation ACK instead of exiting with a
+        # run that no longer has a worker to observe the stop marker.
+        try:
+            parked = await _finalize_run(
+                db,
+                acceptance,
+                current_user,
+                status=JobStatus.AWAITING_CONFIRMATION,
+                run_metadata={"progress_steps": emitter.progress_steps},
+            )
         except Exception:
-            # Audit S2-M3: the wire outcome above is final; bookkeeping
-            # failures must not cascade into a second terminal.
-            logger.error("Failed to finalize drained interrupt run", exc_info=True)
+            parked = None
+            # Best-effort bookkeeping failure: retain the prior behavior and
+            # publish the checkpoint-backed confirmation for retry/recovery.
+            logger.error(
+                "Failed to park stream run AWAITING_CONFIRMATION",
+                exc_info=True,
+                extra={"thread_id": thread_id},
+            )
+        if parked is False:
+            if acceptance is not None and await durable_stop_requested():
+                await cancel_current_stream(reason="user_requested")
+            else:
+                await emitter.finish()
+            return
+
+        confirmation_payload = {
+            "thread_id": thread_id,
+            "confirmation": confirmation_details,
+        }
+        if acceptance is not None:
+            confirmation_payload["run_id"] = acceptance.run_id
+        frame = await emitter.emit(
+            AgentStreamEvent.CONFIRMATION,
+            confirmation_payload,
+        )
+        terminal_frame_sent = True
+        if not client_disconnected:
+            yield frame
+        await emitter.finish()
 
     except Exception as e:
         logger.error("SSE stream error", exc_info=e)
@@ -3040,7 +3155,7 @@ async def stream_event_generator(
             # `acceptance is None` here covers the case that matters most:
             # the accept transaction itself failed, so there is nothing to
             # finalize — and no `accepted` frame was ever emitted.
-            await _finalize_run(
+            failed = await _finalize_run(
                 db,
                 acceptance,
                 current_user,
@@ -3053,6 +3168,12 @@ async def stream_event_generator(
                 error_code="stream_failed",
                 error=client_safe_error(e),
             )
+            if (
+                failed is False
+                and acceptance is not None
+                and await durable_stop_requested()
+            ):
+                await cancel_current_stream(reason="user_requested")
 
     finally:
         if disconnect_canceller is not None:
@@ -3621,14 +3742,12 @@ async def stream_confirm_event_generator(
         async def cancel_confirm_stream(
             reason: str = "client_disconnected",
         ) -> None:
-            if confirm_event_iter is not None:
-                with contextlib.suppress(BaseException):
-                    await _close_async_iterator(confirm_event_iter)
-            with contextlib.suppress(BaseException):
-                await persist_partial_stop(force_inline=True)
-            with contextlib.suppress(BaseException):
-                await emitter.finish()
-            with contextlib.suppress(BaseException):
+            async def close_confirm_events() -> None:
+                if confirm_event_iter is not None:
+                    with contextlib.suppress(asyncio.CancelledError, GeneratorExit):
+                        await _close_async_iterator(confirm_event_iter)
+
+            async def finalize_cancelled() -> None:
                 cancelled_payload: Dict[str, Any] = {
                     "reason": reason,
                     "request_id": emitter.trace_id,
@@ -3646,6 +3765,16 @@ async def stream_confirm_event_generator(
                     event_type=RunEventType.RUN_CANCELLED,
                     payload=cancelled_payload,
                 )
+
+            await _run_cancel_cleanup(
+                ("close_confirm_events", close_confirm_events),
+                (
+                    "persist_partial_stop",
+                    lambda: persist_partial_stop(force_inline=True),
+                ),
+                ("finish_emitter", emitter.finish),
+                ("finalize_cancelled", finalize_cancelled),
+            )
 
         async def durable_stop_requested() -> bool:
             if active_run is None:
@@ -3874,21 +4003,12 @@ async def stream_confirm_event_generator(
                     break
                 if confirmation_details:
                     break
-            frame = await emitter.emit(
-                AgentStreamEvent.CONFIRMATION,
-                {
-                    "thread_id": request_body.thread_id,
-                    "confirmation": confirmation_details,
-                },
-            )
-            terminal_frame_sent = True
-            if not client_disconnected:
-                yield frame
-            # The run is parked awaiting confirmation — no longer producing,
-            # so clear the active pointer; the buffered frames stay until TTL.
-            await emitter.finish()
+            # Park before publishing a nested confirmation. A Stop can win
+            # between the poll above and the guarded AWAITING transition; when
+            # that happens this resumed producer must own the cancellation ACK
+            # rather than leave STOPPING with no worker behind it.
             try:
-                await _finalize_run_id(
+                parked = await _finalize_run_id(
                     db,
                     str(active_run.job_id) if active_run is not None else None,
                     current_user,
@@ -3896,13 +4016,40 @@ async def stream_confirm_event_generator(
                     run_metadata={"progress_steps": emitter.progress_steps},
                 )
             except Exception:
-                # Audit S2-M3: terminal already on the wire — never cascade
-                # into the generic handler's second terminal.
+                parked = None
+                # Preserve the checkpoint-backed retry behavior for an
+                # unknown/transient bookkeeping failure. A guarded False is
+                # handled above as the competing Stop/terminal transition.
                 logger.error(
                     "Failed to park resumed run AWAITING_CONFIRMATION",
                     exc_info=True,
                     extra={"thread_id": request_body.thread_id},
                 )
+            if parked is False:
+                if await durable_stop_requested():
+                    await cancel_confirm_stream(reason="user_requested")
+                else:
+                    await emitter.finish()
+                return
+            confirmation_payload = {
+                "thread_id": request_body.thread_id,
+                "confirmation": confirmation_details,
+            }
+            if active_run is not None:
+                # Confirm streams do not emit a fresh accepted status. Carry
+                # the parked AgentRun id through nested confirmation frames
+                # so Stop remains fenced to this producer.
+                confirmation_payload["run_id"] = str(active_run.job_id)
+            frame = await emitter.emit(
+                AgentStreamEvent.CONFIRMATION,
+                confirmation_payload,
+            )
+            terminal_frame_sent = True
+            if not client_disconnected:
+                yield frame
+            # The run is parked awaiting confirmation — no longer producing,
+            # so clear the active pointer; the buffered frames stay until TTL.
+            await emitter.finish()
             return
 
         final_values = final_snapshot.values if final_snapshot else {}
@@ -4082,7 +4229,10 @@ async def stream_confirm_event_generator(
             ),
         )
         if finalized is False:
-            await cancel_confirm_stream(reason="user_requested")
+            if await durable_stop_requested():
+                await cancel_confirm_stream(reason="user_requested")
+            else:
+                await emitter.finish()
             return
         frame = await emitter.emit(AgentStreamEvent.DONE, done_payload)
         terminal_frame_sent = True
@@ -4093,15 +4243,16 @@ async def stream_confirm_event_generator(
     except (asyncio.CancelledError, GeneratorExit) as cancellation_exc:
 
         async def cleanup_cancelled_confirm_response() -> None:
-            if confirm_event_iter is not None:
-                with contextlib.suppress(BaseException):
-                    await _close_async_iterator(confirm_event_iter)
-            if persist_partial_stop is not None:
-                with contextlib.suppress(BaseException):
+            async def close_confirm_events() -> None:
+                if confirm_event_iter is not None:
+                    with contextlib.suppress(asyncio.CancelledError, GeneratorExit):
+                        await _close_async_iterator(confirm_event_iter)
+
+            async def persist_stopped() -> None:
+                if persist_partial_stop is not None:
                     await persist_partial_stop(force_inline=True)
-            with contextlib.suppress(BaseException):
-                await emitter.finish()
-            with contextlib.suppress(BaseException):
+
+            async def finalize_cancelled() -> None:
                 cancelled_payload: Dict[str, Any] = {
                     "reason": "client_disconnected",
                     "request_id": emitter.trace_id,
@@ -4119,6 +4270,13 @@ async def stream_confirm_event_generator(
                     event_type=RunEventType.RUN_CANCELLED,
                     payload=cancelled_payload,
                 )
+
+            await _run_cancel_cleanup(
+                ("close_confirm_events", close_confirm_events),
+                ("persist_partial_stop", persist_stopped),
+                ("finish_emitter", emitter.finish),
+                ("finalize_cancelled", finalize_cancelled),
+            )
 
         await _run_interrupted_cleanup(cleanup_cancelled_confirm_response)
         raise cancellation_exc
@@ -4170,8 +4328,8 @@ async def stream_confirm_event_generator(
         #   validation inside append_event, rolled back the status write,
         #   and silently defeated the whole fix.
         if events_started:
-            with contextlib.suppress(Exception):
-                await _finalize_run_id(
+            try:
+                failed = await _finalize_run_id(
                     db,
                     str(active_run.job_id) if active_run is not None else None,
                     current_user,
@@ -4181,6 +4339,13 @@ async def stream_confirm_event_generator(
                         "code": "confirm_error",
                         "message": client_safe_error(e),
                     },
+                )
+                if failed is False and await durable_stop_requested():
+                    await cancel_confirm_stream(reason="user_requested")
+                    return
+            except Exception:
+                logger.error(
+                    "Failed to finalize errored confirmation run", exc_info=True
                 )
         if terminal_frame_sent:
             # Audit S2-M3: never emit ERROR after CONFIRMATION/DONE — a

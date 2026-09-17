@@ -101,6 +101,10 @@ async def _run_confirm(graph: _FakeGraph) -> "tuple[list, AsyncMock]":
             new=AsyncMock(return_value=True),
         ),
         patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
             "src.services.threads.workspace_access.get_thread",
             new=editable_thread_getter(),
         ),

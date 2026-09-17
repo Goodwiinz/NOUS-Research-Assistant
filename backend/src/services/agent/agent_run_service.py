@@ -314,6 +314,35 @@ async def get_active_run_for_thread(
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def get_latest_run_for_thread(
+    db: AsyncSession,
+    thread_id: Any,
+    *,
+    organization_id: Any,
+    user_id: Any,
+) -> Optional[AgentRun]:
+    """Return the newest caller-owned run for a durable thread.
+
+    Resume uses this only to distinguish a stale checkpoint from a legacy
+    thread with no durable run. A terminal run means the checkpoint's old HITL
+    interrupt must not be re-delivered after completion or cancellation.
+    """
+    thread_uuid = _coerce_uuid(thread_id)
+    if thread_uuid is None:
+        return None
+    stmt = (
+        select(AgentRun)
+        .where(
+            AgentRun.thread_id == thread_uuid,
+            AgentRun.organization_id == _coerce_uuid(organization_id),
+            AgentRun.user_id == _coerce_uuid(user_id),
+        )
+        .order_by(AgentRun.updated_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def claim_awaiting_run_for_confirmation(
     db: AsyncSession,
     job_id: str,

@@ -421,6 +421,10 @@ async def test_buffered_disconnect_cancels_and_persists_partial(monkeypatch):
             new=AsyncMock(return_value=None),
         ),
         patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
             "src.api.agent.streaming._resolve_and_bind_project",
             new=AsyncMock(return_value=None),
         ),
@@ -631,6 +635,14 @@ async def test_replay_rechecks_buffer_after_active_pointer_clears(monkeypatch):
 def test_resume_no_active_stream_returns_204(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value=None)
+    )
+    # This unit test covers the empty-buffer branch. The pending-confirmation
+    # probe is covered by test_agent_resume_confirmation_envelope and must not
+    # reach a real LangGraph/Postgres checkpointer here.
+    monkeypatch.setattr(
+        execute_mod,
+        "_pending_confirmation_frame",
+        AsyncMock(return_value=None),
     )
     resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
     assert resp.status_code == 204
