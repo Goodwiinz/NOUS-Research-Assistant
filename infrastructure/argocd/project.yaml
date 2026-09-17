@@ -25,6 +25,9 @@ spec:
       namespace: argocd
     - server: https://kubernetes.default.svc
       namespace: infisical-operator
+    # EKS (aws-dev, Task 5): app manifests + helm release target this ns
+    - server: https://kubernetes.default.svc
+      namespace: multimodal-rag-system
 
   # Allowed cluster-scoped resources
   clusterResourceWhitelist:
@@ -39,6 +42,10 @@ spec:
       kind: ClusterRole
     - group: rbac.authorization.k8s.io
       kind: ClusterRoleBinding
+    # The aws-dev app-of-apps watches infrastructure/argocd/applications/,
+    # which contains this AppProject — the root must be able to (re)apply it.
+    - group: argoproj.io
+      kind: AppProject
 
   # Allowed namespace-scoped resources
   namespaceResourceWhitelist:

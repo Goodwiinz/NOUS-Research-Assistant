@@ -20,7 +20,7 @@ metadata:
     # (Task 3) with DNS validation — the validation CNAME is added manually
     # in Cloudflare (DNS is on Cloudflare, not Route53).
     alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:267685730035:certificate/4597607e-7aa4-4e43-960d-9ec80c8d34c7 # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
-    external-dns.alpha.kubernetes.io/hostname: ws.multimodal-rag.example.com
+    external-dns.alpha.kubernetes.io/hostname: dev-ws.gen-text.app
     external-dns.alpha.kubernetes.io/ttl: "300"
     external-dns.alpha.kubernetes.io/provider: cloudflare
 spec:

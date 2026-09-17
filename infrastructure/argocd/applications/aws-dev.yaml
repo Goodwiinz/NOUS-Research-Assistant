@@ -1,0 +1,64 @@
+# EKS dev child app (Task 5). Modeled on dev.yaml (the DOKS child) with:
+#   - values-aws.yaml instead of values-dev.yaml (ECR images, RDS/ElastiCache
+#     via Infisical, ALB ingress, gp3).
+#   - targetRevision pinned to migration/aws until it merges.
+#     TODO(post-merge): switch to develop (together with aws-dev-root.yaml).
+#   - destination namespace multimodal-rag-system (the app manifests' ns).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nous-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: nous-platform
+    environment: aws-dev
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: nous-platform
+
+  source:
+    repoURL: https://github.com/Goodwiinz/rag.git
+    # TODO(post-merge): switch to develop (together with aws-dev-root.yaml)
+    targetRevision: migration/aws
+    path: infrastructure/helm/knowledge-graph-analytics
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-aws.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: multimodal-rag-system
+
+  # Auto-sync once enabled (runbook Step 6d flips it on after scale-up)
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  # Health checks / drift tolerances
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    # The Infisical operator owns the synced Secret lifecycle and mutates
+    # InfisicalSecret status — not drift the app should fight (see
+    # templates/infisical-secrets.yaml).
+    - group: secrets.infisical.com
+      kind: InfisicalSecret
+      jsonPointers:
+        - /status

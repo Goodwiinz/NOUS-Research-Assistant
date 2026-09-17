@@ -1,5 +1,6 @@
-# ArgoCD resource limits — resolves DOKS clusterlint warnings
-# Apply with: helm upgrade argocd argo/argo-cd -n argocd -f argocd-values.yaml
+# ArgoCD resource limits (sized for the lean EKS dev node; carried over from
+# the DOKS-era clusterlint sizing).
+# Install: helm install argocd argo/argo-cd -n argocd --create-namespace -f infrastructure/helm/argocd-values.yaml
 
 controller:
   resources:
