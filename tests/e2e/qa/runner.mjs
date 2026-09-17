@@ -4,6 +4,7 @@ import {
   CASE_STATUSES,
   REPORT_SCHEMA_VERSION,
   configForReport,
+  redactText,
   redactValue,
   sanitizeError,
 } from './report.mjs';
@@ -262,11 +263,15 @@ export async function runCampaign(config, options = {}) {
     },
   };
   if (scenarios.length === 0) {
-    report.summary.reason = invalidSelectionReason ?? 'No scenarios selected';
+    report.summary.reason = redactText(invalidSelectionReason ?? 'No scenarios selected', normalizedConfig.secrets ?? []);
     report.summary.invalid = Boolean(invalidSelectionReason);
     report.summary.incomplete = true;
     report.run.modelTurns = 0;
     report.run.finishedAt = nowIso(clock);
+    // This branch intentionally returns before session setup. Apply the same
+    // recursive redaction as the normal completion path so invalid selected
+    // IDs and their diagnostic text cannot leak a configured secret.
+    report.run = redactValue(report.run, normalizedConfig.secrets ?? []);
     return report;
   }
 
@@ -332,7 +337,7 @@ export async function runCampaign(config, options = {}) {
             }
             return checkExpectedBackendIdentity(normalizedConfig, data);
           },
-          consumeModelTurn: () => {
+          reserveModelTurn: () => {
             modelTurns += 1;
             if (modelTurns > normalizedConfig.maxTurns) {
               throw new Error(`Model turn bound exceeded (${normalizedConfig.maxTurns})`);
@@ -340,6 +345,10 @@ export async function runCampaign(config, options = {}) {
             return modelTurns;
           },
         };
+        // Keep the older name available to scenarios and extensions while
+        // making the ordering explicit: callers reserve the bounded budget
+        // before a request that could be accepted by the model service.
+        evidence.consumeModelTurn = evidence.reserveModelTurn;
         const modelTurnsAtStart = modelTurns;
         const result = await runWithTimeout(
           () => scenario.run(session, evidence),

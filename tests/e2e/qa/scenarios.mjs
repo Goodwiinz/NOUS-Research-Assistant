@@ -342,7 +342,7 @@ const scenarios = [
       assertExactAnswer(followup.events, secondMarker);
       evidence.consumeModelTurn();
       const revisit = await session.streamAgent({
-        messages: [{ role: 'user', content: 'Return the exact marker from the other owned thread, not this thread. Reply with that marker only.' }],
+        messages: [{ role: 'user', content: 'What exact marker did I ask you to use in this thread? Reply with that marker only.' }],
         thread_id: firstFixture.threadId,
         use_rag: false,
       });
@@ -667,19 +667,34 @@ const scenarios = [
         { messages: [{ role: 'user', content: 'x'.repeat(32_001) }], thread_id: fixture.threadId, use_rag: false },
       ];
       const statuses = [];
-      const unexpectedAcceptedRuns = [];
+      const reservedAttempts = [];
       for (const payload of cases) {
+        // Reserve the campaign budget before each potentially accepted
+        // submission. This is deliberately conservative: a 422 is counted
+        // as an attempted model turn because the client cannot prove that a
+        // future backend revision will reject it before model dispatch.
+        reservedAttempts.push(evidence.reserveModelTurn());
+        let response;
         try {
-          const response = await session.streamAgent(payload);
-          statuses.push(response.status);
-          unexpectedAcceptedRuns.push(...(response.acceptedRunIds ?? []));
+          response = await session.streamAgent(payload);
         } catch (error) {
           statuses.push(error.status ?? null);
+          continue;
+        }
+        statuses.push(response.status);
+        const acceptedRunIds = response.acceptedRunIds ?? [];
+        if (acceptedRunIds.length > 0) {
+          // Stop immediately. Continuing would risk submitting more invalid
+          // bodies after the backend has already accepted a model run.
+          throw new Error(`Invalid input unexpectedly accepted model runs: ${acceptedRunIds.join(',')}`);
         }
       }
-      assertThat(unexpectedAcceptedRuns.length === 0, `Invalid input unexpectedly accepted model runs: ${unexpectedAcceptedRuns.join(',')}`);
+      assertThat(statuses.length === cases.length, `Authenticated invalid input did not produce one bounded response per case: ${statuses.join(',')}`);
       assertThat(statuses.every((status) => status === 422), `Authenticated invalid input did not produce exact 422 validation statuses: ${statuses.join(',')}`);
-      return { assertion: 'Authenticated empty, assistant-only, and overlong bodies tied to an owned thread are rejected with 422 before model execution', evidence: [{ statuses, threadId: fixture.threadId }] };
+      return {
+        assertion: 'Authenticated empty, assistant-only, and overlong bodies tied to an owned thread are rejected with exact 422 responses',
+        evidence: [{ statuses, threadId: fixture.threadId, reservedAttempts, budgetSemantics: 'conservative pre-submission attempt accounting' }],
+      };
     },
   },
   {
@@ -740,6 +755,11 @@ const scenarios = [
         target: 'backend', method: 'POST',
         json: { thread_id: fixture.threadId, role: 'user', content: marker, client_message_id: randomUUID() },
       });
+      const persisted = await session.request(`/api/v2/threads/${fixture.threadId}/messages?limit=20`, { target: 'backend' });
+      const persistedValues = persisted.data?.messages ?? persisted.data?.items ?? [];
+      const expectedTranscript = [{ role: 'user', content: marker }];
+      assertThat(persistedValues.length === expectedTranscript.length, `Missing-thread fixture persisted an unexpected number of messages (${persistedValues.length})`);
+      assertThat(persistedValues.every((item, index) => item?.role === expectedTranscript[index].role && item?.content === expectedTranscript[index].content), 'Missing-thread fixture transcript did not match its exact expected message');
       const page = await session.login();
       const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
       try {
@@ -752,8 +772,12 @@ const scenarios = [
           session.config.timeoutMs,
           'Missing thread did not recover to the explicitly owned workspace fixture'
         );
-        await assertTranscriptContains(page, marker, 'Missing-thread recovery', session.config.timeoutMs);
-        return { assertion: 'Missing thread recovers inside the explicitly owned workspace and renders only its owned transcript', evidence: [{ path, recoveredThreadId: fixture.threadId }] };
+        const transcript = page.locator('[data-role="user"], [data-role="assistant"]');
+        await transcript.first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        const renderedMessages = (await transcript.allInnerTexts()).map((text) => text.trim());
+        assertThat(renderedMessages.length === expectedTranscript.length, `Missing-thread recovery rendered unexpected transcript entries (${renderedMessages.length})`);
+        assertThat(renderedMessages.every((text, index) => text === expectedTranscript[index].content), 'Missing-thread recovery rendered an unexpected or reordered transcript message');
+        return { assertion: 'Missing thread recovers inside the explicitly owned workspace and renders exactly its owned transcript', evidence: [{ path, recoveredThreadId: fixture.threadId, expectedCount: expectedTranscript.length, renderedCount: renderedMessages.length }] };
       } finally {
         await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
       }

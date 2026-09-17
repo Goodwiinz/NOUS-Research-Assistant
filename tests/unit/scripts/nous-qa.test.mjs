@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { isFullIdentity, main, observeSourceIdentity, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { runCampaign, exitCodeForReport, checkExpectedBackendIdentity } from '../../../tests/e2e/qa/runner.mjs';
 import { renderHtml } from '../../../tests/e2e/qa/report.mjs';
-import { assertExactAnswer, assertIdempotentMessage, extractAnswerText } from '../../../tests/e2e/qa/scenarios.mjs';
+import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, registry } from '../../../tests/e2e/qa/scenarios.mjs';
 import {
   FixtureLedger,
   FixtureOwnershipError,
@@ -178,6 +178,51 @@ test('missing credentials block authenticated scenarios and cannot pass', async 
   assert.equal(report.cases[0].status, 'BLOCKED');
   assert.notEqual(report.cases[0].status, 'PASS');
   assert.equal(exitCodeForReport(report), 2);
+});
+
+test('authenticated validation stops after an accepted invalid response within maxTurns=1', async () => {
+  const validation = registry.find((scenario) => scenario.id === 'adversarial.authenticated-bounded-validation');
+  assert.ok(validation, 'validation scenario must remain registered');
+  let streamCalls = 0;
+  const ids = [
+    '45454545-4545-4454-8454-454545454545',
+    '56565656-5656-4565-8565-565656565656',
+    '67676767-6767-4676-8676-676767676767',
+  ];
+  let nextId = 0;
+  const report = await runCampaign(
+    {
+      suite: 'adversarial',
+      selectedIds: [validation.id],
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: 'http://127.0.0.1:8000/api/v1',
+      timeoutMs: 100,
+      maxTurns: 1,
+      allowWrites: true,
+      credentials: { email: 'qa@example.test', password: 'synthetic-password' },
+      runId: 'run-validation-max-one',
+    },
+    {
+      registry: [validation],
+      sessionFactory: async () => ({
+        observations: [],
+        login: async () => {},
+        request: async () => ({ status: 201, data: { id: ids[nextId++ % ids.length] } }),
+        registerFixture: () => {},
+        streamAgent: async () => {
+          streamCalls += 1;
+          return { status: 200, acceptedRunIds: ['78787878-7878-4787-8787-787878787878'], events: [] };
+        },
+        cleanup: async () => ({ status: 'complete', retained: [], errors: [] }),
+        close: async () => {},
+      }),
+    }
+  );
+
+  assert.equal(report.cases[0].status, 'FAIL');
+  assert.match(report.cases[0].reason, /unexpectedly accepted/i);
+  assert.equal(report.summary.modelTurns, 1, 'the accepted attempt must consume the reserved maxTurns=1 budget');
+  assert.equal(streamCalls, 1, 'an accepted invalid response must halt before a second submission');
 });
 
 test('cleanup refuses an unowned UUID', async () => {
@@ -394,6 +439,27 @@ test('unknown scenario selection is invalid and exits with code 2', async () => 
   assert.equal(report.cases.length, 0);
   assert.equal(exitCodeForReport(report), 2);
   assert.match(report.summary.reason, /unknown|out-of-suite/i);
+});
+
+test('invalid selected IDs are redacted on the early report return path', async () => {
+  const secret = 'sentinel-invalid-selection-password';
+  const report = await runCampaign(
+    {
+      suite: 'smoke',
+      selectedIds: [`missing-${secret}`],
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: 'http://127.0.0.1:8000/api/v1',
+      timeoutMs: 100,
+      maxTurns: 1,
+      runId: 'run-invalid-selection-redaction',
+      secrets: [secret],
+    },
+    { registry: [], sessionFactory: async () => ({ close: async () => {} }) }
+  );
+
+  assert.equal(report.summary.invalid, true);
+  assert.doesNotMatch(JSON.stringify(report), new RegExp(secret));
+  assert.match(JSON.stringify(report), /\[REDACTED\]/);
 });
 
 test('mixed valid and unknown scenario selections are rejected before any selected case runs', async () => {
@@ -926,6 +992,53 @@ test('failed active-run cancellation retains the owned fixture tree and does not
     assert.ok(cleanup.retained.some((item) => item.kind === 'conversation' && item.id === conversationId));
     assert.ok(cleanup.retained.some((item) => item.kind === 'workspace' && item.id === workspaceId));
     assert.equal(deleteRequests, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('thread cleanup failure retains ancestors and stops all parent deletes', async () => {
+  const workspaceId = '12121212-1212-4121-8121-121212121212';
+  const conversationId = '23232323-2323-4232-8232-232323232323';
+  const threadId = '34343434-3434-4343-8343-343434343434';
+  const deletePaths = [];
+  const server = http.createServer((request, response) => {
+    const path = new URL(request.url, 'http://localhost').pathname;
+    if (request.method === 'DELETE') {
+      deletePaths.push(path);
+      if (path === `/api/v2/threads/${threadId}`) {
+        response.writeHead(500, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ detail: 'synthetic child delete failure' }));
+        return;
+      }
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const session = new QASession({
+      runId: 'run-thread-delete-failure',
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: `http://127.0.0.1:${server.address().port}/api/v1`,
+      timeoutMs: 100,
+      authToken: 'synthetic-token',
+      secrets: ['synthetic-token'],
+    });
+    session.registerFixture('workspace', workspaceId);
+    session.registerFixture('conversation', conversationId, { workspaceId });
+    session.registerFixture('thread', threadId, { conversationId });
+
+    const cleanup = await session.cleanup();
+    assert.equal(cleanup.status, 'incomplete');
+    assert.deepEqual(deletePaths, [`/api/v2/threads/${threadId}`]);
+    assert.equal(cleanup.uncertainMutations.length, 1);
+    assert.ok(cleanup.retained.some((item) => item.kind === 'thread' && item.id === threadId));
+    assert.ok(cleanup.retained.some((item) => item.kind === 'conversation' && item.id === conversationId));
+    assert.ok(cleanup.retained.some((item) => item.kind === 'workspace' && item.id === workspaceId));
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

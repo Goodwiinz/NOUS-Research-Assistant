@@ -798,6 +798,20 @@ export class QASession {
       const workspace = this.ledger.list().find((resource) => resource.kind === 'workspace' && resource.id === workspaceId);
       retainResource(workspace);
     };
+    const retainResourceTree = (resource) => {
+      if (!resource) return;
+      if (resource.kind === 'thread') {
+        retainFixtureTree(resource.id);
+        return;
+      }
+      retainResource(resource);
+      if (resource.kind === 'conversation') {
+        const workspace = this.ledger.list().find((item) => item.kind === 'workspace' && item.id === resource.metadata?.workspaceId);
+        retainResource(workspace);
+      } else if (resource.kind === 'workspace') {
+        retainResource(resource);
+      }
+    };
     const runsToCancel = new Map(this.activeRuns);
     for (const stream of this.pendingStreams.values()) {
       for (const runId of stream.acceptedRunIds ?? []) {
@@ -848,33 +862,53 @@ export class QASession {
       }
     }
     this.activeRuns.clear();
-    const streamRisks = [
-      ...this.uncertainStreams,
-      ...[...this.pendingStreams.values()].map((stream) => ({
-        ...stream,
-        status: null,
-        reason: 'Agent stream is still pending; exact server run ownership is unknown',
-      })),
-    ];
-    const mutationRisks = [
-      ...this.uncertainMutations,
-      ...[...this.pendingMutations.values()].map((mutation) => ({
-        ...mutation,
-        status: null,
-        reason: 'Mutation is still pending; exact server ownership is unknown',
-      })),
-    ];
-    if (streamRisks.length > 0 || mutationRisks.length > 0) {
+    let streamRisks = [];
+    let mutationRisks = [];
+    const reportedStreamRisks = new Set();
+    const reportedMutationRisks = new Set();
+    const refreshRisks = () => {
+      streamRisks = [
+        ...this.uncertainStreams,
+        ...[...this.pendingStreams.values()].map((stream) => ({
+          ...stream,
+          status: null,
+          reason: 'Agent stream is still pending; exact server run ownership is unknown',
+        })),
+      ];
+      mutationRisks = [
+        ...this.uncertainMutations,
+        ...[...this.pendingMutations.values()].map((mutation) => ({
+          ...mutation,
+          status: null,
+          reason: 'Mutation is still pending; exact server ownership is unknown',
+        })),
+      ];
+    };
+    const appendRiskErrors = () => {
       for (const stream of streamRisks) {
-        errors.push({ kind: 'uncertain-stream', ...stream });
+        const key = `${stream.threadId}:${stream.startedAt ?? ''}:${stream.reason}`;
+        if (!reportedStreamRisks.has(key)) {
+          reportedStreamRisks.add(key);
+          errors.push({ kind: 'uncertain-stream', ...stream });
+        }
       }
       for (const mutation of mutationRisks) {
-        errors.push({ kind: 'uncertain-mutation', ...mutation });
+        const key = `${mutation.method}:${mutation.path}:${mutation.startedAt ?? ''}:${mutation.reason}`;
+        if (!reportedMutationRisks.has(key)) {
+          reportedMutationRisks.add(key);
+          errors.push({ kind: 'uncertain-mutation', ...mutation });
+        }
       }
+    };
+    refreshRisks();
+    appendRiskErrors();
+    if (streamRisks.length > 0 || mutationRisks.length > 0) {
       for (const resource of this.ledger.list()) retainResource(resource);
     }
     const resources = this.ledger.list().reverse();
     for (const resource of resources) {
+      refreshRisks();
+      appendRiskErrors();
       if (retainedKeys.has(`${resource.kind}:${resource.id}`) || streamRisks.length > 0 || mutationRisks.length > 0) {
         retainResource(resource);
         continue;
@@ -892,10 +926,20 @@ export class QASession {
           await this.request(path, { method: 'DELETE', internal: true });
         });
       } catch (error) {
-        retainResource(resource);
+        // A failed child delete must preserve every known parent. In
+        // particular, a thread DELETE 500 must never fall through to deleting
+        // its conversation and workspace.
+        retainResourceTree(resource);
         errors.push({ kind: resource.kind, id: resource.id, error: redactText(error?.message ?? error, this.secrets) });
+        refreshRisks();
+        appendRiskErrors();
+        if (streamRisks.length > 0 || mutationRisks.length > 0) {
+          for (const remaining of this.ledger.list()) retainResource(remaining);
+        }
       }
     }
+    refreshRisks();
+    appendRiskErrors();
     return {
       status: errors.length ? 'incomplete' : 'complete',
       retained,
