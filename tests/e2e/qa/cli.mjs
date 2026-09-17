@@ -272,11 +272,14 @@ export async function main(argv = process.argv.slice(2), env = process.env, depe
     report = await runCampaign(config, dependencies);
     const paths = await writeReports(report, config.outputDir);
     console.log(`NOUS QA ${report.run.id}: ${report.summary.passed} passed, ${report.summary.failed} failed, ${report.summary.blocked} blocked, ${report.summary.skipped} skipped`);
-    console.log(`JSON: ${paths.jsonPath}`);
-    console.log(`HTML: ${paths.htmlPath}`);
+    console.log(`JSON: ${redactText(paths.jsonPath, config.secrets)}`);
+    console.log(`HTML: ${redactText(paths.htmlPath, config.secrets)}`);
     return exitCodeForReport(report);
   } catch (error) {
-    console.error(`nous-qa: ${diagnosticMessage(error, env)}`);
+    const message = config
+      ? redactText(error?.message ?? error, config.secrets)
+      : diagnosticMessage(error, env);
+    console.error(`nous-qa: ${message}`);
     return 2;
   }
 }

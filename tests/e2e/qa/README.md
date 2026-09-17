@@ -33,6 +33,14 @@ target only those registered IDs, in reverse creation order. A failed cleanup
 is visible as `incomplete` and retained IDs remain in the private report for
 manual recovery; no title search or broad deletion is used.
 
+Chat history/draft coverage creates both threads in one owned workspace and
+temporarily seeds the frontend's default-workspace cache so `/chat` resolves
+the same workspace; the cache is restored after the case. Q&A and Stop streams
+must carry an exact ledger-owned `thread_id`. Every accepted run is registered
+centrally. A transport timeout before acceptance is recorded as an uncertain
+stream, retains its owned fixture tree, and makes cleanup incomplete instead
+of claiming that the server did not create a run.
+
 Exit codes are `0` when every selected case passes and cleanup completes, `1`
 when a selected assertion fails, and `2` for invalid configuration, no selected
 cases, blocked or skipped prerequisites, or incomplete cleanup. Missing

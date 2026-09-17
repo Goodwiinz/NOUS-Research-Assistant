@@ -48,6 +48,20 @@ function selectedScenarios(config, registry) {
   });
 }
 
+function selectionError(config, registry) {
+  if (!Array.isArray(config.selectedIds) || config.selectedIds.length === 0) return null;
+  const suites = config.suite === 'all'
+    ? new Set(['smoke', 'workflow', 'adversarial'])
+    : new Set([config.suite]);
+  const available = new Set(registry
+    .filter((scenario) => suites.has(scenario.suite))
+    .map((scenario) => scenario.id));
+  const unknown = [...new Set(config.selectedIds)].filter((id) => !available.has(id));
+  return unknown.length > 0
+    ? `Unknown or out-of-suite scenario selection: ${unknown.join(', ')}`
+    : null;
+}
+
 function prerequisiteResult(scenario, config, globalWriteGate = null) {
   const prerequisites = Array.isArray(scenario.prerequisites) ? scenario.prerequisites : [];
   if (globalWriteGate && (prerequisites.includes('writes') || scenario.callsModel)) {
@@ -209,7 +223,8 @@ export async function runCampaign(config, options = {}) {
   validConfig(normalizedConfig);
   const clock = options.clock ?? Date;
   const registry = options.registry ?? defaultRegistry;
-  const scenarios = selectedScenarios(normalizedConfig, registry);
+  const invalidSelectionReason = selectionError(normalizedConfig, registry);
+  const scenarios = invalidSelectionReason ? [] : selectedScenarios(normalizedConfig, registry);
   const runId = normalizedConfig.runId ?? `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`;
   const startedAt = nowIso(clock);
   const report = {
@@ -247,7 +262,8 @@ export async function runCampaign(config, options = {}) {
     },
   };
   if (scenarios.length === 0) {
-    report.summary.reason = 'No scenarios selected';
+    report.summary.reason = invalidSelectionReason ?? 'No scenarios selected';
+    report.summary.invalid = Boolean(invalidSelectionReason);
     report.summary.incomplete = true;
     report.run.modelTurns = 0;
     report.run.finishedAt = nowIso(clock);

@@ -45,7 +45,8 @@ async function waitForCondition(check, timeoutMs, message) {
   let lastError;
   while (Date.now() < deadline) {
     try {
-      if (await check()) return;
+      const result = await check();
+      if (result) return result;
     } catch (error) {
       lastError = error;
     }
@@ -61,19 +62,27 @@ function responseId(response, key = 'id') {
   return id;
 }
 
-async function makeThread(session, evidence, title = 'lifecycle') {
+async function makeThread(session, evidence, title = 'lifecycle', options = {}) {
   // All fixture mutations use the same authenticated browser session that
   // owns the campaign. The API must never be exercised anonymously and then
   // mislabeled as an authenticated workflow pass.
   if (typeof session.login === 'function') await session.login();
   const prefix = evidence.fixturePrefix;
-  const workspaceResponse = await session.request('/api/v2/workspaces', {
-    target: 'backend',
-    method: 'POST',
-    json: { name: `${prefix} workspace`, description: 'Synthetic QA fixture' },
-  });
-  const workspaceId = responseId(workspaceResponse);
-  session.registerFixture('workspace', workspaceId, { title: `${prefix} workspace` });
+  let workspaceId = options.workspaceId ?? null;
+  if (workspaceId) {
+    // The chat UI resolves /chat against the account's default workspace. A
+    // second workspace would be invisible in the same sidebar, so callers
+    // that exercise history/drafts must explicitly reuse an owned workspace.
+    session.ledger.requireOwned('workspace', workspaceId);
+  } else {
+    const workspaceResponse = await session.request('/api/v2/workspaces', {
+      target: 'backend',
+      method: 'POST',
+      json: { name: `${prefix} workspace`, description: 'Synthetic QA fixture' },
+    });
+    workspaceId = responseId(workspaceResponse);
+    session.registerFixture('workspace', workspaceId, { title: `${prefix} workspace` });
+  }
 
   const conversationResponse = await session.request('/api/v2/workspaces/' + encodeURIComponent(workspaceId) + '/conversations', {
     target: 'backend',
@@ -81,7 +90,7 @@ async function makeThread(session, evidence, title = 'lifecycle') {
     json: { workspace_id: workspaceId, title: `${prefix} ${title}` },
   });
   const conversationId = responseId(conversationResponse);
-  session.registerFixture('conversation', conversationId, { title: `${prefix} ${title}` });
+  session.registerFixture('conversation', conversationId, { title: `${prefix} ${title}`, workspaceId });
 
   const threadResponse = await session.request('/api/v2/threads', {
     target: 'backend',
@@ -89,8 +98,34 @@ async function makeThread(session, evidence, title = 'lifecycle') {
     json: { conversation_id: conversationId, title: `${prefix} ${title}` },
   });
   const threadId = responseId(threadResponse);
-  session.registerFixture('thread', threadId, { title: `${prefix} ${title}` });
+  session.registerFixture('thread', threadId, { title: `${prefix} ${title}`, conversationId });
   return { workspaceId, conversationId, threadId };
+}
+
+async function setDefaultWorkspaceCache(page, workspaceId) {
+  return page.evaluate((id) => {
+    const keys = ['default-workspace-object', 'default-workspace-cached-at', 'default-workspace-id'];
+    const previous = Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)]));
+    localStorage.setItem('default-workspace-object', JSON.stringify({ id }));
+    localStorage.setItem('default-workspace-cached-at', String(Date.now()));
+    localStorage.setItem('default-workspace-id', id);
+    return previous;
+  }, workspaceId);
+}
+
+async function restoreDefaultWorkspaceCache(page, previous) {
+  await page.evaluate((values) => {
+    for (const [key, value] of Object.entries(values ?? {})) {
+      if (value === null || value === undefined) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    }
+  }, previous);
+}
+
+async function assertTranscriptContains(page, text, label, timeoutMs = 10_000) {
+  const marker = page.locator('[data-role="user"], [data-role="assistant"]').filter({ hasText: text });
+  await marker.first().waitFor({ state: 'visible', timeout: timeoutMs });
+  assertThat(await marker.count() > 0, `${label} did not render the expected transcript message`);
 }
 
 function fixtureText(prefix) {
@@ -305,9 +340,17 @@ const scenarios = [
       });
       assertThat(followup.events.some((item) => item.event === 'done'), 'Isolated follow-up did not emit done');
       assertExactAnswer(followup.events, secondMarker);
+      evidence.consumeModelTurn();
+      const revisit = await session.streamAgent({
+        messages: [{ role: 'user', content: 'Return the exact marker from the other owned thread, not this thread. Reply with that marker only.' }],
+        thread_id: firstFixture.threadId,
+        use_rag: false,
+      });
+      assertThat(revisit.events.some((item) => item.event === 'done'), 'Revisited first thread did not emit done');
+      assertExactAnswer(revisit.events, firstMarker);
       return {
         assertion: 'Two owned threads return their own inline-only marker with RAG disabled and no attachments',
-        evidence: [{ firstMarkerLength: firstMarker.length, secondMarkerLength: secondMarker.length, rag: false, attachments: 0 }],
+        evidence: [{ firstMarkerLength: firstMarker.length, secondMarkerLength: secondMarker.length, rag: false, attachments: 0, revisitedFirstThread: true }],
       };
     },
   },
@@ -326,10 +369,8 @@ const scenarios = [
       });
       await authenticatedPage(session, threadUrl(fixture.threadId));
       const assertRendered = async (label) => {
-        await session.page.waitForFunction(({ marker, threadId }) => {
-          const current = new URL(window.location.href);
-          return current.searchParams.get('thread') === threadId && document.body.innerText.includes(marker);
-        }, { marker: content, threadId: fixture.threadId }, { timeout: session.config.timeoutMs });
+        await session.page.waitForFunction((threadId) => new URL(window.location.href).searchParams.get('thread') === threadId, fixture.threadId, { timeout: session.config.timeoutMs });
+        await assertTranscriptContains(session.page, content, label, session.config.timeoutMs);
         assertThat(new URL(session.page.url()).searchParams.get('thread') === fixture.threadId, `${label} navigated away from the owned thread`);
       };
       await assertRendered('Initial render');
@@ -367,36 +408,51 @@ const scenarios = [
     mode: 'live',
     async run(session, evidence) {
       const firstFixture = await makeThread(session, evidence, 'history-a');
-      const secondFixture = await makeThread(session, evidence, 'history-b');
+      const secondFixture = await makeThread(session, evidence, 'history-b', { workspaceId: firstFixture.workspaceId });
       const firstTitle = `${evidence.fixturePrefix} history-a`;
       const secondTitle = `${evidence.fixturePrefix} history-b`;
-      const page = await authenticatedPage(session, threadUrl(firstFixture.threadId));
-      await page.waitForFunction(({ firstTitle: first, secondTitle: second }) => {
-        const body = document.body.innerText;
-        return body.includes(first) && body.includes(second);
-      }, { firstTitle, secondTitle }, { timeout: session.config.timeoutMs });
-      const search = page.getByLabel('Search threads');
-      await search.fill('history-a');
-      await page.waitForFunction(({ firstTitle: first, secondTitle: second }) => {
-        const body = document.body.innerText;
-        return body.includes(first) && !body.includes(second);
-      }, { firstTitle, secondTitle }, { timeout: session.config.timeoutMs });
-      assertThat(await search.inputValue() === 'history-a', 'History search input did not retain the query');
-      const draft = `${evidence.fixturePrefix} draft only on history-a`;
-      const message = page.getByLabel('Message');
-      await message.fill(draft);
-      assertThat(await message.inputValue() === draft, 'Draft input did not retain its thread-scoped value');
-      await session.goto(threadUrl(secondFixture.threadId));
-      await page.waitForFunction(({ threadId, draft: previous }) => {
-        const current = new URL(window.location.href);
-        const input = document.querySelector('[aria-label="Message"]');
-        return current.searchParams.get('thread') === threadId && input && input.value !== previous;
-      }, { threadId: secondFixture.threadId, draft }, { timeout: session.config.timeoutMs });
-      assertThat(await page.getByLabel('Message').inputValue() !== draft, 'Draft from history-a leaked into history-b');
-      await session.goto(threadUrl(firstFixture.threadId));
-      await page.waitForFunction((expected) => document.querySelector('[aria-label="Message"]')?.value === expected, draft, { timeout: session.config.timeoutMs });
-      assertThat(await page.getByLabel('Message').inputValue() === draft, 'History-a draft was not restored after returning');
-      return { assertion: 'History search excludes the other owned thread and drafts isolate across A/B switching', evidence: ['Search threads', 'Message', 'thread A/B switch'] };
+      const page = await session.login();
+      const previousCache = await setDefaultWorkspaceCache(page, firstFixture.workspaceId);
+      try {
+        await session.goto(threadUrl(firstFixture.threadId));
+        const rows = page.locator('button.sb-conv');
+        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        const search = page.getByLabel('Search threads');
+        await search.fill('history-a');
+        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await waitForCondition(
+          async () => (await rows.filter({ hasText: secondTitle }).count()) === 0,
+          session.config.timeoutMs,
+          'History search still displayed the other owned conversation'
+        );
+        assertThat(await search.inputValue() === 'history-a', 'History search input did not retain the query');
+        const draft = `${evidence.fixturePrefix} draft only on history-a`;
+        const message = page.getByLabel('Message');
+        await message.fill(draft);
+        assertThat(await message.inputValue() === draft, 'Draft input did not retain its thread-scoped value');
+        await search.fill('');
+        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await rows.filter({ hasText: secondTitle }).first().click();
+        await waitForCondition(
+          async () => new URL(page.url()).searchParams.get('thread') === secondFixture.threadId
+            && (await page.getByLabel('Message').inputValue()) !== draft,
+          session.config.timeoutMs,
+          'Sidebar switch to history-b did not restore an independent draft'
+        );
+        assertThat(await page.getByLabel('Message').inputValue() !== draft, 'Draft from history-a leaked into history-b');
+        await rows.filter({ hasText: firstTitle }).first().click();
+        await waitForCondition(
+          async () => new URL(page.url()).searchParams.get('thread') === firstFixture.threadId
+            && (await page.getByLabel('Message').inputValue()) === draft,
+          session.config.timeoutMs,
+          'Sidebar switch back to history-a did not restore its draft'
+        );
+        assertThat(await page.getByLabel('Message').inputValue() === draft, 'History-a draft was not restored after returning');
+        return { assertion: 'History search and in-app sidebar switching keep drafts isolated across two threads in one owned workspace', evidence: ['Search threads', 'button.sb-conv', 'Message', 'thread A/B switch', 'default workspace cache precondition'] };
+      } finally {
+        await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
+      }
     },
   },
   {
@@ -448,69 +504,106 @@ const scenarios = [
       let acceptedRunId = null;
       let partialSeen = false;
       let streamSettled = false;
+      let cancelSent = false;
+      let provenTerminal = false;
       evidence.consumeModelTurn();
-      const streamPromise = session.streamAgent({
-        messages: [{ role: 'user', content: prompt }],
-        thread_id: fixture.threadId,
-        use_rag: false,
-      }, {
-        timeoutMs: session.config.timeoutMs,
-        onEvent: async (event) => {
-          if (event.event === 'status' && event.data?.phase === 'accepted' && typeof event.data.run_id === 'string') {
-            acceptedRunId = event.data.run_id;
-            session.registerActiveRun(acceptedRunId, fixture.threadId);
+      let streamOutcomePromise;
+      try {
+        // Attach an outcome handler immediately. A cancelled SSE reader may
+        // reject before the scenario reaches its later await; leaving that
+        // rejection pending can terminate the CLI as an unhandled rejection.
+        streamOutcomePromise = session.streamAgent({
+          messages: [{ role: 'user', content: prompt }],
+          thread_id: fixture.threadId,
+          use_rag: false,
+        }, {
+          timeoutMs: session.config.timeoutMs,
+          onEvent: async (event) => {
+            if (event.event === 'status' && event.data?.phase === 'accepted' && typeof event.data.run_id === 'string') {
+              acceptedRunId = event.data.run_id;
+            }
+            if (event.event === 'token' && typeof event.data?.content === 'string' && event.data.content.length > 0) partialSeen = true;
+          },
+        }).then(
+          (value) => { streamSettled = true; return { ok: true, value }; },
+          (error) => { streamSettled = true; return { ok: false, error }; },
+        );
+        await waitForCondition(
+          () => Boolean(acceptedRunId),
+          session.config.timeoutMs,
+          'Agent stream did not expose an accepted run identity'
+        );
+        assertThat(UUID.test(acceptedRunId), 'Accepted stream run identity was not a UUID');
+        await waitForCondition(
+          () => partialSeen || streamSettled,
+          session.config.timeoutMs,
+          'Agent stream produced no observable partial output before Stop'
+        );
+        assertThat(partialSeen && !streamSettled, 'Agent stream completed before the durable Stop control could be exercised');
+        const cancelResponse = await session.request(`/api/v1/agent/stream/cancel/${fixture.threadId}`, {
+          target: 'backend',
+          method: 'POST',
+          json: { expected_run_id: acceptedRunId },
+        });
+        cancelSent = true;
+        assertThat(cancelResponse.status === 204, `Stop endpoint returned ${cancelResponse.status}`);
+        const outcome = await streamOutcomePromise;
+        if (!outcome.ok && outcome.error?.status !== 408) throw outcome.error;
+        const stream = outcome.ok ? outcome.value : { terminal: false, aborted: true };
+        const statusResponse = await waitForCondition(async () => {
+          try {
+            const response = await session.request(`/api/v1/agent/jobs/${acceptedRunId}`, { target: 'backend' });
+            return response.data?.status === 'cancelled' ? response : false;
+          } catch (error) {
+            if (error?.status === 404) return false;
+            throw error;
           }
-          if (event.event === 'token' && typeof event.data?.content === 'string' && event.data.content.length > 0) partialSeen = true;
-        },
-      }).finally(() => { streamSettled = true; });
-      await waitForCondition(
-        () => Boolean(acceptedRunId),
-        session.config.timeoutMs,
-        'Agent stream did not expose an accepted run identity'
-      );
-      assertThat(UUID.test(acceptedRunId), 'Accepted stream run identity was not a UUID');
-      await waitForCondition(
-        () => partialSeen || streamSettled,
-        session.config.timeoutMs,
-        'Agent stream produced no observable partial output before Stop'
-      );
-      assertThat(partialSeen && !streamSettled, 'Agent stream completed before the durable Stop control could be exercised');
-      const cancelResponse = await session.request(`/api/v1/agent/stream/cancel/${fixture.threadId}`, {
-        target: 'backend',
-        method: 'POST',
-        json: { expected_run_id: acceptedRunId },
-      });
-      assertThat(cancelResponse.status === 204, `Stop endpoint returned ${cancelResponse.status}`);
-      const stream = await streamPromise;
-      const statusResponse = await waitForCondition(async () => {
-        try {
-          const response = await session.request(`/api/v1/agent/jobs/${acceptedRunId}`, { target: 'backend' });
-          return response.data?.status === 'cancelled' ? response : false;
-        } catch (error) {
-          if (error?.status === 404) return false;
-          throw error;
+        }, session.config.timeoutMs, 'Cancelled run did not reach a durable terminal status');
+        const messages = await session.request(`/api/v2/threads/${fixture.threadId}/messages?limit=50`, { target: 'backend' });
+        const values = messages.data?.messages ?? messages.data?.items ?? [];
+        const stoppedAssistant = [...values].reverse().find((item) => item.role === 'assistant');
+        assertThat(stoppedAssistant?.stopped === true, 'Cancelled run did not persist an assistant message marked stopped');
+        const stoppedContent = typeof stoppedAssistant.content === 'string' ? stoppedAssistant.content.trim() : '';
+        assertThat(stoppedContent.length > 0, 'Cancelled run persisted no stopped assistant output');
+        const resumed = await session.request(`/api/v1/agent/stream/resume/${fixture.threadId}?after=0`, { target: 'backend' });
+        assertThat(resumed.status === 204, `Cancelled stream resume was not idle (${resumed.status})`);
+        session.markRunTerminal(acceptedRunId);
+        provenTerminal = true;
+        const page = await authenticatedPage(session, threadUrl(fixture.threadId));
+        const assertStoppedRendered = async (label) => {
+          await page.waitForFunction((threadId) => new URL(window.location.href).searchParams.get('thread') === threadId, fixture.threadId, { timeout: session.config.timeoutMs });
+          await assertTranscriptContains(page, stoppedContent.slice(0, Math.min(120, stoppedContent.length)), label, session.config.timeoutMs);
+          await page.locator('[title="You stopped this response; the text above is partial."]').first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+          const stopControl = page.getByLabel('Stop agent');
+          assertThat(await stopControl.count() === 0 || !(await stopControl.isVisible()), `${label} left the Stop control active after durable cancellation`);
+        };
+        await assertStoppedRendered('Initial render');
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: session.config.timeoutMs });
+        await assertStoppedRendered('Reload');
+        return {
+          assertion: 'Exact accepted run reaches durable cancelled status, persists non-empty stopped output, and stays idle after resume/reload',
+          evidence: [{ threadId: fixture.threadId, runId: acceptedRunId, status: statusResponse.data?.status, streamTerminal: stream.terminal, stoppedOutputLength: stoppedContent.length }],
+        };
+      } finally {
+        if (acceptedRunId && !cancelSent) {
+          try {
+            await session.request(`/api/v1/agent/stream/cancel/${fixture.threadId}`, {
+              target: 'backend', method: 'POST', json: { expected_run_id: acceptedRunId },
+            });
+            cancelSent = true;
+          } catch {
+            // Runner cleanup will retain this fixture tree if cancellation is
+            // not proven, preserving recovery evidence instead of deleting it.
+          }
         }
-      }, session.config.timeoutMs, 'Cancelled run did not reach a durable terminal status');
-      const messages = await session.request(`/api/v2/threads/${fixture.threadId}/messages?limit=50`, { target: 'backend' });
-      const values = messages.data?.messages ?? messages.data?.items ?? [];
-      const stoppedAssistant = [...values].reverse().find((item) => item.role === 'assistant');
-      assertThat(stoppedAssistant?.stopped === true, 'Cancelled run did not persist an assistant message marked stopped');
-      const resumed = await session.request(`/api/v1/agent/stream/resume/${fixture.threadId}?after=0`, { target: 'backend' });
-      assertThat(resumed.status === 204, `Cancelled stream resume was not idle (${resumed.status})`);
-      session.clearActiveRun(acceptedRunId);
-      const page = await authenticatedPage(session, threadUrl(fixture.threadId));
-      await page.waitForFunction(({ threadId, marker }) => {
-        const current = new URL(window.location.href);
-        return current.searchParams.get('thread') === threadId && document.body.innerText.includes(marker);
-      }, { threadId: fixture.threadId, marker: evidence.fixturePrefix }, { timeout: session.config.timeoutMs });
-      const stopControl = page.getByLabel('Stop agent');
-      assertThat(await stopControl.count() === 0 || !(await stopControl.isVisible()), 'Stop control remained active after durable cancellation');
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: session.config.timeoutMs });
-      await page.waitForFunction(({ threadId }) => new URL(window.location.href).searchParams.get('thread') === threadId, fixture.threadId, { timeout: session.config.timeoutMs });
-      return {
-        assertion: 'Exact accepted run reaches durable cancelled status, persists stopped output, and stays idle after resume/reload',
-        evidence: [{ threadId: fixture.threadId, runId: acceptedRunId, status: statusResponse.data?.status, streamTerminal: stream.terminal }],
-      };
+        if (streamOutcomePromise && !streamSettled) {
+          await Promise.race([
+            streamOutcomePromise,
+            new Promise((resolve) => setTimeout(resolve, Math.min(250, session.config.timeoutMs))),
+          ]);
+        }
+        if (acceptedRunId && provenTerminal) session.markRunTerminal(acceptedRunId);
+      }
     },
   },
   {
@@ -563,26 +656,30 @@ const scenarios = [
     id: 'adversarial.authenticated-bounded-validation',
     title: 'Authenticated invalid agent inputs return exact validation errors',
     suite: 'adversarial',
-    prerequisites: ['auth'],
+    prerequisites: ['auth', 'writes'],
+    createsFixtures: true,
     mode: 'live',
-    async run(session) {
-      await session.login();
+    async run(session, evidence) {
+      const fixture = await makeThread(session, evidence, 'validation');
       const cases = [
-        { messages: [], use_rag: false },
-        { messages: [{ role: 'assistant', content: 'assistant only' }], use_rag: false },
-        { messages: [{ role: 'user', content: 'x'.repeat(32_001) }], use_rag: false },
+        { messages: [], thread_id: fixture.threadId, use_rag: false },
+        { messages: [{ role: 'assistant', content: 'assistant only' }], thread_id: fixture.threadId, use_rag: false },
+        { messages: [{ role: 'user', content: 'x'.repeat(32_001) }], thread_id: fixture.threadId, use_rag: false },
       ];
       const statuses = [];
+      const unexpectedAcceptedRuns = [];
       for (const payload of cases) {
         try {
-          const response = await session.request('/api/v1/agent/stream', { target: 'backend', method: 'POST', json: payload });
+          const response = await session.streamAgent(payload);
           statuses.push(response.status);
+          unexpectedAcceptedRuns.push(...(response.acceptedRunIds ?? []));
         } catch (error) {
           statuses.push(error.status ?? null);
         }
       }
+      assertThat(unexpectedAcceptedRuns.length === 0, `Invalid input unexpectedly accepted model runs: ${unexpectedAcceptedRuns.join(',')}`);
       assertThat(statuses.every((status) => status === 422), `Authenticated invalid input did not produce exact 422 validation statuses: ${statuses.join(',')}`);
-      return { assertion: 'Authenticated empty, assistant-only, and overlong bodies are rejected with 422 before model execution', evidence: [{ statuses }] };
+      return { assertion: 'Authenticated empty, assistant-only, and overlong bodies tied to an owned thread are rejected with 422 before model execution', evidence: [{ statuses, threadId: fixture.threadId }] };
     },
   },
   {
@@ -633,17 +730,33 @@ const scenarios = [
     id: 'adversarial.missing-thread-ui',
     title: 'Missing thread navigation is handled without exposing another thread',
     suite: 'adversarial',
-    prerequisites: ['auth', 'browser'],
+    prerequisites: ['auth', 'writes', 'browser'],
+    createsFixtures: true,
     mode: 'live',
-    async run(session) {
-      await session.login();
-      const response = await session.goto('/chat/00000000-0000-4000-8000-000000000000');
-      const path = new URL(session.page.url()).pathname;
-      const body = await session.page.locator('body').innerText();
-      assertThat(response?.status() === undefined || response.status() < 500, 'Missing thread produced a server error page');
-      assertThat(!body.includes('NOUS QA'), 'Missing thread displayed a fixture from another run');
-      assertThat(path.startsWith('/chat') || path.startsWith('/dashboard') || path.startsWith('/login'), `Unexpected missing-thread navigation: ${path}`);
-      return { assertion: 'Missing thread stays within the app and does not show unrelated fixture content', evidence: [{ path }] };
+    async run(session, evidence) {
+      const fixture = await makeThread(session, evidence, 'missing-recovery');
+      const marker = `${evidence.fixturePrefix} missing-thread recovery marker`;
+      await session.request('/api/v2/messages', {
+        target: 'backend', method: 'POST',
+        json: { thread_id: fixture.threadId, role: 'user', content: marker, client_message_id: randomUUID() },
+      });
+      const page = await session.login();
+      const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
+      try {
+        const response = await session.goto('/chat?thread=00000000-0000-4000-8000-000000000000');
+        const path = new URL(session.page.url()).pathname;
+        assertThat(response?.status() === undefined || response.status() < 500, 'Missing thread produced a server error page');
+        assertThat(path.startsWith('/chat'), `Unexpected missing-thread navigation: ${path}`);
+        await waitForCondition(
+          () => new URL(page.url()).searchParams.get('thread') === fixture.threadId,
+          session.config.timeoutMs,
+          'Missing thread did not recover to the explicitly owned workspace fixture'
+        );
+        await assertTranscriptContains(page, marker, 'Missing-thread recovery', session.config.timeoutMs);
+        return { assertion: 'Missing thread recovers inside the explicitly owned workspace and renders only its owned transcript', evidence: [{ path, recoveredThreadId: fixture.threadId }] };
+      } finally {
+        await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
+      }
     },
   },
   {
@@ -673,10 +786,11 @@ const scenarios = [
     mode: 'live',
     async run(session, evidence) {
       const page = await authenticatedPage(session, '/chat');
-      const chooser = page.waitForEvent('filechooser');
-      await page.getByLabel('Attach file').click();
-      const file = await chooser;
-      await file.setFiles({ name: `${evidence.fixturePrefix}.exe`, mimeType: 'application/octet-stream', buffer: Buffer.from('MZ') });
+      await page.getByLabel('Attach file', { exact: true }).setInputFiles({
+        name: `${evidence.fixturePrefix}.exe`,
+        mimeType: 'application/octet-stream',
+        buffer: Buffer.from('MZ'),
+      });
       const error = page.getByRole('alert');
       await error.waitFor({ state: 'visible', timeout: session.config.timeoutMs });
       return { assertion: 'Unsupported attachment is rejected with a user-facing alert', evidence: ['Attach file', 'role=alert'] };
@@ -706,12 +820,23 @@ const scenarios = [
     id: 'adversarial.controlled-transport-abort',
     title: 'Controlled transport abort exposes a retryable UI failure',
     suite: 'adversarial',
-    prerequisites: ['auth', 'browser'],
+    prerequisites: ['auth', 'writes', 'browser'],
+    createsFixtures: true,
     mode: 'controlled-transport-fault',
     async run(session, evidence) {
-      const page = await authenticatedPage(session, '/chat');
+      const fixture = await makeThread(session, evidence, 'controlled-transport');
+      const page = await authenticatedPage(session, threadUrl(fixture.threadId));
       assertThat(typeof page.route === 'function', 'Browser route interception is unavailable');
-      await page.route('**/api/v1/agent/stream', async (route) => route.abort('connectionreset'));
+      let interceptedThreadId = null;
+      await page.route('**/api/v1/agent/stream', async (route) => {
+        try {
+          const body = JSON.parse(route.request().postData() ?? '{}');
+          interceptedThreadId = body.thread_id ?? null;
+        } catch {
+          interceptedThreadId = null;
+        }
+        await route.abort('connectionreset');
+      });
       const message = page.getByLabel('Message');
       await message.fill(`${evidence.fixturePrefix} controlled transport fault`);
       await message.press('Enter');
@@ -720,7 +845,11 @@ const scenarios = [
       } finally {
         await page.unroute('**/api/v1/agent/stream');
       }
-      return { assertion: 'Controlled browser fault is labeled separately and surfaced as an alert', evidence: ['route.abort(connectionreset)', 'role=alert'] };
+      assertThat(interceptedThreadId === fixture.threadId, 'Controlled transport fault did not target the exact owned thread');
+      const messages = await session.request(`/api/v2/threads/${fixture.threadId}/messages?limit=50`, { target: 'backend' });
+      const values = messages.data?.messages ?? messages.data?.items ?? [];
+      assertThat(values.every((item) => typeof item?.thread_id !== 'string' || item.thread_id === fixture.threadId), 'Controlled fault created a message outside the owned parent thread');
+      return { assertion: 'Controlled browser fault is labeled separately, targets the owned thread, and any created chat messages remain under that parent', evidence: ['route.abort(connectionreset)', 'role=alert', { threadId: fixture.threadId, messageCount: values.length }] };
     },
   },
   {

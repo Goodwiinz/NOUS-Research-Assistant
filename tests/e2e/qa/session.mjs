@@ -241,6 +241,10 @@ export class QASession {
     this._authToken = null;
     this.activeControllers = new Set();
     this.activeRuns = new Map();
+    this.pendingMutations = new Map();
+    this.uncertainMutations = [];
+    this.pendingStreams = new Map();
+    this.uncertainStreams = [];
   }
 
   assertOperational({ internal = false } = {}) {
@@ -267,12 +271,31 @@ export class QASession {
     const playwright = this.dependencies.playwright ?? (await import('playwright'));
     const chromium = playwright.chromium ?? playwright.default?.chromium;
     if (!chromium) throw new QASessionError('Playwright Chromium is unavailable');
-    this.browser = await chromium.launch({ headless: true });
-    const contextOptions = { baseURL: this.config.baseUrl };
-    if (this.config.storageState) contextOptions.storageState = this.config.storageState;
-    this.context = await this.browser.newContext(contextOptions);
-    this.page = await this.context.newPage();
-    return this.page;
+    let browser = null;
+    let context = null;
+    let page = null;
+    try {
+      browser = await chromium.launch({ headless: true });
+      this.assertOperational();
+      const contextOptions = { baseURL: this.config.baseUrl };
+      if (this.config.storageState) contextOptions.storageState = this.config.storageState;
+      context = await browser.newContext(contextOptions);
+      this.assertOperational();
+      page = await context.newPage();
+      this.assertOperational();
+      this.browser = browser;
+      this.context = context;
+      this.page = page;
+      return page;
+    } catch (error) {
+      // A quarantine/close can win while Chromium is launching. Close every
+      // local resource before rethrowing instead of assigning a late context
+      // to a session that the runner already retired.
+      for (const resource of [page, context, browser]) {
+        try { await resource?.close(); } catch { /* preserve the original failure */ }
+      }
+      throw error;
+    }
   }
 
   assertTrustedBrowserUrl(value) {
@@ -410,6 +433,35 @@ export class QASession {
       headers.set('content-type', 'application/json');
     }
     const started = Date.now();
+    const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+    let mutationKey = null;
+    let mutationSettled = false;
+    const beginMutation = () => {
+      if (!mutating) return;
+      mutationKey = randomUUID();
+      this.pendingMutations.set(mutationKey, {
+        method,
+        path: sanitizeRequestObservation({ method, path }, this.secrets).path,
+        startedAt: new Date().toISOString(),
+      });
+    };
+    const settleMutation = () => {
+      if (!mutationKey || mutationSettled) return;
+      mutationSettled = true;
+      this.pendingMutations.delete(mutationKey);
+    };
+    const markMutationUncertain = (status = null) => {
+      if (!mutationKey || mutationSettled) return;
+      mutationSettled = true;
+      const pending = this.pendingMutations.get(mutationKey);
+      this.pendingMutations.delete(mutationKey);
+      this.uncertainMutations.push({
+        method,
+        path: pending?.path ?? sanitizeRequestObservation({ method, path }, this.secrets).path,
+        status: Number.isFinite(status) ? status : null,
+        reason: 'Mutation outcome was not observed; exact server ownership is unknown',
+      });
+    };
     const release = () => {
       clearTimeout(timeoutId);
       this.activeControllers.delete(controller);
@@ -426,6 +478,7 @@ export class QASession {
       this.assertOperational({ internal });
       // Manual redirects ensure an API response cannot move a bearer token to
       // an untrusted origin. A redirect is reported as a bounded failure.
+      beginMutation();
       response = await fetch(url, {
         method,
         headers,
@@ -434,6 +487,7 @@ export class QASession {
         redirect: 'manual',
       });
     } catch (error) {
+      markMutationUncertain();
       const observation = sanitizeRequestObservation({ method, path, status: null, durationMs: Date.now() - started }, this.secrets);
       this.observations.push(observation);
       release();
@@ -450,16 +504,21 @@ export class QASession {
         try { data = JSON.parse(text); } catch { data = null; }
       }
       if (response.status >= 300 && response.status < 400) {
+        markMutationUncertain(response.status);
         throw new HttpError(`Request redirected (${response.status})`, { status: response.status });
       }
       if (!response.ok) {
         // Keep response bodies out of errors and reports. Scenarios assert
         // status contracts; backend detail may contain account or document
         // content unrelated to the QA fixture.
+        if (response.status >= 500) markMutationUncertain(response.status);
+        else settleMutation();
         throw new HttpError(`Request failed (${response.status})`, { status: response.status });
       }
+      settleMutation();
       return { status: response.status, headers: response.headers, data, text, bytes };
     } catch (error) {
+      markMutationUncertain(error?.status ?? null);
       if (error?.name === 'AbortError') {
         throw new HttpError(`Request body timed out: ${method} ${path}`, { status: 408 });
       }
@@ -471,8 +530,40 @@ export class QASession {
 
   async streamAgent(payload, options = {}) {
     this.assertOperational();
+    const threadId = typeof payload?.thread_id === 'string' ? payload.thread_id : null;
+    if (!threadId) throw new QASessionError('Agent stream requires an exact owned thread ID');
+    this.ledger.requireOwned('thread', threadId);
     const path = '/api/v1/agent/stream';
     const url = this.urlFor(path, 'backend');
+    const streamKey = randomUUID();
+    this.pendingStreams.set(streamKey, {
+      key: streamKey,
+      method: 'POST',
+      path,
+      threadId,
+      startedAt: new Date().toISOString(),
+    });
+    let submissionSettled = false;
+    let fetchStarted = false;
+    const settleSubmission = () => {
+      if (submissionSettled) return;
+      submissionSettled = true;
+      this.pendingStreams.delete(streamKey);
+    };
+    const markUncertainSubmission = (status = null, reason = 'Agent stream outcome was not observed; exact server run ownership is unknown') => {
+      if (submissionSettled) return;
+      submissionSettled = true;
+      const pending = this.pendingStreams.get(streamKey);
+      this.pendingStreams.delete(streamKey);
+      this.uncertainStreams.push({
+        method: 'POST',
+        path,
+        threadId,
+        status: Number.isFinite(status) ? status : null,
+        startedAt: pending?.startedAt ?? null,
+        reason,
+      });
+    };
     const controller = new AbortController();
     this.activeControllers.add(controller);
     const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs ?? this.config.timeoutMs);
@@ -490,6 +581,7 @@ export class QASession {
       const token = (await this.browserAuthToken()) ?? this.config.authToken;
       if (token) headers.set('authorization', `Bearer ${token}`);
       this.assertOperational();
+      fetchStarted = true;
       response = await fetch(url, {
         method: 'POST',
         headers,
@@ -498,6 +590,8 @@ export class QASession {
         redirect: 'manual',
       });
     } catch (error) {
+      if (fetchStarted) markUncertainSubmission();
+      else settleSubmission();
       this.observations.push(sanitizeRequestObservation({ method: 'POST', path, status: null, durationMs: Date.now() - started }, this.secrets));
       release();
       if (error?.name === 'AbortError') throw new HttpError('Agent stream timed out or was aborted', { status: 408 });
@@ -507,6 +601,13 @@ export class QASession {
     let reader = null;
     try {
       if (!response.ok || !response.body) {
+        if (response.status >= 500 || (response.status >= 300 && response.status < 400) || (response.ok && !response.body)) {
+          markUncertainSubmission(response.status);
+        } else {
+          // A bounded 4xx response is an observed rejection before a run was
+          // accepted; it is safe to settle without retaining the fixture.
+          settleSubmission();
+        }
         throw new HttpError(`Agent stream failed (${response.status})`, { status: response.status });
       }
       const events = [];
@@ -516,6 +617,13 @@ export class QASession {
       let currentEvent = '';
       let terminal = false;
       let streamBytes = 0;
+      const acceptedRunIds = [];
+      const clearTerminalRuns = () => {
+        for (const runId of acceptedRunIds) {
+          this.clearActiveRun(runId, { internal: true });
+          this.settleStreamSubmission(runId, { internal: true });
+        }
+      };
       while (!terminal) {
         const chunk = await reader.read();
         if (chunk.done) break;
@@ -545,13 +653,45 @@ export class QASession {
             }
             const parsedEvent = { event: currentEvent, data };
             events.push(parsedEvent);
+            if (currentEvent === 'status' && data?.phase === 'accepted') {
+              const runId = typeof data.run_id === 'string' ? data.run_id : null;
+              if (!runId || !UUID.test(runId)) {
+                throw new QASessionError('Agent stream accepted an invalid run identity');
+              }
+              // This is internal bookkeeping for an already submitted stream;
+              // it may arrive after quarantine. External mutations remain
+              // gated while the exact run is retained for cleanup/recovery.
+              this.registerActiveRun(runId, threadId, { internal: true });
+              const pending = this.pendingStreams.get(streamKey);
+              if (pending) {
+                pending.acceptedRunIds = [...(pending.acceptedRunIds ?? []), runId];
+              }
+              if (!acceptedRunIds.includes(runId)) acceptedRunIds.push(runId);
+            }
             if (typeof options.onEvent === 'function') await options.onEvent(parsedEvent);
-            if (['done', 'error', 'confirmation'].includes(currentEvent)) terminal = true;
+            if (['done', 'error', 'confirmation'].includes(currentEvent)) {
+              terminal = true;
+              // `confirmation` is an intentionally non-terminal backend state
+              // (the run is awaiting HITL), so cleanup must retain it. A done
+              // or error event proves the accepted run reached a terminal
+              // stream outcome and no longer needs cancellation cleanup.
+              if (currentEvent === 'done' || currentEvent === 'error') {
+                clearTerminalRuns();
+                if (acceptedRunIds.length === 0) settleSubmission();
+              }
+            }
           }
         }
       }
-      return { status: response.status, events, terminal };
+      if (!submissionSettled && currentEvent !== 'confirmation' && !terminal) {
+        markUncertainSubmission(response.status, 'Agent stream ended without a terminal event or accepted run identity');
+      }
+      if (!submissionSettled && terminal && currentEvent === 'confirmation' && acceptedRunIds.length === 0) {
+        markUncertainSubmission(response.status, 'Agent stream requested confirmation without an accepted run identity');
+      }
+      return { status: response.status, events, terminal, acceptedRunIds };
     } catch (error) {
+      if (!submissionSettled) markUncertainSubmission(response?.status ?? null);
       if (error?.name === 'AbortError') throw new HttpError('Agent stream timed out or was aborted', { status: 408 });
       throw error;
     } finally {
@@ -565,15 +705,33 @@ export class QASession {
     return this.ledger.register(kind, id, metadata);
   }
 
-  registerActiveRun(runId, threadId) {
-    this.assertOperational();
-    if (!runId || !threadId) throw new QASessionError('An active run requires an exact run and thread ID');
+  registerActiveRun(runId, threadId, options = {}) {
+    this.assertOperational(options);
+    if (!runId || !threadId || !UUID.test(String(runId))) {
+      throw new QASessionError('An active run requires an exact UUID run and thread ID');
+    }
+    this.ledger.requireOwned('thread', String(threadId));
     this.activeRuns.set(String(runId), { runId: String(runId), threadId: String(threadId) });
   }
 
-  clearActiveRun(runId) {
-    this.assertOperational();
+  clearActiveRun(runId, options = {}) {
+    this.assertOperational(options);
     this.activeRuns.delete(String(runId));
+  }
+
+  settleStreamSubmission(runId, options = {}) {
+    this.assertOperational(options);
+    for (const [key, stream] of this.pendingStreams.entries()) {
+      if (stream.acceptedRunIds?.includes(String(runId))) {
+        this.pendingStreams.delete(key);
+      }
+    }
+  }
+
+  markRunTerminal(runId) {
+    this.assertOperational();
+    this.clearActiveRun(runId);
+    this.settleStreamSubmission(runId);
   }
 
   abort() {
@@ -618,9 +776,35 @@ export class QASession {
 
   async cleanup() {
     const retained = [];
+    const retainedKeys = new Set();
     const errors = [...this.quarantineErrors];
     const activeRuns = [];
-    for (const run of this.activeRuns.values()) {
+    const retainResource = (resource) => {
+      if (!resource) return;
+      const key = `${resource.kind}:${resource.id}`;
+      if (retainedKeys.has(key)) return;
+      retainedKeys.add(key);
+      retained.push({ kind: resource.kind, id: resource.id });
+    };
+    const retainFixtureTree = (threadId) => {
+      const thread = this.ledger.list().find((resource) => resource.kind === 'thread' && resource.id === String(threadId));
+      if (!thread) return;
+      retainResource(thread);
+      const conversationId = thread.metadata?.conversationId;
+      const conversation = this.ledger.list().find((resource) => resource.kind === 'conversation' && resource.id === conversationId);
+      if (!conversation) return;
+      retainResource(conversation);
+      const workspaceId = conversation.metadata?.workspaceId;
+      const workspace = this.ledger.list().find((resource) => resource.kind === 'workspace' && resource.id === workspaceId);
+      retainResource(workspace);
+    };
+    const runsToCancel = new Map(this.activeRuns);
+    for (const stream of this.pendingStreams.values()) {
+      for (const runId of stream.acceptedRunIds ?? []) {
+        if (!runsToCancel.has(runId)) runsToCancel.set(runId, { runId, threadId: stream.threadId });
+      }
+    }
+    for (const run of runsToCancel.values()) {
       try {
         await this.request(`/api/v1/agent/stream/cancel/${encodeURIComponent(run.threadId)}`, {
           target: 'backend',
@@ -648,20 +832,53 @@ export class QASession {
         }
         if (!terminal) throw new QASessionError('Owned agent run did not reach a terminal status during cleanup');
         activeRuns.push({ runId: run.runId, threadId: run.threadId, status: 'terminal' });
+        this.settleStreamSubmission(run.runId, { internal: true });
       } catch (error) {
-        // A terminal race is safe: the exact owned run is already gone or
-        // completed. Any other result remains visible as incomplete cleanup.
-        if ([404, 409].includes(error?.status)) {
+        // A 404 means the exact run is already gone. A 409 is not assumed to
+        // be terminal: the backend also uses it for awaiting-confirmation,
+        // identity races, and other still-owned states.
+        if (error?.status === 404) {
           activeRuns.push({ runId: run.runId, threadId: run.threadId, status: 'terminal-race' });
+          this.settleStreamSubmission(run.runId, { internal: true });
         } else {
           errors.push({ kind: 'agent-run', id: run.runId, error: redactText(error?.message ?? error, this.secrets) });
           activeRuns.push({ runId: run.runId, threadId: run.threadId, status: 'error' });
+          retainFixtureTree(run.threadId);
         }
       }
     }
     this.activeRuns.clear();
+    const streamRisks = [
+      ...this.uncertainStreams,
+      ...[...this.pendingStreams.values()].map((stream) => ({
+        ...stream,
+        status: null,
+        reason: 'Agent stream is still pending; exact server run ownership is unknown',
+      })),
+    ];
+    const mutationRisks = [
+      ...this.uncertainMutations,
+      ...[...this.pendingMutations.values()].map((mutation) => ({
+        ...mutation,
+        status: null,
+        reason: 'Mutation is still pending; exact server ownership is unknown',
+      })),
+    ];
+    if (streamRisks.length > 0 || mutationRisks.length > 0) {
+      for (const stream of streamRisks) {
+        errors.push({ kind: 'uncertain-stream', ...stream });
+      }
+      for (const mutation of mutationRisks) {
+        errors.push({ kind: 'uncertain-mutation', ...mutation });
+      }
+      for (const resource of this.ledger.list()) retainResource(resource);
+    }
     const resources = this.ledger.list().reverse();
     for (const resource of resources) {
+      if (retainedKeys.has(`${resource.kind}:${resource.id}`) || streamRisks.length > 0 || mutationRisks.length > 0) {
+        retainResource(resource);
+        continue;
+      }
       try {
         await this.ledger.deleteOwned(resource.kind, resource.id, async () => {
           const path = {
@@ -675,11 +892,18 @@ export class QASession {
           await this.request(path, { method: 'DELETE', internal: true });
         });
       } catch (error) {
-        retained.push({ kind: resource.kind, id: resource.id });
+        retainResource(resource);
         errors.push({ kind: resource.kind, id: resource.id, error: redactText(error?.message ?? error, this.secrets) });
       }
     }
-    return { status: errors.length ? 'incomplete' : 'complete', retained, errors, activeRuns };
+    return {
+      status: errors.length ? 'incomplete' : 'complete',
+      retained,
+      errors,
+      activeRuns,
+      uncertainStreams: streamRisks,
+      uncertainMutations: mutationRisks,
+    };
   }
 
   async close() {

@@ -61,6 +61,43 @@ test('reproduction command redacts environment secrets', () => {
   assert.doesNotMatch(config.command, /sentinel-password/);
 });
 
+test('CLI report paths are redacted when the configured output directory contains a secret', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nous-qa-output-'));
+  const outputDir = join(dir, 'sentinel-password-reports');
+  const originalLog = console.log;
+  const lines = [];
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    const exitCode = await main([
+      '--suite', 'smoke',
+      '--scenario', 'stdout-path-redaction',
+      '--output-dir', outputDir,
+    ], {
+      NOUS_QA_PASSWORD: 'sentinel-password',
+    }, {
+      registry: [{
+        id: 'stdout-path-redaction',
+        title: 'stdout path redaction',
+        suite: 'smoke',
+        prerequisites: [],
+        run: async () => ({ assertion: 'pass' }),
+      }],
+      sessionFactory: async () => ({
+        observations: [],
+        cleanup: async () => ({ status: 'complete', retained: [], errors: [] }),
+        close: async () => {},
+      }),
+    });
+    assert.equal(exitCode, 0);
+  } finally {
+    console.log = originalLog;
+    await rm(dir, { recursive: true, force: true });
+  }
+  assert.doesNotMatch(lines.join('\n'), /sentinel-password/);
+  assert.match(lines.join('\n'), /JSON: .*\[REDACTED\]/);
+  assert.match(lines.join('\n'), /HTML: .*\[REDACTED\]/);
+});
+
 test('HTML report escapes hostile values and has no executable script', () => {
   const html = renderHtml({
     schemaVersion: 1,
@@ -340,7 +377,7 @@ test('session close errors remain visible in the cleanup report', async () => {
   assert.equal(report.summary.incomplete, true);
 });
 
-test('empty scenario selection is incomplete and exits with code 2', async () => {
+test('unknown scenario selection is invalid and exits with code 2', async () => {
   const report = await runCampaign(
     {
       suite: 'smoke',
@@ -356,7 +393,34 @@ test('empty scenario selection is incomplete and exits with code 2', async () =>
 
   assert.equal(report.cases.length, 0);
   assert.equal(exitCodeForReport(report), 2);
-  assert.match(report.summary.reason, /no scenarios/i);
+  assert.match(report.summary.reason, /unknown|out-of-suite/i);
+});
+
+test('mixed valid and unknown scenario selections are rejected before any selected case runs', async () => {
+  let ran = false;
+  const report = await runCampaign(
+    {
+      suite: 'smoke',
+      selectedIds: ['known', 'workflow-only'],
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: 'http://127.0.0.1:8000/api/v1',
+      timeoutMs: 100,
+      maxTurns: 1,
+      runId: 'run-invalid-selection',
+    },
+    {
+      registry: [
+        { id: 'known', title: 'known', suite: 'smoke', prerequisites: [], run: async () => { ran = true; return { assertion: 'ran' }; } },
+        { id: 'workflow-only', title: 'workflow-only', suite: 'workflow', prerequisites: [], run: async () => ({ assertion: 'wrong suite' }) },
+      ],
+      sessionFactory: async () => ({ close: async () => {} }),
+    }
+  );
+  assert.equal(ran, false);
+  assert.equal(report.cases.length, 0);
+  assert.equal(report.summary.invalid, true);
+  assert.match(report.summary.reason, /unknown|out-of-suite/i);
+  assert.equal(exitCodeForReport(report), 2);
 });
 
 test('deployment evidence is validated and target-bound', async () => {
@@ -554,6 +618,169 @@ test('browser auth decodes ordered Supabase SSR cookie chunks only on the truste
   assert.doesNotMatch(JSON.stringify(session.observations), /synthetic-cookie-access-token/);
 });
 
+test('deferred browser launch is quarantined and closes late resources', async () => {
+  let releaseLaunch;
+  let browserClosed = 0;
+  const launch = new Promise((resolve) => { releaseLaunch = resolve; });
+  const session = new QASession({
+    runId: 'run-deferred-browser',
+    baseUrl: 'http://127.0.0.1:3000',
+    apiUrl: 'http://127.0.0.1:8000/api/v1',
+    timeoutMs: 100,
+  }, {
+    playwright: {
+      chromium: {
+        launch: async () => launch,
+      },
+    },
+  });
+  const opening = session.openBrowser();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const quarantining = session.quarantine();
+  releaseLaunch({ close: async () => { browserClosed += 1; } });
+  await assert.rejects(opening, /quarantined/i);
+  await quarantining;
+  assert.equal(browserClosed, 1);
+});
+
+test('agent streams centrally register accepted runs only for owned threads and cleanup cancels before deletion', async () => {
+  const order = [];
+  const runId = '11111111-1111-4111-8111-111111111111';
+  const workspaceId = '22222222-2222-4222-8222-222222222222';
+  const conversationId = '33333333-3333-4333-8333-333333333333';
+  const threadId = '44444444-4444-4444-8444-444444444444';
+  const server = http.createServer((request, response) => {
+    const path = new URL(request.url, 'http://localhost').pathname;
+    if (path === '/api/v1/agent/stream') {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end([
+        `event: status\ndata: ${JSON.stringify({ phase: 'accepted', run_id: runId })}\n`,
+        'event: token\ndata: {"content":"NOUS_STREAM_ACK"}\n',
+        'event: done\ndata: {"status":"complete"}\n',
+      ].join('\n'));
+      return;
+    }
+    if (path.startsWith('/api/v1/agent/stream/cancel/')) {
+      order.push('cancel');
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (path.startsWith('/api/v1/agent/jobs/')) {
+      order.push('job');
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ status: 'cancelled' }));
+      return;
+    }
+    if (request.method === 'DELETE') {
+      order.push(`delete:${path}`);
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const session = new QASession({
+      runId: 'run-stream-owned',
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: `http://127.0.0.1:${server.address().port}/api/v1`,
+      timeoutMs: 500,
+      authToken: 'synthetic-token',
+      secrets: ['synthetic-token'],
+    });
+    session.registerFixture('workspace', workspaceId);
+    session.registerFixture('conversation', conversationId, { workspaceId });
+    session.registerFixture('thread', threadId, { conversationId });
+    let seenDuringCallback = false;
+    const result = await session.streamAgent({
+      thread_id: threadId,
+      messages: [{ role: 'user', content: 'ack' }],
+      use_rag: false,
+    }, {
+      onEvent: (event) => {
+        if (event.event === 'status') seenDuringCallback = session.activeRuns.has(runId);
+      },
+    });
+    assert.equal(seenDuringCallback, true);
+    assert.deepEqual(result.acceptedRunIds, [runId]);
+    assert.equal(session.activeRuns.has(runId), false, 'terminal done stream should clear its proven run');
+    await assert.rejects(
+      () => session.streamAgent({ thread_id: '55555555-5555-4555-8555-555555555555', messages: [], use_rag: false }),
+      /owned thread/i
+    );
+    session.registerActiveRun(runId, threadId);
+    const cleanup = await session.cleanup();
+    assert.equal(cleanup.status, 'complete');
+    assert.deepEqual(order.slice(0, 2), ['cancel', 'job']);
+    assert.deepEqual(order.slice(2), [
+      `delete:/api/v2/threads/${threadId}`,
+      `delete:/api/v2/conversations/${conversationId}`,
+      `delete:/api/v2/workspaces/${workspaceId}`,
+    ]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('a stream that times out before acceptance retains its owned thread for uncertain-run recovery', async () => {
+  const workspaceId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const conversationId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const threadId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  let acceptedSent = false;
+  let deleteRequests = 0;
+  const server = http.createServer((request, response) => {
+    const path = new URL(request.url, 'http://localhost').pathname;
+    if (request.method === 'POST' && path === '/api/v1/agent/stream') {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      setTimeout(() => {
+        acceptedSent = true;
+        response.write(`event: status\ndata: ${JSON.stringify({ phase: 'accepted', run_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' })}\n\n`);
+      }, 100);
+      return;
+    }
+    if (request.method === 'DELETE') {
+      deleteRequests += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const session = new QASession({
+      runId: 'run-stream-timeout-before-accepted',
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: `http://127.0.0.1:${server.address().port}/api/v1`,
+      timeoutMs: 25,
+      authToken: 'synthetic-token',
+      secrets: ['synthetic-token'],
+    });
+    session.registerFixture('workspace', workspaceId);
+    session.registerFixture('conversation', conversationId, { workspaceId });
+    session.registerFixture('thread', threadId, { conversationId });
+    await assert.rejects(
+      () => session.streamAgent({ thread_id: threadId, messages: [{ role: 'user', content: 'slow' }], use_rag: false }),
+      /timed out|aborted/i
+    );
+    const cleanup = await session.cleanup();
+    assert.equal(cleanup.status, 'incomplete');
+    assert.equal(cleanup.uncertainStreams.length, 1);
+    assert.equal(cleanup.uncertainStreams[0].threadId, threadId);
+    assert.ok(cleanup.retained.some((item) => item.kind === 'thread' && item.id === threadId));
+    assert.equal(deleteRequests, 0);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(acceptedSent, true, 'local transport should model a late accepted run after the client timeout');
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('manual API redirects do not forward bearer credentials cross-origin', async () => {
   let leakedAuthorization = null;
   const destination = http.createServer((request, response) => {
@@ -598,6 +825,107 @@ test('response body reads remain bounded after headers arrive', async () => {
       timeoutMs: 25,
     });
     await assert.rejects(() => session.request('/never-finishes', { target: 'backend' }), /timed out|aborted/i);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('timed-out mutating requests remain uncertain and prevent cleanup from claiming completion', async () => {
+  let created = false;
+  let deleteRequests = 0;
+  let delayedResponse;
+  const server = http.createServer((request, response) => {
+    const path = new URL(request.url, 'http://localhost').pathname;
+    if (request.method === 'POST' && path === '/api/v2/workspaces') {
+      created = true;
+      delayedResponse = setTimeout(() => {
+        response.writeHead(201, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ id: '66666666-6666-4666-8666-666666666666' }));
+      }, 2_000);
+      request.on('close', () => clearTimeout(delayedResponse));
+      return;
+    }
+    if (request.method === 'DELETE') {
+      deleteRequests += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const session = new QASession({
+      runId: 'run-uncertain-mutation',
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: `http://127.0.0.1:${server.address().port}/api/v1`,
+      timeoutMs: 500,
+      authToken: 'synthetic-token',
+      secrets: ['synthetic-token'],
+    });
+    session.registerFixture('thread', '77777777-7777-4777-8777-777777777777');
+    await assert.rejects(
+      () => session.request('/api/v2/workspaces', { target: 'backend', method: 'POST', json: { name: 'delayed' }, timeoutMs: 500 }),
+      /timed out|aborted/i
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(created, true);
+    const cleanup = await session.cleanup();
+    assert.equal(cleanup.status, 'incomplete');
+    assert.equal(cleanup.uncertainMutations.length, 1);
+    assert.match(cleanup.errors[0].reason, /outcome was not observed|pending/i);
+    assert.equal(deleteRequests, 0, 'uncertain mutation must not trigger guessed cleanup deletes');
+  } finally {
+    clearTimeout(delayedResponse);
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('failed active-run cancellation retains the owned fixture tree and does not treat 409 as terminal', async () => {
+  const runId = '88888888-8888-4888-8888-888888888888';
+  const workspaceId = '99999999-9999-4999-8999-999999999999';
+  const conversationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const threadId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  let deleteRequests = 0;
+  const server = http.createServer((request, response) => {
+    const path = new URL(request.url, 'http://localhost').pathname;
+    if (path.startsWith('/api/v1/agent/stream/cancel/')) {
+      response.writeHead(409, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ detail: 'awaiting confirmation' }));
+      return;
+    }
+    if (request.method === 'DELETE') {
+      deleteRequests += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const session = new QASession({
+      runId: 'run-cancel-409',
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: `http://127.0.0.1:${server.address().port}/api/v1`,
+      timeoutMs: 50,
+      authToken: 'synthetic-token',
+      secrets: ['synthetic-token'],
+    });
+    session.registerFixture('workspace', workspaceId);
+    session.registerFixture('conversation', conversationId, { workspaceId });
+    session.registerFixture('thread', threadId, { conversationId });
+    session.registerActiveRun(runId, threadId);
+    const cleanup = await session.cleanup();
+    assert.equal(cleanup.status, 'incomplete');
+    assert.equal(cleanup.activeRuns[0].status, 'error');
+    assert.ok(cleanup.retained.some((item) => item.kind === 'thread' && item.id === threadId));
+    assert.ok(cleanup.retained.some((item) => item.kind === 'conversation' && item.id === conversationId));
+    assert.ok(cleanup.retained.some((item) => item.kind === 'workspace' && item.id === workspaceId));
+    assert.equal(deleteRequests, 0);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
