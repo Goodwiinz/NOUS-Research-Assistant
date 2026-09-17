@@ -11,10 +11,10 @@
 # rationale/rollback levers for per-var values: see values-dev.yaml (identical values)
 
 global:
-  # <ACCOUNT_ID> = terraform output account_id (Task 2)
+  # 267685730035 = terraform output account_id (Task 2)
   # Fill-once pair: when you fill this registry host, backend.image.repository
   # must be updated in the same change (it embeds the registry host).
-  imageRegistry: "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com"
+  imageRegistry: "267685730035.dkr.ecr.us-east-1.amazonaws.com"
   # ECR auth via the node IAM role (AmazonEC2ContainerRegistryReadOnly) —
   # no imagePullSecrets, unlike the DO do-registry secret.
   imagePullSecrets: []
@@ -30,7 +30,7 @@ commonLabels:
 # ──────────────────────────────────────────────
 # Infisical secret sync — dev env
 # During cutover, point /database at the RDS endpoint and /redis at the
-# ElastiCache endpoint (<ELASTICACHE_ENDPOINT>, terraform output Task 2).
+# ElastiCache endpoint (master.nous-redis.ycuebr.use1.cache.amazonaws.com, terraform output Task 2).
 # ──────────────────────────────────────────────
 infisical:
   enabled: true
@@ -50,9 +50,9 @@ backend:
   enabled: true
   replicaCount: 1
   image:
-    # <ACCOUNT_ID> = terraform output account_id; repos pushed to ECR in Task 2.
+    # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # tag/digest pinned to the same SHAs currently on DO (re-pushed to ECR).
-    repository: "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
+    repository: "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
     tag: "e75d8547dd4c7938864af3b888986162a517f55d"
     digest: "sha256:e78f7cba32ad854044de016b56186c293e9b5f53f4b1481e895de6306c6e6c10"
     sourceSha: "e75d8547dd4c7938864af3b888986162a517f55d"
@@ -80,7 +80,7 @@ backend:
       # TLS is AWS ACM (NOT cert-manager): terraform aws_acm_certificate
       # (Task 3) with DNS validation — the validation CNAME is added manually
       # in Cloudflare (DNS is on Cloudflare, not Route53).
-      alb.ingress.kubernetes.io/certificate-arn: <ACM_CERT_ARN> # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
+      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:267685730035:certificate/4597607e-7aa4-4e43-960d-9ec80c8d34c7 # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
       # external-dns stays on the Cloudflare provider (design doc); records
       # dev-api.gen-text.app -> ALB hostname.
       external-dns.alpha.kubernetes.io/hostname: dev-api.gen-text.app
@@ -202,10 +202,10 @@ backend:
     # style, us-east-1) — this is what replaces the Spaces path-style setup.
     - name: STORAGE_BACKEND
       value: "s3"
-    # <APPLICATION_STORAGE_BUCKET> = terraform output application_storage
+    # nous-development-storage-3ilp9pj2 = terraform output application_storage
     # bucket name (Task 2).
     - name: S3_BUCKET_NAME
-      value: "<APPLICATION_STORAGE_BUCKET>"
+      value: "nous-development-storage-3ilp9pj2"
     - name: S3_REGION
       value: "us-east-1"
     # S3_CDN_ENDPOINT dropped: DO CDN does not exist on AWS. Re-add with a
@@ -381,10 +381,10 @@ serviceAccount:
 keda:
   enabled: true
   redis:
-    # <ELASTICACHE_ENDPOINT> = terraform output ElastiCache primary endpoint
+    # master.nous-redis.ycuebr.use1.cache.amazonaws.com = terraform output ElastiCache primary endpoint
     # (Task 2). Terraform output is the bare host; :6379 appended here
     # (KEDA wants host:port). ElastiCache default TLS on.
-    address: "<ELASTICACHE_ENDPOINT>:6379"
+    address: "master.nous-redis.ycuebr.use1.cache.amazonaws.com:6379"
     username: "default"
     authSecretName: redis-credentials
     passwordKey: REDIS_PASSWORD
