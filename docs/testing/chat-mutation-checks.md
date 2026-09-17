@@ -251,3 +251,23 @@ A's summary never enters B's displayed messages.
   `AssertionError: expected true to be false` (exit 1).
 - Exact source bytes were restored in `finally`; the same command then
   passed (1 passed, 8 skipped). No product source change remains.
+
+## 2026-09-17 Task 7 editable-thread and stream-identity guards
+
+- **Canonical route gate:** `backend/src/api/agent/execute.py` now delegates
+  Stop and resume to `_resolve_thread(..., create_if_missing=False)` instead of
+  checking `Workspace.owner_id` directly. The old owner-only implementation
+  was restored for the five new allow/mismatch route tests; all five failed
+  with 404 (exit 1), log `/tmp/chat-audit-20260916/task7-owner-only-mutant.log`.
+  The intended source was restored/reconstructed and the complete focused set
+  passed 31 tests. This route boundary uses a mocked canonical resolver; real
+  role/access evidence is the existing workspace model and resolver suite.
+- **Active run-to-stream fence:** tests cover a caller-owned active AgentRun
+  whose mapping points to a different stream and require 204/no replay.
+- **Finished run-to-stream fence:** tests cover a caller-owned latest terminal
+  AgentRun whose mapping points to a different stream and require 204/no replay.
+
+The first standalone mapping-mutant attempt was invalid because its temporary
+replacement contained literal newline text and produced an import
+`IndentationError`; it is not counted as a killed mutation. Root will rerun
+both mapping mutations against the frozen commit with exact byte restoration.

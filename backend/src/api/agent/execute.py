@@ -245,6 +245,40 @@ class StreamCancelRequest(BaseModel):
     )
 
 
+async def _require_editable_agent_thread(
+    db: AsyncSession,
+    current_user: User,
+    thread_id: _uuid.UUID,
+) -> Any:
+    """Require the canonical workspace/thread edit permission.
+
+    Agent stream actions share the same editable-thread policy as turn
+    creation and confirmation. In particular, a workspace editor/admin may
+    operate on an editable thread while viewers, revoked members, and threads
+    below deleted ancestors receive the same indistinguishable 404.
+    AgentRun reads below this gate remain scoped to the caller's organization
+    and user, so thread edit access never grants control of another caller's
+    run.
+    """
+    request = AgentExecuteRequest.model_construct(
+        messages=[AgentMessage(role="user", content="authorization")],
+        thread_id=str(thread_id),
+        page_context=PageContextRequest(),
+    )
+    try:
+        thread, _conversation_id = await _resolve_thread(
+            db,
+            current_user,
+            request,
+            create_if_missing=False,
+        )
+    except (AgentThreadResolutionError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return thread
+
+
 _SSE_RESPONSE = {
     200: {
         "description": "Server-Sent Events stream",
@@ -921,18 +955,7 @@ async def cancel_stream_confirmation(
     await _enforce_rate_limit(
         _agent_read_rate_limiter, str(current_user.id), _AGENT_READ_PREFIX
     )
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_id,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
-    )
-    if (await db.execute(ownership_stmt)).scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    await _require_editable_agent_thread(db, current_user, thread_id)
 
     active = await get_active_run_for_thread(
         db,
@@ -1303,21 +1326,10 @@ async def resume_stream(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid thread_id")
 
-    # Same IDOR guard as get_graph_trace: thread must belong to the caller's
-    # workspace; 404 (not 403) so we don't confirm another tenant's thread.
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_uuid,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
-    )
-    thread_row = (await db.execute(ownership_stmt)).scalar_one_or_none()
-    if thread_row is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    # Reconnect uses the same editable-thread policy as turn creation and
+    # confirmation. The durable AgentRun checks below still scope the stream
+    # identity to this caller, so an editor cannot replay another member's run.
+    await _require_editable_agent_thread(db, current_user, thread_uuid)
 
     sid = await _stream_buffer.active_stream_id(thread_id)
     # Run correlation (codex audit CX1): the client's seq cursor is only
@@ -1327,12 +1339,38 @@ async def resume_stream(
     # frames — 204 tells the client its old run is over.
     if stream is not None and sid is not None and stream.lower() != sid.lower():
         return Response(status_code=204)
+    if sid is not None:
+        active_run = await get_active_run_for_thread(
+            db,
+            thread_uuid,
+            organization_id=getattr(current_user, "organization_id", None),
+            user_id=current_user.id,
+        )
+        if active_run is None:
+            # A Redis pointer without a caller-owned durable run is either a
+            # legacy stream or another caller's stream. Fail closed without
+            # exposing its buffered frames.
+            return Response(status_code=204)
+        active_stream = await _stream_buffer.stream_id_for_run(str(active_run.job_id))
+        if active_stream is None or active_stream.lower() != sid.lower():
+            return Response(status_code=204)
     if sid is None and stream is not None:
         # The active pointer is deliberately cleared after the terminal frame,
         # but the per-stream buffer remains for an hour. Verify the immutable
         # stream->thread mapping before replaying that just-finished stream.
         owner_thread_id = await _stream_buffer.thread_id_for_stream(stream)
         if owner_thread_id is None or owner_thread_id.lower() != thread_id.lower():
+            return Response(status_code=204)
+        latest_run = await get_latest_run_for_thread(
+            db,
+            thread_uuid,
+            organization_id=getattr(current_user, "organization_id", None),
+            user_id=current_user.id,
+        )
+        if latest_run is None:
+            return Response(status_code=204)
+        latest_stream = await _stream_buffer.stream_id_for_run(str(latest_run.job_id))
+        if latest_stream is None or latest_stream.lower() != stream.lower():
             return Response(status_code=204)
         sid = stream
     if sid is None:

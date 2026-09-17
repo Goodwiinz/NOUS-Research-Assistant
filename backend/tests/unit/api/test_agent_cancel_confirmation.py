@@ -20,11 +20,32 @@ def _client(*, owns_thread: bool = True) -> tuple[TestClient, AsyncMock]:
     app = FastAPI()
     app.include_router(execute_mod.router)
     db = AsyncMock()
-    db.execute.return_value = Mock(
-        scalar_one_or_none=Mock(
-            return_value=SimpleNamespace(id=THREAD_ID) if owns_thread else None
-        )
+    workspace = SimpleNamespace(
+        is_deleted=False,
+        is_public=False,
+        owner_id=USER_ID,
+        is_member=lambda _user_id: True,
+        can_user_edit=lambda _user_id: True,
     )
+    thread = SimpleNamespace(
+        id=THREAD_ID,
+        conversation_id="conversation-1",
+        is_deleted=False,
+        conversation=SimpleNamespace(
+            id="conversation-1",
+            is_deleted=False,
+            workspace=workspace,
+        ),
+    )
+    result = Mock(
+        scalar_one_or_none=Mock(return_value=thread if owns_thread else None),
+        scalars=Mock(
+            return_value=SimpleNamespace(
+                first=Mock(return_value=thread if owns_thread else None)
+            )
+        ),
+    )
+    db.execute.return_value = result
 
     async def override_db() -> AsyncIterator[AsyncMock]:
         yield db
@@ -294,6 +315,110 @@ def test_cancel_hides_unowned_threads() -> None:
     response = client.post(f"/api/v1/agent/stream/cancel/{THREAD_ID}")
 
     assert response.status_code == 404
+
+
+def test_cancel_allows_canonical_editable_member_to_stop_owned_run() -> None:
+    """Workspace editors use the same editable-thread gate as /stream."""
+    client, db = _client(owns_thread=False)
+    active = SimpleNamespace(job_id="run-editor", status=JobStatus.RUNNING.value)
+    stop = AsyncMock(
+        return_value=SimpleNamespace(
+            run_id="run-editor", status=JobStatus.STOPPING, claimed=True
+        )
+    )
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=THREAD_ID), "conversation"))
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(
+            execute_mod, "get_active_run_for_thread", new=AsyncMock(return_value=active)
+        ),
+        patch.object(execute_mod, "request_run_cancellation", new=stop),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={"expected_run_id": "run-editor"},
+        )
+
+    assert response.status_code == 204
+    resolve.assert_awaited_once()
+    stop.assert_awaited_once_with(
+        db,
+        run_id="run-editor",
+        thread_id=UUID(THREAD_ID),
+        organization_id=ORG_ID,
+        user_id=USER_ID,
+        reason="user_requested",
+        request_id=None,
+    )
+
+
+def test_cancel_editable_member_cannot_stop_foreign_active_run() -> None:
+    """An editor's thread access never widens the AgentRun owner fence."""
+    client, _db = _client(owns_thread=False)
+    active = AsyncMock(return_value=None)
+    stop = AsyncMock()
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=THREAD_ID), "conversation"))
+    get_run = AsyncMock(return_value=None)
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(execute_mod, "get_active_run_for_thread", new=active),
+        patch.object(execute_mod, "get_run", new=get_run),
+        patch.object(execute_mod, "request_run_cancellation", new=stop),
+    ):
+        response = client.post(
+            f"/api/v1/agent/stream/cancel/{THREAD_ID}",
+            json={"expected_run_id": "foreign-run"},
+        )
+
+    assert response.status_code == 204
+    active.assert_awaited_once()
+    get_run.assert_awaited_once_with(
+        _db,
+        "foreign-run",
+        organization_id=ORG_ID,
+        user_id=USER_ID,
+    )
+    stop.assert_not_awaited()
+
+
+def test_cancel_editable_member_without_identity_cannot_stop_foreign_run() -> None:
+    """The legacy no-body probe also cannot control a foreign run."""
+    client, _db = _client(owns_thread=False)
+    active = AsyncMock(return_value=None)
+    stop = AsyncMock()
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=THREAD_ID), "conversation"))
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(execute_mod, "get_active_run_for_thread", new=active),
+        patch.object(execute_mod, "request_run_cancellation", new=stop),
+    ):
+        response = client.post(f"/api/v1/agent/stream/cancel/{THREAD_ID}")
+
+    assert response.status_code == 204
+    active.assert_awaited_once()
+    stop.assert_not_awaited()
+
+
+def test_cancel_denied_by_canonical_edit_guard_before_run_lookup() -> None:
+    """Viewer/revoked/deleted-parent failures are 404s before run access."""
+    client, db = _client(owns_thread=False)
+    resolve = AsyncMock(
+        side_effect=execute_mod.AgentThreadResolutionError("Thread not found")
+    )
+    active = AsyncMock()
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(execute_mod, "get_active_run_for_thread", new=active),
+    ):
+        response = client.post(f"/api/v1/agent/stream/cancel/{THREAD_ID}")
+
+    assert response.status_code == 404
+    active.assert_not_awaited()
+    db.execute.assert_not_awaited()
 
 
 def test_job_confirm_fails_when_durable_stop_won() -> None:
