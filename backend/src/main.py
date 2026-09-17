@@ -374,7 +374,19 @@ async def lifespan(app: FastAPI):
 
     logger.info("Application startup complete")
 
-    yield
+    from src.services.agent.typesafe_classifier import (
+        close_typesafe_client,
+        start_typesafe_client,
+    )
+
+    start_typesafe_client()
+    try:
+        yield
+    finally:
+        try:
+            await close_typesafe_client()
+        except Exception as exc:
+            logger.warning("TypeSafe client shutdown failed (%s)", type(exc).__name__)
 
     # Shutdown
     logger.info("Shutting down Multimodal RAG System...")
