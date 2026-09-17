@@ -20519,6 +20519,15 @@ export interface operations {
                     "application/json": components["schemas"]["ExportError"];
                 };
             };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
         };
     };
     list_export_formats_api_v1_export_formats_get: {
@@ -20639,6 +20648,15 @@ export interface operations {
                     "application/json": components["schemas"]["ExportError"];
                 };
             };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
         };
     };
     export_thread_stream_api_v1_export_thread__thread_id__stream_post: {
@@ -20662,6 +20680,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Thread not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -20669,6 +20696,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Export failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
                 };
             };
         };

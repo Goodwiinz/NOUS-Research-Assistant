@@ -24385,6 +24385,16 @@
               }
             },
             "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [
@@ -24594,6 +24604,16 @@
               }
             },
             "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [
@@ -24645,6 +24665,16 @@
           "200": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "Thread not found"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -24654,6 +24684,26 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [

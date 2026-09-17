@@ -8,6 +8,7 @@ Handles conversion of thread data to various formats:
 - HTML: Self-contained viewable file
 """
 
+import asyncio
 import io
 import json
 import re
@@ -34,10 +35,46 @@ from src.shared.export_schemas import (
     ExportFormat,
     ExportOptions,
     MessageExport,
+    ProviderTokenUsage,
     ThreadExport,
 )
 
 logger = structlog.get_logger(__name__)
+
+
+class PDFExportUnavailableError(RuntimeError):
+    """Raised when the PDF renderer cannot be loaded in this process."""
+
+    def __init__(self) -> None:
+        super().__init__("PDF export unavailable")
+
+
+class PDFExportConversionError(RuntimeError):
+    """Raised when PDF conversion fails or produces non-PDF bytes."""
+
+    def __init__(self) -> None:
+        super().__init__("PDF export failed")
+
+
+def _provider_token_usage(value: Any) -> Optional[ProviderTokenUsage]:
+    """Preserve valid provider usage while keeping missing values unknown."""
+    if not isinstance(value, dict):
+        return None
+
+    known: dict[str, int] = {}
+    for key in ("input_tokens", "output_tokens"):
+        token_count = value.get(key)
+        if (
+            token_count is None
+            or isinstance(token_count, bool)
+            or not isinstance(token_count, int)
+            or token_count < 0
+        ):
+            continue
+        known[key] = token_count
+
+    return ProviderTokenUsage(**known) if known else None
+
 
 # HTML-sensitive characters are escaped by Jinja when the plain-text source
 # string enters the template. Escaping angle brackets here as well would leave
@@ -196,7 +233,9 @@ MARKDOWN_TEMPLATE = """# {{ thread.title or "Untitled Thread" }}
 **Created**: {{ thread.created_at.strftime(date_format) }}
 **Messages**: {{ thread.message_count }}
 {% if options.include_metadata %}
-**Tokens**: {{ thread.token_count }}
+{% if thread.token_count > 0 %}
+**Legacy token count**: {{ thread.token_count }}
+{% endif %}
 {% endif %}
 
 ---
@@ -209,6 +248,10 @@ MARKDOWN_TEMPLATE = """# {{ thread.title or "Untitled Thread" }}
 *{{ message.created_at.strftime(date_format) }}*{% if message.model_name and options.include_metadata %} | Model: {{ message.model_name }}{% endif %}
 
 {{ message.content }}
+
+{% if message.provider_usage and options.include_metadata %}
+**Provider usage**: {{ message.provider_usage.input_tokens if message.provider_usage.input_tokens is not none else "unknown" }} input tokens; {{ message.provider_usage.output_tokens if message.provider_usage.output_tokens is not none else "unknown" }} output tokens
+{% endif %}
 
 {% if message.citations and options.include_citations %}
 ### Sources
@@ -290,7 +333,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <strong>Status:</strong> {{ thread.status }} | 
         <strong>Created:</strong> {{ thread.created_at.strftime(date_format) }} | 
         <strong>Messages:</strong> {{ thread.message_count }}
-        {% if options.include_metadata %} | <strong>Tokens:</strong> {{ thread.token_count }}{% endif %}
+        {% if options.include_metadata and thread.token_count > 0 %} | <strong>Legacy token count:</strong> {{ thread.token_count }}{% endif %}
     </div>
     
     {% for message in thread.messages %}
@@ -303,6 +346,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <span>{{ message.created_at.strftime(date_format) }}{% if message.model_name and options.include_metadata %} | {{ message.model_name }}{% endif %}</span>
         </div>
         <div class="content">{{ message.content }}</div>
+
+        {% if message.provider_usage and options.include_metadata %}
+        <div class="usage"><strong>Provider usage:</strong> {{ message.provider_usage.input_tokens if message.provider_usage.input_tokens is not none else "unknown" }} input tokens; {{ message.provider_usage.output_tokens if message.provider_usage.output_tokens is not none else "unknown" }} output tokens</div>
+        {% endif %}
         
         {% if message.citations and options.include_citations %}
         <div class="citations">
@@ -459,50 +506,90 @@ class PDFFormatter(ExportFormatter):
 
     def __init__(self):
         self._html_formatter = HTMLFormatter()
-        self._weasyprint_available = self._check_weasyprint()
+        self._weasyprint: Any = None
 
-    def _check_weasyprint(self) -> bool:
+    def _load_weasyprint(self) -> Any:
+        """Load the native renderer only when a PDF is actually requested."""
+        if self._weasyprint is not None:
+            return self._weasyprint
+
         try:
             import weasyprint
 
-            return True
-        except ImportError:
+        except (ImportError, OSError) as exc:
             logger.warning(
-                "WeasyPrint not installed, PDF export will use HTML fallback"
+                "PDF renderer unavailable",
+                error_type=type(exc).__name__,
             )
-            return False
+            raise PDFExportUnavailableError() from None
+
+        self._weasyprint = weasyprint
+        return weasyprint
+
+    @staticmethod
+    def _resource_fetcher() -> tuple[Any, type[BaseException]]:
+        """Build a fetcher that blocks all local and remote resource loads."""
+        import weasyprint
+
+        urls = getattr(weasyprint, "urls", None)
+        if urls is None:
+            raise PDFExportUnavailableError()
+
+        url_fetcher = urls.URLFetcher
+        resource_error = urls.FatalURLFetchingError
+
+        class DenyResourceFetcher(url_fetcher):
+            def fetch(self, url: str, headers: Any = None) -> Any:
+                raise resource_error(
+                    "Resource loading is disabled for thread exports"
+                )
+
+        return DenyResourceFetcher(), resource_error
 
     def format(self, thread: ThreadExport, options: ExportOptions) -> bytes:
+        weasyprint = self._load_weasyprint()
         html_content = self._html_formatter.format(thread, options)
 
-        if not self._weasyprint_available:
-            # Fallback: return HTML with PDF content type suggestion
+        try:
+            resource_fetcher, resource_error = self._resource_fetcher()
+        except PDFExportUnavailableError:
+            raise
+        except (ImportError, OSError, AttributeError, TypeError) as exc:
             logger.warning(
-                "PDF export falling back to HTML - install weasyprint for true PDF"
+                "PDF resource policy unavailable",
+                error_type=type(exc).__name__,
             )
-            return html_content
+            raise PDFExportUnavailableError() from None
 
         try:
-            import weasyprint
-
-            html_doc = weasyprint.HTML(string=html_content.decode("utf-8"))
+            html_doc = weasyprint.HTML(
+                string=html_content.decode("utf-8"),
+                url_fetcher=resource_fetcher,
+            )
             pdf_bytes = html_doc.write_pdf()
-            return pdf_bytes
-        except Exception as e:
-            logger.error("PDF generation failed", error=str(e))
-            raise RuntimeError(f"PDF generation failed: {e}")
+        except resource_error:
+            logger.warning("PDF export resource blocked")
+            raise PDFExportConversionError() from None
+        except Exception as exc:
+            logger.error(
+                "PDF generation failed",
+                error_type=type(exc).__name__,
+            )
+            raise PDFExportConversionError() from None
+
+        if not isinstance(pdf_bytes, bytes) or not pdf_bytes.startswith(b"%PDF-"):
+            logger.error("PDF generation returned an invalid signature")
+            raise PDFExportConversionError()
+
+        return pdf_bytes
 
     @property
     def content_type(self) -> str:
-        if self._weasyprint_available:
-            return "application/pdf"
-        return "text/html; charset=utf-8"
+        return "application/pdf"
 
     @property
     def file_extension(self) -> str:
-        if self._weasyprint_available:
-            return "pdf"
-        return "html"
+        return "pdf"
 
 
 class ExportService:
@@ -531,7 +618,7 @@ class ExportService:
             raise ValueError(f"Thread {thread_id} not found or access denied")
 
         formatter = self._formatters[format]
-        content = formatter.format(thread, options)
+        content = await self._format_thread(format, formatter, thread, options)
 
         # Generate filename
         title_slug = self._slugify(thread.title or "thread")
@@ -580,7 +667,9 @@ class ExportService:
                         )
                         continue
 
-                    content = formatter.format(thread, options)
+                    content = await self._format_thread(
+                        format, formatter, thread, options
+                    )
                     title_slug = self._slugify(thread.title or "thread")
                     filename = (
                         f"{title_slug}_{thread_id[:8]}.{formatter.file_extension}"
@@ -588,12 +677,15 @@ class ExportService:
 
                     zf.writestr(filename, content)
 
-                except Exception as e:
+                except (PDFExportUnavailableError, PDFExportConversionError):
+                    raise
+                except Exception as exc:
                     logger.error(
-                        "Failed to export thread", thread_id=thread_id, error=str(e)
+                        "Failed to export thread",
+                        thread_id=thread_id,
+                        error_type=type(exc).__name__,
                     )
-                    # Add error file
-                    zf.writestr(f"error_{thread_id[:8]}.txt", f"Export failed: {e}")
+                    zf.writestr(f"error_{thread_id[:8]}.txt", "Export failed")
 
         zip_buffer.seek(0)
         zip_content = zip_buffer.read()
@@ -609,6 +701,19 @@ class ExportService:
         )
 
         return zip_content, filename, "application/zip"
+
+    async def _format_thread(
+        self,
+        format: ExportFormat,
+        formatter: ExportFormatter,
+        thread: ThreadExport,
+        options: ExportOptions,
+    ) -> bytes:
+        """Format a thread without blocking the event loop with native PDF work."""
+        thread.export_format = format
+        if format == ExportFormat.PDF:
+            return await asyncio.to_thread(formatter.format, thread, options)
+        return formatter.format(thread, options)
 
     async def _load_thread(
         self, thread_id: str, user_id: str, options: ExportOptions
@@ -706,6 +811,11 @@ class ExportService:
                     content=msg.content,
                     created_at=msg.created_at,
                     model_name=msg.model_name if options.include_metadata else None,
+                    provider_usage=(
+                        _provider_token_usage(getattr(msg, "token_usage", None))
+                        if options.include_metadata
+                        else None
+                    ),
                     token_count=msg.token_count if options.include_metadata else 0,
                     latency_ms=msg.latency_ms if options.include_metadata else None,
                     feedback_rating=(

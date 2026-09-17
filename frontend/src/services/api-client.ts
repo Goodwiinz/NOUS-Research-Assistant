@@ -54,6 +54,11 @@ export interface UploadOptions {
   signal?: AbortSignal;
 }
 
+export interface BinaryDownloadExpectation {
+  contentType?: string;
+  signature?: string;
+}
+
 function composeAbortSignals(signals: AbortSignal[]): {
   signal: AbortSignal;
   cleanup: () => void;
@@ -609,7 +614,8 @@ export class APIClient {
   async downloadPost(
     url: string,
     filename?: string,
-    body?: unknown
+    body?: unknown,
+    expectation?: BinaryDownloadExpectation
   ): Promise<void> {
     await this.ensureAuth();
 
@@ -627,14 +633,77 @@ export class APIClient {
     }
 
     const blob = await response.blob();
+    if (
+      expectation &&
+      !(await this.matchesDownloadExpectation(response, blob, expectation))
+    ) {
+      throw new APIErrorClass({
+        message: 'Export response did not match the requested format',
+        status_code: 502,
+        type: 'http_error',
+      });
+    }
+
     const downloadUrl = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = downloadUrl;
-    link.download = filename || this.extractFilename(response) || 'download';
+    link.download = this.extractFilename(response) || filename || 'download';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     window.URL.revokeObjectURL(downloadUrl);
+  }
+
+  private async matchesDownloadExpectation(
+    response: Response,
+    blob: Blob,
+    expectation: BinaryDownloadExpectation
+  ): Promise<boolean> {
+    if (expectation.contentType) {
+      const actualContentType = (
+        response.headers.get('content-type') ||
+        blob.type ||
+        ''
+      )
+        .split(';', 1)[0]
+        .trim()
+        .toLowerCase();
+      if (actualContentType !== expectation.contentType.toLowerCase()) {
+        return false;
+      }
+    }
+
+    if (expectation.signature) {
+      const expected = new TextEncoder().encode(expectation.signature);
+      const actual = new Uint8Array(
+        await this.readBlobBytes(blob.slice(0, expected.byteLength))
+      );
+      if (
+        actual.byteLength < expected.byteLength ||
+        expected.some((value, index) => actual[index] !== value)
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private readBlobBytes(blob: Blob): Promise<ArrayBuffer> {
+    const blobWithArrayBuffer = blob as Blob & {
+      arrayBuffer?: () => Promise<ArrayBuffer>;
+    };
+    if (blobWithArrayBuffer.arrayBuffer) {
+      return blobWithArrayBuffer.arrayBuffer();
+    }
+
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () =>
+        reject(reader.error || new Error('Unable to inspect download bytes'));
+      reader.readAsArrayBuffer(blob);
+    });
   }
 
   /**

@@ -51,6 +51,7 @@ neo4j==6.3.0
 # Multimodal Processing
 pypdf>=6.6.2
 PyMuPDF==1.28.2
+weasyprint==70.0
 pytesseract==0.3.13
 pillow>=12.2.0
 opencv-python==4.13.0.92

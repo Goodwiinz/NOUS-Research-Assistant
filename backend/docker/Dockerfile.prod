@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libgl1 \
     libmagic1 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libharfbuzz-subset0 \
+    fonts-dejavu-core \
     wget \
     procps \
     netcat-openbsd \
@@ -75,7 +79,8 @@ RUN \
         pip install -r requirements.txt; \
     fi && \
     pip install "setuptools<72" && \
-    python -c "import pkg_resources"
+    python -c "import pkg_resources" && \
+    python -c 'from weasyprint import HTML; pdf = HTML(string="<h1>PDF smoke</h1>").write_pdf(); assert pdf.startswith(b"%PDF-")'
 
 # Stage 3: Build with minimal dependencies
 FROM base AS production
