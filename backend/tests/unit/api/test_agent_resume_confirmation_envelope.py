@@ -18,6 +18,7 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from tests.utils.agent_stream import sse_data, sse_event_name, sse_seq
 
@@ -28,10 +29,12 @@ _CONFIRMATION = {
 }
 
 
-def _snapshot_with_interrupt(value: dict) -> SimpleNamespace:
+def _snapshot_with_interrupt(
+    value: dict, *, user_id: Optional[str] = None
+) -> SimpleNamespace:
     """A checkpoint snapshot parked on a single ``interrupt()``."""
     return SimpleNamespace(
-        values={},
+        values={} if user_id is None else {"user_id": user_id},
         tasks=(SimpleNamespace(interrupts=(SimpleNamespace(value=value),)),),
     )
 
@@ -111,6 +114,102 @@ async def test_resume_confirmation_seq_continues_from_client_cursor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_confirmation_carries_durable_run_id_after_reload() -> None:
+    """A cold-load confirmation must retain the exact Stop identity."""
+    from src.api.agent import execute as execute_mod
+    from src.api.agent.execute import _pending_confirmation_frame
+
+    thread_id = str(_uuid.uuid4())
+    run_id = str(_uuid.uuid4())
+    current_user = Mock(id="user-1", organization_id="org-1")
+    patches = _graph_patches(
+        _snapshot_with_interrupt(_CONFIRMATION, user_id=current_user.id)
+    )
+    db = object()
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patch.object(
+            execute_mod,
+            "get_active_run_for_thread",
+            new=AsyncMock(return_value=SimpleNamespace(job_id=run_id)),
+        ),
+    ):
+        frame = await _pending_confirmation_frame(thread_id, current_user, db=db)  # type: ignore[arg-type]
+
+    assert frame is not None
+    assert sse_data(frame)["run_id"] == run_id
+
+
+@pytest.mark.asyncio
+async def test_resume_confirmation_does_not_resurrect_acknowledged_stop() -> None:
+    """A stale checkpoint cannot re-arm HITL after a terminal run ACK."""
+    from src.api.agent import execute as execute_mod
+    from src.api.agent.execute import _pending_confirmation_frame
+
+    thread_id = str(_uuid.uuid4())
+    current_user = Mock(id="user-1", organization_id="org-1")
+    patches = _graph_patches(_snapshot_with_interrupt(_CONFIRMATION))
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patch.object(
+            execute_mod,
+            "get_active_run_for_thread",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod,
+            "get_latest_run_for_thread",
+            new=AsyncMock(return_value=SimpleNamespace(status="cancelled")),
+        ),
+    ):
+        frame = await _pending_confirmation_frame(
+            thread_id,
+            current_user,
+            db=object(),  # type: ignore[arg-type]
+        )
+
+    assert frame is None
+
+
+@pytest.mark.asyncio
+async def test_resume_confirmation_does_not_resurrect_stopping_run() -> None:
+    """A pending Stop claim suppresses the old checkpoint before ACK."""
+    from src.api.agent import execute as execute_mod
+    from src.api.agent.execute import _pending_confirmation_frame
+    from src.shared.enums import JobStatus
+
+    thread_id = str(_uuid.uuid4())
+    current_user = Mock(id="user-1", organization_id="org-1")
+    patches = _graph_patches(_snapshot_with_interrupt(_CONFIRMATION))
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patch.object(
+            execute_mod,
+            "get_active_run_for_thread",
+            new=AsyncMock(
+                return_value=SimpleNamespace(status=JobStatus.STOPPING.value)
+            ),
+        ),
+    ):
+        frame = await _pending_confirmation_frame(
+            thread_id,
+            current_user,
+            db=object(),  # type: ignore[arg-type]
+        )
+
+    assert frame is None
+
+
+@pytest.mark.asyncio
 async def test_resume_confirmation_response_uses_sse_headers() -> None:
     """The single-frame resume response must carry the shared SSE headers."""
     from src.api.agent import execute as execute_mod
@@ -122,6 +221,26 @@ async def test_resume_confirmation_response_uses_sse_headers() -> None:
     class _FakeResult:
         def scalar_one_or_none(self) -> object:
             return object()  # ownership check passes
+
+        def scalars(self) -> SimpleNamespace:
+            workspace = SimpleNamespace(
+                is_deleted=False,
+                is_public=False,
+                owner_id=current_user.id,
+                is_member=lambda _user_id: True,
+                can_user_edit=lambda _user_id: True,
+            )
+            thread = SimpleNamespace(
+                id=thread_id,
+                conversation_id="conversation-1",
+                is_deleted=False,
+                conversation=SimpleNamespace(
+                    id="conversation-1",
+                    is_deleted=False,
+                    workspace=workspace,
+                ),
+            )
+            return SimpleNamespace(first=lambda: thread)
 
     class _FakeDB:
         async def execute(self, *_args: Any, **_kwargs: Any) -> _FakeResult:
@@ -173,3 +292,396 @@ async def test_resume_confirmation_frame_absent_without_interrupt() -> None:
         )
 
     assert frame is None
+
+
+async def _resume_with_checkpoint(snapshot: SimpleNamespace, current_user: Mock) -> Any:
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    db = _resume_db()
+    graph_patches = _graph_patches(snapshot)
+    with (
+        graph_patches[0],
+        graph_patches[1],
+        graph_patches[2],
+        patch.object(
+            execute_mod,
+            "_resolve_thread",
+            new=AsyncMock(return_value=(SimpleNamespace(id=thread_id), "conversation")),
+        ),
+        patch.object(
+            execute_mod._stream_buffer,
+            "active_stream_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod,
+            "get_active_run_for_thread",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod,
+            "get_latest_run_for_thread",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        return await execute_mod.resume_stream(
+            _resume_request(),
+            thread_id=thread_id,
+            after=0,
+            stream=None,
+            last_event_id=None,
+            current_user=current_user,
+            db=db,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_does_not_redeliver_foreign_checkpoint_to_editable_member() -> (
+    None
+):
+    """Editable thread access must not expose another user's parked HITL."""
+    current_user = Mock(id="editor-b", organization_id="org-1")
+    response = await _resume_with_checkpoint(
+        _snapshot_with_interrupt(_CONFIRMATION, user_id="editor-a"), current_user
+    )
+
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_resume_redelivers_checkpoint_to_its_owner() -> None:
+    """The checkpoint owner can still recover a parked confirmation."""
+    current_user = Mock(id="editor-a", organization_id="org-1")
+    response = await _resume_with_checkpoint(
+        _snapshot_with_interrupt(_CONFIRMATION, user_id=current_user.id),
+        current_user,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_resume_denies_checkpoint_without_owner_identity() -> None:
+    """A checkpoint without durable ownership is fail-closed on DB-backed resume."""
+    current_user = Mock(id="editor-a", organization_id="org-1")
+    response = await _resume_with_checkpoint(
+        _snapshot_with_interrupt(_CONFIRMATION), current_user
+    )
+
+    assert response.status_code == 204
+
+
+def _resume_db() -> AsyncMock:
+    """DB double whose legacy owner-only query denies an editor.
+
+    The canonical editable-thread resolver is patched in the allow cases. If
+    the route regresses to its former Workspace.owner_id predicate, these
+    tests therefore fail with 404 before reaching the stream/run assertions.
+    """
+    db = AsyncMock()
+    db.execute.return_value = Mock(
+        scalar_one_or_none=Mock(return_value=None),
+    )
+    return db
+
+
+def _resume_request() -> SimpleNamespace:
+    return SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
+
+
+@pytest.mark.asyncio
+async def test_resume_allows_editable_member_with_caller_owned_active_stream() -> None:
+    """An editor can reconnect to its own active stream through the canonical gate."""
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    stream_id = str(_uuid.uuid4())
+    run_id = str(_uuid.uuid4())
+    current_user = Mock(id="editor-1", organization_id="org-1")
+    db = _resume_db()
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=thread_id), "conversation"))
+    active = AsyncMock(return_value=SimpleNamespace(job_id=run_id, status="running"))
+    run_stream = AsyncMock(return_value=stream_id)
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(
+            execute_mod._stream_buffer,
+            "active_stream_id",
+            new=AsyncMock(return_value=stream_id),
+        ),
+        patch.object(execute_mod._stream_buffer, "stream_id_for_run", new=run_stream),
+        patch.object(execute_mod, "get_active_run_for_thread", new=active),
+    ):
+        response = await execute_mod.resume_stream(
+            _resume_request(),
+            thread_id=thread_id,
+            after=0,
+            stream=None,
+            last_event_id=None,
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response.status_code == 200
+    resolve.assert_awaited_once()
+    active.assert_awaited_once_with(
+        db,
+        _uuid.UUID(thread_id),
+        organization_id="org-1",
+        user_id="editor-1",
+    )
+    run_stream.assert_awaited_once_with(run_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_finished_stream_requires_caller_owned_run_mapping() -> None:
+    """After active-pointer cleanup, replay still needs caller/run correlation."""
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    stream_id = str(_uuid.uuid4())
+    run_id = str(_uuid.uuid4())
+    current_user = Mock(id="admin-1", organization_id="org-1")
+    db = _resume_db()
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=thread_id), "conversation"))
+    latest = AsyncMock(return_value=SimpleNamespace(job_id=run_id, status="completed"))
+    thread_for_stream = AsyncMock(return_value=thread_id)
+    run_stream = AsyncMock(return_value=stream_id)
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(
+            execute_mod._stream_buffer,
+            "active_stream_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod._stream_buffer, "thread_id_for_stream", new=thread_for_stream
+        ),
+        patch.object(execute_mod._stream_buffer, "stream_id_for_run", new=run_stream),
+        patch.object(execute_mod, "get_latest_run_for_thread", new=latest),
+    ):
+        response = await execute_mod.resume_stream(
+            _resume_request(),
+            thread_id=thread_id,
+            after=3,
+            stream=stream_id,
+            last_event_id=None,
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response.status_code == 200
+    latest.assert_awaited_once_with(
+        db,
+        _uuid.UUID(thread_id),
+        organization_id="org-1",
+        user_id="admin-1",
+    )
+    thread_for_stream.assert_awaited_once_with(stream_id)
+    run_stream.assert_awaited_once_with(run_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_returns_204_when_active_caller_run_maps_to_another_stream() -> (
+    None
+):
+    """A caller-owned run still cannot authorize a mismatched stream id."""
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    stream_id = str(_uuid.uuid4())
+    current_user = Mock(id="editor-1", organization_id="org-1")
+    db = _resume_db()
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=thread_id), "conversation"))
+    active = AsyncMock(
+        return_value=SimpleNamespace(job_id="caller-run", status="running")
+    )
+    run_stream = AsyncMock(return_value=str(_uuid.uuid4()))
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(
+            execute_mod._stream_buffer,
+            "active_stream_id",
+            new=AsyncMock(return_value=stream_id),
+        ),
+        patch.object(execute_mod._stream_buffer, "stream_id_for_run", new=run_stream),
+        patch.object(execute_mod, "get_active_run_for_thread", new=active),
+    ):
+        response = await execute_mod.resume_stream(
+            _resume_request(),
+            thread_id=thread_id,
+            after=0,
+            stream=None,
+            last_event_id=None,
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response.status_code == 204
+    run_stream.assert_awaited_once_with("caller-run")
+
+
+@pytest.mark.asyncio
+async def test_resume_returns_204_when_latest_caller_run_maps_to_another_stream() -> (
+    None
+):
+    """A finished replay must match both caller ownership and run identity."""
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    stream_id = str(_uuid.uuid4())
+    current_user = Mock(id="admin-1", organization_id="org-1")
+    db = _resume_db()
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=thread_id), "conversation"))
+    latest = AsyncMock(
+        return_value=SimpleNamespace(job_id="caller-run", status="completed")
+    )
+    run_stream = AsyncMock(return_value=str(_uuid.uuid4()))
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(
+            execute_mod._stream_buffer,
+            "active_stream_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod._stream_buffer,
+            "thread_id_for_stream",
+            new=AsyncMock(return_value=thread_id),
+        ),
+        patch.object(execute_mod._stream_buffer, "stream_id_for_run", new=run_stream),
+        patch.object(execute_mod, "get_latest_run_for_thread", new=latest),
+    ):
+        response = await execute_mod.resume_stream(
+            _resume_request(),
+            thread_id=thread_id,
+            after=0,
+            stream=stream_id,
+            last_event_id=None,
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response.status_code == 204
+    run_stream.assert_awaited_once_with("caller-run")
+
+
+@pytest.mark.asyncio
+async def test_resume_returns_204_for_foreign_active_stream_without_caller_run() -> (
+    None
+):
+    """A same-workspace editor cannot replay another editor's active run."""
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    active_stream_id = str(_uuid.uuid4())
+    current_user = Mock(id="editor-2", organization_id="org-1")
+    db = _resume_db()
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=thread_id), "conversation"))
+    active = AsyncMock(return_value=None)
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(
+            execute_mod._stream_buffer,
+            "active_stream_id",
+            new=AsyncMock(return_value=active_stream_id),
+        ),
+        patch.object(execute_mod, "get_active_run_for_thread", new=active),
+    ):
+        responses = [
+            await execute_mod.resume_stream(
+                _resume_request(),
+                thread_id=thread_id,
+                after=0,
+                stream=stream,
+                last_event_id=None,
+                current_user=current_user,
+                db=db,
+            )
+            for stream in (None, active_stream_id)
+        ]
+
+    assert [response.status_code for response in responses] == [204, 204]
+    assert active.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_resume_returns_204_for_foreign_finished_stream() -> None:
+    """A terminal stream is private even when its thread remains editable."""
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    stream_id = str(_uuid.uuid4())
+    current_user = Mock(id="editor-2", organization_id="org-1")
+    db = _resume_db()
+    resolve = AsyncMock(return_value=(SimpleNamespace(id=thread_id), "conversation"))
+    latest = AsyncMock(return_value=None)
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(
+            execute_mod._stream_buffer,
+            "active_stream_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            execute_mod._stream_buffer,
+            "thread_id_for_stream",
+            new=AsyncMock(return_value=thread_id),
+        ),
+        patch.object(execute_mod, "get_latest_run_for_thread", new=latest),
+    ):
+        response = await execute_mod.resume_stream(
+            _resume_request(),
+            thread_id=thread_id,
+            after=0,
+            stream=stream_id,
+            last_event_id=None,
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response.status_code == 204
+    latest.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_denies_non_editable_thread_before_redis_or_run_reads() -> None:
+    """Viewer/revoked/deleted-parent access fails before any stream lookup."""
+    from src.api.agent import execute as execute_mod
+
+    thread_id = str(_uuid.uuid4())
+    current_user = Mock(id="viewer-1", organization_id="org-1")
+    db = _resume_db()
+    resolve = AsyncMock(
+        side_effect=execute_mod.AgentThreadResolutionError("Thread not found")
+    )
+    active_stream = AsyncMock()
+    active_run = AsyncMock()
+
+    with (
+        patch.object(execute_mod, "_resolve_thread", new=resolve),
+        patch.object(execute_mod._stream_buffer, "active_stream_id", new=active_stream),
+        patch.object(execute_mod, "get_active_run_for_thread", new=active_run),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await execute_mod.resume_stream(
+            _resume_request(),
+            thread_id=thread_id,
+            after=0,
+            stream=None,
+            last_event_id=None,
+            current_user=current_user,
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 404
+    active_stream.assert_not_awaited()
+    active_run.assert_not_awaited()
+    db.execute.assert_not_awaited()

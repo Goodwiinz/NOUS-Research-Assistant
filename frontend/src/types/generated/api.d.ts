@@ -197,7 +197,12 @@ export interface paths {
         put?: never;
         /**
          * Cancel Stream Confirmation
-         * @description Durably abandon a caller-owned graph parked on HITL confirmation.
+         * @description Request durable cancellation of a caller-owned stream run.
+         *
+         *     An omitted body preserves the parked-confirmation endpoint contract. A
+         *     body identifies a normal running turn; its producer must observe the
+         *     ``stopping`` marker and acknowledge cancellation before the response can
+         *     become terminal.
          */
         post: operations["cancel_stream_confirmation_api_v1_agent_stream_cancel__thread_id__post"];
         delete?: never;
@@ -9405,6 +9410,8 @@ export interface components {
             progress_steps?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Reasoning Summary */
+            reasoning_summary?: string | null;
             /** @default user */
             role: components["schemas"]["MessageRole-Output"];
             /** Stopped */
@@ -11437,6 +11444,8 @@ export interface components {
             }[] | null;
             /** Plan Reasoning */
             plan_reasoning?: string | null;
+            /** Reasoning Summary */
+            reasoning_summary?: string | null;
             /** Role */
             role: string;
             /** Token Usage */
@@ -13605,6 +13614,14 @@ export interface components {
          * @enum {string}
          */
         StepType: "search" | "screen" | "extract" | "synthesize" | "verify" | "export";
+        /** StreamCancelRequest */
+        StreamCancelRequest: {
+            /**
+             * Expected Run Id
+             * @description The active run the caller intends to stop
+             */
+            expected_run_id?: string | null;
+        };
         /** StreamConfirmRequest */
         StreamConfirmRequest: {
             /** Confirmed */
@@ -15421,7 +15438,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StreamCancelRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {
@@ -15439,7 +15460,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPErrorResponse"];
                 };
             };
-            /** @description Run is not awaiting confirmation */
+            /** @description Run is no longer the expected active run */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -20498,6 +20519,15 @@ export interface operations {
                     "application/json": components["schemas"]["ExportError"];
                 };
             };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
         };
     };
     list_export_formats_api_v1_export_formats_get: {
@@ -20618,6 +20648,15 @@ export interface operations {
                     "application/json": components["schemas"]["ExportError"];
                 };
             };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
         };
     };
     export_thread_stream_api_v1_export_thread__thread_id__stream_post: {
@@ -20641,6 +20680,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Thread not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -20648,6 +20696,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Export failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
                 };
             };
         };

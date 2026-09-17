@@ -21,6 +21,7 @@ from uuid import UUID
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     Depends,
     Header,
     HTTPException,
@@ -52,7 +53,6 @@ from src.services.agent.agent_execution_service import (  # noqa: F401
     AgentThreadResolutionError,
     _actor_fields,
     _cleanup_jobs,
-    _clear_stale_pending_confirmation,
     _get_job,
     _get_latest_user_content,
     _jobs,
@@ -66,9 +66,14 @@ from src.services.agent.agent_execution_service import (  # noqa: F401
 from src.services.agent.agent_run_service import (
     claim_awaiting_run_for_confirmation,
     get_active_run_for_thread,
+    get_latest_run_for_thread,
+    get_run,
     release_confirmation_claim,
 )
-from src.services.agent.agent_submission_service import abandon_awaiting_submission
+from src.services.agent.agent_submission_service import (
+    abandon_awaiting_submission,
+    request_run_cancellation,
+)
 
 # Wire models moved to the service layer (audit B5) so the graph runner can
 # build them without importing src.api. Re-exported here so every existing
@@ -228,6 +233,49 @@ class ConfirmationRequest(BaseModel):
 class StreamConfirmRequest(BaseModel):
     thread_id: StrictUUIDString
     confirmed: bool
+
+
+class StreamCancelRequest(BaseModel):
+    expected_run_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="The active run the caller intends to stop",
+    )
+
+
+async def _require_editable_agent_thread(
+    db: AsyncSession,
+    current_user: User,
+    thread_id: _uuid.UUID,
+) -> Any:
+    """Require the canonical workspace/thread edit permission.
+
+    Agent stream actions share the same editable-thread policy as turn
+    creation and confirmation. In particular, a workspace editor/admin may
+    operate on an editable thread while viewers, revoked members, and threads
+    below deleted ancestors receive the same indistinguishable 404.
+    AgentRun reads below this gate remain scoped to the caller's organization
+    and user, so thread edit access never grants control of another caller's
+    run.
+    """
+    request = AgentExecuteRequest.model_construct(
+        messages=[AgentMessage(role="user", content="authorization")],
+        thread_id=str(thread_id),
+        page_context=PageContextRequest(),
+    )
+    try:
+        thread, _conversation_id = await _resolve_thread(
+            db,
+            current_user,
+            request,
+            create_if_missing=False,
+        )
+    except (AgentThreadResolutionError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return thread
 
 
 _SSE_RESPONSE = {
@@ -881,7 +929,7 @@ async def stream_confirm_agent(
         404: {"model": HTTPErrorResponse, "description": "Thread not found"},
         409: {
             "model": HTTPErrorResponse,
-            "description": "Run is not awaiting confirmation",
+            "description": "Run is no longer the expected active run",
         },
         503: {
             "model": HTTPErrorResponse,
@@ -891,25 +939,22 @@ async def stream_confirm_agent(
 )
 async def cancel_stream_confirmation(
     thread_id: _uuid.UUID,
+    request: Request,
+    cancellation: Optional[StreamCancelRequest] = Body(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Durably abandon a caller-owned graph parked on HITL confirmation."""
+    """Request durable cancellation of a caller-owned stream run.
+
+    An omitted body preserves the parked-confirmation endpoint contract. A
+    body identifies a normal running turn; its producer must observe the
+    ``stopping`` marker and acknowledge cancellation before the response can
+    become terminal.
+    """
     await _enforce_rate_limit(
         _agent_read_rate_limiter, str(current_user.id), _AGENT_READ_PREFIX
     )
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_id,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
-    )
-    if (await db.execute(ownership_stmt)).scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    await _require_editable_agent_thread(db, current_user, thread_id)
 
     active = await get_active_run_for_thread(
         db,
@@ -918,6 +963,69 @@ async def cancel_stream_confirmation(
         user_id=current_user.id,
     )
     if active is None:
+        # A body carrying an exact identity is an acknowledged cancellation
+        # command, rather than the legacy parked-confirmation probe. Preserve
+        # the distinction between a repeated stop of an already-cancelled run
+        # (idempotent success) and a late stop after completion (conflict).
+        expected_run_id = cancellation.expected_run_id if cancellation else None
+        if cancellation is not None and expected_run_id is not None:
+            terminal = await get_run(
+                db,
+                expected_run_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+            )
+            if terminal is not None and terminal.status != JobStatus.CANCELLED.value:
+                raise HTTPException(status_code=409, detail="Run is already complete")
+        return Response(status_code=204)
+    expected_run_id = cancellation.expected_run_id if cancellation else None
+    if expected_run_id is not None and expected_run_id != active.job_id:
+        raise HTTPException(status_code=409, detail="Run is no longer active")
+    if (
+        cancellation is not None
+        and active.status != JobStatus.AWAITING_CONFIRMATION.value
+    ):
+        if expected_run_id is None:
+            raise HTTPException(status_code=409, detail="Run identity is required")
+        request_id = getattr(getattr(request, "state", None), "request_id", None)
+        try:
+            requested = await request_run_cancellation(
+                db,
+                run_id=expected_run_id,
+                thread_id=thread_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+                reason="user_requested",
+                request_id=request_id,
+            )
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("Failed to request cancellation of agent stream")
+            raise HTTPException(
+                status_code=503,
+                detail="Cancellation is temporarily unavailable; please retry",
+            ) from exc
+        if requested is None:
+            # The exact run disappeared between the active lookup and claim;
+            # a newer owner must never be cancelled by this stale request.
+            raced = await get_active_run_for_thread(
+                db,
+                thread_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+            )
+            if raced is not None and raced.job_id != expected_run_id:
+                raise HTTPException(status_code=409, detail="Run is no longer active")
+            return Response(status_code=204)
+        if requested.status == JobStatus.AWAITING_CONFIRMATION:
+            raise HTTPException(
+                status_code=409, detail="Run is already awaiting confirmation"
+            )
+        if requested.status.is_terminal:
+            if requested.status != JobStatus.CANCELLED:
+                raise HTTPException(status_code=409, detail="Run is already complete")
+            return Response(status_code=204)
         return Response(status_code=204)
     if active.status != JobStatus.AWAITING_CONFIRMATION.value:
         raise HTTPException(status_code=409, detail="Run is not awaiting confirmation")
@@ -929,6 +1037,7 @@ async def cancel_stream_confirmation(
             organization_id=current_user.organization_id,
             user_id=current_user.id,
             reason="user_stopped_confirmation",
+            expected_run_id=active.job_id,
         )
         await db.commit()
     except Exception as exc:
@@ -970,33 +1079,11 @@ async def cancel_stream_confirmation(
             exc_info=True,
         )
 
-    # The durable terminal write above is authoritative. Checkpoint cleanup is
-    # best-effort; a fresh turn repeats it before invoking the graph.
-    try:
-        from src.services.agent.checkpointer import get_checkpointer
-        from src.services.agent.graph import compile_agent_graph
-        from src.services.agent.memory import get_memory_store
-
-        graph = compile_agent_graph(
-            checkpointer=await get_checkpointer(),
-            store=await get_memory_store(),
-        )
-        await _clear_stale_pending_confirmation(
-            graph,
-            {
-                "configurable": {
-                    "thread_id": str(thread_id),
-                    "user_id": str(current_user.id),
-                    "organization_id": str(current_user.organization_id or ""),
-                }
-            },
-        )
-    except Exception:
-        logger.warning(
-            "Cancelled HITL run but could not clear checkpoint for thread %s",
-            str(thread_id),
-            exc_info=True,
-        )
+    # Do not clear the shared thread checkpoint here. A newer turn may have
+    # replaced this parked run between the durable cancellation commit and
+    # this point; clearing now could erase that newer producer's checkpoint.
+    # The durable cancelled status suppresses stale resume/confirm paths, and
+    # the producer/new-turn path owns cleanup after it claims the replacement.
     return Response(status_code=204)
 
 
@@ -1053,7 +1140,11 @@ async def _single_frame(frame: str):
 
 
 async def _pending_confirmation_frame(
-    thread_id: str, current_user: User, *, after: int = 0
+    thread_id: str,
+    current_user: User,
+    *,
+    after: int = 0,
+    db: Optional[AsyncSession] = None,
 ) -> Optional[str]:
     """SSE ``confirmation`` frame when the graph is parked on a HITL interrupt.
 
@@ -1073,6 +1164,47 @@ async def _pending_confirmation_frame(
     without one the client's Last-Event-ID cursor never advances past this
     frame and a reconnect replays from a stale position.
     """
+    active_run = None
+    if db is not None:
+        # Check durable ownership before opening the graph/checkpointer. A
+        # cancelled/completed run can leave its checkpoint parked on the old
+        # interrupt; probing that checkpoint first would both waste a cold
+        # reload and risk resurrecting an approval after a terminal ACK.
+        try:
+            active_run = await get_active_run_for_thread(
+                db,
+                thread_id,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            if (
+                active_run is not None
+                and getattr(active_run, "status", None) == JobStatus.STOPPING.value
+            ):
+                # A Stop claim is already durable, but the producer may not
+                # have written the terminal ACK yet. Do not re-arm the stale
+                # checkpoint's approval card during that short window.
+                return None
+            if active_run is None:
+                latest_run = await get_latest_run_for_thread(
+                    db,
+                    thread_id,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+                if latest_run is not None:
+                    return None
+        except Exception:
+            logger.warning(
+                "Failed to resolve parked run id for thread %s",
+                thread_id,
+                exc_info=True,
+            )
+            # Without a tenant-scoped durable answer, a checkpoint interrupt
+            # cannot be distinguished from a stale terminal run. Fail closed
+            # for cold resume rather than rearming an approval that may already
+            # have been cancelled or completed.
+            return None
     try:
         from src.services.agent.checkpointer import get_checkpointer
         from src.services.agent.graph import compile_agent_graph
@@ -1094,6 +1226,22 @@ async def _pending_confirmation_frame(
         snapshot = await graph.aget_state(config)
         if snapshot is None:
             return None
+        if db is not None:
+            checkpoint_values = getattr(snapshot, "values", None)
+            checkpoint_user_id = (
+                checkpoint_values.get("user_id")
+                if isinstance(checkpoint_values, dict)
+                else None
+            )
+            if checkpoint_user_id is None or str(checkpoint_user_id) != str(
+                current_user.id
+            ):
+                logger.warning(
+                    "Suppressing parked confirmation owned by another or unknown "
+                    "user for thread %s",
+                    thread_id,
+                )
+                return None
 
         confirmation: Dict[str, Any] = {}
         for task in snapshot.tasks or ():
@@ -1106,6 +1254,8 @@ async def _pending_confirmation_frame(
             return None
 
         payload = {"thread_id": thread_id, "confirmation": confirmation}
+        if active_run is not None:
+            payload["run_id"] = str(active_run.job_id)
         logger.info(
             "Re-delivering pending HITL confirmation on resume for thread %s",
             thread_id,
@@ -1170,21 +1320,10 @@ async def resume_stream(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid thread_id")
 
-    # Same IDOR guard as get_graph_trace: thread must belong to the caller's
-    # workspace; 404 (not 403) so we don't confirm another tenant's thread.
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_uuid,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
-    )
-    thread_row = (await db.execute(ownership_stmt)).scalar_one_or_none()
-    if thread_row is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    # Reconnect uses the same editable-thread policy as turn creation and
+    # confirmation. The durable AgentRun checks below still scope the stream
+    # identity to this caller, so an editor cannot replay another member's run.
+    await _require_editable_agent_thread(db, current_user, thread_uuid)
 
     sid = await _stream_buffer.active_stream_id(thread_id)
     # Run correlation (codex audit CX1): the client's seq cursor is only
@@ -1194,12 +1333,38 @@ async def resume_stream(
     # frames — 204 tells the client its old run is over.
     if stream is not None and sid is not None and stream.lower() != sid.lower():
         return Response(status_code=204)
+    if sid is not None:
+        active_run = await get_active_run_for_thread(
+            db,
+            thread_uuid,
+            organization_id=getattr(current_user, "organization_id", None),
+            user_id=current_user.id,
+        )
+        if active_run is None:
+            # A Redis pointer without a caller-owned durable run is either a
+            # legacy stream or another caller's stream. Fail closed without
+            # exposing its buffered frames.
+            return Response(status_code=204)
+        active_stream = await _stream_buffer.stream_id_for_run(str(active_run.job_id))
+        if active_stream is None or active_stream.lower() != sid.lower():
+            return Response(status_code=204)
     if sid is None and stream is not None:
         # The active pointer is deliberately cleared after the terminal frame,
         # but the per-stream buffer remains for an hour. Verify the immutable
         # stream->thread mapping before replaying that just-finished stream.
         owner_thread_id = await _stream_buffer.thread_id_for_stream(stream)
         if owner_thread_id is None or owner_thread_id.lower() != thread_id.lower():
+            return Response(status_code=204)
+        latest_run = await get_latest_run_for_thread(
+            db,
+            thread_uuid,
+            organization_id=getattr(current_user, "organization_id", None),
+            user_id=current_user.id,
+        )
+        if latest_run is None:
+            return Response(status_code=204)
+        latest_stream = await _stream_buffer.stream_id_for_run(str(latest_run.job_id))
+        if latest_stream is None or latest_stream.lower() != stream.lower():
             return Response(status_code=204)
         sid = stream
     if sid is None:
@@ -1210,7 +1375,12 @@ async def resume_stream(
         # forever while the run sat waiting for an answer. The user sees a
         # turn that produced nothing, re-sends, and the pending interrupt is
         # discarded as abandoned. Re-deliver it instead.
-        frame = await _pending_confirmation_frame(thread_id, current_user, after=after)
+        frame = await _pending_confirmation_frame(
+            thread_id,
+            current_user,
+            after=after,
+            db=db,
+        )
         if frame is not None:
             return StreamingResponse(
                 _single_frame(frame),
@@ -1271,6 +1441,7 @@ class MessageResponse(BaseModel):
     # Per-turn agent provenance (assistant rows only; None for legacy rows).
     plan: Optional[List[Dict[str, Any]]] = None
     plan_reasoning: Optional[str] = None
+    reasoning_summary: Optional[str] = None
     token_usage: Optional[Dict[str, int]] = None
 
 
@@ -1446,6 +1617,7 @@ async def get_thread_messages(
                 tool_executions=redact_tool_executions(msg.tool_executions),
                 plan=msg.plan,
                 plan_reasoning=msg.plan_reasoning,
+                reasoning_summary=msg.reasoning_summary,
                 token_usage=msg.token_usage,
             )
         )

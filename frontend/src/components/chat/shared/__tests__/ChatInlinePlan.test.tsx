@@ -53,7 +53,7 @@ describe('ChatInlinePlan', () => {
     ).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Execution plan · 0/1' })
+      screen.getByRole('button', { name: 'Reasoning · Execution plan · 0/1' })
     );
     expect(
       screen.getByText('Search arXiv first, then summarize the top hit.')
@@ -63,6 +63,21 @@ describe('ChatInlinePlan', () => {
   it('omits the reasoning paragraph when no reasoning is provided', () => {
     render(<ChatInlinePlan plan={plan} streaming />);
     expect(screen.queryByText(/search arxiv first/i)).not.toBeInTheDocument();
+  });
+
+  it('renders planner rationale when a plan has no steps', () => {
+    render(
+      <ChatInlinePlan
+        plan={[]}
+        reasoning="The request needs a direct evidence check."
+        streaming
+      />
+    );
+
+    expect(screen.getByText('Planner rationale')).toBeInTheDocument();
+    expect(
+      screen.getByText('The request needs a direct evidence check.')
+    ).toBeInTheDocument();
   });
 
   it('toggles aria-expanded and visible content on click', () => {

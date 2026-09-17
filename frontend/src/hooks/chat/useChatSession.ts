@@ -74,6 +74,10 @@ function indexThreads(threads: Thread[]): void {
 export interface ChatAuthRecoveryRoute {
   isReady: boolean;
   threadId: string | null;
+  /** True only while the initial URL/workspace selection is settling. */
+  isInitializing?: boolean;
+  /** Keeps an explicit ?new=1 intent distinct from a bare /chat URL. */
+  isNewChatIntent?: boolean;
 }
 
 export interface UseChatSessionReturn {
@@ -252,6 +256,8 @@ export function useChatSession(): UseChatSessionReturn {
     const routeThreadId = hasNewChatIntent ? null : threadFromUrl;
     return {
       threadId: routeThreadId,
+      isInitializing,
+      isNewChatIntent: hasNewChatIntent,
       isReady: Boolean(
         isAuthenticated &&
         !isInitializing &&

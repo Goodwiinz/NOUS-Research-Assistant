@@ -2377,6 +2377,17 @@
             ],
             "title": "Progress Steps"
           },
+          "reasoning_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Summary"
+          },
           "role": {
             "$ref": "#/components/schemas/MessageRole-Output",
             "default": "user"
@@ -6667,6 +6678,17 @@
               }
             ],
             "title": "Plan Reasoning"
+          },
+          "reasoning_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Summary"
           },
           "role": {
             "title": "Role",
@@ -11596,6 +11618,26 @@
         "title": "StepType",
         "type": "string"
       },
+      "StreamCancelRequest": {
+        "properties": {
+          "expected_run_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The active run the caller intends to stop",
+            "title": "Expected Run Id"
+          }
+        },
+        "title": "StreamCancelRequest",
+        "type": "object"
+      },
       "StreamConfirmRequest": {
         "properties": {
           "confirmed": {
@@ -15632,7 +15674,7 @@
     },
     "/api/v1/agent/stream/cancel/{thread_id}": {
       "post": {
-        "description": "Durably abandon a caller-owned graph parked on HITL confirmation.",
+        "description": "Request durable cancellation of a caller-owned stream run.\n\nAn omitted body preserves the parked-confirmation endpoint contract. A\nbody identifies a normal running turn; its producer must observe the\n``stopping`` marker and acknowledge cancellation before the response can\nbecome terminal.",
         "operationId": "cancel_stream_confirmation_api_v1_agent_stream_cancel__thread_id__post",
         "parameters": [
           {
@@ -15646,6 +15688,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StreamCancelRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Cancellation"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -15668,7 +15727,7 @@
                 }
               }
             },
-            "description": "Run is not awaiting confirmation"
+            "description": "Run is no longer the expected active run"
           },
           "422": {
             "content": {
@@ -24326,6 +24385,16 @@
               }
             },
             "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [
@@ -24535,6 +24604,16 @@
               }
             },
             "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [
@@ -24586,6 +24665,16 @@
           "200": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "Thread not found"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -24595,6 +24684,26 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [

@@ -89,6 +89,17 @@ class CitationExport(BaseModel):
     score: Optional[float] = None
 
 
+class ProviderTokenUsage(BaseModel):
+    """Provider-reported token usage for one persisted model response."""
+
+    input_tokens: Optional[int] = Field(
+        default=None, ge=0, description="Provider-reported input/prompt tokens"
+    )
+    output_tokens: Optional[int] = Field(
+        default=None, ge=0, description="Provider-reported output/completion tokens"
+    )
+
+
 class MessageExport(BaseModel):
     """Exported message data."""
 
@@ -97,6 +108,13 @@ class MessageExport(BaseModel):
     content: str
     created_at: datetime
     model_name: Optional[str] = None
+    provider_usage: Optional[ProviderTokenUsage] = Field(
+        default=None,
+        description=(
+            "Provider-reported usage persisted for this message; missing members "
+            "remain unknown"
+        ),
+    )
     token_count: int = 0
     latency_ms: Optional[int] = None
     feedback_rating: Optional[int] = None

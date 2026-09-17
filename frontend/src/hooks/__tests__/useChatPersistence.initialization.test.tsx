@@ -69,6 +69,7 @@ describe('useChatPersistence initialization', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, '', '/');
     useChatStore.setState(originalActions);
     useChatStore.getState().reset();
 
@@ -92,6 +93,7 @@ describe('useChatPersistence initialization', () => {
   });
 
   afterEach(() => {
+    window.history.replaceState({}, '', '/');
     useAuthStore.setState({ isAuthenticated: false });
     useChatStore.setState(originalActions);
     useChatStore.getState().reset();
@@ -317,6 +319,24 @@ describe('useChatPersistence initialization', () => {
     expect(useChatStore.getState().currentConversationId).toBe(
       'conversation-created'
     );
+  });
+
+  it('defers first-thread fallback while an explicit deep link is pending', async () => {
+    window.history.replaceState({}, '', '/chat?thread=missing-thread');
+    serviceMocks.listThreads.mockResolvedValue(threadPage([thread]));
+
+    const hook = renderHook(() => useChatPersistence());
+    await waitFor(() =>
+      expect(serviceMocks.listThreads).toHaveBeenCalledWith('conversation-1')
+    );
+
+    // useChatSession owns the missing URL lookup and its 403/404 fallback. A
+    // persistence consumer must leave the selection empty until that owner
+    // resolves, otherwise the first thread wins and a later send targets it.
+    expect(useChatStore.getState().currentThreadId).toBeNull();
+
+    hook.unmount();
+    window.history.replaceState({}, '', '/');
   });
 
   it('keeps explicit loads for different scopes physically independent', async () => {

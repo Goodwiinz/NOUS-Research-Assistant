@@ -153,6 +153,7 @@ async def test_assistant_plan_and_token_usage_round_trip(db_session, thread_fact
     ]
     usage = {"input_tokens": 1200, "output_tokens": 340}
     reasoning = "Search documents first, then summarize the findings."
+    provider_summary = "I compared the strongest retrieved sources."
     progress = [
         {"phase": "accepted", "detail": "Request accepted"},
         {"phase": "writing", "detail": "Drafting the response"},
@@ -166,6 +167,7 @@ async def test_assistant_plan_and_token_usage_round_trip(db_session, thread_fact
         tool_executions_out=None,
         plan=plan,
         plan_reasoning=reasoning,
+        reasoning_summary=provider_summary,
         token_usage=usage,
         progress_steps=progress,
     )
@@ -181,6 +183,7 @@ async def test_assistant_plan_and_token_usage_round_trip(db_session, thread_fact
     assert row is not None
     assert row.plan == plan
     assert row.plan_reasoning == reasoning
+    assert row.reasoning_summary == provider_summary
     assert row.token_usage == usage
     assert row.progress_steps == progress
 
@@ -188,6 +191,7 @@ async def test_assistant_plan_and_token_usage_round_trip(db_session, thread_fact
     # formatter threads.py's list-messages endpoint uses.
     response = _format_message_response(row)
     assert response.plan_reasoning == reasoning
+    assert response.reasoning_summary == provider_summary
     assert response.progress_steps == progress
 
     db_session.info["_created"]["chat_messages"].append(row.id)
@@ -212,6 +216,7 @@ async def test_assistant_without_provenance_persists_null_columns(
     assert row is not None
     assert row.plan is None
     assert row.plan_reasoning is None
+    assert row.reasoning_summary is None
     assert row.token_usage is None
     assert row.progress_steps is None
 

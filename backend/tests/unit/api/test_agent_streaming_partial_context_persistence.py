@@ -49,6 +49,26 @@ def _token_event() -> dict[str, Any]:
     }
 
 
+def _reasoning_event() -> dict[str, Any]:
+    return {
+        "event": "on_chat_model_stream",
+        "name": "llm_node",
+        "metadata": {"langgraph_node": "llm_node"},
+        "data": {
+            "chunk": SimpleNamespace(
+                content=[
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "Comparing evidence."}
+                        ],
+                    }
+                ]
+            )
+        },
+    }
+
+
 class _InitialClearThenFailGraph:
     async def astream_events(
         self, *_args: Any, **_kwargs: Any
@@ -64,6 +84,7 @@ class _InitialNonemptyThenFailGraph:
         self, *_args: Any, **_kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         yield _context_event(_contexts())
+        yield _reasoning_event()
         yield _token_event()
         raise TimeoutError("stop after the latest nonempty snapshot")
 
@@ -256,6 +277,7 @@ async def test_initial_partial_persistence_retains_latest_nonempty_snapshot() ->
     persist_call = persist.await_args
     assert persist_call is not None
     assert persist_call.kwargs["retrieved_contexts"] == _contexts()
+    assert persist_call.kwargs["reasoning_summary"] == "Comparing evidence."
 
 
 @pytest.mark.asyncio
@@ -308,6 +330,7 @@ async def test_confirm_partial_persistence_retains_carried_context_order() -> No
                     job_id="run-contexts",
                     user_message_id=None,
                     client_message_id=None,
+                    run_metadata={"reasoning_summary": "Before approval."},
                 )
             ),
         ),
@@ -315,6 +338,11 @@ async def test_confirm_partial_persistence_retains_carried_context_order() -> No
             streaming,
             "claim_awaiting_run_for_confirmation",
             new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            streaming,
+            "is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
         ),
         patch.object(streaming, "_finalize_run_id", new=AsyncMock(return_value=True)),
         patch.object(
@@ -358,6 +386,7 @@ async def test_confirm_partial_persistence_retains_carried_context_order() -> No
         "Canonical first evidence",
         "Canonical second evidence",
     ]
+    assert persist.await_args.kwargs["reasoning_summary"] == "Before approval."
     persist_call = persist.await_args
     assert persist_call is not None
     assert persist_call.kwargs["content"] == "partial answer"
@@ -432,6 +461,11 @@ async def test_confirm_partial_persistence_uses_latest_resumed_context_snapshot(
             streaming,
             "claim_awaiting_run_for_confirmation",
             new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            streaming,
+            "is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
         ),
         patch.object(streaming, "_finalize_run_id", new=AsyncMock(return_value=True)),
         patch.object(

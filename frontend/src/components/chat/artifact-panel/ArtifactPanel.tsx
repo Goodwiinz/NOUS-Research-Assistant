@@ -327,17 +327,30 @@ export function ArtifactPanel({
   // Escape closes the panel. Handling it on the <aside> only worked while
   // focus was already inside the panel — opening it never moves focus (it
   // stays in the composer), so Escape did nothing. The panel is mounted only
-  // while open, so the listener's lifetime is the open state.
+  // while open, so the listener's lifetime is the open state. Keep this on
+  // the document because focus can remain outside the panel, and let an
+  // overlay consume Escape when the event or its live DOM state identifies it.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
       // The panel is the bottom layer: anything stacked above it (command
-      // palette, a dialog) owns Escape first, and a document listener would
-      // otherwise close the panel behind it on the same press.
+      // palette, a dialog) owns Escape first. Radix can remove its portal
+      // during dispatch, so check defaultPrevented and the original event
+      // path before consulting the live DOM.
+      const eventOverlaySelector =
+        '[data-dismissable-overlay], [role="dialog"]';
+      const liveOverlaySelector =
+        '[data-dismissable-overlay], [role="dialog"][data-state="open"]';
+      const eventPathHasOverlay = event
+        .composedPath()
+        .some(
+          (target) =>
+            target instanceof Element && target.matches(eventOverlaySelector)
+        );
       if (
-        document.querySelector(
-          '[data-dismissable-overlay], [role="dialog"][data-state="open"]'
-        )
+        event.defaultPrevented ||
+        eventPathHasOverlay ||
+        document.querySelector(liveOverlaySelector)
       ) {
         return;
       }

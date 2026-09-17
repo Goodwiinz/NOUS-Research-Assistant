@@ -6,8 +6,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-vi.mock('@/services/apiClient', () => ({
-  apiClient: {
+vi.mock('@/services/api-client', () => ({
+  api: {
     get: vi.fn(),
     post: vi.fn(),
   },
@@ -22,6 +22,7 @@ vi.mock('@/lib/supabase/client', () => ({
 }));
 
 import { agentChatService } from '../agentChatService';
+import { api } from '../api-client';
 
 function makeReader(chunks: string[]): {
   read(): Promise<ReadableStreamReadResult<Uint8Array>>;
@@ -210,6 +211,28 @@ describe('agentChatService.streamMessage SSE parsing', () => {
     );
   });
 
+  it('forwards the accepted durable run id', async () => {
+    global.fetch = fetchWith([
+      'event: status\ndata: {"phase":"accepted","run_id":"run-1"}\n\n',
+    ]);
+    const onRunId = vi.fn();
+
+    await agentChatService.streamMessage(request, { onRunId });
+
+    expect(onRunId).toHaveBeenCalledWith('run-1');
+  });
+
+  it('forwards a parked confirmation run id when resuming', async () => {
+    global.fetch = fetchWith([
+      'event: confirmation\ndata: {"thread_id":"thread-1","confirmation":{},"run_id":"run-1"}\n\n',
+    ]);
+    const onConfirmation = vi.fn();
+
+    await agentChatService.streamMessage(request, { onConfirmation });
+
+    expect(onConfirmation).toHaveBeenCalledWith('thread-1', {}, 'run-1');
+  });
+
   it('defaults missing token counts to zero on the usage event', async () => {
     global.fetch = fetchWith(['event: usage\ndata: {}\n\n']);
     const onUsage = vi.fn();
@@ -372,6 +395,59 @@ describe('agentChatService.cancelPendingConfirmation', () => {
       expect.stringContaining('/agent/stream/cancel/thread%2Fwith%20space'),
       expect.objectContaining({ method: 'POST' })
     );
+  });
+});
+
+describe('agentChatService.cancelActiveRun', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+    vi.mocked(api.get).mockReset();
+  });
+
+  it('posts the expected active run identity to the cancellation endpoint', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 204,
+    })) as unknown as typeof fetch;
+    vi.mocked(api.get).mockResolvedValue({ status: 'cancelled' } as never);
+
+    await agentChatService.cancelActiveRun('thread/with space', 'run-1');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/agent/stream/cancel/thread%2Fwith%20space'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ expected_run_id: 'run-1' }),
+      })
+    );
+  });
+
+  it('waits for the producer terminal state and rejects a late completed run', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 204,
+    })) as unknown as typeof fetch;
+    vi.mocked(api.get).mockResolvedValue({ status: 'completed' } as never);
+
+    await expect(
+      agentChatService.cancelActiveRun('thread-1', 'run-1')
+    ).rejects.toThrow('cancellation was not acknowledged');
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps polling while stopping and resolves only after cancelled', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 204,
+    })) as unknown as typeof fetch;
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ status: 'stopping' } as never)
+      .mockResolvedValueOnce({ status: 'cancelled' } as never);
+
+    await agentChatService.cancelActiveRun('thread-1', 'run-1');
+
+    expect(api.get).toHaveBeenCalledTimes(2);
   });
 });
 

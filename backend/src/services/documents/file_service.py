@@ -463,7 +463,7 @@ class FileService:
                 self._assert_not_duplicate(file_hash, str(organization.id))
                 try:
                     with open(spool_path, "rb") as fh:
-                        self._s3_helper.upload_fileobj(fh, s3_key, mime_type)
+                        self.s3_helper.upload_fileobj(fh, s3_key, mime_type)
                 finally:
                     try:
                         os.unlink(spool_path)
@@ -502,7 +502,7 @@ class FileService:
                 self._assert_not_duplicate(file_hash, str(organization.id))
                 try:
                     with open(spool_path, "rb") as fh:
-                        storage_key = self._storage_helper.upload_fileobj(
+                        storage_key = self.storage_helper.upload_fileobj(
                             fh, bucket, key, mime_type
                         )
                 finally:
@@ -668,6 +668,8 @@ class FileService:
                         storage_path or obj_file_path,
                         exc_info=True,
                     )
+            if isinstance(e, (FileValidationError, HTTPException)):
+                raise
             raise FileStorageError(f"Failed to upload file: {str(e)}")
 
     def extract_text_content(self, document: Document) -> str:
