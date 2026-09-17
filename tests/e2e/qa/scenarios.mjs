@@ -128,16 +128,29 @@ async function assertTranscriptContains(page, text, label, timeoutMs = 10_000) {
   assertThat(await marker.count() > 0, `${label} did not render the expected transcript message`);
 }
 
+async function waitForVisibleUnique(locator, label, timeoutMs) {
+  try {
+    await locator.first().waitFor({ state: 'visible', timeout: timeoutMs });
+  } catch {
+    throw new Error(`${label} is missing or not visible`);
+  }
+  assertThat(await locator.count() === 1, `${label} is missing or not unique`);
+}
+
 function fixtureText(prefix) {
   return `${prefix} Kestrel fixture. The control number is 7314. The absent fact is the color amber.`;
 }
 
-async function smokeLogin(session) {
+export async function smokeLogin(session) {
   await session.goto('/login', { timeoutMs: session.config.timeoutMs });
   const page = session.page;
-  assertThat(await page.locator('#email').count() === 1, 'Login email field is missing');
-  assertThat(await page.locator('#password').count() === 1, 'Login password field is missing');
-  assertThat(await page.locator('form button[type="submit"]').count() === 1, 'Login submit control is missing');
+  // React can render the login shell after DOMContentLoaded. Wait for the
+  // actual visible controls within the scenario bound before checking
+  // uniqueness; network-idle is neither required nor a reliable UI signal.
+  const timeoutMs = session.config.timeoutMs;
+  await waitForVisibleUnique(page.locator('#email'), 'Login email field', timeoutMs);
+  await waitForVisibleUnique(page.locator('#password'), 'Login password field', timeoutMs);
+  await waitForVisibleUnique(page.locator('form button[type="submit"]'), 'Login submit control', timeoutMs);
   return { assertion: 'Accessible login fields are rendered', evidence: ['#email', '#password', 'form button[type="submit"]'] };
 }
 

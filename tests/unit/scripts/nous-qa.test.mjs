@@ -7,13 +7,59 @@ import { join } from 'node:path';
 import { isFullIdentity, main, observeSourceIdentity, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { runCampaign, exitCodeForReport, checkExpectedBackendIdentity } from '../../../tests/e2e/qa/runner.mjs';
 import { renderHtml } from '../../../tests/e2e/qa/report.mjs';
-import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, registry } from '../../../tests/e2e/qa/scenarios.mjs';
+import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
 import {
   FixtureLedger,
   FixtureOwnershipError,
   QASession,
 } from '../../../tests/e2e/qa/session.mjs';
 import http from 'node:http';
+
+function delayedVisibleLocator({ appearsAfterMs = 0, count = 1, visible = true } = {}) {
+  const startedAt = Date.now();
+  const handle = {
+    async waitFor({ timeout }) {
+      const deadline = Date.now() + timeout;
+      while (Date.now() < deadline && Date.now() - startedAt < appearsAfterMs) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(5, Math.max(1, deadline - Date.now()))));
+      }
+      if (Date.now() - startedAt < appearsAfterMs || !visible) throw new Error('synthetic locator timeout');
+    },
+  };
+  return {
+    first: () => handle,
+    count: async () => (Date.now() - startedAt >= appearsAfterMs ? count : 0),
+  };
+}
+
+function fakeLoginSession(locators, timeoutMs = 100) {
+  return {
+    config: { timeoutMs },
+    goto: async () => {},
+    page: { locator: (selector) => locators[selector] },
+  };
+}
+
+function loginLocators(overrides = {}) {
+  return {
+    '#email': delayedVisibleLocator(),
+    '#password': delayedVisibleLocator(),
+    'form button[type="submit"]': delayedVisibleLocator(),
+    ...overrides,
+  };
+}
+
+test('login smoke waits for delayed visible controls before checking uniqueness', async () => {
+  const startedAt = Date.now();
+  const result = await smokeLogin(fakeLoginSession(loginLocators({ '#email': delayedVisibleLocator({ appearsAfterMs: 20 }) })));
+  assert.equal(result.assertion, 'Accessible login fields are rendered');
+  assert.ok(Date.now() - startedAt >= 15, 'the smoke check should wait for delayed React controls');
+});
+
+test('login smoke fails within its bound when a required control is absent', async () => {
+  const session = fakeLoginSession(loginLocators({ '#password': delayedVisibleLocator({ appearsAfterMs: 10_000 }) }), 25);
+  await assert.rejects(() => smokeLogin(session), /Login password field is missing or not visible/);
+});
 
 test('rejects a credential-bearing target URL before a campaign can start', () => {
   assert.throws(
