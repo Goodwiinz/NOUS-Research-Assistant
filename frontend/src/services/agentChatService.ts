@@ -154,6 +154,8 @@ export interface AgentStreamCallbacks {
      * results, real durations) — richer than the live SSE summaries. */
     tool_executions?: Array<Record<string, unknown>>;
     progress_steps?: AgentProgressStep[];
+    /** Bounded provider-authored summary persisted for this turn. */
+    reasoning_summary?: string | null;
   }) => void;
   /**
    * Fired for a server `error` frame and for HTTP-level failures on new or

@@ -2377,6 +2377,17 @@
             ],
             "title": "Progress Steps"
           },
+          "reasoning_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Summary"
+          },
           "role": {
             "$ref": "#/components/schemas/MessageRole-Output",
             "default": "user"
@@ -6667,6 +6678,17 @@
               }
             ],
             "title": "Plan Reasoning"
+          },
+          "reasoning_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Summary"
           },
           "role": {
             "title": "Role",

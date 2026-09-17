@@ -86,6 +86,7 @@ describe('cloudMessageView', () => {
           },
         ],
         plan_reasoning: 'Search first, then answer from the results.',
+        reasoning_summary: 'I compared the strongest retrieved sources.',
         token_usage: { input_tokens: 1200, output_tokens: 340 },
         progress_steps: [
           { phase: 'accepted', detail: 'Request accepted' },
@@ -98,6 +99,9 @@ describe('cloudMessageView', () => {
     expect(msg.plan?.[0].tool).toBe('search_documents');
     expect(msg.planReasoning).toBe(
       'Search first, then answer from the results.'
+    );
+    expect(msg.reasoningSummary).toBe(
+      'I compared the strongest retrieved sources.'
     );
     expect(msg.metadata?.tokenUsage).toEqual({ input: 1200, output: 340 });
     expect(msg.progressSteps).toEqual([
@@ -119,6 +123,7 @@ describe('cloudMessageView', () => {
 
     expect(msg.plan).toBeUndefined();
     expect(msg.planReasoning).toBeUndefined();
+    expect(msg.reasoningSummary).toBeUndefined();
     expect(msg.metadata).toBeUndefined();
   });
 

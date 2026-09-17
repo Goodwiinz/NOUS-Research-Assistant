@@ -106,6 +106,8 @@ export interface ChatState {
    * transcript render the plan WHILE the turn streams instead of only after
    * commit. Mirrors the committed message's `plan` field shape exactly. */
   streamingPlan: PlanStep[];
+  /** Planner-authored rationale for the current live plan. */
+  streamingPlanReasoning: string;
   /** Display-safe server progress accumulated for the current turn. */
   streamingProgress: AgentProgressStep[];
   /** Bounded provider-authored reasoning summary for the live turn. */

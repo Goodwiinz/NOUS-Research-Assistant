@@ -48,9 +48,10 @@ class _DisconnectGraph:
     aclose() the iterator (cancelling the resumed run) and stop without emitting
     the confirmation/done events."""
 
-    def __init__(self):
+    def __init__(self, *, summary_only: bool = False):
         self.aclosed = False
         self._sent = False
+        self.summary_only = summary_only
 
     def astream_events(self, *args, **kwargs):
         return self
@@ -65,7 +66,25 @@ class _DisconnectGraph:
                 "event": "on_chat_model_stream",
                 "name": "llm_node",
                 "metadata": {"langgraph_node": "llm_node"},
-                "data": {"chunk": SimpleNamespace(content="x")},
+                "data": {
+                    "chunk": SimpleNamespace(
+                        content=(
+                            [
+                                {
+                                    "type": "reasoning",
+                                    "summary": [
+                                        {
+                                            "type": "summary_text",
+                                            "text": "Before the answer, I compared evidence.",
+                                        }
+                                    ],
+                                }
+                            ]
+                            if self.summary_only
+                            else "x"
+                        )
+                    )
+                },
             }
         raise StopAsyncIteration
 
@@ -200,3 +219,57 @@ async def test_confirm_stream_persists_partial_on_disconnect():
     assert kwargs["thread_id"] == THREAD_ID
     # idempotency key derived from the original user turn's client_message_id
     assert kwargs["client_message_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_confirm_stream_persists_summary_only_stop_before_answer() -> None:
+    """A public provider summary survives a stop even when no answer token
+    arrived yet; it must not fabricate answer content."""
+    from src.api.agent.streaming import stream_confirm_event_generator
+
+    graph = _DisconnectGraph(summary_only=True)
+    request = SimpleNamespace(
+        is_disconnected=AsyncMock(side_effect=[False, True, True])
+    )
+    body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="")
+    current_user = Mock(id="user-1", organization_id="org-1")
+    persist = AsyncMock(return_value="assistant-row-summary")
+
+    with (
+        patch(
+            "src.api.agent.streaming._stream_buffer.start_stream",
+            new=AsyncMock(side_effect=RuntimeError("redis down")),
+        ),
+        patch(
+            "src.services.agent.observability.configure_langsmith", return_value=None
+        ),
+        patch(
+            "src.services.agent.checkpointer.get_checkpointer",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch(
+            "src.services.agent.memory.get_memory_store",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch(
+            "src.services.agent.graph.compile_agent_graph",
+            return_value=graph,
+        ),
+        patch(
+            "src.api.agent.streaming._jobs_mod._persist_assistant_message_safe",
+            new=persist,
+        ),
+        patch(
+            "src.api.agent.streaming._latest_user_client_message_id",
+            new=AsyncMock(return_value="user-cmid-summary"),
+        ),
+        patch("src.api.agent.streaming.AsyncSessionLocal", return_value=AsyncMock()),
+    ):
+        async for _ in stream_confirm_event_generator(body, request, current_user):
+            pass
+
+    persist.assert_awaited_once()
+    kwargs = persist.await_args.kwargs
+    assert kwargs["content"] == ""
+    assert kwargs["reasoning_summary"] == "Before the answer, I compared evidence."
+    assert kwargs["stopped"] is True

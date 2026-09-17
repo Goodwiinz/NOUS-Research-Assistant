@@ -155,6 +155,9 @@ class ChatMessage(BaseModel):
     progress_steps = Column(JSONB, nullable=True)
     # Planner's top-level rationale for `plan` (capped 2000 chars in planner_node).
     plan_reasoning = Column(Text, nullable=True)
+    # Bounded provider-authored reasoning summary. Raw/private reasoning is
+    # never persisted or exposed through this field.
+    reasoning_summary = Column(Text, nullable=True)
 
     # Feedback
     feedback_rating = Column(Integer, nullable=True)  # 1-5 rating

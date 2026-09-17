@@ -165,6 +165,7 @@ function resetStreamingTurnState(): void {
     streamingCitations: [],
     streamingSteps: [],
     streamingPlan: [],
+    streamingPlanReasoning: '',
     streamingProgress: [],
     streamingReasoning: '',
     streamingElapsedMs: null,
@@ -201,6 +202,8 @@ export interface PendingConfirmation {
   plan?: PlanStep[];
   /** Planner's top-level rationale for `plan`, carried the same way. */
   planReasoning?: string;
+  /** Provider-authored summary captured before a confirmation pause. */
+  reasoningSummary?: string;
   progress?: AgentProgressStep[];
   /** RAG citations retrieved before the interrupt — the interrupt exit
    * clears streamingCitations, so they must ride the confirmation. */
@@ -912,6 +915,7 @@ export function useChatStreaming(
         client_message_id?: string | null;
         tool_executions?: Array<Record<string, unknown>>;
         progress_steps?: AgentProgressStep[];
+        reasoning_summary?: string | null;
       } = {};
 
       try {
@@ -954,6 +958,7 @@ export function useChatStreaming(
           streamingContent: '',
           streamingSteps: [],
           streamingPlan: [],
+          streamingPlanReasoning: '',
           streamingProgress: [],
           streamingReasoning: '',
           // Only "retrieving" when RAG is on; cleared on first token / context.
@@ -1161,6 +1166,7 @@ export function useChatStreaming(
               // after commit. Plan events fire once per run, not per token.
               useChatStore.setState({
                 streamingPlan: [...turnPlan],
+                streamingPlanReasoning: turnPlanReasoning,
                 streamingStatusDetail: 'Working through the plan',
               });
               if (!currentThreadId) return;
@@ -1206,6 +1212,7 @@ export function useChatStreaming(
                 steps: turnSteps.filter((s) => s.status !== 'running'),
                 plan: [...turnPlan],
                 planReasoning: turnPlanReasoning || undefined,
+                reasoningSummary: turnReasoning || undefined,
                 progress: [...turnProgress],
                 // Snapshot NOW — the streamHadConfirmation exit below clears
                 // streamingCitations before the confirm stream starts.
@@ -1273,7 +1280,7 @@ export function useChatStreaming(
                 runtimeId: crypto.randomUUID(),
                 source: 'local-only',
                 role: 'assistant',
-                content: `Stream error: ${error}`,
+                content: '',
                 timestamp: Date.now(),
                 error: {
                   message:
@@ -1327,7 +1334,9 @@ export function useChatStreaming(
         // upstream" failure (DNS, auth, model error) used to look identical from
         // the UI side.
         const finalContent = assistantContent || lastStreamedContentRef.current;
-        if (!finalContent.trim()) {
+        const finalReasoningSummary =
+          doneIds.reasoning_summary ?? turnReasoning;
+        if (!finalContent.trim() && !finalReasoningSummary.trim()) {
           // A user-stop before the first token: just unwind quietly — no error
           // bubble for an answer the user chose not to wait for.
           if (!isStoppedByUser() && !quietWhenEmpty) {
@@ -1409,6 +1418,8 @@ export function useChatStreaming(
             finalTurnSteps.length > 0 ? finalTurnSteps : undefined,
           plan: turnPlan.length > 0 ? turnPlan : undefined,
           planReasoning: turnPlanReasoning || undefined,
+          reasoningSummary:
+            (doneIds.reasoning_summary ?? turnReasoning) || undefined,
           progressSteps:
             doneIds.progress_steps && doneIds.progress_steps.length > 0
               ? doneIds.progress_steps
@@ -2295,10 +2306,10 @@ export function useChatStreaming(
         let confirmCitations = pendingConfirmation.citations ?? [];
         let confirmPlan: PlanStep[] = [...(pendingConfirmation.plan ?? [])];
         let confirmPlanReasoning = pendingConfirmation.planReasoning ?? '';
+        let confirmReasoning = pendingConfirmation.reasoningSummary ?? '';
         let confirmProgress: AgentProgressStep[] = [
           ...(pendingConfirmation.progress ?? []),
         ];
-        let confirmReasoning = '';
         // CX5: the confirm-resume path is a SEPARATE live-stream owner from
         // runStreamTurn (a resumed HITL turn belongs to the confirmation's
         // workspace thread, which may differ from whatever thread is
@@ -2313,8 +2324,9 @@ export function useChatStreaming(
           // Seed from the pre-interrupt plan so it survives the HITL
           // resume — the interrupt exit already cleared streamingPlan.
           streamingPlan: [...confirmPlan],
+          streamingPlanReasoning: confirmPlanReasoning,
           streamingProgress: [...confirmProgress],
-          streamingReasoning: '',
+          streamingReasoning: confirmReasoning,
           streamingCitations: confirmCitations,
           streamingElapsedMs: null,
           streamingPhase: 'accepted',
@@ -2346,6 +2358,7 @@ export function useChatStreaming(
           assistant_message_id?: string | null;
           client_message_id?: string | null;
           progress_steps?: AgentProgressStep[];
+          reasoning_summary?: string | null;
         } = {};
         const confirmMessages = [...messages];
         const confirmRuntimeId =
@@ -2371,6 +2384,7 @@ export function useChatStreaming(
             ...(confirmPlanReasoning
               ? { planReasoning: confirmPlanReasoning }
               : {}),
+            ...(confirmReasoning ? { reasoningSummary: confirmReasoning } : {}),
             ...(confirmProgress.length > 0
               ? { progressSteps: [...confirmProgress] }
               : {}),
@@ -2587,6 +2601,7 @@ export function useChatStreaming(
                 confirmPlanReasoning = reasoning;
                 useChatStore.setState({
                   streamingPlan: [...confirmPlan],
+                  streamingPlanReasoning: confirmPlanReasoning,
                   streamingStatusDetail: 'Working through the plan',
                 });
                 const items = toActivityPlanItems(steps);
@@ -2605,6 +2620,7 @@ export function useChatStreaming(
                   steps: confirmSteps.filter((s) => s.status !== 'running'),
                   plan: [...confirmPlan],
                   planReasoning: confirmPlanReasoning || undefined,
+                  reasoningSummary: confirmReasoning || undefined,
                   citations: [...confirmCitations],
                   progress: [...confirmProgress],
                   userRuntimeId: pendingConfirmation.userRuntimeId,
@@ -2645,7 +2661,9 @@ export function useChatStreaming(
               onDone: (payload) => {
                 finishAuthRecoveryAttempt(authRecoveryAttempt);
                 confirmDoneIds = payload ?? {};
-                if (confirmContent.trim()) {
+                const reasoningSummary =
+                  payload?.reasoning_summary ?? confirmReasoning;
+                if (confirmContent.trim() || reasoningSummary.trim()) {
                   const baseMessage = buildConfirmMessage(
                     confirmContent,
                     false
@@ -2665,6 +2683,7 @@ export function useChatStreaming(
                     ...(payload?.assistant_message_id
                       ? { id: payload.assistant_message_id }
                       : {}),
+                    ...(reasoningSummary ? { reasoningSummary } : {}),
                     ...(serverSteps && serverSteps.length > 0
                       ? {
                           toolExecutions: serverSteps,
@@ -2698,7 +2717,7 @@ export function useChatStreaming(
                   runtimeId: crypto.randomUUID(),
                   source: 'local-only',
                   role: 'assistant',
-                  content: `Confirmation error: ${error}`,
+                  content: '',
                   timestamp: Date.now(),
                   error: {
                     message:
@@ -2721,7 +2740,7 @@ export function useChatStreaming(
           if (
             !confirmCommitted &&
             isConfirmStopped() &&
-            confirmContent.trim()
+            (confirmContent.trim() || confirmReasoning.trim())
           ) {
             confirmCommitted = true;
             if (isConfirmDisplayed())
@@ -2749,15 +2768,11 @@ export function useChatStreaming(
             );
           }
         } catch (err) {
-          const errorMessage =
-            err instanceof Error
-              ? err.message
-              : 'Network error during confirmation';
           const msg: ChatPageMessage = {
             runtimeId: crypto.randomUUID(),
             source: 'local-only',
             role: 'assistant',
-            content: `Confirmation failed: ${errorMessage}`,
+            content: '',
             timestamp: Date.now(),
             // Without the error block this bubble rendered as plain assistant
             // prose: no failure styling and no retry affordance, unlike every

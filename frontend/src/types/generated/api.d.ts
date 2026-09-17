@@ -9410,6 +9410,8 @@ export interface components {
             progress_steps?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Reasoning Summary */
+            reasoning_summary?: string | null;
             /** @default user */
             role: components["schemas"]["MessageRole-Output"];
             /** Stopped */
@@ -11442,6 +11444,8 @@ export interface components {
             }[] | null;
             /** Plan Reasoning */
             plan_reasoning?: string | null;
+            /** Reasoning Summary */
+            reasoning_summary?: string | null;
             /** Role */
             role: string;
             /** Token Usage */

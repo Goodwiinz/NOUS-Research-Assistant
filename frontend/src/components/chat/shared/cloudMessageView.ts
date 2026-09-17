@@ -124,6 +124,8 @@ export interface ChatPageMessage {
   plan?: PlanStep[];
   /** Planner's top-level rationale for `plan`. */
   planReasoning?: string;
+  /** Bounded provider-authored reasoning summary for this turn. */
+  reasoningSummary?: string;
   /** Display-safe progress persisted with this assistant turn. */
   progressSteps?: AgentProgressStep[];
   /** Transient marker on the in-flight assistant turn path: the
@@ -192,6 +194,9 @@ export function mapDbMessageToChatPageMessage(
     toolExecutions: mapDbToolExecutions(dbMsg.tool_executions),
     ...(dbMsg.plan && dbMsg.plan.length > 0 ? { plan: dbMsg.plan } : {}),
     ...(dbMsg.plan_reasoning ? { planReasoning: dbMsg.plan_reasoning } : {}),
+    ...(dbMsg.reasoning_summary
+      ? { reasoningSummary: dbMsg.reasoning_summary }
+      : {}),
     ...(dbMsg.progress_steps && dbMsg.progress_steps.length > 0
       ? { progressSteps: dbMsg.progress_steps }
       : {}),
@@ -299,6 +304,12 @@ function mergeLocalProvenance(
         : {}),
       ...((message.planReasoning ?? local.planReasoning)
         ? { planReasoning: message.planReasoning ?? local.planReasoning }
+        : {}),
+      ...((message.reasoningSummary ?? local.reasoningSummary)
+        ? {
+            reasoningSummary:
+              message.reasoningSummary ?? local.reasoningSummary,
+          }
         : {}),
       ...(mergedToolExecutions?.length
         ? { toolExecutions: mergedToolExecutions }

@@ -1900,6 +1900,7 @@ async def _persist_assistant_message(
     client_message_id: Optional[str] = None,
     plan: Optional[list] = None,
     plan_reasoning: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
     token_usage: Optional[dict] = None,
     progress_steps: Optional[list] = None,
 ) -> Optional[str]:
@@ -1962,6 +1963,7 @@ async def _persist_assistant_message(
         client_message_id=client_message_id,
         plan=plan,
         plan_reasoning=plan_reasoning,
+        reasoning_summary=reasoning_summary,
         token_usage=token_usage,
         progress_steps=progress_steps,
     )
@@ -2061,6 +2063,7 @@ async def _persist_assistant_message_safe(
     client_message_id: Optional[str] = None,
     plan: Optional[list] = None,
     plan_reasoning: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
     token_usage: Optional[dict] = None,
     progress_steps: Optional[list] = None,
     required: bool = False,
@@ -2091,6 +2094,7 @@ async def _persist_assistant_message_safe(
                 client_message_id=client_message_id,
                 plan=plan,
                 plan_reasoning=plan_reasoning,
+                reasoning_summary=reasoning_summary,
                 token_usage=token_usage,
                 progress_steps=progress_steps,
             )

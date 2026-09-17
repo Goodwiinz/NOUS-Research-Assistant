@@ -482,6 +482,7 @@ function LiveMessageTiming({
  */
 function StreamingReasoningSection({ label }: { label: string }): ReactElement {
   const streamingPlan = useChatStore((s) => s.streamingPlan);
+  const streamingPlanReasoning = useChatStore((s) => s.streamingPlanReasoning);
   const streamingSteps = useChatStore((s) => s.streamingSteps);
   const progress = useChatStore((s) => s.streamingProgress);
   const reasoning = useChatStore((s) => s.streamingReasoning);
@@ -507,13 +508,14 @@ function StreamingReasoningSection({ label }: { label: string }): ReactElement {
         streaming
         open={open}
         onOpenChange={setOpen}
-        restingLabel={label}
+        restingLabel={reasoning ? 'Reasoning summary' : label}
         aria-live="off"
         className="mb-2 max-w-none"
       />
-      {streamingPlan.length > 0 ? (
+      {streamingPlan.length > 0 || streamingPlanReasoning ? (
         <ChatInlinePlan
           plan={streamingPlan}
+          reasoning={streamingPlanReasoning || undefined}
           toolExecutions={streamingSteps}
           streaming
         />
@@ -528,19 +530,29 @@ function CompletedProgressSection({
   message: ChatPageMessage;
 }): ReactElement | null {
   const [open, setOpen] = useState(false);
-  if (!message.progressSteps?.length) return null;
+  const steps = [
+    ...(message.progressSteps ?? []).map((step) => ({
+      title: step.detail,
+      body: 'Completed',
+    })),
+    ...(message.reasoningSummary
+      ? [{ title: 'Reasoning summary', body: message.reasoningSummary }]
+      : []),
+  ];
+  if (steps.length === 0) return null;
 
   return (
     <ReasoningPanel
-      steps={message.progressSteps.map((step) => ({
-        title: step.detail,
-        body: 'Completed',
-      }))}
-      visibleSteps={message.progressSteps.length}
+      steps={steps}
+      visibleSteps={steps.length}
       streaming={false}
       open={open}
       onOpenChange={setOpen}
-      restingLabel="How this answer was prepared"
+      restingLabel={
+        message.reasoningSummary
+          ? 'Reasoning summary'
+          : 'How this answer was prepared'
+      }
       className="mb-2 max-w-none"
     />
   );
@@ -640,10 +652,8 @@ function AuiStreamingBody(): ReactElement {
  * Short, honest helper line under an error message, keyed by the SERVER's
  * `category` (see `AgentErrorCategory` in services/agentStreamEvents.ts).
  *
- * The category was write-only until now — recorded on the bubble and never
- * read. Anything absent or unrecognised falls back to the existing behaviour
- * (render `message.content`, the raw failure text), so an unknown category from
- * a newer backend degrades quietly instead of blanking the line.
+ * Unknown or absent categories use a stable retryable message. Raw stream
+ * diagnostics are never rendered in the product surface.
  */
 const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
   rate_limited: 'The service is busy. Try again in a moment.',
@@ -651,7 +661,15 @@ const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
   invalid_request: "This request can't be retried as-is.",
   conflict: 'A confirmation is already in progress.',
   permission_denied: "You don't have permission to complete this action.",
+  model_error: 'The model could not complete this response. Please retry.',
+  tool_error: 'A tool failed while preparing this response. Please retry.',
+  checkpoint_unavailable:
+    'The saved response state is unavailable. Please retry.',
+  internal: 'The response could not be completed. Please retry.',
+  cancelled: 'The response was stopped.',
 };
+const DEFAULT_ERROR_HELP =
+  'The response could not be completed. Please try again.';
 
 /**
  * Categories where an identical retry cannot succeed: the request itself is
@@ -750,7 +768,7 @@ export function AuiAssistantMessage({
   // ambiguous blank bubble. onRetry re-sends the prior user turn.
   if (message?.error) {
     const helperLine =
-      ERROR_CATEGORY_HELP[message.error.category ?? ''] ?? message.content;
+      ERROR_CATEGORY_HELP[message.error.category ?? ''] ?? DEFAULT_ERROR_HELP;
     const retryable = !NON_RETRYABLE_ERROR_CATEGORIES.has(
       message.error.category ?? ''
     );
@@ -767,7 +785,7 @@ export function AuiAssistantMessage({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-(--nous-mars)" />
             <div className="min-w-0">
               <p className="text-sm font-medium text-(--nous-fg-1)">
-                {message.error.message}
+                This response failed to generate. Please try again.
               </p>
               {helperLine ? (
                 <p className="mt-1 text-[12px] text-(--nous-fg-3)">
@@ -803,13 +821,14 @@ export function AuiAssistantMessage({
       <div className="min-w-0 flex-1 text-left">
         {message && <CompletedProgressSection message={message} />}
         {/* Execution plan — committed provenance for agent turns */}
-        {message?.plan && message.plan.length > 0 && (
+        {(message?.plan && message.plan.length > 0) ||
+        message?.planReasoning ? (
           <ChatInlinePlan
-            plan={message.plan}
+            plan={message.plan ?? []}
             reasoning={message.planReasoning}
             toolExecutions={message.toolExecutions}
           />
-        )}
+        ) : null}
         {/* Tool strip — tools/sources/time/tokens/stopped */}
         {message && (
           <ToolStrip {...getToolStripProps(message, visibleCitations.length)} />

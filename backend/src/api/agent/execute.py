@@ -1409,6 +1409,7 @@ class MessageResponse(BaseModel):
     # Per-turn agent provenance (assistant rows only; None for legacy rows).
     plan: Optional[List[Dict[str, Any]]] = None
     plan_reasoning: Optional[str] = None
+    reasoning_summary: Optional[str] = None
     token_usage: Optional[Dict[str, int]] = None
 
 
@@ -1584,6 +1585,7 @@ async def get_thread_messages(
                 tool_executions=redact_tool_executions(msg.tool_executions),
                 plan=msg.plan,
                 plan_reasoning=msg.plan_reasoning,
+                reasoning_summary=msg.reasoning_summary,
                 token_usage=msg.token_usage,
             )
         )

@@ -78,19 +78,31 @@ describe('AuiMessage error category', () => {
     ).toBeInTheDocument();
   });
 
-  it('falls back to the raw failure text for an unmapped category', () => {
-    renderErrorMessage('stream-error', 'Stream error: boom');
-    expect(screen.getByText('Stream error: boom')).toBeInTheDocument();
+  it('uses stable safe copy for an unmapped category', () => {
+    renderErrorMessage('stream-error', 'Stream error: /srv/private/example.py');
+    expect(
+      screen.getByText('The response could not be completed. Please try again.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/private\/example\.py/)).not.toBeInTheDocument();
   });
 
-  it('falls back to the raw failure text when no category is present', () => {
-    renderErrorMessage(undefined, 'Stream error: boom');
-    expect(screen.getByText('Stream error: boom')).toBeInTheDocument();
+  it('uses stable safe copy when no category is present', () => {
+    renderErrorMessage(undefined, 'Stream error: /srv/private/example.py');
+    expect(
+      screen.getByText('The response could not be completed. Please try again.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/private\/example\.py/)).not.toBeInTheDocument();
   });
 
-  it('degrades quietly for an unknown category from a newer backend', () => {
-    renderErrorMessage('some_future_category', 'Stream error: boom');
-    expect(screen.getByText('Stream error: boom')).toBeInTheDocument();
+  it('degrades safely for an unknown category from a newer backend', () => {
+    renderErrorMessage(
+      'some_future_category',
+      'Stream error: /srv/private/example.py'
+    );
+    expect(
+      screen.getByText('The response could not be completed. Please try again.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/private\/example\.py/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
 

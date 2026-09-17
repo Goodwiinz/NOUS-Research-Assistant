@@ -87,6 +87,7 @@ _PROGRESS_PHASES = frozenset(
     {"accepted", "routing", "retrieving", "planning", "writing", "finalizing"}
 )
 _MAX_PROGRESS_STEPS = 16
+_MAX_REASONING_SUMMARY_CHARS = 8_000
 _REPLAY_STREAM_START_GRACE_S = 5.0
 _REPLAY_STREAM_POLL_INTERVAL_S = 0.1
 
@@ -285,6 +286,13 @@ def _chunk_reasoning_summary(chunk: Any) -> str:
     return "".join(parts)
 
 
+def _append_reasoning_summary(current: str, delta: str) -> str:
+    """Accumulate only bounded, provider-authored public summary text."""
+    if not isinstance(delta, str) or not delta:
+        return current
+    return (current + delta)[:_MAX_REASONING_SUMMARY_CHARS]
+
+
 def _latest_turn_assistant_text(messages: Any) -> str:
     """Text of the newest AI message produced AFTER the newest human turn.
 
@@ -372,6 +380,7 @@ async def _stream_luna_fast_path(
     )
     llm = build_fast_path_llm()
     parts: list[str] = []
+    reasoning_summary = ""
     input_tokens = 0
     output_tokens = 0
     client_disconnected = False
@@ -415,7 +424,7 @@ async def _stream_luna_fast_path(
                     )
             return
         partial = "".join(parts)
-        if not partial:
+        if not partial and not reasoning_summary:
             return
         persisted_partial_id = await _jobs_mod._persist_assistant_message_safe(
             thread_id=resolved_thread_id,
@@ -427,6 +436,7 @@ async def _stream_luna_fast_path(
             ttft_ms=_ttft_ms(emitter, stream_started_at),
             stopped=True,
             client_message_id=assistant_cmid,
+            reasoning_summary=reasoning_summary or None,
             progress_steps=emitter.progress_steps or None,
         )
 
@@ -557,6 +567,17 @@ async def _stream_luna_fast_path(
                         continue
 
                     chunk = item["event"]
+                    reasoning_delta = _chunk_reasoning_summary(chunk)
+                    if reasoning_delta:
+                        reasoning_summary = _append_reasoning_summary(
+                            reasoning_summary, reasoning_delta
+                        )
+                        frame = await emitter.emit(
+                            AgentStreamEvent.REASONING_DELTA,
+                            {"content": reasoning_delta},
+                        )
+                        if not client_disconnected:
+                            yield frame
                     text = _chunk_text(chunk)
                     usage = getattr(chunk, "usage_metadata", None)
                     if isinstance(usage, dict):
@@ -615,6 +636,7 @@ async def _stream_luna_fast_path(
             ttft_ms=_ttft_ms(emitter, stream_started_at),
             stopped=False,
             client_message_id=assistant_cmid,
+            reasoning_summary=reasoning_summary or None,
             progress_steps=emitter.progress_steps or None,
             token_usage=(
                 {"input_tokens": input_tokens, "output_tokens": output_tokens}
@@ -694,6 +716,8 @@ async def _stream_luna_fast_path(
             "progress_steps": emitter.progress_steps,
             "tool_executions": [],
         }
+        if reasoning_summary:
+            done_payload["reasoning_summary"] = reasoning_summary
         if _canonical_persistence_enabled():
             done_payload.update(
                 {
@@ -2337,6 +2361,7 @@ async def stream_event_generator(
         # Accumulated user-facing tokens, so a client abort can persist the
         # partial answer server-side (stopped=True) instead of losing it.
         streamed_parts: List[str] = []
+        reasoning_summary = ""
         # Deterministic assistant-side idempotency key derived from the user
         # turn's client_message_id: an SSE retry of the same turn maps to the
         # same key, so the assistant-role partial unique index dedupes it.
@@ -2366,7 +2391,7 @@ async def stream_event_generator(
                             message_id=persisted_assistant_id,
                         )
                 return
-            if resolved_thread_id is None or not partial:
+            if resolved_thread_id is None or (not partial and not reasoning_summary):
                 return
             assistant_persisted = True
             stop_kwargs = dict(
@@ -2379,6 +2404,7 @@ async def stream_event_generator(
                 ttft_ms=_ttft_ms(emitter, stream_started_at),
                 stopped=True,
                 client_message_id=assistant_cmid,
+                reasoning_summary=reasoning_summary or None,
                 progress_steps=emitter.progress_steps or None,
                 # Tokens accumulated up to the abort; no plan here — it
                 # would need a checkpoint read on a path that must stay
@@ -2524,6 +2550,9 @@ async def stream_event_generator(
                                 _chunk_reasoning_summary(chunk) if chunk else ""
                             )
                             if reasoning_delta:
+                                reasoning_summary = _append_reasoning_summary(
+                                    reasoning_summary, reasoning_delta
+                                )
                                 frame = await emitter.emit(
                                     AgentStreamEvent.REASONING_DELTA,
                                     {"content": reasoning_delta},
@@ -2601,13 +2630,13 @@ async def stream_event_generator(
                             output = event.get("data", {}).get("output", {})
                             if isinstance(output, dict):
                                 plan_steps = output.get("plan", [])
-                                if plan_steps:
+                                plan_reasoning = output.get("plan_reasoning") or ""
+                                if plan_steps or plan_reasoning:
                                     frame = await emitter.emit(
                                         AgentStreamEvent.PLAN,
                                         {
                                             "steps": plan_steps,
-                                            "reasoning": output.get("plan_reasoning")
-                                            or "",
+                                            "reasoning": plan_reasoning,
                                         },
                                     )
                                     if not client_disconnected:
@@ -2741,7 +2770,10 @@ async def stream_event_generator(
                         acceptance,
                         current_user,
                         status=JobStatus.AWAITING_CONFIRMATION,
-                        run_metadata={"progress_steps": emitter.progress_steps},
+                        run_metadata={
+                            "progress_steps": emitter.progress_steps,
+                            "reasoning_summary": reasoning_summary or None,
+                        },
                     )
                 except Exception:
                     parked = None
@@ -2838,7 +2870,10 @@ async def stream_event_generator(
             # one would fabricate an empty transcript entry for a turn the
             # client already surfaces as "no response received".
             if resolved_thread_id is not None and (
-                streamed_token or assistant_content or tool_executions_out
+                streamed_token
+                or assistant_content
+                or tool_executions_out
+                or reasoning_summary
             ):
                 if acceptance is not None and await durable_stop_requested():
                     await cancel_current_stream(reason="user_requested")
@@ -2853,6 +2888,7 @@ async def stream_event_generator(
                     ttft_ms=_ttft_ms(emitter, stream_started_at),
                     stopped=False,
                     client_message_id=assistant_cmid,
+                    reasoning_summary=reasoning_summary or None,
                     plan=final_values.get("plan") or None,
                     plan_reasoning=final_values.get("plan_reasoning") or None,
                     progress_steps=emitter.progress_steps or None,
@@ -2920,6 +2956,8 @@ async def stream_event_generator(
                 else []
             ),
         }
+        if reasoning_summary:
+            done_payload["reasoning_summary"] = reasoning_summary
         if _canonical_persistence_enabled():
             # Ids let the client reconcile its optimistic bubbles with the
             # server-persisted rows instead of double-saving (server-canonical
@@ -3429,6 +3467,13 @@ async def stream_confirm_event_generator(
             if isinstance(run_metadata, dict)
             else None
         )
+        reasoning_summary = (
+            str(run_metadata.get("reasoning_summary") or "")[
+                :_MAX_REASONING_SUMMARY_CHARS
+            ]
+            if isinstance(run_metadata, dict)
+            else ""
+        )
 
         page_context = _page_context_to_dict(
             current_snapshot.values.get("page_context", {})
@@ -3701,7 +3746,7 @@ async def stream_confirm_event_generator(
                             message_id=persisted_assistant_id,
                         )
                 return
-            if not partial:
+            if not partial and not reasoning_summary:
                 return
             assistant_persisted = True
             # Checkpoint-anchored idempotency key (see _resume_assistant_cmid),
@@ -3722,6 +3767,7 @@ async def stream_confirm_event_generator(
                 latency_ms=None,
                 stopped=True,
                 client_message_id=disconnect_cmid,
+                reasoning_summary=reasoning_summary or None,
                 progress_steps=emitter.progress_steps or None,
                 token_usage=(
                     {
@@ -3866,6 +3912,9 @@ async def stream_confirm_event_generator(
                     chunk = event.get("data", {}).get("chunk")
                     reasoning_delta = _chunk_reasoning_summary(chunk) if chunk else ""
                     if reasoning_delta:
+                        reasoning_summary = _append_reasoning_summary(
+                            reasoning_summary, reasoning_delta
+                        )
                         frame = await emitter.emit(
                             AgentStreamEvent.REASONING_DELTA,
                             {"content": reasoning_delta},
@@ -3939,12 +3988,13 @@ async def stream_confirm_event_generator(
                     output = event.get("data", {}).get("output", {})
                     if isinstance(output, dict):
                         plan_steps = output.get("plan", [])
-                        if plan_steps:
+                        plan_reasoning = output.get("plan_reasoning") or ""
+                        if plan_steps or plan_reasoning:
                             frame = await emitter.emit(
                                 AgentStreamEvent.PLAN,
                                 {
                                     "steps": plan_steps,
-                                    "reasoning": output.get("plan_reasoning") or "",
+                                    "reasoning": plan_reasoning,
                                 },
                             )
                             if not client_disconnected:
@@ -4018,7 +4068,10 @@ async def stream_confirm_event_generator(
                     str(active_run.job_id) if active_run is not None else None,
                     current_user,
                     status=JobStatus.AWAITING_CONFIRMATION,
-                    run_metadata={"progress_steps": emitter.progress_steps},
+                    run_metadata={
+                        "progress_steps": emitter.progress_steps,
+                        "reasoning_summary": reasoning_summary or None,
+                    },
                 )
             except Exception:
                 parked = None
@@ -4126,6 +4179,7 @@ async def stream_confirm_event_generator(
                     retrieved_contexts=final_values.get("retrieved_contexts"),
                     plan=final_values.get("plan") or None,
                     plan_reasoning=final_values.get("plan_reasoning") or None,
+                    reasoning_summary=reasoning_summary or None,
                     progress_steps=emitter.progress_steps or None,
                     token_usage=token_usage_payload,
                     client_message_id=assistant_cmid,
@@ -4208,6 +4262,8 @@ async def stream_confirm_event_generator(
                 else []
             ),
         }
+        if reasoning_summary:
+            done_payload["reasoning_summary"] = reasoning_summary
         if _canonical_persistence_enabled():
             done_payload.update(
                 {

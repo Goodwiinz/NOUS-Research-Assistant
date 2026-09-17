@@ -223,6 +223,7 @@ def _message_to_response(message: ChatMessage) -> ChatMessageResponse:
         tool_executions=redact_tool_executions(message.tool_executions),
         plan=message.plan,
         plan_reasoning=message.plan_reasoning,
+        reasoning_summary=message.reasoning_summary,
         token_usage=message.token_usage,
         progress_steps=message.progress_steps,
         citations=(
