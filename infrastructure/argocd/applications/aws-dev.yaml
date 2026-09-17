@@ -42,6 +42,11 @@ spec:
       - PrunePropagationPolicy=foreground
       - PruneLast=true
       - ApplyOutOfSyncOnly=true
+      # EKS does not have KEDA or cert-manager CRDs yet (Task 3 addon gap):
+      # without this, their absence invalidates the WHOLE sync (ArgoCD
+      # dry-run fails on undiscoverable GVKs and applies nothing). Skipped
+      # items self-apply on the next sync once the CRDs are installed.
+      - SkipDryRunOnMissingResource=true
     retry:
       limit: 3
       backoff:
