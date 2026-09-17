@@ -464,23 +464,24 @@ async def _load_attachment_contexts(
                 if thread is None:
                     return [], [dict(_FOLLOW_UP_ATTACHMENT_UNAVAILABLE)]
 
-                # Restrict history discovery to documents this actor's org can
-                # read. The latest attached user turn is the follow-up scope;
-                # older unrelated attachments are not copied into the prompt.
+                # Select the latest attached user turn before checking whether
+                # each referenced document is still readable. A soft-deleted
+                # or otherwise inaccessible document must remain the selected
+                # scope so a follow-up cannot fall back to an older file or
+                # broad corpus search. The document read below applies the
+                # organization and ownership filters and reports unavailable
+                # ids without exposing their content.
                 history_result = await session.execute(
                     select(MessageAttachment.message_id, MessageAttachment.document_id)
                     .join(
                         ChatMessage,
                         ChatMessage.id == MessageAttachment.message_id,
                     )
-                    .join(Document, Document.id == MessageAttachment.document_id)
                     .where(
                         ChatMessage.thread_id == thread_uuid,
                         ChatMessage.role == MessageRole.USER,
                         ChatMessage.is_deleted == False,  # noqa: E712
                         ChatMessage.superseded_by_message_id.is_(None),
-                        Document.organization_id == organization_uuid,
-                        Document.is_deleted == False,  # noqa: E712
                     )
                     .order_by(
                         ChatMessage.created_at.desc(),

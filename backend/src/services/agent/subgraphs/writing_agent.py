@@ -83,6 +83,7 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         AGENT_LLM_TIMEOUT_SECONDS,
         _build_page_context_line,
     )
+    from src.services.agent._nodes_llm import _attachment_status_part
 
     sanitized = _sanitize_messages(state["messages"])
     if (
@@ -127,6 +128,11 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     context_line = _build_page_context_line(state.get("page_context", {}))
     if context_line:
         messages.append(SystemMessage(content=context_line))
+    attachment_status_prompt = _attachment_status_part(
+        state.get("attachment_status", [])
+    )
+    if attachment_status_prompt:
+        messages.append(SystemMessage(content=attachment_status_prompt))
     retrieved = state.get("retrieved_contexts", [])
     if retrieved:
         from src.services.agent._nodes_llm import _retrieval_context_part

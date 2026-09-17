@@ -296,6 +296,170 @@ class TestRagNodeFastPath:
         assert result["retrieved_contexts"][0]["document_id"] == str(document_id)
         assert "KESTREL-DOC-7314" in result["retrieved_contexts"][0]["content"]
 
+    async def test_deleted_latest_attachment_does_not_reuse_older_thread_file(
+        self, monkeypatch
+    ):
+        """A deleted latest file remains the follow-up scope and fails closed."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from uuid import UUID
+
+        from sqlalchemy import create_engine
+
+        from src.services.agent import _nodes_rag
+        from src.services.agent._nodes_rag import _load_attachment_contexts
+
+        user_id = UUID("44444444-4444-4444-8444-444444444444")
+        organization_id = UUID("55555555-5555-4555-8555-555555555555")
+        thread_id = UUID("33333333-3333-4333-8333-333333333333")
+        older_document_id = UUID("11111111-1111-4111-8111-111111111111")
+        latest_document_id = UUID("22222222-2222-4222-8222-222222222222")
+        older_message_id = "66666666-6666-4666-8666-666666666666"
+        latest_message_id = "77777777-7777-4777-8777-777777777777"
+
+        engine = create_engine("sqlite:///:memory:")
+        connection = engine.connect()
+        connection.exec_driver_sql(
+            "CREATE TABLE chat_messages("
+            "id TEXT, thread_id TEXT, role TEXT, is_deleted BOOLEAN, "
+            "superseded_by_message_id TEXT, created_at TEXT)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE message_attachments("
+            "message_id TEXT, document_id TEXT, created_at TEXT)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE documents("
+            "id TEXT, organization_id TEXT, is_deleted BOOLEAN)"
+        )
+        for message_id, document_id, created_at, is_deleted in (
+            (
+                older_message_id,
+                older_document_id,
+                "2026-09-16",
+                False,
+            ),
+            (
+                latest_message_id,
+                latest_document_id,
+                "2026-09-17",
+                True,
+            ),
+        ):
+            connection.exec_driver_sql(
+                "INSERT INTO chat_messages VALUES(?,?,?,?,?,?)",
+                (
+                    message_id,
+                    str(thread_id),
+                    "user",
+                    False,
+                    None,
+                    created_at,
+                ),
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO message_attachments VALUES(?,?,?)",
+                (message_id, str(document_id), created_at),
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO documents VALUES(?,?,?)",
+                (str(document_id), str(organization_id), is_deleted),
+            )
+
+        class _Result:
+            def scalars(self):
+                return SimpleNamespace(
+                    all=lambda: [
+                        SimpleNamespace(
+                            id=older_document_id,
+                            title="OLD SOURCE",
+                            processing_status="completed",
+                            content_text="STALE-CODE",
+                            is_deleted=False,
+                        )
+                    ]
+                )
+
+        class _Session:
+            async def execute(self, statement):
+                if "message_attachments" in str(statement):
+                    return connection.execute(statement)
+                return _Result()
+
+        class _SessionContext:
+            async def __aenter__(self):
+                return _Session()
+
+            async def __aexit__(self, *_args):
+                return False
+
+        monkeypatch.setattr(
+            "src.services.agent.tool_session.tool_session",
+            lambda: _SessionContext(),
+        )
+        monkeypatch.setattr(
+            "src.services.agent.tool_session.resolve_tool_user",
+            AsyncMock(return_value=SimpleNamespace(id=user_id)),
+        )
+        monkeypatch.setattr(
+            "src.services.threads.workspace_access.get_thread",
+            AsyncMock(return_value=SimpleNamespace(id=thread_id)),
+        )
+
+        async def _owned_ids(_session, document_ids, _actor_id):
+            return [
+                document_id
+                for document_id in document_ids
+                if document_id == older_document_id
+            ]
+
+        monkeypatch.setattr(
+            "src.services.threads.workspace_access.filter_owned_document_ids",
+            AsyncMock(side_effect=_owned_ids),
+        )
+        primary_read = AsyncMock(return_value=[{"content": "corpus distractor"}])
+        fallback_read = AsyncMock(return_value=[{"content": "corpus distractor"}])
+        monkeypatch.setattr(_nodes_rag, "_try_primary_do_kb_read", primary_read)
+        monkeypatch.setattr(_nodes_rag, "_legacy_hybrid_search_fallback", fallback_read)
+
+        contexts, statuses = await _load_attachment_contexts(
+            attachment_ids=[],
+            thread_id=str(thread_id),
+            user_id=str(user_id),
+            organization_id=str(organization_id),
+            query="What is the attached launch code?",
+        )
+
+        assert contexts == []
+        assert statuses == [
+            {"document_id": str(latest_document_id), "status": "unavailable"}
+        ]
+
+        result = await _nodes_rag.rag_node(
+            {
+                "messages": [],
+                "page_context": {},
+                "retrieved_contexts": [],
+                "thread_id": str(thread_id),
+                "thread_persistence": "durable",
+                "use_rag": True,
+            },
+            {
+                "configurable": {
+                    "thread_id": str(thread_id),
+                    "user_id": str(user_id),
+                    "organization_id": str(organization_id),
+                }
+            },
+        )
+        assert result["retrieved_contexts"] == []
+        assert result["attachment_status"] == statuses
+        primary_read.assert_not_awaited()
+        fallback_read.assert_not_awaited()
+
+        connection.close()
+        engine.dispose()
+
     async def test_follow_up_does_not_read_attachments_from_inaccessible_thread(
         self, monkeypatch
     ):

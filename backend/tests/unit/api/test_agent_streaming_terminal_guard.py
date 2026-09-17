@@ -74,6 +74,7 @@ async def test_graph_park_failure_keeps_confirmation_terminal_and_never_fails_ru
         page_context={"type": "chat"},
         model="",
         client_message_id=None,
+        attachment_ids=None,
     )
 
     from src.core.config import get_settings
@@ -194,6 +195,7 @@ async def test_graph_park_stop_race_finalizes_cancelled_before_confirmation(
         page_context={"type": "chat"},
         model="",
         client_message_id=None,
+        attachment_ids=None,
     )
     finalize_statuses: list[Any] = []
 
@@ -299,7 +301,10 @@ async def test_confirm_park_failure_after_nested_confirmation_stays_clean(
         is_disconnected=AsyncMock(return_value=False),
     )
     body = SimpleNamespace(
-        thread_id=str(__import__("uuid").uuid4()), confirmed=True, model=""
+        thread_id=str(__import__("uuid").uuid4()),
+        confirmed=True,
+        model="",
+        attachment_ids=None,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 

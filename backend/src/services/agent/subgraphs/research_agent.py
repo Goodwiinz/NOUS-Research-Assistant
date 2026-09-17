@@ -165,15 +165,23 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         return {"messages": [direct_search]}
 
     from src.services.agent.retrieval_provenance import render_retrieval_prompt
+    from src.services.agent._nodes_llm import _attachment_status_part
 
     messages = [
         SystemMessage(content=_build_research_system_prompt()),
+    ]
+    attachment_status_prompt = _attachment_status_part(
+        state.get("attachment_status", [])
+    )
+    if attachment_status_prompt:
+        messages.append(SystemMessage(content=attachment_status_prompt))
+    messages.append(
         SystemMessage(
             content=render_retrieval_prompt(
                 state.get("retrieved_contexts", []), sanitized
             )
-        ),
-    ]
+        )
+    )
     from src.services.agent.runtime_snapshot import render_project_skill_catalog
 
     skill_catalog_prompt = render_project_skill_catalog(
