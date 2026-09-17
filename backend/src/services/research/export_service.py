@@ -540,9 +540,7 @@ class PDFFormatter(ExportFormatter):
 
         class DenyResourceFetcher(url_fetcher):
             def fetch(self, url: str, headers: Any = None) -> Any:
-                raise resource_error(
-                    "Resource loading is disabled for thread exports"
-                )
+                raise resource_error("Resource loading is disabled for thread exports")
 
         return DenyResourceFetcher(), resource_error
 

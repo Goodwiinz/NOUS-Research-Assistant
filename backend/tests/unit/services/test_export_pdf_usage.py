@@ -8,11 +8,13 @@ import sys
 import threading
 from datetime import datetime
 from types import ModuleType, SimpleNamespace
+from typing import Any, Protocol, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.services.research.export_service import (
+    ExportFormatter,
     ExportService,
     HTMLFormatter,
     JSONFormatter,
@@ -30,6 +32,10 @@ from src.shared.export_schemas import (
 pytestmark = pytest.mark.unit
 
 _STAMP = datetime(2026, 9, 17, 12, 0, 0)
+
+
+class _URLFetcher(Protocol):
+    def fetch(self, url: str, headers: object = None) -> object: ...
 
 
 def _thread_export(*, token_count: int = 0) -> ThreadExport:
@@ -82,7 +88,9 @@ def _fake_weasyprint(
     class FakeHTML:
         def __init__(self, *, string: str, **kwargs: object) -> None:
             self.string = string
-            self.fetcher = kwargs.get("url_fetcher")
+            self.fetcher: _URLFetcher | None = cast(
+                _URLFetcher | None, kwargs.get("url_fetcher")
+            )
 
         def write_pdf(self) -> bytes:
             if fetch_resource:
@@ -189,7 +197,7 @@ def test_native_import_failure_does_not_disable_non_pdf_exports(
 ) -> None:
     original_import = builtins.__import__
 
-    def fail_weasyprint(name: str, *args: object, **kwargs: object):
+    def fail_weasyprint(name: str, *args: Any, **kwargs: Any) -> ModuleType:
         if name == "weasyprint":
             raise OSError("libpango is unavailable")
         return original_import(name, *args, **kwargs)
@@ -205,19 +213,25 @@ def test_native_import_failure_does_not_disable_non_pdf_exports(
 
 @pytest.mark.asyncio
 async def test_pdf_formatting_runs_in_a_worker_thread(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = ExportService(AsyncMock())
-    service._load_thread = AsyncMock(return_value=_thread_export())
+    monkeypatch.setattr(
+        service, "_load_thread", AsyncMock(return_value=_thread_export())
+    )
     event_loop_thread = threading.get_ident()
     worker_threads: list[int] = []
 
-    class ThreadRecordingFormatter:
-        file_extension = "pdf"
-        content_type = "application/pdf"
+    class ThreadRecordingFormatter(ExportFormatter):
+        @property
+        def file_extension(self) -> str:
+            return "pdf"
 
-        def format(
-            self, thread: ThreadExport, options: ExportOptions
-        ) -> bytes:
+        @property
+        def content_type(self) -> str:
+            return "application/pdf"
+
+        def format(self, thread: ThreadExport, options: ExportOptions) -> bytes:
             worker_threads.append(threading.get_ident())
             return b"%PDF-worker"
 
@@ -240,7 +254,9 @@ async def test_batch_pdf_renderer_failure_is_not_packaged_as_success(
 ) -> None:
     monkeypatch.setitem(sys.modules, "weasyprint", None)
     service = ExportService(AsyncMock())
-    service._load_thread = AsyncMock(return_value=_thread_export())
+    monkeypatch.setattr(
+        service, "_load_thread", AsyncMock(return_value=_thread_export())
+    )
 
     with pytest.raises(RuntimeError, match="PDF export unavailable"):
         await service.export_batch(
@@ -249,7 +265,9 @@ async def test_batch_pdf_renderer_failure_is_not_packaged_as_success(
 
 
 @pytest.mark.asyncio
-async def test_load_thread_exports_persisted_provider_usage_without_legacy_backfill() -> None:
+async def test_load_thread_exports_persisted_provider_usage_without_legacy_backfill() -> (
+    None
+):
     message = MagicMock()
     message.id = "message-1"
     message.is_deleted = False
@@ -303,9 +321,11 @@ async def test_load_thread_exports_persisted_provider_usage_without_legacy_backf
 
 
 def test_human_readable_export_does_not_print_unknown_zero_total() -> None:
-    markdown = MarkdownFormatter().format(
-        _thread_export(token_count=0), ExportOptions()
-    ).decode("utf-8")
+    markdown = (
+        MarkdownFormatter()
+        .format(_thread_export(token_count=0), ExportOptions())
+        .decode("utf-8")
+    )
 
     assert "**Tokens**: 0" not in markdown
     assert "Legacy token count" not in markdown
@@ -336,9 +356,13 @@ def test_json_export_contains_provider_usage_when_present() -> None:
 
 
 @pytest.mark.asyncio
-async def test_export_thread_stamps_requested_format_in_json_metadata() -> None:
+async def test_export_thread_stamps_requested_format_in_json_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = ExportService(AsyncMock())
-    service._load_thread = AsyncMock(return_value=_thread_export())
+    monkeypatch.setattr(
+        service, "_load_thread", AsyncMock(return_value=_thread_export())
+    )
 
     content, filename, content_type = await service.export_thread(
         "thread-1", "user-1", ExportFormat.JSON, ExportOptions()

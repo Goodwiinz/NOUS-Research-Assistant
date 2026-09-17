@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import sys
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
 from src.api.research import export as export_api
-from src.services.research.export_service import PDFExportConversionError
-from src.shared.export_schemas import ExportFormat, ExportOptions
+from src.models.user import User
+from src.services.research.export_service import ExportService, PDFExportConversionError
+from src.shared.export_schemas import BatchExportRequest, ExportFormat, ExportOptions
 
 pytestmark = pytest.mark.unit
 
@@ -23,12 +25,21 @@ def _thread_export() -> MagicMock:
     return thread
 
 
-def _service_with_missing_renderer(monkeypatch: pytest.MonkeyPatch) -> object:
+def _current_user() -> User:
+    # These route tests exercise only current_user.id; no database-backed user
+    # behavior is needed for the exporter error contract.
+    return cast(User, SimpleNamespace(id="user-1"))
+
+
+def _service_with_missing_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> ExportService:
     monkeypatch.setitem(sys.modules, "weasyprint", None)
-    from src.services.research.export_service import ExportService
 
     service = ExportService(AsyncMock())
-    service._load_thread = AsyncMock(return_value=_thread_export())
+    monkeypatch.setattr(
+        service, "_load_thread", AsyncMock(return_value=_thread_export())
+    )
     return service
 
 
@@ -48,7 +59,7 @@ async def test_single_pdf_renderer_unavailable_is_a_safe_503(
             include_metadata=True,
             include_feedback=False,
             db=AsyncMock(),
-            current_user=SimpleNamespace(id="user-1"),
+            current_user=_current_user(),
         )
 
     assert raised.value.status_code == 503
@@ -68,7 +79,7 @@ async def test_stream_pdf_renderer_unavailable_is_a_safe_503(
             format=ExportFormat.PDF,
             include_citations=True,
             db=AsyncMock(),
-            current_user=SimpleNamespace(id="user-1"),
+            current_user=_current_user(),
         )
 
     assert raised.value.status_code == 503
@@ -84,14 +95,14 @@ async def test_batch_pdf_renderer_unavailable_is_a_safe_503(
 
     with pytest.raises(HTTPException) as raised:
         await export_api.export_batch(
-            request=SimpleNamespace(
+            request=BatchExportRequest(
                 thread_ids=["thread-1"],
                 format=ExportFormat.PDF,
                 options=ExportOptions(),
                 as_zip=True,
             ),
             db=AsyncMock(),
-            current_user=SimpleNamespace(id="user-1"),
+            current_user=_current_user(),
         )
 
     assert raised.value.status_code == 503
@@ -116,7 +127,7 @@ async def test_single_pdf_success_uses_server_filename_and_mime(
         include_metadata=True,
         include_feedback=False,
         db=AsyncMock(),
-        current_user=SimpleNamespace(id="user-1"),
+        current_user=_current_user(),
     )
 
     assert response.body.startswith(b"%PDF-")
@@ -131,9 +142,7 @@ async def test_single_pdf_conversion_failure_is_safe_500(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = MagicMock()
-    service.export_thread = AsyncMock(
-        side_effect=PDFExportConversionError()
-    )
+    service.export_thread = AsyncMock(side_effect=PDFExportConversionError())
     monkeypatch.setattr(export_api, "get_export_service", lambda _db: service)
 
     with pytest.raises(HTTPException) as raised:
@@ -145,7 +154,7 @@ async def test_single_pdf_conversion_failure_is_safe_500(
             include_metadata=True,
             include_feedback=False,
             db=AsyncMock(),
-            current_user=SimpleNamespace(id="user-1"),
+            current_user=_current_user(),
         )
 
     assert raised.value.status_code == 500
