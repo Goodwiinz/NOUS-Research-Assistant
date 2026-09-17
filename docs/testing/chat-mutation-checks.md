@@ -267,7 +267,49 @@ A's summary never enters B's displayed messages.
 - **Finished run-to-stream fence:** tests cover a caller-owned latest terminal
   AgentRun whose mapping points to a different stream and require 204/no replay.
 
-The first standalone mapping-mutant attempt was invalid because its temporary
-replacement contained literal newline text and produced an import
-`IndentationError`; it is not counted as a killed mutation. Root will rerun
-both mapping mutations against the frozen commit with exact byte restoration.
+Two preliminary standalone mapping-mutant attempts were invalid: one failed
+at the old owner-only 404 before exercising stream correlation; the other
+produced an import `IndentationError`. Neither counts as mutation evidence.
+
+Root independently verified both guards on frozen `2f78c21b0` using Python
+`try/finally` and exact byte restoration:
+
+- Active guard at `backend/src/api/agent/execute.py:1355`: `if active_stream is None or active_stream.lower() != sid.lower():`.
+  Replacing only this condition with `if False:` made
+  `test_resume_returns_204_when_active_caller_run_maps_to_another_stream`
+  fail with `assert 200 == 204`: it replayed the mismatched stream.
+- Terminal guard at `backend/src/api/agent/execute.py:1373`: `if latest_stream is None or latest_stream.lower() != stream.lower():`.
+  The same one-condition bypass made
+  `test_resume_returns_204_when_latest_caller_run_maps_to_another_stream`
+  fail with `assert 200 == 204`.
+- Each test command used
+  `PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:56379/15 python -m pytest -q backend/tests/unit/api/test_agent_resume_confirmation_envelope.py::<test-name> --timeout=30 --tb=short`.
+- Both regressions passed together after restoration. Restored source SHA256:
+  `4c9c5530fbc2229dc34d0c90750cfb00d8706a7845fe30f019435818a80273d1`.
+  The source matched the committed file exactly; no product diff remains.
+- Logs: `/tmp/chat-audit-20260916/task7-root-active-mutant.log`,
+  `task7-root-terminal-mutant.log`, `task7-root-restored.log`, and
+  `task7-root-mutation-summary.log` in the same private directory.
+
+### Parked confirmation checkpoint ownership
+
+Verified on `236867d21`, source `backend/src/api/agent/execute.py:1251`.
+The authenticated checkpoint-owner block rejects a foreign or missing
+`snapshot.values["user_id"]` before it can emit a parked approval prompt.
+
+- Mutation: replace only the `if db is not None:` immediately before
+  `checkpoint_values =` with `if False:`. The temporary file parsed
+  successfully before the test ran.
+- Focused tests in
+  `backend/tests/unit/api/test_agent_resume_confirmation_envelope.py`:
+  `test_resume_does_not_redeliver_foreign_checkpoint_to_editable_member` and
+  `test_resume_denies_checkpoint_without_owner_identity`.
+- Command for each test:
+  `PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:56379/15 python -m pytest -q backend/tests/unit/api/test_agent_resume_confirmation_envelope.py::<test-name> --timeout=30 --tb=short`.
+- Both failed with `assert 200 == 204`, proving an approval would be emitted.
+  Exact source bytes were restored in `finally`. Both denied cases and
+  `test_resume_redelivers_checkpoint_to_its_owner` then passed together.
+- Restored source SHA256:
+  `952fc4e05c4d80c0a6a54899bfe4beafc0bba99b70ef22a17095b1bb93fe4bc6`.
+  Logs under `/tmp/chat-audit-20260916/`: `task7-root-checkpoint-mutant.log`,
+  `task7-root-checkpoint-restored.log`, `task7-root-checkpoint-summary.log`.
