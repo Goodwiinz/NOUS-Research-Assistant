@@ -55,6 +55,7 @@ import { workspaceService } from '@/services/workspaceService';
 
 type StreamCallbacks = {
   onToken: (t: string) => void;
+  onReasoningDelta?: (content: string) => void;
   onRunId?: (runId: string) => void;
   onConfirmation: (
     threadId: string,
@@ -180,6 +181,7 @@ describe('useChatStreaming stream ownership', () => {
       (_req: unknown, cb: StreamCallbacks) => {
         // The user walks away to another thread while the confirm resolves.
         useChatStore.setState({ currentThreadId: 'thread-B' });
+        cb.onReasoningDelta?.('summary from thread A');
         cb.onToken('confirmed answer');
         cb.onDone({});
         return Promise.resolve();
@@ -209,6 +211,14 @@ describe('useChatStreaming stream ownership', () => {
       useChatStore.setState({ currentThreadId: 'thread-A' });
     });
     expect(result.current.pendingConfirmation).toBeNull();
+    const displayedMessages = params.setMessages.mock.calls.flatMap(([next]) =>
+      Array.isArray(next) ? (next as ChatPageMessage[]) : []
+    );
+    expect(
+      displayedMessages.some(
+        (message) => message.reasoningSummary === 'summary from thread A'
+      )
+    ).toBe(false);
   });
 
   it('clears stale RAG retrieval state when a confirmation stream starts', async () => {

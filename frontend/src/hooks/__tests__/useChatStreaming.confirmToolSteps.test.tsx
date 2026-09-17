@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
 import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
@@ -19,13 +19,14 @@ vi.mock('next/navigation', () => ({
 
 const streamMessageMock = vi.fn();
 const streamConfirmMock = vi.fn();
+const resumeStreamMock = vi.fn();
 vi.mock('@/services/agentChatService', () => ({
   agentChatService: {
     streamMessage: (...args: unknown[]) => streamMessageMock(...args),
     streamConfirm: (...args: unknown[]) => streamConfirmMock(...args),
     // The hook probes for a parked HITL confirmation on thread activation;
     // nothing is parked in these scenarios.
-    resumeStream: vi.fn().mockResolvedValue({ status: 'idle' }),
+    resumeStream: (...args: unknown[]) => resumeStreamMock(...args),
   },
 }));
 
@@ -43,6 +44,7 @@ import { workspaceService } from '@/services/workspaceService';
 
 type StreamCallbacks = {
   onToken: (t: string) => void;
+  onReasoningDelta?: (content: string) => void;
   onToolStart: (tool: string, args?: Record<string, unknown>) => void;
   onToolEnd: (tool: string, result: string, isError: boolean) => void;
   onRagContext: (contexts: Array<Record<string, unknown>>) => void;
@@ -98,10 +100,108 @@ describe('useChatStreaming HITL confirm tool steps', () => {
   beforeEach(() => {
     streamMessageMock.mockReset();
     streamConfirmMock.mockReset();
+    resumeStreamMock.mockReset();
+    resumeStreamMock.mockResolvedValue({ status: 'idle' });
+    useChatStore.getState().reset();
+    useAgentActivityStore.setState({ runs: {}, currentThreadId: null });
     vi.mocked(workspaceService.listMessages).mockResolvedValue({
       messages: [],
       has_more: false,
     } as never);
+  });
+
+  it('commits provider summaries received before a normal answer', async () => {
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks) => {
+        cb.onReasoningDelta?.('Compared ');
+        cb.onReasoningDelta?.('the retrieved sources.');
+        cb.onToken('normal answer');
+        cb.onDone({});
+        return Promise.resolve();
+      }
+    );
+
+    const params = makeParams();
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+
+    await act(async () => {
+      await result.current.handleSubmit('summarize the sources');
+    });
+
+    const committed = committedAssistantMessages(params.setMessages);
+    expect(committed[committed.length - 1]).toMatchObject({
+      content: 'normal answer',
+      reasoningSummary: 'Compared the retrieved sources.',
+    });
+    expect(useChatStore.getState().streamingReasoning).toBe('');
+  });
+
+  it('keeps a provider summary when stopped before the first answer token', async () => {
+    let releaseStream!: () => void;
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks, signal?: AbortSignal) => {
+        cb.onReasoningDelta?.('I compared the retrieved sources.');
+        return new Promise<void>((resolve) => {
+          releaseStream = resolve;
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }
+    );
+
+    const params = makeParams();
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+    let submitPromise!: Promise<void>;
+    await act(async () => {
+      submitPromise = result.current.handleSubmit('stop after reasoning');
+      await waitFor(() => expect(streamMessageMock).toHaveBeenCalled());
+    });
+
+    act(() => result.current.handleStop());
+    await act(async () => {
+      releaseStream();
+      await submitPromise;
+    });
+
+    const committed = committedAssistantMessages(params.setMessages);
+    expect(committed[committed.length - 1]).toMatchObject({
+      content: '',
+      reasoningSummary: 'I compared the retrieved sources.',
+      metadata: { stopped: true },
+    });
+  });
+
+  it('carries provider summary across confirmation and appends resumed summary', async () => {
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks) => {
+        cb.onReasoningDelta?.('Before approval.');
+        cb.onConfirmation('agent-thread-1', { tool: 'ingest_arxiv_papers' });
+        cb.onDone({});
+        return Promise.resolve();
+      }
+    );
+    streamConfirmMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks) => {
+        cb.onReasoningDelta?.(' After approval.');
+        cb.onToken('confirmed answer');
+        cb.onDone({});
+        return Promise.resolve();
+      }
+    );
+
+    const params = makeParams();
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+    await act(async () => {
+      await result.current.handleSubmit('ingest these');
+    });
+    await act(async () => {
+      await result.current.handleConfirmation(true);
+    });
+
+    const committed = committedAssistantMessages(params.setMessages);
+    expect(committed[committed.length - 1]).toMatchObject({
+      content: 'confirmed answer',
+      reasoningSummary: 'Before approval. After approval.',
+    });
   });
 
   it('tracks live streamingSteps during the confirm stream and commits toolExecutions', async () => {
@@ -460,6 +560,7 @@ describe('useChatStreaming HITL confirm tool steps', () => {
   it('commits the partial answer tagged stopped when the user aborts the confirm stream', async () => {
     streamMessageMock.mockImplementation(
       (_req: unknown, cb: StreamCallbacks) => {
+        cb.onReasoningDelta?.('Before approval.');
         cb.onConfirmation('agent-thread-1', { tool: 'ingest_arxiv_papers' });
         cb.onDone({});
         return Promise.resolve();
@@ -495,6 +596,7 @@ describe('useChatStreaming HITL confirm tool steps', () => {
     });
     // Partial tokens arrive, then the user hits Stop (abort → no onDone).
     await act(async () => {
+      confirmCb.onReasoningDelta?.(' After approval.');
       confirmCb.onToken('partial resumed answer');
       result.current.handleStop();
       releaseConfirm();
@@ -507,6 +609,7 @@ describe('useChatStreaming HITL confirm tool steps', () => {
     expect(committed[committed.length - 1]).toMatchObject({
       role: 'assistant',
       content: 'partial resumed answer',
+      reasoningSummary: 'Before approval. After approval.',
       metadata: { stopped: true },
     });
     expect(refreshSpy).toHaveBeenCalledWith(
