@@ -138,9 +138,11 @@ module "vpc" {
   name = "${var.project_name}-vpc"
   cidr = var.vpc_cidr
 
-  azs             = data.aws_availability_zones.available.names
-  private_subnets = [for i in range(length(data.aws_availability_zones.available.names)) : cidrsubnet(var.vpc_cidr, 4, i)]
-  public_subnets  = [for i in range(length(data.aws_availability_zones.available.names)) : cidrsubnet(var.vpc_cidr, 8, i + 100)]
+  # Pinned to 3 AZs: EKS rejects us-east-1e for control planes, and
+  # multi-AZ NAT would triple NAT cost with the full zone list.
+  azs             = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  private_subnets = [for i in range(3) : cidrsubnet(var.vpc_cidr, 4, i)]
+  public_subnets  = [for i in range(3) : cidrsubnet(var.vpc_cidr, 8, i + 100)]
 
   enable_nat_gateway = true
   # Lean dev choice: one NAT gateway shared across AZs (~$33/mo) instead of
@@ -210,8 +212,12 @@ module "eks" {
   aws_auth_roles = concat(
     [
       {
+        # {{SessionName}} resolves to the instance ID (e.g. i-0abc...) — the
+        # kubelet registers under its private DNS name, so NodeAuthorizer
+        # rejects it ("node i-xxx is not allowed to modify node ip-10-...").
+        # {{EC2PrivateDNSName}} is the correct username template.
         rolearn  = module.eks.eks_managed_node_groups["default"].iam_role_arn
-        username = "system:node:{{SessionName}}"
+        username = "system:node:{{EC2PrivateDNSName}}"
         groups   = ["system:bootstrappers", "system:nodes"]
       }
     ],
@@ -235,23 +241,17 @@ module "eks" {
       # Lean dev sizing: single SPOT node group (t3.large via var.node_instance_types)
       capacity_type = "SPOT"
 
+      # EKS-managed launch template: custom LT rendered empty user-data (no
+      # bootstrap args) → instances launched but never joined the cluster.
+      # EKS-managed LT + default AMI bootstraps correctly.
+      use_custom_launch_template = false
+      disk_size                  = 100
+
       update_config = {
         max_unavailable_percentage = 33
       }
 
-      iam_role_arn = aws_iam_role.nodes.arn
-
-      block_device_mappings = {
-        xvda = {
-          device_name = "/dev/xvda"
-          ebs = {
-            volume_size = 100
-            volume_type = "gp3"
-            iops        = 3000
-            throughput  = 125
-          }
-        }
-      }
+      # Module-managed node role (aws-auth maps module.eks...iam_role_arn)
 
       tags = {
         Name = "${var.project_name}-node-group"
@@ -284,14 +284,9 @@ module "eks" {
       type        = "ingress"
       self        = true
     }
-    ingress_cluster_kublet_api = {
-      description                   = "Cluster API to Node kubelet API"
-      protocol                      = "tcp"
-      from_port                     = 10250
-      to_port                       = 10250
-      type                          = "ingress"
-      source_cluster_security_group = true
-    }
+    # NOTE: no cluster→node 10250 rule here — module's built-in
+    # ingress_cluster_kubelet already covers it; a duplicate definition
+    # collides with it (InvalidPermission.Duplicate).
   }
 
   tags = {
@@ -440,7 +435,7 @@ module "rds" {
   identifier = "${var.project_name}-postgres"
 
   engine         = "postgres"
-  engine_version = "15.4"
+  engine_version = "16.15"
   instance_class = var.db_instance_class
 
   allocated_storage     = var.db_allocated_storage
@@ -455,6 +450,7 @@ module "rds" {
   port                   = 5432
   vpc_security_group_ids = [aws_security_group.rds.id]
   subnet_ids             = module.vpc.private_subnets
+  create_db_subnet_group = true # default false — without it RDS lands in the default VPC
 
   maintenance_window = "Mon:03:00-Mon:04:00"
   backup_window      = "04:00-06:00"
@@ -465,21 +461,24 @@ module "rds" {
 
   deletion_protection = var.environment == "production" ? true : false
 
-  family               = "postgres15"
-  major_engine_version = "15"
+  family               = "postgres16"
+  major_engine_version = "16"
 
   parameters = [
     {
-      name  = "shared_preload_libraries"
-      value = "pg_stat_statements"
+      name         = "shared_preload_libraries"
+      value        = "pg_stat_statements"
+      apply_method = "pending-reboot" # static parameter — immediate not allowed
     },
     {
-      name  = "log_statement"
-      value = "all"
+      name         = "log_statement"
+      value        = "all"
+      apply_method = "immediate"
     },
     {
-      name  = "log_min_duration_statement"
-      value = "1000"
+      name         = "log_min_duration_statement"
+      value        = "1000"
+      apply_method = "immediate"
     }
   ]
 
@@ -537,8 +536,14 @@ module "elasticache" {
   transit_encryption_enabled = true
   at_rest_encryption_enabled = true
 
-  subnet_group_name  = aws_elasticache_subnet_group.default.name
-  security_group_ids = [aws_security_group.redis.id]
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+
+  # Subnet group managed by root-level aws_elasticache_subnet_group.default
+  # (below) — module must not create its own duplicate.
+  create_subnet_group = false
+  subnet_group_name   = aws_elasticache_subnet_group.default.name
+  security_group_ids  = [aws_security_group.redis.id]
 
   # Single-node lean dev cache: ElastiCache requires >= 2 nodes for automatic
   # failover / multi-AZ, so both must be disabled when redis_number_nodes == 1.

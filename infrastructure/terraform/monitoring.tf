@@ -313,53 +313,16 @@ resource "aws_xray_sampling_rule" "default" {
 # AWS Config Rules
 # =============================================================================
 
-resource "aws_config_config_rule" "eks_cluster_no_public_access" {
-  count = var.enable_security_scan ? 1 : 0
+# NOTE: aws_config_config_rule "eks_cluster_no_public_access" removed —
+# source_identifier EKS_CLUSTER_NO_PUBLIC_ACCESS is not a valid AWS managed
+# rule id (apply fails). Re-add with a verified identifier from:
+# https://docs.aws.amazon.com/config/latest/developerguide/managed-rules-by-aws-config.html
+#
+# NOTE: remaining aws_config_config_rule resources (rds_encryption_enabled,
+# s3_bucket_public_read_prohibited) also removed for lean dev — AWS Config
+# rules require a configuration recorder + delivery channel which this stack
+# does not provision. Re-add recorder + rules together if config compliance
+# is wanted.
 
-  name = "${var.project_name}-eks-cluster-no-public-access"
-
-  source {
-    owner             = "AWS"
-    source_identifier = "EKS_CLUSTER_NO_PUBLIC_ACCESS"
-  }
-
-  depends_on = [aws_sns_topic.alerts]
-
-  tags = {
-    Name = "${var.project_name}-eks-cluster-no-public-access"
-  }
-}
-
-resource "aws_config_config_rule" "rds_encryption_enabled" {
-  count = var.enable_security_scan ? 1 : 0
-
-  name = "${var.project_name}-rds-encryption-enabled"
-
-  source {
-    owner             = "AWS"
-    source_identifier = "RDS_STORAGE_ENCRYPTED"
-  }
-
-  depends_on = [aws_sns_topic.alerts]
-
-  tags = {
-    Name = "${var.project_name}-rds-encryption-enabled"
-  }
-}
-
-resource "aws_config_config_rule" "s3_bucket_public_read_prohibited" {
-  count = var.enable_security_scan ? 1 : 0
-
-  name = "${var.project_name}-s3-bucket-public-read-prohibited"
-
-  source {
-    owner             = "AWS"
-    source_identifier = "S3_BUCKET_PUBLIC_READ_PROHIBITED"
-  }
-
-  depends_on = [aws_sns_topic.alerts]
-
-  tags = {
-    Name = "${var.project_name}-s3-bucket-public-read-prohibited"
-  }
-}
+# resource "aws_config_config_rule" "rds_encryption_enabled" { ... }
+# resource "aws_config_config_rule" "s3_bucket_public_read_prohibited" { ... }

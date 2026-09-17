@@ -33,11 +33,9 @@ resource "aws_ecr_lifecycle_policy" "backend" {
           countType   = "imageCountMoreThan"
           countNumber = 20
         }
-        action = [
-          {
-            type = "expire"
-          }
-        ]
+        action = {
+          type = "expire"
+        }
       }
     ]
   })
@@ -56,11 +54,9 @@ resource "aws_ecr_lifecycle_policy" "frontend" {
           countType   = "imageCountMoreThan"
           countNumber = 20
         }
-        action = [
-          {
-            type = "expire"
-          }
-        ]
+        action = {
+          type = "expire"
+        }
       }
     ]
   })
