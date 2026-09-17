@@ -75,6 +75,33 @@ failure was the missing persisted key. The source was restored in `finally`, the
 failure was inspected, and the summary case was rerun with the correct expected
 failure and successful restored control. No interrupted mutation is counted.
 
+### Broader CI follow-up
+
+The full GitHub unit selection at `11f2e58fd` completed with 5,645 passed,
+9 failed, 80 skipped and 3 xpassed. All nine failures were in the legacy replay
+fixture, which supplied neither the canonical workspace/thread access shape nor
+the caller-owned run/stream mapping. Commit `6280c8b10` corrects that fixture;
+production code is unchanged. All 24 replay-file tests and 26 adjacent resume,
+confirmation and rate-limit tests passed locally after the correction.
+
+The parent also verified that the corrected fixtures reach their intended guards.
+Using the same pytest command prefix above, these two cases passed, failed with
+the respective guard disabled (`200` instead of `204`), and passed after exact
+restoration:
+
+- `backend/tests/agent/test_streaming_resume.py::test_resume_mismatched_stream_param_returns_204`
+  protects `backend/src/api/agent/execute.py:1334`, the active-stream cursor check.
+- `backend/tests/agent/test_streaming_resume.py::test_resume_finished_stream_rejects_wrong_thread_mapping`
+  protects `backend/src/api/agent/execute.py:1356`, the immutable stream-to-thread check.
+
+The corrected image at `11f2e58fd` passed `pip check`, a CPU tensor operation, an
+actual spaCy NLP pass, OpenCV import, parsed PDF generation and import of all 370
+API paths. The network-disabled API probe required the public tokenizer cache to
+be supplied first; the initial missing-cache failure is retained in local
+evidence. This is not a claim of credential-free live service startup or exact
+NLP output parity with the old model. Final-head image and GitHub check results
+remain attached to the PR, including the repeat after the fixture correction.
+
 ## Observed deployment and rollback identities
 
 Read-only observations on 2026-09-17, before deployment:
