@@ -494,20 +494,23 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           );
         }
 
-        const urlParams =
+        const urlParamsAtInitialization =
           typeof window !== 'undefined'
             ? new URLSearchParams(window.location.search)
             : null;
-        const isNewChat = urlParams?.get('new') === '1';
-        const requestedThreadId = urlParams?.get('thread');
+        const isNewChatAtInitialization =
+          urlParamsAtInitialization?.get('new') === '1';
+        const requestedThreadIdAtInitialization =
+          urlParamsAtInitialization?.get('thread');
         // The chat route restores an explicit deep link in parallel with this
         // layout initializer. `setCurrentConversation` normally clears the
         // downstream thread selection, so remember a URL-owned selection that
         // landed while the conversation read was in flight and restore it
         // after that reset completes.
-        const selectedThreadBeforeConversationLoad = requestedThreadId
-          ? useChatStore.getState().currentThreadId
-          : null;
+        const selectedThreadBeforeConversationLoad =
+          requestedThreadIdAtInitialization
+            ? useChatStore.getState().currentThreadId
+            : null;
 
         await setCurrentConversation(conversationId);
 
@@ -521,27 +524,50 @@ export function useChatPersistence(): UseChatPersistenceReturn {
 
         const threadsState = useChatStore.getState();
         const conversationThreads = threadsState.threads[conversationId] || [];
+        // A sidebar click or route change can land while the conversation's
+        // thread read is in flight. Re-read the URL and selection at the
+        // commit point so an old deep link cannot take ownership from that
+        // newer navigation, and so ?new=1 remains authoritative even when a
+        // stale thread query is still present beside it.
+        const liveUrlParams =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search)
+            : null;
+        const liveRequestedThreadId = liveUrlParams?.get('thread');
+        const liveIsNewChat = liveUrlParams?.get('new') === '1';
+        const selectedThreadAfterConversationLoad =
+          threadsState.currentThreadId;
+        const selectionStillOwned =
+          selectedThreadAfterConversationLoad === null ||
+          selectedThreadAfterConversationLoad ===
+            requestedThreadIdAtInitialization;
         if (
-          requestedThreadId &&
-          selectedThreadBeforeConversationLoad === requestedThreadId &&
-          threadsState.currentThreadId !== requestedThreadId
+          requestedThreadIdAtInitialization &&
+          !isNewChatAtInitialization &&
+          liveRequestedThreadId === requestedThreadIdAtInitialization &&
+          !liveIsNewChat &&
+          selectedThreadBeforeConversationLoad ===
+            requestedThreadIdAtInitialization &&
+          selectionStillOwned &&
+          selectedThreadAfterConversationLoad !==
+            requestedThreadIdAtInitialization
         ) {
           debugLog(
             '[useChatPersistence] Restoring deep-linked thread after conversation init:',
-            requestedThreadId
+            requestedThreadIdAtInitialization
           );
-          setCurrentThread(requestedThreadId);
+          setCurrentThread(requestedThreadIdAtInitialization);
         }
         // An explicit "new chat" (?new=1) must land on a blank composer.
         // useChatSession already honors this; without the same check here
         // this hook writes a stale thread id into the store, and the next
         // send appends to that previous thread instead of starting a new
         // one (and the URL never becomes ?thread=).
-        const hasExplicitThreadIntent = Boolean(urlParams?.get('thread'));
+        const hasExplicitThreadIntent = Boolean(liveRequestedThreadId);
         if (
           conversationThreads.length > 0 &&
           !threadsState.currentThreadId &&
-          !isNewChat &&
+          !liveIsNewChat &&
           !hasExplicitThreadIntent
         ) {
           const firstThread = conversationThreads[0];
