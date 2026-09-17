@@ -614,6 +614,50 @@ async def test_llm_paths_render_fallback_from_final_sanitized_history(
     assert evidence in system_text
 
 
+@pytest.mark.parametrize(
+    ("module_path", "node_name"),
+    [
+        ("src.services.agent.subgraphs.research_agent", "research_llm_node"),
+        ("src.services.agent.subgraphs.data_agent", "data_llm_node"),
+        ("src.services.agent.subgraphs.writing_agent", "writing_llm_node"),
+    ],
+)
+async def test_specialist_llm_paths_render_attachment_status_without_context(
+    monkeypatch: pytest.MonkeyPatch, module_path: str, node_name: str
+) -> None:
+    """Specialists tell the model when the selected file is still processing."""
+    from src.services.agent import graph as graph_mod
+    from src.services.agent import llm_factory
+
+    llm = _CapturingLLM()
+    monkeypatch.setattr(graph_mod, "_build_llm", lambda *_a, **_k: llm)
+    monkeypatch.setattr(llm_factory, "build_synthesis_llm", lambda *_a, **_k: llm)
+    module = importlib.import_module(module_path)
+
+    await getattr(module, node_name)(
+        {
+            "messages": [HumanMessage(content="summarize the attached file")],
+            "retrieved_contexts": [],
+            "attachment_status": [
+                {"status": "processing", "title": "PENDING-ATTACHMENT.txt"}
+            ],
+            "intent": "research",
+            "page_context": {},
+            "tool_loop_count": 0,
+        },
+        {},
+    )
+
+    assert llm.calls
+    system_text = "\n".join(
+        str(message.content)
+        for message in llm.calls[-1]
+        if isinstance(message, SystemMessage)
+    )
+    assert "PENDING-ATTACHMENT.txt" in system_text
+    assert "still being processed" in system_text
+
+
 @pytest.mark.parametrize("node_kind", ["main", "factory"])
 async def test_forced_synthesis_paths_use_sanitized_history_for_source_binding(
     monkeypatch: pytest.MonkeyPatch, node_kind: str
@@ -653,6 +697,9 @@ async def test_forced_synthesis_paths_use_sanitized_history_for_source_binding(
                 "context_origin": "tool",
             }
         ],
+        "attachment_status": [
+            {"status": "processing", "title": "PENDING-ATTACHMENT.txt"}
+        ],
         "intent": "research",
         "tool_loop_count": 8,
     }
@@ -673,3 +720,5 @@ async def test_forced_synthesis_paths_use_sanitized_history_for_source_binding(
         str(message.content) for message in sent if isinstance(message, SystemMessage)
     )
     assert evidence in system_text
+    assert "PENDING-ATTACHMENT.txt" in system_text
+    assert "still being processed" in system_text

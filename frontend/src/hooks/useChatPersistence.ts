@@ -413,6 +413,12 @@ export function useChatPersistence(): UseChatPersistenceReturn {
       initializationRef.current.started = true;
 
       _initInFlight = (async () => {
+        // Keep the selection that existed when this shared initialization run
+        // began. A sidebar click can select a different thread while the
+        // conversation page is pending; that newer choice must survive the
+        // downstream reset performed by setCurrentConversation.
+        const threadSelectionAtInitializationStart =
+          useChatStore.getState().currentThreadId;
         debugLog('[useChatPersistence] Starting initialization...');
         let initialized = false;
         let initializationError: unknown;
@@ -494,6 +500,28 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           );
         }
 
+        const urlParamsAtInitialization =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search)
+            : null;
+        const isNewChatAtInitialization =
+          urlParamsAtInitialization?.get('new') === '1';
+        const requestedThreadIdAtInitialization =
+          urlParamsAtInitialization?.get('thread');
+        // The chat route restores an explicit deep link in parallel with this
+        // layout initializer. `setCurrentConversation` normally clears the
+        // downstream thread selection, so remember a URL-owned selection that
+        // landed while the conversation read was in flight and restore it
+        // after that reset completes.
+        const selectedThreadBeforeConversationLoad =
+          requestedThreadIdAtInitialization
+            ? useChatStore.getState().currentThreadId
+            : null;
+        const selectionChangedDuringInitialization =
+          selectedThreadBeforeConversationLoad !== null &&
+          selectedThreadBeforeConversationLoad !==
+            threadSelectionAtInitializationStart;
+
         await setCurrentConversation(conversationId);
 
         debugLog(
@@ -506,21 +534,71 @@ export function useChatPersistence(): UseChatPersistenceReturn {
 
         const threadsState = useChatStore.getState();
         const conversationThreads = threadsState.threads[conversationId] || [];
+        // A sidebar click or route change can land while the conversation's
+        // thread read is in flight. Re-read the URL and selection at the
+        // commit point so an old deep link cannot take ownership from that
+        // newer navigation, and so ?new=1 remains authoritative even when a
+        // stale thread query is still present beside it.
+        const liveUrlParams =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search)
+            : null;
+        const liveRequestedThreadId = liveUrlParams?.get('thread');
+        const liveIsNewChat = liveUrlParams?.get('new') === '1';
+        const selectedThreadAfterConversationLoad =
+          threadsState.currentThreadId;
+        const selectionStillOwned =
+          selectedThreadAfterConversationLoad === null ||
+          selectedThreadAfterConversationLoad ===
+            requestedThreadIdAtInitialization;
+        const newerSelectionBeforeConversationReset =
+          selectionChangedDuringInitialization &&
+          selectedThreadBeforeConversationLoad !==
+            requestedThreadIdAtInitialization
+            ? selectedThreadBeforeConversationLoad
+            : null;
+        const liveRouteStillOwnsSelection =
+          liveRequestedThreadId === requestedThreadIdAtInitialization ||
+          liveRequestedThreadId === newerSelectionBeforeConversationReset;
+        const shouldRestoreNewerSelection =
+          newerSelectionBeforeConversationReset !== null &&
+          !isNewChatAtInitialization &&
+          !liveIsNewChat &&
+          liveRouteStillOwnsSelection &&
+          selectedThreadAfterConversationLoad === null;
+        if (shouldRestoreNewerSelection) {
+          debugLog(
+            '[useChatPersistence] Restoring newer thread selection after conversation init:',
+            newerSelectionBeforeConversationReset
+          );
+          setCurrentThread(newerSelectionBeforeConversationReset);
+        } else if (
+          requestedThreadIdAtInitialization &&
+          !isNewChatAtInitialization &&
+          liveRequestedThreadId === requestedThreadIdAtInitialization &&
+          !liveIsNewChat &&
+          selectedThreadBeforeConversationLoad ===
+            requestedThreadIdAtInitialization &&
+          selectionStillOwned &&
+          selectedThreadAfterConversationLoad !==
+            requestedThreadIdAtInitialization
+        ) {
+          debugLog(
+            '[useChatPersistence] Restoring deep-linked thread after conversation init:',
+            requestedThreadIdAtInitialization
+          );
+          setCurrentThread(requestedThreadIdAtInitialization);
+        }
         // An explicit "new chat" (?new=1) must land on a blank composer.
         // useChatSession already honors this; without the same check here
         // this hook writes a stale thread id into the store, and the next
         // send appends to that previous thread instead of starting a new
         // one (and the URL never becomes ?thread=).
-        const urlParams =
-          typeof window !== 'undefined'
-            ? new URLSearchParams(window.location.search)
-            : null;
-        const isNewChat = urlParams?.get('new') === '1';
-        const hasExplicitThreadIntent = Boolean(urlParams?.get('thread'));
+        const hasExplicitThreadIntent = Boolean(liveRequestedThreadId);
         if (
           conversationThreads.length > 0 &&
           !threadsState.currentThreadId &&
-          !isNewChat &&
+          !liveIsNewChat &&
           !hasExplicitThreadIntent
         ) {
           const firstThread = conversationThreads[0];

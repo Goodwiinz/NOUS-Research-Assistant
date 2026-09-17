@@ -21,6 +21,13 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     page_context: dict
     retrieved_contexts: list
+    # Server-validated document ids for the current turn. The rag node treats
+    # a non-empty list as an exact source scope and never widens it to corpus
+    # search; an empty list may resolve the latest thread-owned attachments on
+    # a retrieval-enabled follow-up.
+    attachment_ids: list
+    # Prompt-safe readiness records for explicitly requested attachments.
+    attachment_status: list
     tool_executions: list
     thread_id: str
     # Server-authored checkpoint provenance. An exact ``ephemeral`` value is

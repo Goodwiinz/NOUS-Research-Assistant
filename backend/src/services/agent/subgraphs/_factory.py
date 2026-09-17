@@ -314,10 +314,23 @@ def make_specialist_subgraph(
         retrieval_prompt = render_retrieval_prompt(
             state.get("retrieved_contexts", []), sanitized
         )
+        from src.services.agent._nodes_llm import _attachment_status_part
+
+        attachment_status_prompt = _attachment_status_part(
+            state.get("attachment_status", [])
+        )
+        attachment_status_suffix = (
+            f"\n\n{attachment_status_prompt}" if attachment_status_prompt else ""
+        )
         full = [
             SystemMessage(
                 content=(
-                    base_prompt + "\n\n" + retrieval_prompt + addendum + limit_contract
+                    base_prompt
+                    + attachment_status_suffix
+                    + "\n\n"
+                    + retrieval_prompt
+                    + addendum
+                    + limit_contract
                 )
             )
         ] + sanitized

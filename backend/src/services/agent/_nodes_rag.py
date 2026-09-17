@@ -29,7 +29,7 @@ import asyncio
 import logging
 import math
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage
@@ -128,6 +128,18 @@ _CONVERSATIONAL_PATTERNS: frozenset[str] = frozenset(
 # Length threshold (in whitespace-delimited tokens) below which a query is
 # considered "short". Short queries without a retrieval verb skip RAG.
 _SHORT_QUERY_TOKEN_LIMIT: int = 8
+
+# Explicit chat attachments are a small, user-selected source set. Keep their
+# input and prompt footprint bounded even if a stale checkpoint contains a
+# larger list than the request schema permits.
+_MAX_ATTACHMENT_IDS = 10
+_MAX_ATTACHMENT_CONTEXT_CHARS = 3000
+_MAX_ATTACHMENT_HISTORY_ROWS = 100
+_ATTACHMENT_PROCESSING_STATUSES = frozenset({"pending", "processing", "retrying"})
+_FOLLOW_UP_ATTACHMENT_UNAVAILABLE = {
+    "status": "unavailable",
+    "title": "previous thread attachment",
+}
 
 
 def _resolve_active_project_id(
@@ -321,6 +333,262 @@ def _is_retrieval_query(content: str) -> bool:
             return True
 
     return False
+
+
+def _normalize_attachment_ids(values: Sequence[Any] | None) -> list[UUID]:
+    """Parse and de-duplicate attachment ids while preserving request order."""
+    normalized: list[UUID] = []
+    seen: set[UUID] = set()
+    for index, value in enumerate(values or ()):
+        if index >= _MAX_ATTACHMENT_IDS:
+            break
+        try:
+            document_id = value if isinstance(value, UUID) else UUID(str(value))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if document_id not in seen:
+            seen.add(document_id)
+            normalized.append(document_id)
+    return normalized
+
+
+def _attachment_excerpt(content: str, query: str) -> str:
+    """Return a bounded, query-focused excerpt from attached document text."""
+    from src.services.agent._pii_redact import redact_pii
+
+    safe_content = redact_pii(content or "")
+    if len(safe_content) <= _MAX_ATTACHMENT_CONTEXT_CHARS:
+        return safe_content
+
+    # Uploaded text can be much larger than the prompt budget. Prefer a window
+    # around a meaningful query term so a fact near the end of a document is
+    # still available, while retaining a deterministic bounded fallback.
+    terms = [
+        term.lower()
+        for term in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{3,}", query or "")
+        if term.lower()
+        not in {"only", "attached", "file", "document", "please", "what", "give"}
+    ]
+    lowered_content = safe_content.lower()
+    positions = [lowered_content.find(term) for term in terms]
+    positions = [position for position in positions if position >= 0]
+    if not positions:
+        return safe_content[:_MAX_ATTACHMENT_CONTEXT_CHARS]
+    start = max(0, min(positions) - 1000)
+    end = start + _MAX_ATTACHMENT_CONTEXT_CHARS
+    if end > len(safe_content):
+        end = len(safe_content)
+        start = max(0, end - _MAX_ATTACHMENT_CONTEXT_CHARS)
+    return safe_content[start:end]
+
+
+def _attachment_status(
+    document_id: UUID, status: str, title: str | None = None
+) -> dict:
+    """Build a prompt-safe status record without carrying processing errors."""
+    result: dict[str, str] = {"document_id": str(document_id), "status": status}
+    if title:
+        from src.services.agent._pii_redact import redact_pii
+
+        result["title"] = redact_pii(title)[:500]
+    return result
+
+
+async def _load_attachment_contexts(
+    *,
+    attachment_ids: Sequence[Any] | None,
+    thread_id: str | None,
+    user_id: str,
+    organization_id: str,
+    query: str,
+) -> tuple[list[dict], list[dict]]:
+    """Load only authorized attached documents for the current graph turn.
+
+    Explicit ids are authoritative: inaccessible or unready ids produce an
+    unavailable status and never widen into organization/project search. When
+    a follow-up omits ids, the latest live user message in the owned thread
+    that has attachments supplies the source set. Every document read remains
+    organization-scoped and soft-delete filtered.
+    """
+    explicit_ids = bool(attachment_ids)
+    requested_ids = _normalize_attachment_ids(attachment_ids)
+    if explicit_ids and not requested_ids:
+        return [], []
+
+    try:
+        user_uuid = UUID(str(user_id))
+        organization_uuid = UUID(str(organization_id))
+    except (AttributeError, TypeError, ValueError):
+        return [], [{"status": "unavailable"} for _ in requested_ids]
+
+    from sqlalchemy import select
+
+    from src.models.chat_message import ChatMessage, MessageRole
+    from src.models.document import Document, ProcessingStatus
+    from src.models.message_attachment import MessageAttachment
+    from src.services.agent.tool_session import resolve_tool_user, tool_session
+    from src.services.threads import workspace_access
+
+    try:
+        async with tool_session() as session:
+            actor = await resolve_tool_user(
+                session, str(user_uuid), str(organization_uuid)
+            )
+            if actor is None:
+                if not explicit_ids and thread_id:
+                    return [], [dict(_FOLLOW_UP_ATTACHMENT_UNAVAILABLE)]
+                return [], [
+                    _attachment_status(document_id, "unavailable")
+                    for document_id in requested_ids
+                ]
+
+            if not explicit_ids:
+                if not thread_id:
+                    return [], []
+                try:
+                    thread_uuid = UUID(str(thread_id))
+                except (AttributeError, TypeError, ValueError):
+                    return [], [dict(_FOLLOW_UP_ATTACHMENT_UNAVAILABLE)]
+
+                # A thread UUID alone is not authorization. Prove access to
+                # the full workspace -> conversation -> thread chain before
+                # reading any historical attachment rows. Keep this gate
+                # lean: the attachment query below loads only the rows needed
+                # for the latest attached user turn.
+                thread = await workspace_access.get_thread(
+                    session,
+                    thread_uuid,
+                    actor.id,
+                    include_messages=False,
+                )
+                if thread is None:
+                    return [], [dict(_FOLLOW_UP_ATTACHMENT_UNAVAILABLE)]
+
+                # Select the latest attached user turn before checking whether
+                # each referenced document is still readable. A soft-deleted
+                # or otherwise inaccessible document must remain the selected
+                # scope so a follow-up cannot fall back to an older file or
+                # broad corpus search. The document read below applies the
+                # organization and ownership filters and reports unavailable
+                # ids without exposing their content.
+                history_result = await session.execute(
+                    select(MessageAttachment.message_id, MessageAttachment.document_id)
+                    .join(
+                        ChatMessage,
+                        ChatMessage.id == MessageAttachment.message_id,
+                    )
+                    .where(
+                        ChatMessage.thread_id == thread_uuid,
+                        ChatMessage.role == MessageRole.USER,
+                        ChatMessage.is_deleted == False,  # noqa: E712
+                        ChatMessage.superseded_by_message_id.is_(None),
+                    )
+                    .order_by(
+                        ChatMessage.created_at.desc(),
+                        MessageAttachment.created_at.asc(),
+                    )
+                    .limit(_MAX_ATTACHMENT_HISTORY_ROWS)
+                )
+                history_rows = list(history_result.all())
+                if not history_rows:
+                    return [], []
+                latest_message_id = history_rows[0][0]
+                requested_ids = []
+                seen: set[UUID] = set()
+                for message_id, document_id in history_rows:
+                    if message_id != latest_message_id:
+                        continue
+                    if document_id not in seen:
+                        seen.add(document_id)
+                        requested_ids.append(document_id)
+                        if len(requested_ids) >= _MAX_ATTACHMENT_IDS:
+                            break
+
+            # Keep the write-path organization predicate as the shared access
+            # funnel, then repeat it on the content read for defense in depth.
+            owned_ids = await workspace_access.filter_owned_document_ids(
+                session, requested_ids, actor.id
+            )
+            documents_result = await session.execute(
+                select(Document).where(
+                    Document.id.in_(owned_ids),
+                    Document.organization_id == organization_uuid,
+                    Document.is_deleted == False,  # noqa: E712
+                )
+            )
+            documents = {
+                document.id: document for document in documents_result.scalars().all()
+            }
+
+            contexts: list[dict] = []
+            statuses: list[dict] = []
+            for document_id in requested_ids:
+                document = documents.get(document_id)
+                if document is None:
+                    statuses.append(_attachment_status(document_id, "unavailable"))
+                    continue
+
+                raw_processing_status = getattr(document, "processing_status", None)
+                raw_processing_status = getattr(
+                    raw_processing_status, "value", raw_processing_status
+                )
+                processing_status = str(raw_processing_status).lower()
+                if processing_status in _ATTACHMENT_PROCESSING_STATUSES:
+                    statuses.append(
+                        _attachment_status(
+                            document_id, "processing", getattr(document, "title", None)
+                        )
+                    )
+                    continue
+                if processing_status != ProcessingStatus.COMPLETED.value:
+                    statuses.append(
+                        _attachment_status(
+                            document_id, "unavailable", getattr(document, "title", None)
+                        )
+                    )
+                    continue
+
+                content = _attachment_excerpt(
+                    getattr(document, "content_text", None) or "", query
+                )
+                if not content.strip():
+                    statuses.append(
+                        _attachment_status(
+                            document_id, "unavailable", getattr(document, "title", None)
+                        )
+                    )
+                    continue
+
+                from src.services.agent._pii_redact import redact_pii
+
+                contexts.append(
+                    {
+                        "document_id": str(document_id),
+                        "title": redact_pii(
+                            getattr(document, "title", None) or "Untitled"
+                        )[:500],
+                        "content": content,
+                        "score": 1.0,
+                        "score_source": "attachment",
+                        "context_origin": "attachment",
+                    }
+                )
+                statuses.append(
+                    _attachment_status(
+                        document_id, "ready", getattr(document, "title", None)
+                    )
+                )
+            return contexts, statuses
+    except Exception:  # noqa: BLE001 - attachment reads fail closed
+        logger.warning(
+            "attachment context load failed; returning no content", exc_info=True
+        )
+        if not explicit_ids and thread_id and not requested_ids:
+            return [], [dict(_FOLLOW_UP_ATTACHMENT_UNAVAILABLE)]
+        return [], [
+            _attachment_status(document_id, "unavailable")
+            for document_id in requested_ids
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +1074,36 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
     existing_project_id = state.get("current_project_id") or page_context.get(
         "project_id"
     )
+
+    # Explicit attachments are authoritative for this turn. On a follow-up,
+    # an omitted list may resolve to the latest attached user turn, but only
+    # while retrieval is enabled; ``use_rag=False`` still suppresses implicit
+    # corpus/thread reads. In either case, an attachment scope returns before
+    # project/org retrieval so unrelated documents cannot enter the prompt.
+    explicit_attachment_ids = state.get("attachment_ids") or []
+    should_load_attachment_scope = bool(explicit_attachment_ids) or (
+        state.get("use_rag", True) is not False
+        and state.get("thread_persistence") == "durable"
+        and bool(configurable.get("thread_id"))
+        and not configurable.get("search_fn")
+    )
+    if should_load_attachment_scope:
+        attachment_contexts, attachment_status = await _load_attachment_contexts(
+            attachment_ids=explicit_attachment_ids,
+            thread_id=str(configurable.get("thread_id") or ""),
+            user_id=user_id,
+            organization_id=organization_id,
+            query=last_user_msg or "",
+        )
+        if explicit_attachment_ids or attachment_contexts or attachment_status:
+            state_update: Dict[str, Any] = {
+                "retrieved_contexts": attachment_contexts,
+                "attachment_status": attachment_status,
+            }
+            if existing_project_id:
+                state_update["current_project_id"] = existing_project_id
+            return state_update
+
     if state.get("use_rag", True) is False:
         logger.debug("rag_node: retrieval disabled by request")
         state_update: Dict[str, Any] = {"retrieved_contexts": []}
