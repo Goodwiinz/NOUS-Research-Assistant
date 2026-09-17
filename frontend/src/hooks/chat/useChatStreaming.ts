@@ -621,8 +621,7 @@ export function useChatStreaming(
       const existing = durableStopByRunRef.current[runId];
       if (existing) return existing;
 
-      let request: Promise<void>;
-      request = agentChatService
+      const request: Promise<void> = agentChatService
         .cancelActiveRun(threadId, runId)
         .then(() => {
           // A delayed ACK from an older run must never stop a newer run that

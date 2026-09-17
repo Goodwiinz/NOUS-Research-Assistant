@@ -1517,6 +1517,11 @@ async def _run_interrupted_cleanup(cleanup: Any) -> None:
             await asyncio.shield(cleanup_task)
         except asyncio.CancelledError:
             continue
+    # The outer cancellation can arrive on the same turn that the shielded
+    # child finishes. In that case the loop observes ``done()`` after catching
+    # CancelledError and would otherwise return without retrieving the child
+    # exception, making a failed durable ACK look successful.
+    cleanup_task.result()
 
 
 async def _run_cancel_cleanup(

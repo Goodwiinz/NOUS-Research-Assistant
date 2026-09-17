@@ -70,6 +70,26 @@ async def test_interrupted_cleanup_shields_request_cancel_scope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_interrupted_cleanup_surfaces_ack_failure_after_request_cancellation() -> (
+    None
+):
+    from src.api.agent import streaming as streaming_mod
+
+    async def cleanup() -> None:
+        await asyncio.sleep(0)
+        raise RuntimeError("ack failed")
+
+    with pytest.raises(RuntimeError, match="ack failed"):
+        with CancelScope() as scope:
+            # The request is already cancelled when the shielded child starts.
+            # A second cancellation models repeated ASGI cancellation delivery
+            # while the durable ACK task is still completing.
+            scope.cancel()
+            scope.cancel()
+            await streaming_mod._run_interrupted_cleanup(cleanup)
+
+
+@pytest.mark.asyncio
 async def test_cancel_cleanup_surfaces_terminal_ack_failure_after_all_steps() -> None:
     from src.api.agent import streaming as streaming_mod
 

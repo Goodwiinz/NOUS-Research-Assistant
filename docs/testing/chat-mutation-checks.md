@@ -220,3 +220,17 @@ service. Frontend commands run from `frontend/` with Node 24 and pnpm 10.18.2.
 - Mutation makes an older run's ACK mark the newer activity `stopped` instead
   of retaining `running`. The focused test fails, and passes after exact
   restoration (1 passed, 8 skipped).
+
+### Interrupted cleanup ACK exception retrieval
+
+- **Source:** `backend/src/api/agent/streaming.py:1524`.
+- **Guard:** `cleanup_task.result()` after the cancellation loop; it retrieves
+  a shielded cleanup task's exception when outer AnyIO cancellation arrives on
+  the same turn that the task completes.
+- **Covering test:**
+  `backend/tests/unit/api/test_agent_streaming_response_cancellation.py::test_interrupted_cleanup_surfaces_ack_failure_after_request_cancellation`.
+- **Command:**
+  `PYTHONPATH=backend pytest -q backend/tests/unit/api/test_agent_streaming_response_cancellation.py::test_interrupted_cleanup_surfaces_ack_failure_after_request_cancellation --tb=short`.
+- **Mutation:** removing `cleanup_task.result()` made the test fail with
+  `Failed: DID NOT RAISE RuntimeError`; restoring the exact source bytes made
+  it pass. The shield-success companion test also passes with the guard.
