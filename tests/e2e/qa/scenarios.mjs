@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SAFE_STREAM_EVENT_TYPES = new Set(['status', 'token', 'done', 'error', 'confirmation', 'tool_call', 'tool_result', 'metadata']);
 
 function assertThat(condition, message, evidence = []) {
   if (!condition) {
@@ -19,12 +20,77 @@ export function extractAnswerText(events = []) {
     .join('');
 }
 
-/** Exact answer oracle: empty, partial, and substring matches must fail. */
-export function assertExactAnswer(events, expected) {
-  const answer = extractAnswerText(events).trim();
-  assertThat(answer.length > 0, 'Model answer was empty');
-  assertThat(answer === expected, `Model answer did not exactly equal the expected token (${answer.length} chars)`);
-  return answer;
+function streamDiagnostics(events, phase) {
+  const values = Array.isArray(events) ? events : [];
+  const eventTypes = values.map((item) => SAFE_STREAM_EVENT_TYPES.has(item?.event) ? item.event : 'other');
+  const acceptedRunIds = values
+    .filter((item) => item?.event === 'status' && item?.data?.phase === 'accepted')
+    .map((item) => item?.data?.run_id)
+    .filter((runId) => typeof runId === 'string' && UUID.test(runId));
+  return {
+    phase: String(phase ?? 'stream').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64),
+    eventCount: Math.min(values.length, 100),
+    eventTypes: [...new Set(eventTypes)].slice(0, 20),
+    tokenEventCount: Math.min(values.filter((item) => item?.event === 'token').length, 100),
+    acceptedRunIds: [...new Set(acceptedRunIds)].slice(0, 8),
+  };
+}
+
+function normalizedAnswer(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function answerDiagnostics(events, expected, phase) {
+  const rawAnswer = extractAnswerText(events);
+  return {
+    ...streamDiagnostics(events, phase),
+    exactMatch: rawAnswer === expected,
+    formattingNormalizedMatch: normalizedAnswer(rawAnswer) === normalizedAnswer(expected),
+    answerEmpty: rawAnswer.trim().length === 0,
+    answerLength: Math.min(rawAnswer.length, 4000),
+    trimmedAnswerLength: Math.min(rawAnswer.trim().length, 4000),
+    expectedLength: Math.min(String(expected ?? '').length, 4000),
+  };
+}
+
+function assertStreamDone(stream, phase) {
+  const events = Array.isArray(stream?.events) ? stream.events : [];
+  const diagnostic = {
+    ...streamDiagnostics(events, phase),
+    terminal: stream?.terminal === true,
+    done: events.some((item) => item?.event === 'done'),
+    errorCategory: 'stream',
+    errorCode: 'MISSING_DONE',
+  };
+  assertThat(diagnostic.done, 'Stream did not emit a done event', diagnostic);
+  return diagnostic;
+}
+
+/** Exact answer oracle: empty, partial, formatting-only, and substring matches must fail. */
+export function assertExactAnswer(events, expected, phase = 'answer') {
+  const diagnostic = answerDiagnostics(events, expected, phase);
+  if (diagnostic.answerEmpty) {
+    assertThat(false, 'Model answer was empty', { ...diagnostic, errorCategory: 'answer', errorCode: 'ANSWER_EMPTY' });
+  }
+  if (!diagnostic.exactMatch) {
+    // Keep the strict raw comparison. The normalized boolean is diagnostic
+    // context only and never turns a formatting mismatch into a pass.
+    assertThat(false, 'Model answer did not exactly equal the expected token', { ...diagnostic, errorCategory: 'answer', errorCode: 'ANSWER_MISMATCH' });
+  }
+  return extractAnswerText(events);
+}
+
+export function isCanonicalEmptyThreadMessageList(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const keys = Object.keys(data).sort();
+  if (keys.join('|') !== 'has_more|limit|messages|page|total') return false;
+  return Array.isArray(data.messages)
+    && data.messages.length === 0
+    && data.total === 0
+    && data.has_more === false
+    && data.page === 1
+    && Number.isInteger(data.limit)
+    && data.limit >= 1;
 }
 
 /** Idempotency oracle used by the lifecycle case and its local negative test. */
@@ -38,6 +104,10 @@ export function assertIdempotentMessage({ firstId, secondId, messages, clientMes
 
 function threadUrl(threadId) {
   return `/chat?thread=${encodeURIComponent(threadId)}`;
+}
+
+function messageComposer(page) {
+  return page.getByRole('textbox', { name: 'Message', exact: true });
 }
 
 async function waitForCondition(check, timeoutMs, message) {
@@ -274,16 +344,16 @@ const scenarios = [
         thread_id: fixture.threadId,
         use_rag: false,
       });
-      assertThat(first.events.some((item) => item.event === 'done'), 'First Q&A turn did not emit done');
-      const firstAnswer = assertExactAnswer(first.events, 'NOUS_QA_ACK');
+      assertStreamDone(first, 'q-and-a-first');
+      const firstAnswer = assertExactAnswer(first.events, 'NOUS_QA_ACK', 'q-and-a-first-answer');
       evidence.consumeModelTurn();
       const second = await session.streamAgent({
         messages: [{ role: 'user', content: 'What exact token did I ask you to use? Reply with that token only.' }],
         thread_id: fixture.threadId,
         use_rag: false,
       });
-      assertThat(second.events.some((item) => item.event === 'done'), 'Follow-up Q&A turn did not emit done');
-      const secondAnswer = assertExactAnswer(second.events, 'NOUS_QA_ACK');
+      assertStreamDone(second, 'q-and-a-followup');
+      const secondAnswer = assertExactAnswer(second.events, 'NOUS_QA_ACK', 'q-and-a-followup-answer');
       return {
         assertion: 'Two bounded inline-only turns reached done with exact deterministic answers',
         evidence: [{ firstTerminal: first.terminal, secondTerminal: second.terminal, firstAnswerLength: firstAnswer.length, secondAnswerLength: secondAnswer.length }],
@@ -335,32 +405,32 @@ const scenarios = [
         thread_id: firstFixture.threadId,
         use_rag: false,
       });
-      assertThat(first.events.some((item) => item.event === 'done'), 'First isolated Q&A turn did not emit done');
-      assertExactAnswer(first.events, firstMarker);
+      assertStreamDone(first, 'isolation-first');
+      assertExactAnswer(first.events, firstMarker, 'isolation-first-answer');
       evidence.consumeModelTurn();
       const second = await session.streamAgent({
         messages: [{ role: 'user', content: `Reply exactly with ${secondMarker} and no other text.` }],
         thread_id: secondFixture.threadId,
         use_rag: false,
       });
-      assertThat(second.events.some((item) => item.event === 'done'), 'Second isolated Q&A turn did not emit done');
-      assertExactAnswer(second.events, secondMarker);
+      assertStreamDone(second, 'isolation-second');
+      assertExactAnswer(second.events, secondMarker, 'isolation-second-answer');
       evidence.consumeModelTurn();
       const followup = await session.streamAgent({
         messages: [{ role: 'user', content: 'What exact marker did I ask you to use in this thread? Reply with that marker only.' }],
         thread_id: secondFixture.threadId,
         use_rag: false,
       });
-      assertThat(followup.events.some((item) => item.event === 'done'), 'Isolated follow-up did not emit done');
-      assertExactAnswer(followup.events, secondMarker);
+      assertStreamDone(followup, 'isolation-followup');
+      assertExactAnswer(followup.events, secondMarker, 'isolation-followup-answer');
       evidence.consumeModelTurn();
       const revisit = await session.streamAgent({
         messages: [{ role: 'user', content: 'What exact marker did I ask you to use in this thread? Reply with that marker only.' }],
         thread_id: firstFixture.threadId,
         use_rag: false,
       });
-      assertThat(revisit.events.some((item) => item.event === 'done'), 'Revisited first thread did not emit done');
-      assertExactAnswer(revisit.events, firstMarker);
+      assertStreamDone(revisit, 'isolation-revisit');
+      assertExactAnswer(revisit.events, firstMarker, 'isolation-revisit-answer');
       return {
         assertion: 'Two owned threads return their own inline-only marker with RAG disabled and no attachments',
         evidence: [{ firstMarkerLength: firstMarker.length, secondMarkerLength: secondMarker.length, rag: false, attachments: 0, revisitedFirstThread: true }],
@@ -441,7 +511,7 @@ const scenarios = [
         );
         assertThat(await search.inputValue() === 'history-a', 'History search input did not retain the query');
         const draft = `${evidence.fixturePrefix} draft only on history-a`;
-        const message = page.getByLabel('Message');
+        const message = messageComposer(page);
         await message.fill(draft);
         assertThat(await message.inputValue() === draft, 'Draft input did not retain its thread-scoped value');
         await search.fill('');
@@ -449,19 +519,19 @@ const scenarios = [
         await rows.filter({ hasText: secondTitle }).first().click();
         await waitForCondition(
           async () => new URL(page.url()).searchParams.get('thread') === secondFixture.threadId
-            && (await page.getByLabel('Message').inputValue()) !== draft,
+            && (await messageComposer(page).inputValue()) !== draft,
           session.config.timeoutMs,
           'Sidebar switch to history-b did not restore an independent draft'
         );
-        assertThat(await page.getByLabel('Message').inputValue() !== draft, 'Draft from history-a leaked into history-b');
+        assertThat(await messageComposer(page).inputValue() !== draft, 'Draft from history-a leaked into history-b');
         await rows.filter({ hasText: firstTitle }).first().click();
         await waitForCondition(
           async () => new URL(page.url()).searchParams.get('thread') === firstFixture.threadId
-            && (await page.getByLabel('Message').inputValue()) === draft,
+            && (await messageComposer(page).inputValue()) === draft,
           session.config.timeoutMs,
           'Sidebar switch back to history-a did not restore its draft'
         );
-        assertThat(await page.getByLabel('Message').inputValue() === draft, 'History-a draft was not restored after returning');
+        assertThat(await messageComposer(page).inputValue() === draft, 'History-a draft was not restored after returning');
         return { assertion: 'History search and in-app sidebar switching keep drafts isolated across two threads in one owned workspace', evidence: ['Search threads', 'button.sb-conv', 'Message', 'thread A/B switch', 'default workspace cache precondition'] };
       } finally {
         await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
@@ -719,17 +789,41 @@ const scenarios = [
     async run(session) {
       await session.login();
       const stale = '00000000-0000-4000-8000-000000000000';
-      const statuses = [];
-      for (const path of [`/api/v2/threads/${stale}`, `/api/v2/threads/${stale}/messages`, `/api/v1/agent/threads/${stale}/messages`]) {
+      const endpoints = [
+        { kind: 'thread-detail', path: `/api/v2/threads/${stale}` },
+        { kind: 'thread-message-list', path: `/api/v2/threads/${stale}/messages` },
+        { kind: 'agent-message-list', path: `/api/v1/agent/threads/${stale}/messages` },
+      ];
+      const observations = [];
+      for (const endpoint of endpoints) {
         try {
-          const response = await session.request(path, { target: 'backend' });
-          statuses.push(response.status);
+          const response = await session.request(endpoint.path, { target: 'backend' });
+          if (response.status === 200) {
+            const canonicalEmptyList = endpoint.kind === 'thread-message-list'
+              && isCanonicalEmptyThreadMessageList(response.data);
+            assertThat(canonicalEmptyList, 'Stale thread returned an unexpected successful response shape', {
+              phase: 'stale-thread-access',
+              endpoint: endpoint.kind,
+              status: response.status,
+              responseShape: canonicalEmptyList ? 'empty-message-list' : 'unexpected',
+            });
+            observations.push({ endpoint: endpoint.kind, status: response.status, responseShape: 'empty-message-list' });
+            continue;
+          }
+          assertThat([401, 403, 404].includes(response.status), 'Stale thread endpoint returned an unexpected denial status', {
+            phase: 'stale-thread-access', endpoint: endpoint.kind, status: response.status, responseShape: 'denied',
+          });
+          observations.push({ endpoint: endpoint.kind, status: response.status, responseShape: 'denied' });
         } catch (error) {
-          statuses.push(error.status ?? null);
+          if (error?.evidence) throw error;
+          const status = Number.isInteger(error?.status) ? error.status : null;
+          assertThat([401, 403, 404].includes(status), 'Stale thread endpoint failed with an unexpected status', {
+            phase: 'stale-thread-access', endpoint: endpoint.kind, status, responseShape: 'denied',
+          });
+          observations.push({ endpoint: endpoint.kind, status, responseShape: 'denied' });
         }
       }
-      assertThat(statuses.every((status) => [401, 403, 404].includes(status)), `Stale thread request disclosed a successful response: ${statuses.join(',')}`);
-      return { assertion: 'Stale thread endpoints return denial/not-found statuses', evidence: [{ statuses }] };
+      return { assertion: 'Stale thread endpoints return denial/not-found statuses or the documented canonical empty message list', evidence: [{ phase: 'stale-thread-access', observations }] };
     },
   },
   {
@@ -842,7 +936,7 @@ const scenarios = [
     async run(session) {
       const page = await authenticatedPage(session, '/chat');
       await page.setViewportSize({ width: 390, height: 844 });
-      const message = page.getByLabel('Message');
+      const message = messageComposer(page);
       const before = await message.inputValue();
       await message.fill('line one');
       await message.press('Shift+Enter');
@@ -874,7 +968,7 @@ const scenarios = [
         }
         await route.abort('connectionreset');
       });
-      const message = page.getByLabel('Message');
+      const message = messageComposer(page);
       await message.fill(`${evidence.fixturePrefix} controlled transport fault`);
       await message.press('Enter');
       try {

@@ -31,3 +31,12 @@ Do not mock a server operation and label the result a live backend pass. Control
 ## Verification and handoff
 
 Test the tool itself with Node's test runner and local HTTP fixtures: argument/input validation, redaction, escaped HTML, status/exit aggregation, timeout handling, partial failures, fixture ownership and cleanup constraints. Exercise at least one real local browser flow through the tool. Existing script-contract tests and directory docs lint remain required. Capture final live campaign reports only after the deployed backend contains the merged repairs and the frontend is verified. Record deployment waiting as a prerequisite, not a product failure. Do not merge or deploy application changes as part of this testing-tool task.
+
+## Implementation ruling — 2026-09-17: deployment identity
+
+Current `/health` and `/health/readiness` do not expose a source SHA. Never equate the application VERSION with a commit. Support optional `--deployment-evidence <JSON>` for externally observed metadata, with target URL, backend SHA/digest, frontend SHA, timestamp and provenance; validate exact target, bounded freshness and identity shape. Explicitly label this as operator-supplied external observation, not a live server attestation. An expected-backend-SHA requirement blocks writes when neither a real server identity nor valid matching external evidence is available. Without that explicit requirement, unknown identity remains recorded as unknown. The controller will verify actual Kubernetes/GitHub release metadata before authorizing this session's live campaign.
+
+
+## Scope amendment — 2026-09-17, chat only
+
+The owner narrowed this campaign to chat. Remaining execution covers chat answers, follow-up context, streaming and Stop, thread history and drafts, chat attachments, public reasoning summaries, exports, authentication, and responsive controls. Research projects, pipelines, notes, and draft generation are excluded from further testing and repair in this campaign. The two exact-owned temporary research projects were removed after the scope change. Earlier observations remain historical evidence.

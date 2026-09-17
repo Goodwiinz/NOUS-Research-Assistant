@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { isFullIdentity, main, observeSourceIdentity, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
-import { runCampaign, exitCodeForReport, checkExpectedBackendIdentity } from '../../../tests/e2e/qa/runner.mjs';
+import { runCampaign, exitCodeForReport, checkExpectedBackendIdentity, sanitizeAssertionEvidence } from '../../../tests/e2e/qa/runner.mjs';
 import { renderHtml } from '../../../tests/e2e/qa/report.mjs';
-import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
+import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
 import {
   FixtureLedger,
   FixtureOwnershipError,
@@ -38,6 +38,49 @@ function fakeLoginSession(locators, timeoutMs = 100) {
     goto: async () => {},
     page: { locator: (selector) => locators[selector] },
   };
+}
+
+function fakeModelSession(streams) {
+  const fixtureIds = [
+    '81818181-8181-4181-8181-818181818181',
+    '92929292-9292-4292-8292-929292929292',
+    'a3a3a3a3-a3a3-43a3-83a3-a3a3a3a3a3a3',
+    'b4b4b4b4-b4b4-44b4-84b4-b4b4b4b4b4b4',
+    'c5c5c5c5-c5c5-45c5-85c5-c5c5c5c5c5c5',
+  ];
+  let fixtureIndex = 0;
+  return {
+    observations: [],
+    login: async () => {},
+    request: async () => ({ status: 201, data: { id: fixtureIds[fixtureIndex++ % fixtureIds.length] } }),
+    registerFixture: () => {},
+    streamAgent: async () => streams.shift() ?? { status: 200, events: [], terminal: true, acceptedRunIds: [] },
+    cleanup: async () => ({ status: 'complete', retained: [], errors: [] }),
+    close: async () => {},
+  };
+}
+
+async function runLocalModelScenario(id, streams, runId, secrets = []) {
+  const scenario = registry.find((item) => item.id === id);
+  assert.ok(scenario, `${id} must remain registered`);
+  return runCampaign(
+    {
+      suite: scenario.suite,
+      selectedIds: [id],
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: 'http://127.0.0.1:8000/api/v1',
+      timeoutMs: 100,
+      maxTurns: 12,
+      allowWrites: true,
+      credentials: { email: 'qa@example.test', password: 'synthetic-password' },
+      secrets,
+      runId,
+    },
+    {
+      registry: [scenario],
+      sessionFactory: async () => fakeModelSession(streams),
+    }
+  );
 }
 
 function loginLocators(overrides = {}) {
@@ -269,6 +312,36 @@ test('authenticated validation stops after an accepted invalid response within m
   assert.match(report.cases[0].reason, /unexpectedly accepted/i);
   assert.equal(report.summary.modelTurns, 1, 'the accepted attempt must consume the reserved maxTurns=1 budget');
   assert.equal(streamCalls, 1, 'an accepted invalid response must halt before a second submission');
+});
+
+test('stale-thread access accepts only the canonical empty message-list response', async () => {
+  const stale = registry.find((scenario) => scenario.id === 'adversarial.stale-thread-access');
+  assert.ok(stale, 'stale-thread scenario must remain registered');
+  const session = {
+    login: async () => {},
+    request: async (path) => {
+      if (path.endsWith('/messages') && path.startsWith('/api/v2/')) {
+        return { status: 200, data: { messages: [], total: 0, page: 1, limit: 100, has_more: false } };
+      }
+      return { status: 404, data: { detail: 'not found' } };
+    },
+  };
+  await stale.run(session);
+  assert.equal(isCanonicalEmptyThreadMessageList({ messages: [], total: 0, page: 1, limit: 100, has_more: false }), true);
+  assert.equal(isCanonicalEmptyThreadMessageList({ messages: [], total: 0, page: 1, limit: 100, has_more: false, data: 'unexpected' }), false);
+
+  await assert.rejects(
+    () => stale.run({
+      ...session,
+      request: async (path) => {
+        if (path.endsWith('/messages') && path.startsWith('/api/v2/')) {
+          return { status: 200, data: { data: { messages: [] }, total: 0, page: 1, limit: 100, has_more: false } };
+        }
+        return { status: 404, data: null };
+      },
+    }),
+    /unexpected successful response shape/
+  );
 });
 
 test('cleanup refuses an unowned UUID', async () => {

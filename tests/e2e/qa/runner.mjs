@@ -13,6 +13,82 @@ import { registry as defaultRegistry } from './scenarios.mjs';
 
 const SUITES = new Set(['smoke', 'workflow', 'adversarial', 'all']);
 const FULL_IDENTITY = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|sha256:[0-9a-f]{64})$/i;
+const SAFE_DIAGNOSTIC_KEYS = new Set([
+  'phase', 'eventType', 'eventTypes', 'eventCount', 'tokenEventCount',
+  'acceptedRunIds', 'terminal', 'done', 'status', 'statuses',
+  'errorCategory', 'errorCode', 'exactMatch', 'formattingNormalizedMatch',
+  'answerEmpty', 'answerLength', 'trimmedAnswerLength', 'expectedLength',
+  'endpoint', 'responseShape', 'observations',
+]);
+const SAFE_DIAGNOSTIC_EVENT_TYPES = new Set(['status', 'token', 'done', 'error', 'confirmation', 'tool_call', 'tool_result', 'metadata', 'other']);
+const SAFE_DIAGNOSTIC_ENDPOINTS = new Set(['thread-detail', 'thread-message-list', 'agent-message-list']);
+const SAFE_DIAGNOSTIC_SHAPES = new Set(['empty-message-list', 'denied', 'unexpected']);
+const SAFE_DIAGNOSTIC_ERROR_CATEGORIES = new Set(['answer', 'stream', 'transport', 'validation', 'assertion', 'unknown']);
+const SAFE_DIAGNOSTIC_ERROR_CODES = new Set(['ANSWER_EMPTY', 'ANSWER_MISMATCH', 'MISSING_DONE', 'SCENARIO_TIMEOUT', 'UNKNOWN']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Keep assertion diagnostics useful without allowing answer text, prompts,
+ * response bodies, or arbitrary exception fields into a report.
+ */
+export function sanitizeAssertionEvidence(value, depth = 0) {
+  if (depth > 3 || value === null || value === undefined) return undefined;
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => sanitizeAssertionEvidence(item, depth + 1)).filter((item) => item !== undefined);
+  if (typeof value !== 'object') return undefined;
+  const output = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!SAFE_DIAGNOSTIC_KEYS.has(key)) continue;
+    if (key === 'observations') {
+      const observations = sanitizeAssertionEvidence(item, depth + 1);
+      if (Array.isArray(observations)) output[key] = observations;
+      continue;
+    }
+    if (key === 'acceptedRunIds') {
+      if (Array.isArray(item)) output[key] = item.filter((runId) => typeof runId === 'string' && UUID.test(runId)).slice(0, 8);
+      continue;
+    }
+    if (key === 'eventTypes') {
+      if (Array.isArray(item)) output[key] = [...new Set(item.filter((eventType) => SAFE_DIAGNOSTIC_EVENT_TYPES.has(eventType)))].slice(0, 20);
+      continue;
+    }
+    if (key === 'statuses') {
+      if (Array.isArray(item)) output[key] = item.filter((status) => Number.isInteger(status) && status >= 100 && status <= 599).slice(0, 20);
+      continue;
+    }
+    if (key === 'eventType') {
+      if (SAFE_DIAGNOSTIC_EVENT_TYPES.has(item)) output[key] = item;
+      continue;
+    }
+    if (key === 'endpoint') {
+      if (SAFE_DIAGNOSTIC_ENDPOINTS.has(item)) output[key] = item;
+      continue;
+    }
+    if (key === 'responseShape') {
+      if (SAFE_DIAGNOSTIC_SHAPES.has(item)) output[key] = item;
+      continue;
+    }
+    if (key === 'errorCategory') {
+      if (SAFE_DIAGNOSTIC_ERROR_CATEGORIES.has(item)) output[key] = item;
+      continue;
+    }
+    if (key === 'errorCode') {
+      if (SAFE_DIAGNOSTIC_ERROR_CODES.has(item)) output[key] = item;
+      continue;
+    }
+    if (key === 'phase') {
+      if (typeof item === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(item)) output[key] = item;
+      continue;
+    }
+    if (['status', 'eventCount', 'tokenEventCount', 'answerLength', 'trimmedAnswerLength', 'expectedLength'].includes(key)) {
+      if (Number.isInteger(item)) output[key] = Math.max(0, Math.min(4000, item));
+      continue;
+    }
+    if (['terminal', 'done', 'exactMatch', 'formattingNormalizedMatch', 'answerEmpty'].includes(key)) {
+      if (typeof item === 'boolean') output[key] = item;
+    }
+  }
+  return Object.keys(output).length ? output : undefined;
+}
 
 class ScenarioTimeoutError extends Error {
   constructor(timeoutMs) {
@@ -367,9 +443,13 @@ export async function runCampaign(config, options = {}) {
           requests: (session?.observations ?? []).slice(beforeRequests),
         }));
       } catch (error) {
+        const assertionEvidence = sanitizeAssertionEvidence(error?.evidence);
         report.cases.push(caseResult(scenario, 'FAIL', {
           reason: sanitizeError(error, normalizedConfig.secrets ?? []).message,
-          evidence: [sanitizeError(error, normalizedConfig.secrets ?? [])],
+          evidence: [
+            sanitizeError(error, normalizedConfig.secrets ?? []),
+            ...(assertionEvidence ? [{ kind: 'assertion-diagnostic', ...assertionEvidence }] : []),
+          ],
           durationMs: Date.now() - started,
           requests: (session?.observations ?? []).slice(beforeRequests),
         }));

@@ -21,6 +21,29 @@ const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const URL_SECRET = /([?&](?:token|password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token)=)[^&#\s]*/gi;
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+const BROWSER_ACTIONS = new Set(['click', 'fill', 'press', 'setInputFiles', 'waitFor', 'waitForURL', 'goto', 'reload', 'inputValue', 'allInnerTexts', 'unknown']);
+
+function browserErrorSummary(error) {
+  const raw = String(error?.message ?? error ?? '');
+  const lower = raw.toLowerCase();
+  const looksLikeBrowser = error?.name === 'TimeoutError'
+    || lower.includes('strict mode violation')
+    || lower.includes('call log:')
+    || /(?:locator|page)\.[a-z]/i.test(raw);
+  if (!looksLikeBrowser) return null;
+  const actionMatch = raw.match(/(?:locator|page)\.([A-Za-z]+)/i);
+  const action = BROWSER_ACTIONS.has(actionMatch?.[1]) ? actionMatch[1] : 'unknown';
+  const category = lower.includes('strict mode violation')
+    ? 'strict-match'
+    : lower.includes('timeout')
+      ? 'timeout'
+      : lower.includes('target page, context or browser has been closed')
+        ? 'closed'
+        : 'browser';
+  const timeoutMatch = raw.match(/(\d{1,6})\s*ms/);
+  const timeoutMs = timeoutMatch ? Math.min(300_000, Number(timeoutMatch[1])) : null;
+  return { category, action, timeoutMs };
+}
 
 /** Escape text for insertion into an HTML text node or attribute. */
 export function escapeHtml(value) {
@@ -85,6 +108,16 @@ export function redactValue(value, secrets = [], depth = 0) {
 export function sanitizeError(error, secrets = []) {
   const message = error instanceof Error ? error.message : String(error);
   const name = error instanceof Error ? error.name : 'Error';
+  const browser = browserErrorSummary(error);
+  if (browser) {
+    return {
+      name: 'BrowserError',
+      message: `Browser ${browser.category} during ${browser.action}${browser.timeoutMs === null ? '' : ` (${browser.timeoutMs}ms timeout)`}`,
+      category: browser.category,
+      action: browser.action,
+      timeoutMs: browser.timeoutMs,
+    };
+  }
   return {
     name: redactText(name, secrets).slice(0, 160),
     message: redactText(message, secrets).slice(0, 1000),

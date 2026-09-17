@@ -50,3 +50,8 @@
 - [ ] Perform exploratory browser testing where the fixed registry cannot answer a workflow question. Add useful repeatable cases to the tool with tests that catch the observed defect; keep actual model/API tests separate from transport fault injection.
 - [ ] Confirm report redaction and exact-owned cleanup, summarize pass/fail/blocked coverage and prioritize fixes with reproduction instructions. Do not count a scenario whose prerequisite was absent as a pass.
 - [ ] Review the complete tool patch independently, resolve tool defects with Luna max and rerun the owning tests. Provide the CLI command, HTML/JSON reports, audit findings and a fix plan. Preserve any outstanding deployment dependency explicitly.
+
+
+## Scope amendment — 2026-09-17, chat only
+
+The owner narrowed this campaign to chat. Remaining execution covers chat answers, follow-up context, streaming and Stop, thread history and drafts, chat attachments, public reasoning summaries, exports, authentication, and responsive controls. Research projects, pipelines, notes, and draft generation are excluded from further testing and repair in this campaign. The two exact-owned temporary research projects were removed after the scope change. Earlier observations remain historical evidence.

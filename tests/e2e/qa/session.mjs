@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { redactText, sanitizeRequestObservation } from './report.mjs';
+import { redactText, sanitizeError, sanitizeRequestObservation } from './report.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAFE_PATH = /^\/(?:[^\s?#]|%[0-9a-f]{2})*(?:\?[^\s#]*)?$/i;
@@ -317,7 +317,7 @@ export class QASession {
         timeout: options.timeoutMs ?? this.config.timeoutMs,
       });
     } catch (error) {
-      throw new QASessionError(redactText(error?.message ?? error, this.secrets));
+      throw new QASessionError(sanitizeError(error, this.secrets).message);
     }
     this.assertTrustedBrowserUrl(page.url());
     return response;
@@ -559,6 +559,7 @@ export class QASession {
         method: 'POST',
         path,
         threadId,
+        acceptedRunIds: [...(pending?.acceptedRunIds ?? [])],
         status: Number.isFinite(status) ? status : null,
         startedAt: pending?.startedAt ?? null,
         reason,
@@ -728,10 +729,20 @@ export class QASession {
     }
   }
 
-  markRunTerminal(runId) {
-    this.assertOperational();
-    this.clearActiveRun(runId);
-    this.settleStreamSubmission(runId);
+  markRunTerminal(runId, options = {}) {
+    this.assertOperational(options);
+    const exactRunId = String(runId);
+    this.clearActiveRun(exactRunId, options);
+    this.settleStreamSubmission(exactRunId, options);
+    // A stream can end after acceptance without emitting done (for example,
+    // when Stop closes its SSE reader). Keep that uncertainty until the exact
+    // accepted run is proven terminal. Pre-acceptance/unknown submissions and
+    // unrelated run IDs remain retained.
+    this.uncertainStreams = this.uncertainStreams.flatMap((stream) => {
+      if (!stream.acceptedRunIds?.includes(exactRunId)) return [stream];
+      const remaining = stream.acceptedRunIds.filter((id) => id !== exactRunId);
+      return remaining.length > 0 ? [{ ...stream, acceptedRunIds: remaining }] : [];
+    });
   }
 
   abort() {
@@ -767,7 +778,7 @@ export class QASession {
         try {
           await resource?.close();
         } catch (error) {
-          this.quarantineErrors.push({ kind: label, error: redactText(error?.message ?? error, this.secrets) });
+          this.quarantineErrors.push({ kind: label, error: sanitizeError(error, this.secrets).message });
         }
       }
     })();
@@ -846,14 +857,14 @@ export class QASession {
         }
         if (!terminal) throw new QASessionError('Owned agent run did not reach a terminal status during cleanup');
         activeRuns.push({ runId: run.runId, threadId: run.threadId, status: 'terminal' });
-        this.settleStreamSubmission(run.runId, { internal: true });
+        this.markRunTerminal(run.runId, { internal: true });
       } catch (error) {
         // A 404 means the exact run is already gone. A 409 is not assumed to
         // be terminal: the backend also uses it for awaiting-confirmation,
         // identity races, and other still-owned states.
         if (error?.status === 404) {
           activeRuns.push({ runId: run.runId, threadId: run.threadId, status: 'terminal-race' });
-          this.settleStreamSubmission(run.runId, { internal: true });
+          this.markRunTerminal(run.runId, { internal: true });
         } else {
           errors.push({ kind: 'agent-run', id: run.runId, error: redactText(error?.message ?? error, this.secrets) });
           activeRuns.push({ runId: run.runId, threadId: run.threadId, status: 'error' });
@@ -959,7 +970,7 @@ export class QASession {
       try {
         await resource?.close();
       } catch (error) {
-        errors.push(`${label}: ${redactText(error?.message ?? error, this.secrets)}`);
+        errors.push(`${label}: ${sanitizeError(error, this.secrets).message}`);
       }
     }
     this.context = null;
