@@ -531,7 +531,9 @@ export class APIClient {
           } catch {
             // Response body may not be JSON
           }
-          reject(this.toAPIError(body, xhr.status, xhr.statusText || 'Upload failed'));
+          reject(
+            this.toAPIError(body, xhr.status, xhr.statusText || 'Upload failed')
+          );
         }
       };
 
