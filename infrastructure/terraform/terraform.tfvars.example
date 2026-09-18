@@ -10,7 +10,7 @@ owner_email = "devops@example.com" # fill before apply
 
 # EKS Configuration
 cluster_name = "nous-dev-cluster"
-eks_cluster_version = "1.28"
+eks_cluster_version = "1.31"
 
 # Network Configuration
 vpc_cidr = "10.0.0.0/16"

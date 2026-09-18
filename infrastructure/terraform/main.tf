@@ -199,6 +199,11 @@ module "eks" {
     }
     aws-ebs-csi-driver = {
       most_recent = true
+      # IRSA for the CSI controller (ebs-csi-irsa.tf). The live addon already
+      # has this role attached (was applied out-of-band); if state drifts to
+      # role="", re-read with:
+      #   terraform apply -refresh-only -target=module.eks.aws_eks_addon.this["aws-ebs-csi-driver"]
+      service_account_role_arn = aws_iam_role.ebs_csi.arn
     }
   }
 

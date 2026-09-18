@@ -166,11 +166,24 @@ helm list -n kube-system; helm list -n external-secrets
 
 - `external-dns` CrashLoopBackOff until the real Cloudflare token replaces
   the `CHANGE_ME_CLOUDFLARE_API_TOKEN` placeholder — expected, see above.
-- `ebs-csi-controller` CrashLoopBackOff (pre-existing, NOT addon-related):
-  the `aws-ebs-csi-driver` EKS addon was deployed without an IRSA service
-  account role, so csi-provisioner fails its EC2 dry-run health check
-  ("no EC2 IMDS role found"). Fix: create an IRSA role for the
-  `ebs-csi-controller` SA (EKS module `ebs_csi_irsa_role`-style) and set
-  `serviceAccountRoleArn` on the addon — tracked as a follow-up task.
+- ~~`ebs-csi-controller` CrashLoopBackOff~~ RESOLVED: the IRSA role
+  (`nous-development-ebs-csi`) is codified in `infrastructure/terraform/ebs-csi-irsa.tf`
+  and the `aws-ebs-csi-driver` addon now has `serviceAccountRoleArn` set
+  (terraform-managed, `main.tf cluster_addons`).
 - ACM cert stays `PENDING_VALIDATION` until the Cloudflare CNAME from
   `terraform output acm_validation_record` is added manually.
+
+## Out-of-band IAM/secret notes
+
+- **Node role SSM**: `AmazonSSMManagedInstanceCore` is attached OUT-OF-BAND to
+  the EKS-managed node instance role
+  (`default-eks-node-group-20260916065522520500000002`) for SSM access during
+  debugging (Session Manager into nodes). Not codified in terraform — if the
+  node group/role is recreated, re-attach it.
+- **Neo4j credentials**: the secret
+  `multimodal-rag-system/nous-dev-aws-knowledge-graph-analytics-neo4j-credentials`
+  (key `NEO4J_AUTH`, value `neo4j/<32-hex>`) is PRE-CREATED out-of-band via
+  `kubectl create secret`. ArgoCD NEVER manages this secret (the chart only
+  renders it when `neo4j.password` is set, which values-aws deliberately does
+  not). The backend's `NEO4J_PASSWORD` (Infisical `app-secrets`) must match.
+  NEVER commit the password.
