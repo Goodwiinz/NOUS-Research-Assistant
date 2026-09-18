@@ -1329,6 +1329,20 @@ test('exact answer oracle rejects empty, partial, and substring matches', () => 
   assert.throws(() => assertExactAnswer([{ event: 'token', data: { content: 'answer includes NOUS_QA_ACK' } }], 'NOUS_QA_ACK'), /exactly/i);
 });
 
+test('exact answer oracle accepts only bounded markdown or punctuation around the token', () => {
+  assert.equal(
+    assertExactAnswer(
+      [{ event: 'token', data: { content: '\n`NOUS_QA_ACK`.\n' } }],
+      'NOUS_QA_ACK'
+    ),
+    '\n`NOUS_QA_ACK`.\n'
+  );
+  assert.throws(
+    () => assertExactAnswer([{ event: 'token', data: { content: 'The answer is NOUS_QA_ACK.' } }], 'NOUS_QA_ACK'),
+    /exactly/i
+  );
+});
+
 test('idempotency oracle rejects a duplicate persisted row even when IDs are echoed', () => {
   const row = { client_message_id: 'cmid-1', content: 'exact content' };
   assert.throws(() => assertIdempotentMessage({
