@@ -175,6 +175,13 @@ helm list -n kube-system; helm list -n external-secrets
 
 ## Out-of-band IAM/secret notes
 
+- **ArgoCD git fetch timeout**: the repo pack is 1.28GiB — the default 90s
+  `git fetch` times out on a fresh repo-server clone (ComparisonError
+  "git fetch origin --tags --force --prune failed timeout after 1m30s").
+  Out-of-band: `argocd-cmd-params-cm` data key
+  `reposerver.git.request.timeout=900` (env `ARGOCD_GIT_REQUEST_TIMEOUT` on
+  the repo-server), then restart `deploy/argocd-repo-server`. If the ArgoCD
+  helm release is ever reinstalled, re-apply this key.
 - **Node role SSM**: `AmazonSSMManagedInstanceCore` is attached OUT-OF-BAND to
   the EKS-managed node instance role
   (`default-eks-node-group-20260916065522520500000002`) for SSM access during
