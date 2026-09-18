@@ -40,21 +40,16 @@ describe('ChatInlinePlan', () => {
     );
   });
 
-  it('renders the reasoning paragraph only while expanded', () => {
+  it('opens a committed planner rationale so it is visible after completion', () => {
     render(
       <ChatInlinePlan
         plan={plan}
         reasoning="Search arXiv first, then summarize the top hit."
       />
     );
-    // Collapsed by default (non-streaming) — reasoning not yet in the DOM.
     expect(
-      screen.queryByText('Search arXiv first, then summarize the top hit.')
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(
       screen.getByRole('button', { name: 'Reasoning · Execution plan · 0/1' })
-    );
+    ).toHaveAttribute('aria-expanded', 'true');
     expect(
       screen.getByText('Search arXiv first, then summarize the top hit.')
     ).toBeInTheDocument();

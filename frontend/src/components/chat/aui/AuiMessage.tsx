@@ -529,7 +529,10 @@ function CompletedProgressSection({
 }: {
   message: ChatPageMessage;
 }): ReactElement | null {
-  const [open, setOpen] = useState(false);
+  // Provider-authored summaries are the public reasoning surface. Keep them
+  // visible after the stream commits; ordinary lifecycle progress remains
+  // collapsed so existing transcripts stay compact.
+  const [open, setOpen] = useState(Boolean(message.reasoningSummary));
   const steps = [
     ...(message.progressSteps ?? []).map((step) => ({
       title: step.detail,

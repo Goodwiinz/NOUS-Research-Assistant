@@ -464,6 +464,26 @@ describe('AuiAssistantMessage committed-path chrome (ChatBubble parity)', () => 
     expect(screen.getByText('Request accepted')).toBeInTheDocument();
     expect(screen.getByText('Drafting the response')).toBeInTheDocument();
   });
+
+  it('opens a persisted provider reasoning summary so it is visible after completion', () => {
+    renderByIndex([
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Prepared answer.',
+        timestamp: 2,
+        reasoningSummary: 'I compared the strongest retrieved sources.',
+      },
+    ]);
+
+    const trigger = screen.getByRole('button', {
+      name: /reasoning summary/i,
+    });
+    expect(trigger).toHaveAttribute('data-state', 'open');
+    expect(
+      screen.getByText('I compared the strongest retrieved sources.')
+    ).toBeInTheDocument();
+  });
 });
 
 describe('AuiMessageByIndex runtime-sync race', () => {
