@@ -30,10 +30,10 @@ backend:
   replicaCount: 1
   image:
     repository: registry.digitalocean.com/ragsystemregistry/backend
-    tag: "527ad1813f197a6282d11f80f6262f1664848306"
+    tag: "74e0716edabad10a589e8d6038c8353075e97ba1"
     # The digest is the actual pull identity; tag/sourceSha are trace metadata.
-    digest: "sha256:90224d07b6735c993ffe96d093bcfda815bdbe2d966507d005860c39a1bd0d82"
-    sourceSha: "527ad1813f197a6282d11f80f6262f1664848306"
+    digest: "sha256:2c554d1f3cd1aebee4a467e4eb221a20b90c87b627e7c101bf25f54ec00ad46f"
+    sourceSha: "74e0716edabad10a589e8d6038c8353075e97ba1"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
