@@ -1,0 +1,46 @@
+# EKS ingress child app (final-review I4). Deploys the ALB-patched Ingress
+# manifests from the kustomize overlay — sibling of aws-dev.yaml (the helm
+# release app). Picked up automatically by the aws-dev root app-of-apps, which
+# watches this directory (excluding root.yaml/dev.yaml).
+#
+# NOTE: overlays/aws-dev deliberately contains NO cluster-scoped resources
+# (the gp3 StorageClass bootstrap lives in infrastructure/kubernetes/aws-bootstrap/
+# and is applied out-of-ArgoCD — the nous-platform AppProject whitelist does
+# not include storage.k8s.io).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nous-dev-aws-ingress
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: nous-platform
+    environment: aws-dev
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: nous-platform
+
+  source:
+    repoURL: https://github.com/Goodwiinz/rag.git
+    # TODO(post-merge): switch to develop (together with aws-dev.yaml)
+    targetRevision: migration/aws
+    path: infrastructure/kubernetes/overlays/aws-dev
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: multimodal-rag-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=false
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

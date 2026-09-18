@@ -25,11 +25,9 @@ resources:
   # out-of-root file resources; the manifests/ dir itself is not a usable
   # kustomize base: no kustomization.yaml + DO-era legacy material).
   - ingress.yaml
-  # EBS gp3 StorageClass the aws-ebs-csi-driver addon does not create itself;
-  # required by values-aws.yaml (global.storageClass=gp3). See the header in
-  # storageclass-gp3.yaml for why this is a bootstrap resource, not ArgoCD-
-  # managed.
-  - storageclass-gp3.yaml
+  # NOTE: the gp3 StorageClass is NOT here — it is cluster-scoped and the
+  # nous-platform AppProject whitelist does not include storage.k8s.io, so it
+  # is applied out-of-ArgoCD from infrastructure/kubernetes/aws-bootstrap/ instead.
 
 patches:
   - path: ingress-alb-patch.yaml

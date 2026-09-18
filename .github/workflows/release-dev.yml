@@ -7,9 +7,14 @@ name: Release Dev
 # GitHub App design, which never finished bootstrapping.
 #
 # Chain: green Test Pipeline on develop -> build the image at that exact SHA
-# via docker-build.yml -> commit the values-dev.yaml digest/tag bump straight
-# to develop with [skip ci] using GITHUB_TOKEN. Argo CD's nous-dev app tracks
-# develop, so the bump commit is the deployment.
+# via docker-build.yml -> commit the values-aws.yaml digest/tag bump straight
+# to develop with [skip ci] using GITHUB_TOKEN. Argo CD's nous-dev-aws (and
+# nous-dev-aws-ingress root tracking develop) picks the bump up on EKS.
+#
+# DO lane FROZEN: the DO dev environment (values-dev.yaml / nous-dev app on
+# DOKS) no longer receives image bumps — the AWS/EKS lane is the dev target.
+# The DO registry/Spaces build inputs still exist in docker-build.yml only as
+# build-cache plumbing until the S3 cache swap lands.
 #
 # Guards kept from the old design:
 # - only a completed, successful Test Pipeline run for develop triggers it
@@ -76,7 +81,10 @@ jobs:
             exit 0
           fi
 
-          VALUES_FILE="infrastructure/helm/knowledge-graph-analytics/values-dev.yaml"
+          # AWS/EKS dev lane: bump the ECR-pinned identity in values-aws.yaml.
+          # The chart renders repository@sha256:<digest> when digest is set
+          # (templates/_helpers.tpl backendImage), falling back to :tag.
+          VALUES_FILE="infrastructure/helm/knowledge-graph-analytics/values-aws.yaml"
           yq -i '.backend.image.digest = strenv(DIGEST)' "$VALUES_FILE"
           yq -i '.backend.image.tag = strenv(SOURCE_SHA)' "$VALUES_FILE"
           yq -i '.backend.image.sourceSha = strenv(SOURCE_SHA)' "$VALUES_FILE"
