@@ -11,13 +11,13 @@
 | | Source (freeze) | Target (cutover) |
 |---|---|---|
 | Kubernetes | DOKS `do-nyc3-rag-system-cluster` | EKS `nous-dev-cluster` (us-east-1) |
-| App namespace | `rag-dev` | `rag-dev` |
+| App namespace | `rag-dev` | `multimodal-rag-system` |
 | Helm release | `nous-dev` (ArgoCD app of same name) | `nous-dev-aws` |
 | Postgres | DO managed PG, db `multimodal_rag` | RDS PostgreSQL 16 (`db.t4g.small`) |
 | Redis | DO managed Valkey | ElastiCache `cache.t4g.small` (**no data migration — cold start**) |
 | Neo4j | STS `nous-dev-knowledge-graph-analytics-neo4j` (5.26) | same chart on EBS gp3 |
 | Qdrant | STS in `rag-dev` (1.13, manually applied — not in git) | same on EBS gp3 |
-| Object storage | Spaces `rag-system-storage` (nyc3) | S3 `nous-storage-us-east-1` |
+| Object storage | Spaces `rag-system-storage` (nyc3) | S3 `nous-development-storage-3ilp9pj2` |
 | Images | DO registry | ECR `nous/backend`, `nous/frontend` |
 | DNS | Cloudflare (external-dns) | Cloudflare (external-dns) → ALB group `nous-dev` |
 | Frontend | Vercel `dev-app.goodwiinz.tech` | unchanged |
@@ -30,7 +30,7 @@ export EKS_CONTEXT=<EKS_CONTEXT>     # nous-dev-cluster
 ```
 
 > **Rule:** every `kubectl` in Steps 1-5 runs against `$DOKS_CONTEXT` unless the
-> command explicitly says `-n rag-dev --context $EKS_CONTEXT`. Halt if a command
+> command explicitly says `-n multimodal-rag-system --context $EKS_CONTEXT`. Halt if a command
 > errors or output differs from "Expected".
 >
 > `argocd` CLI does NOT follow kubectl contexts — it talks to whatever server it
@@ -59,7 +59,7 @@ All boxes must be checked before starting. Any unchecked box = no go.
   ```bash
   rclone lsd spaces: && rclone lsd s3:
   rclone lsf spaces:rag-system-storage --max-depth 1 | head
-  rclone lsf s3:nous-storage-us-east-1 --max-depth 1 | head
+  rclone lsf s3:nous-development-storage-3ilp9pj2 --max-depth 1 | head
   ```
   Expected: both remotes list without auth errors (`spaces` = DO Spaces keys, `s3` = AWS profile).
 - [ ] Disk space for dumps on the operator machine: `df -h .` — need ≥ (Spaces usage + 2×PG dump size + 2×Neo4j dump). Check source sizes first:
@@ -87,7 +87,7 @@ All boxes must be checked before starting. Any unchecked box = no go.
   Expected: image tagged with the same source SHA currently running on DO (`kubectl -n rag-dev --context $DOKS_CONTEXT get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.template.spec.containers[0].image}{"\n"}{end}'` — match digests, not tags).
 - [ ] Task 7 first rclone sync done and clean:
   ```bash
-  rclone check spaces:rag-system-storage s3:nous-storage-us-east-1
+  rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2
   ```
   Expected: `0 differences` (pre-freeze drift acceptable; final delta synced in Step 3).
 - [ ] EKS addons healthy (Task 3) — required before Step 6 scale-up, check now:
@@ -97,11 +97,21 @@ All boxes must be checked before starting. Any unchecked box = no go.
   kubectl get pods -n external-secrets --context $EKS_CONTEXT
   ```
   Expected: all Running/Ready.
-- [ ] EKS app stack deployed and both EKS ArgoCD apps exist but **paused** (sync none) per Task 5: root app-of-apps `aws-dev` and its `nous-dev-aws` child. Verify:
+- [ ] `infisical-universal-auth` secret exists in the EKS app namespace BEFORE
+  the ArgoCD apps sync (the Infisical operator CRDs/SecretStore depend on it —
+  see `infrastructure/kubernetes/infisical-bootstrap.md`). Verify:
+  ```bash
+  kubectl get secret infisical-universal-auth -n multimodal-rag-system --context $EKS_CONTEXT
+  ```
+- [ ] EKS app stack deployed and both EKS ArgoCD apps exist with **SyncPolicy
+  automated**: root app-of-apps `aws-dev` and its `nous-dev-aws` child. (The
+  writer-freeze comes from the DO-side Step 1; nothing on EKS needs pausing —
+  the app runs from already-rendered manifests until Step 6 scales it up.)
+  Verify:
   ```bash
   argocd app list   # (EKS ArgoCD)
   ```
-  Expected: `aws-dev` (root) and `nous-dev-aws` (child) on EKS, both `SyncPolicy: <none>` (manual).
+  Expected: `aws-dev` (root) and `nous-dev-aws` (child) on EKS, `SyncPolicy: automated`.
 - [ ] ACM certificate issued (Task 3 terraform; DNS validation CNAME added manually in Cloudflare):
   ```bash
   aws acm list-certificates --region us-east-1 \
@@ -180,9 +190,9 @@ Run inside a transient pod on **EKS** (RDS is VPC-private; DO managed PG is reac
 **2a. Launch migration pod:**
 
 ```bash
-kubectl run pg-mig -n rag-dev --context $EKS_CONTEXT \
+kubectl run pg-mig -n multimodal-rag-system --context $EKS_CONTEXT \
   --image=postgres:16-alpine --restart=Never --command -- sleep 7200
-kubectl wait --for=condition=Ready pod/pg-mig -n rag-dev --context $EKS_CONTEXT --timeout=120s
+kubectl wait --for=condition=Ready pod/pg-mig -n multimodal-rag-system --context $EKS_CONTEXT --timeout=120s
 ```
 
 Expected: `condition met`.
@@ -201,8 +211,8 @@ export RDS_PASSWORD='<RDS_PASSWORD>'
 # passed verbatim to psql (no shell layer inside the pod), so SQL containing
 # quotes, parentheses, or semicolons is safe. Passwords are only parsed by
 # your login shell: keep the export lines single-quoted (escape ' as '\'').
-psql_do()  { kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$DO_PGPASSWORD" psql -h "$DO_PGHOST" -p "$DO_PGPORT" -U "$DO_PGUSER" -d multimodal_rag "$@"; }
-psql_rds() { kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" psql -h "$RDS_HOST" -p "$RDS_PORT" -U "$RDS_USER" -d multimodal_rag "$@"; }
+psql_do()  { kubectl exec -i -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$DO_PGPASSWORD" psql -h "$DO_PGHOST" -p "$DO_PGPORT" -U "$DO_PGUSER" -d multimodal_rag "$@"; }
+psql_rds() { kubectl exec -i -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" psql -h "$RDS_HOST" -p "$RDS_PORT" -U "$RDS_USER" -d multimodal_rag "$@"; }
 
 psql_do -c "SELECT version();" && psql_rds -c "SELECT version();"
 ```
@@ -221,7 +231,7 @@ psql_rds -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$RDS_USER';"
 Expected: `1` and `1`. If the db is missing:
 
 ```bash
-kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" \
+kubectl exec -i -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" \
   psql -h "$RDS_HOST" -p "$RDS_PORT" -U "$RDS_USER" -d postgres -c 'CREATE DATABASE multimodal_rag;'
 ```
 
@@ -230,10 +240,10 @@ kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$R
 **2d. Dump DO:**
 
 ```bash
-kubectl exec -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$DO_PGPASSWORD" \
+kubectl exec -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$DO_PGPASSWORD" \
   pg_dump -Fc -h "$DO_PGHOST" -p "$DO_PGPORT" -U "$DO_PGUSER" -d multimodal_rag -f /tmp/nous.dump
-kubectl exec -n rag-dev pg-mig --context "$EKS_CONTEXT" -- ls -lh /tmp/nous.dump
-kubectl exec -n rag-dev pg-mig --context "$EKS_CONTEXT" -- pg_restore --list /tmp/nous.dump | tail -5
+kubectl exec -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- ls -lh /tmp/nous.dump
+kubectl exec -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- pg_restore --list /tmp/nous.dump | tail -5
 ```
 
 Expected: non-trivial file size; `pg_restore --list` prints TOC entries without error.
@@ -243,7 +253,7 @@ Expected: non-trivial file size; `pg_restore --list` prints TOC entries without 
 **2e. Restore to RDS:**
 
 ```bash
-kubectl exec -i -n rag-dev pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" \
+kubectl exec -i -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- env PGPASSWORD="$RDS_PASSWORD" \
   pg_restore -h "$RDS_HOST" -p "$RDS_PORT" -U "$RDS_USER" -d multimodal_rag \
   --no-owner --no-privileges --exit-on-error -j 2 /tmp/nous.dump
 psql_rds -c "ANALYZE;"
@@ -277,7 +287,7 @@ Expected: secrets saved (operator re-syncs on next reconcile, ≤60s; new backen
 **2h. Remove migration pod** (kept until here for re-verification; delete now, recreate if Step 9 rollback needs counts):
 
 ```bash
-kubectl delete pod pg-mig -n rag-dev --context $EKS_CONTEXT
+kubectl delete pod pg-mig -n multimodal-rag-system --context $EKS_CONTEXT
 ```
 
 ---
@@ -287,8 +297,8 @@ kubectl delete pod pg-mig -n rag-dev --context $EKS_CONTEXT
 DO writes are frozen (Step 1), so this is the last delta.
 
 ```bash
-rclone sync spaces:rag-system-storage s3:nous-storage-us-east-1 --progress
-rclone check spaces:rag-system-storage s3:nous-storage-us-east-1
+rclone sync spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --progress
+rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2
 ```
 
 Expected: check reports `0 differences` and `0 errors`.
@@ -341,9 +351,9 @@ Expected: local file, same size as listed in 4b.
 **4d. Pause EKS Neo4j before first data-bearing start.** If the EKS STS has already started once with an empty volume that's fine — the load below overwrites — but the STS must be at 0 during the load:
 
 ```bash
-kubectl scale statefulset nous-dev-knowledge-graph-analytics-neo4j -n rag-dev \
+kubectl scale statefulset nous-dev-aws-knowledge-graph-analytics-neo4j -n multimodal-rag-system \
   --context $EKS_CONTEXT --replicas=0
-kubectl get pods -n rag-dev --context $EKS_CONTEXT -l app.kubernetes.io/component=neo4j
+kubectl get pods -n multimodal-rag-system --context $EKS_CONTEXT -l app.kubernetes.io/component=neo4j
 ```
 
 Expected: no neo4j pods.
@@ -351,7 +361,7 @@ Expected: no neo4j pods.
 **4e. Stage dump into the EKS PVC** via a helper pod mounting the STS's PVC `neo4j-data-nous-dev-aws-knowledge-graph-analytics-neo4j-0`:
 
 ```bash
-kubectl apply -n rag-dev --context $EKS_CONTEXT -f - <<'EOF'
+kubectl apply -n multimodal-rag-system --context $EKS_CONTEXT -f - <<'EOF'
 apiVersion: v1
 kind: Pod
 metadata:
@@ -370,10 +380,10 @@ spec:
       persistentVolumeClaim:
         claimName: neo4j-data-nous-dev-aws-knowledge-graph-analytics-neo4j-0
 EOF
-kubectl wait --for=condition=Ready pod/neo4j-stage -n rag-dev --context $EKS_CONTEXT --timeout=180s
-kubectl exec -n rag-dev --context $EKS_CONTEXT neo4j-stage -- mkdir -p /data/dumps
-kubectl cp /tmp/nous-neo4j.dump rag-dev/neo4j-stage:/data/dumps/neo4j.dump --context $EKS_CONTEXT
-kubectl exec -n rag-dev --context $EKS_CONTEXT neo4j-stage -- ls -lh /data/dumps
+kubectl wait --for=condition=Ready pod/neo4j-stage -n multimodal-rag-system --context $EKS_CONTEXT --timeout=180s
+kubectl exec -n multimodal-rag-system --context $EKS_CONTEXT neo4j-stage -- mkdir -p /data/dumps
+kubectl cp /tmp/nous-neo4j.dump multimodal-rag-system/neo4j-stage:/data/dumps/neo4j.dump --context $EKS_CONTEXT
+kubectl exec -n multimodal-rag-system --context $EKS_CONTEXT neo4j-stage -- ls -lh /data/dumps
 ```
 
 Expected: dump file inside the PVC at `/data/dumps/neo4j.dump` (no server running → load happens before first start).
@@ -381,7 +391,7 @@ Expected: dump file inside the PVC at `/data/dumps/neo4j.dump` (no server runnin
 **4f. Load into the PVC** (runs in the helper before the real pod ever starts):
 
 ```bash
-kubectl exec -n rag-dev --context $EKS_CONTEXT neo4j-stage -- \
+kubectl exec -n multimodal-rag-system --context $EKS_CONTEXT neo4j-stage -- \
   neo4j-admin database load neo4j --from-path=/data/dumps
 ```
 
@@ -390,14 +400,21 @@ Expected: load completes, no error. (If the empty default database was ever crea
 **4g. Clean up helper; leave STS at 0** until Step 6:
 
 ```bash
-kubectl delete pod neo4j-stage -n rag-dev --context $EKS_CONTEXT
+kubectl delete pod neo4j-stage -n multimodal-rag-system --context $EKS_CONTEXT
 ```
 
-Note: the `neo4j` database dump carries graph data only — users/credentials live in the `system` db and are NOT migrated. Auth on EKS is governed by the chart secret `nous-dev-aws-knowledge-graph-analytics-neo4j-credentials` (`NEO4J_AUTH`, password supplied at deploy per `values-aws.yaml`).
+Note: the `neo4j` database dump carries graph data only — users/credentials live in the `system` db and are NOT migrated. Auth on EKS is governed by the secret `nous-dev-aws-knowledge-graph-analytics-neo4j-credentials` (`NEO4J_AUTH`) — pre-created OUT-OF-BAND (`kubectl create secret`, 32-hex password); ArgoCD NEVER manages this secret (chart renders it only when `neo4j.password` is set, which values-aws deliberately does not). Backend's `NEO4J_PASSWORD` (Infisical `app-secrets`) must match. NEVER commit the password.
 
 ---
 
 ## 5. Qdrant: per-collection snapshots → restore on EKS
+
+> **NOTE (pre-cutover decision logged):** the EKS Qdrant restore target is
+> **NOT YET DEPLOYED** (no Qdrant manifests in `infrastructure/kubernetes/`).
+> Either deploy the Qdrant manifests into `multimodal-rag-system` before the
+> cutover window, or DEFER the Qdrant migration to a fast-follow (leaving dev
+> on DO-frozen snapshots until then). Decide explicitly — do not improvise
+> mid-window.
 
 Qdrant's StatefulSet in `rag-dev` was applied manually (not in git) — discover the real pod/service name first. Port `6333` (HTTP).
 
@@ -445,9 +462,9 @@ Expected: one `.snapshot` file per collection, sizes matching 5b.
 **5d. Restore on EKS** — port-forward the EKS qdrant pod and upload each snapshot:
 
 ```bash
-kubectl get statefulset,svc,pvc -n rag-dev --context $EKS_CONTEXT | grep -i qdrant
+kubectl get statefulset,svc,pvc -n multimodal-rag-system --context $EKS_CONTEXT | grep -i qdrant
 export EKS_QDRANT_POD=<eks-qdrant-pod-0>
-kubectl port-forward -n rag-dev --context $EKS_CONTEXT $EKS_QDRANT_POD 6334:6333 &
+kubectl port-forward -n multimodal-rag-system --context $EKS_CONTEXT $EKS_QDRANT_POD 6334:6333 &
 for f in /tmp/qdrant-snaps/*.snapshot; do
   c=$(basename "$f" .snapshot)
   curl -s -X POST "http://localhost:6334/collections/$c/snapshots/upload?priority=snapshot" \
@@ -485,12 +502,12 @@ kubectl get pods -n kube-system --context $EKS_CONTEXT \
 
 Expected: all Running/Ready. **HALT:** ALB controller or external-dns not ready — DNS and TLS cannot come up without them.
 
-**6b. Infisical on EKS** — confirm the operator synced the updated `/database` and `/redis` secrets into `rag-dev`:
+**6b. Infisical on EKS** — confirm the operator synced the updated `/database` and `/redis` secrets into `multimodal-rag-system`:
 
 ```bash
-kubectl -n rag-dev --context $EKS_CONTEXT get secret \
+kubectl -n multimodal-rag-system --context $EKS_CONTEXT get secret \
   database-credentials redis-credentials app-secrets supabase-credentials azure-openai-credentials -o name
-kubectl -n rag-dev --context $EKS_CONTEXT get infisicalsecrets
+kubectl -n multimodal-rag-system --context $EKS_CONTEXT get infisicalsecrets
 ```
 
 Expected: all secrets present, CRDs synced. (`spaces-credentials` must be absent — pruned by `values-aws.yaml`; `do-kb-credentials` optional during transition.)
@@ -513,11 +530,11 @@ Expected: secrets saved. (KEDA reads `keda.redis.address` = `<ELASTICACHE_ENDPOI
 **6d. Scale up + enable GitOps:**
 
 ```bash
-kubectl scale deployments --all -n rag-dev --context $EKS_CONTEXT --replicas=1
-kubectl scale statefulset nous-dev-knowledge-graph-analytics-neo4j -n rag-dev --context $EKS_CONTEXT --replicas=1
+kubectl scale deployments --all -n multimodal-rag-system --context $EKS_CONTEXT --replicas=1
+kubectl scale statefulset nous-dev-aws-knowledge-graph-analytics-neo4j -n multimodal-rag-system --context $EKS_CONTEXT --replicas=1
 argocd app set nous-dev-aws --sync-policy automated   # EKS ArgoCD child app
 argocd app set aws-dev  --sync-policy automated   # EKS ArgoCD root app-of-apps
-kubectl get pods -n rag-dev --context $EKS_CONTEXT -w   # Ctrl-C when settled
+kubectl get pods -n multimodal-rag-system --context $EKS_CONTEXT -w   # Ctrl-C when settled
 ```
 
 Expected: backend, celery-worker, celery-beat, neo4j (and qdrant) pods Running/Ready; backend `wait-for-postgres` init container passes (RDS reachable).
@@ -531,7 +548,7 @@ Expected: backend, celery-worker, celery-beat, neo4j (and qdrant) pods Running/R
 **7a. Get the ALB hostname:**
 
 ```bash
-kubectl get ingress -n rag-dev --context $EKS_CONTEXT
+kubectl get ingress -n multimodal-rag-system --context $EKS_CONTEXT
 ```
 
 Expected: `backend-ingress` (+ `websocket-ingress`) ADDRESS = `k8s-nousdev-...us-east-1.elb.amazonaws.com`.
@@ -570,11 +587,11 @@ Run all from outside the cluster (real user path, via ALB). Frontend: `https://d
 | 3 | Chat streaming (SSE) | Send a chat message | Tokens stream incrementally (ALB `idle-timeout: 300` ≥ app `TIMEOUT: 300`) |
 | 4 | WebSocket | Open a session that uses the ws path | Socket connects (ALB `idle-timeout: 4000` on websocket-ingress); `/ws/health` 200 |
 | 5 | Knowledge-graph entities page | Open entities page | Nodes/edges render (Neo4j restored — data visible from Step 4) |
-| 6 | Celery beat | `kubectl logs -n rag-dev --context $EKS_CONTEXT deploy/nous-dev-celery-beat --tail=50` | Heartbeat/tick lines; no task failures |
-| 7 | Celery worker | `kubectl logs -n rag-dev --context $EKS_CONTEXT deploy/nous-dev-celery-worker --tail=50` | Tasks consumed from ElastiCache queue |
-| 8 | KEDA scale-from-zero | Push enough queue depth (or wait for load) then `kubectl get hpa,so -n rag-dev --context $EKS_CONTEXT` | ScaledObject active; worker replicas > min; scales back down after |
-| 9 | S3 round-trip | Download a pre-migration file through the UI/app | File served from S3 (`nous-storage-us-east-1`) |
-| 10 | Synthetic traffic | `kubectl get cronjob -n rag-dev --context $EKS_CONTEXT` → wait for next `*/20` tick → check job logs | Synthetic job succeeds |
+| 6 | Celery beat | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-beat --tail=50` | Heartbeat/tick lines; no task failures |
+| 7 | Celery worker | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-worker --tail=50` | Tasks consumed from ElastiCache queue |
+| 8 | Worker autoscaling (HPA) | `kubectl get hpa -n multimodal-rag-system --context $EKS_CONTEXT` | Worker HPA present (KEDA is NOT installed on EKS — `keda.enabled: false`; re-test ScaledObject after KEDA install) |
+| 9 | S3 round-trip | Download a pre-migration file through the UI/app | File served from S3 (`nous-development-storage-3ilp9pj2`) |
+| 10 | Synthetic traffic | `kubectl get cronjob -n multimodal-rag-system --context $EKS_CONTEXT` → wait for next `*/20` tick → check job logs | Synthetic job succeeds |
 
 **HALT:** any test fails → capture logs, then decide: quick fix inside the window, or rollback (Step 9). Timebox: if >2 smoke tests fail or the failure class is data-related, roll back.
 
@@ -597,8 +614,8 @@ Requires: a **fresh shell** — re-export `$DOKS_CONTEXT`/`$EKS_CONTEXT` and `ar
 **9.1. Scale EKS down** (prevents split-brain writers when DNS flips back):
 
 ```bash
-kubectl scale deployments --all -n rag-dev --context $EKS_CONTEXT --replicas=0
-argocd app set nous-dev --sync-policy none   # EKS ArgoCD child app
+kubectl scale deployments --all -n multimodal-rag-system --context $EKS_CONTEXT --replicas=0
+argocd app set nous-dev-aws --sync-policy none   # EKS ArgoCD child app
 argocd app set aws-dev  --sync-policy none   # EKS ArgoCD root app-of-apps
 ```
 
@@ -627,10 +644,12 @@ Expected after 9.2-9.4: `curl -s https://dev-api.goodwiinz.tech/health` returns 
 ## 10. Post-cutover
 
 - **First 24h — monitor:**
-  - Grafana (kube-prometheus-stack, ns `rag-system-monitoring` on EKS): pod restarts, backend p95, Celery queue depth, RDS/ElastiCache panels
+  - Grafana (kube-prometheus-stack): NOT deployed on EKS — `prometheus.enabled: false`
+    in `values-aws.yaml`, so there is no `rag-system-monitoring` namespace; rely on
+    CloudWatch + Sentry until a monitoring stack is stood up (fast-follow)
   - CloudWatch (us-east-1): ALB 5xx/target health, RDS connections+CPU, ElastiCache evictions
   - Sentry (`SENTRY_ENVIRONMENT=dev`): new error classes vs pre-cutover baseline
-  - `rclone check spaces:rag-system-storage s3:nous-storage-us-east-1` daily for the first week (Spaces must not receive new writes; if it does, some component still points at DO → fix immediately)
+  - `rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2` daily for the first week (Spaces must not receive new writes; if it does, some component still points at DO → fix immediately)
 - **DO stays frozen 2 weeks** as the rollback source. Do not delete DO resources in this window. Do not resume `nous-dev`/`nous-root` auto-sync on the DO ArgoCD.
 - After the soak, follow the decommission checklist: `docs/runbooks/aws-decommission.md` (covers DO LB deletion, final data archive to S3 Glacier, DOKS destruction, Spaces key revocation).
 - Close-out notes: record actual cutover times, any deviations from this runbook, and the ECR tag ↔ source SHA mapping for the deployed images.

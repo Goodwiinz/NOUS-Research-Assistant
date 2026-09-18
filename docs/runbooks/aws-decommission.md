@@ -44,7 +44,7 @@ All boxes checked before anything destructive. Any unchecked box = no go.
   kubectl get deploy,sts -n rag-dev --context $DOKS_CONTEXT
   ```
   Expected: Deployments `0/N`; Neo4j + Qdrant StatefulSets `1/1`.
-- [ ] **Zero rollback events during soak.** No one ran cutover Step 9; confirm via close-out notes + `kubectl get pods -n rag-dev --context $EKS_CONTEXT` uptime (no mass restarts aligned with a rollback).
+- [ ] **Zero rollback events during soak.** No one ran cutover Step 9; confirm via close-out notes + `kubectl get pods -n multimodal-rag-system --context $EKS_CONTEXT` uptime (no mass restarts aligned with a rollback).
 - [ ] **AWS side healthy — smoke suite green.** Re-run every row of cutover Step 8 (login, upload→embed→search, chat SSE, WebSocket, entities page, Celery beat/worker, KEDA, S3 round-trip, synthetic CronJob) against `https://dev-api.goodwiinz.tech`. Expected: all pass on the first clean run.
   ```bash
   curl -s https://dev-api.goodwiinz.tech/health
@@ -81,7 +81,7 @@ Everything in this section is read-only on DO. Goal: a complete, verified
 archive in S3 Glacier Deep Archive under
 `s3://<ARCHIVE_BUCKET>/do-decommission-<YYYY-MM-DD>/`.
 
-> `<ARCHIVE_BUCKET>`: use `nous-storage-us-east-1` or the terraform backups
+> `<ARCHIVE_BUCKET>`: use `nous-development-storage-3ilp9pj2` or the terraform backups
 > bucket from `infrastructure/terraform/backup.tf`
 > (`${project}-${environment}-backups-<suffix>`; see `terraform output`).
 > DEEP_ARCHIVE objects need an `aws s3 restore` initiation (hours) to read —
@@ -91,17 +91,17 @@ archive in S3 Glacier Deep Archive under
 pattern as cutover Step 2: transient pod on EKS reaching DO PG's public endpoint.
 
 ```bash
-kubectl run pg-final -n rag-dev --context $EKS_CONTEXT \
+kubectl run pg-final -n multimodal-rag-system --context $EKS_CONTEXT \
   --image=postgres:16-alpine --restart=Never --command -- sleep 7200
-kubectl wait --for=condition=Ready pod/pg-final -n rag-dev --context $EKS_CONTEXT --timeout=120s
+kubectl wait --for=condition=Ready pod/pg-final -n multimodal-rag-system --context $EKS_CONTEXT --timeout=120s
 # creds from Infisical project nous-platform env dev folder /database — never shell-history:
 export DO_PGHOST=<DO_PG_HOST> DO_PGPORT=<DO_PG_PORT> DO_PGUSER=<DO_PG_USER>
-kubectl exec -n rag-dev pg-final --context $EKS_CONTEXT -- env \
+kubectl exec -n multimodal-rag-system pg-final --context $EKS_CONTEXT -- env \
   PGPASSWORD='<DO_PG_PASSWORD>' \
   pg_dump -Fc -h "$DO_PGHOST" -p "$DO_PGPORT" -U "$DO_PGUSER" -d multimodal_rag -f /tmp/nous-final.dump
-kubectl exec -n rag-dev pg-final --context $EKS_CONTEXT -- ls -lh /tmp/nous-final.dump
-kubectl cp rag-dev/pg-final:/tmp/nous-final.dump /tmp/nous-final.dump --context $EKS_CONTEXT
-kubectl delete pod pg-final -n rag-dev --context $EKS_CONTEXT
+kubectl exec -n multimodal-rag-system pg-final --context $EKS_CONTEXT -- ls -lh /tmp/nous-final.dump
+kubectl cp multimodal-rag-system/pg-final:/tmp/nous-final.dump /tmp/nous-final.dump --context $EKS_CONTEXT
+kubectl delete pod pg-final -n multimodal-rag-system --context $EKS_CONTEXT
 aws s3 cp /tmp/nous-final.dump \
   s3://<ARCHIVE_BUCKET>/do-decommission-<YYYY-MM-DD>/nous-final.dump --storage-class DEEP_ARCHIVE
 aws s3 ls s3://<ARCHIVE_BUCKET>/do-decommission-<YYYY-MM-DD>/nous-final.dump
@@ -112,14 +112,14 @@ Expected: non-trivial dump size; `aws s3 ls` size == local size.
 **HALT:** dump non-zero exit or 0-byte file → fix, retry; nothing has been deleted, DO intact.
 
 **2b. Final Spaces → S3 sync + manifest.** Note the split destination is
-intentional: Spaces objects land in the live `s3:nous-storage-us-east-1`
+intentional: Spaces objects land in the live `s3:nous-development-storage-3ilp9pj2`
 bucket (they are the serving copy post-cutover), while every other
 decommission artifact in this runbook (dumps, manifests, state) goes to
 `<ARCHIVE_BUCKET>` under `do-decommission-<YYYY-MM-DD>/`.
 
 ```bash
-rclone sync spaces:rag-system-storage s3:nous-storage-us-east-1 --progress
-rclone check spaces:rag-system-storage s3:nous-storage-us-east-1
+rclone sync spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --progress
+rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2
 rclone size spaces:rag-system-storage | tee /tmp/spaces-final-size.txt
 rclone lsjson -R --files-only spaces:rag-system-storage | gzip > /tmp/spaces-manifest.json.gz
 aws s3 cp /tmp/spaces-manifest.json.gz \
@@ -177,7 +177,7 @@ Expected: one non-0-byte `.snapshot` per collection; tar size ≈ sum of snapsho
 | Artifact | Where | Size | Verified by |
 |---|---|---|---|
 | PG dump | `s3://<ARCHIVE_BUCKET>/do-decommission-<YYYY-MM-DD>/nous-final.dump` | <SIZE> | `aws s3 ls` vs local `ls -l` |
-| Spaces objects | `s3:nous-storage-us-east-1` | <COUNT> objects / <BYTES> | `rclone check` + manifest |
+| Spaces objects | `s3:nous-development-storage-3ilp9pj2` | <COUNT> objects / <BYTES> | `rclone check` + manifest |
 | Spaces manifest | `.../spaces-manifest.json.gz` | <SIZE> | gunzip + line count |
 | Neo4j dump | `.../nous-neo4j.dump` | <SIZE> | `aws s3 ls` vs local |
 | Qdrant snapshots | `.../qdrant-snapshots.tgz` | <SIZE> / <N> collections | tar listing |
@@ -347,7 +347,7 @@ Prerequisites (verify before installing):
 
 - [ ] EBS CSI snapshot controller + CRDs installed on EKS (`kubectl get crd volumesnapshots.snapshot.storage.k8s.io` → exists; controller pod Running in `kube-system`).
 - [ ] A `VolumeSnapshotClass` with `driver: ebs.csi.aws.com` and `deletionPolicy: Delete` exists (add to terraform if missing — manifest work, follow-up task).
-- [ ] Qdrant PVC name discovered (STS is not git-managed): `kubectl get pvc -n rag-dev --context $EKS_CONTEXT | grep -i qdrant`.
+- [ ] Qdrant PVC name discovered (STS is not git-managed): `kubectl get pvc -n multimodal-rag-system --context $EKS_CONTEXT | grep -i qdrant`.
 
 Starter manifest (promote to `infrastructure/kubernetes/` or the helm chart as a
 follow-up — do not leave it only in this doc):
@@ -357,13 +357,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ebs-pvc-snapshot
-  namespace: rag-dev
+  namespace: multimodal-rag-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: ebs-pvc-snapshot
-  namespace: rag-dev
+  namespace: multimodal-rag-system
 rules:
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshots"]
@@ -373,7 +373,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: ebs-pvc-snapshot
-  namespace: rag-dev
+  namespace: multimodal-rag-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -381,13 +381,13 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: ebs-pvc-snapshot
-    namespace: rag-dev
+    namespace: multimodal-rag-system
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: ebs-pvc-snapshot
-  namespace: rag-dev
+  namespace: multimodal-rag-system
 spec:
   schedule: "0 3 * * 0"          # weekly Sunday 03:00 UTC — same cadence as the old DO qdrant-backup
   concurrencyPolicy: Forbid
@@ -408,9 +408,9 @@ spec:
                   set -eu
                   STAMP=$(date +%Y%m%d-%H%M%S)
                   for pvc in \
-                    neo4j-data-nous-dev-knowledge-graph-analytics-neo4j-0 \
+                    neo4j-data-nous-dev-aws-knowledge-graph-analytics-neo4j-0 \
                     <QDRANT_PVC>; do
-                    kubectl apply -n rag-dev -f - <<EOF
+                    kubectl apply -n multimodal-rag-system -f - <<EOF
                   apiVersion: snapshot.storage.k8s.io/v1
                   kind: VolumeSnapshot
                   metadata:
@@ -421,12 +421,12 @@ spec:
                       persistentVolumeClaimName: ${pvc}
                   EOF
                   done
-                  kubectl get volumesnapshots -n rag-dev
+                  kubectl get volumesnapshots -n multimodal-rag-system
                   # keep newest 8 total (≈4 per PVC), oldest first out
-                  kubectl get volumesnapshots -n rag-dev \
+                  kubectl get volumesnapshots -n multimodal-rag-system \
                     --sort-by=.metadata.creationTimestamp -o name | head -n -8 \
-                    | xargs -r kubectl delete -n rag-dev
-                  kubectl get volumesnapshots -n rag-dev
+                    | xargs -r kubectl delete -n multimodal-rag-system
+                  kubectl get volumesnapshots -n multimodal-rag-system
               resources:
                 limits:   { cpu: 100m, memory: 128Mi }
                 requests: { cpu: 50m,  memory: 64Mi }
@@ -435,7 +435,7 @@ spec:
 Verification after first fire:
 
 ```bash
-kubectl get volumesnapshots -n rag-dev --context $EKS_CONTEXT \
+kubectl get volumesnapshots -n multimodal-rag-system --context $EKS_CONTEXT \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.readyToUse}{"\n"}{end}'
 ```
 
