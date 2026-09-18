@@ -2,7 +2,7 @@
 ingress class is alb and TLS terminates on an AWS ACM cert (values-aws), and
 cert-manager is not installed there — rendering a ClusterIssuer would make the
 whole ArgoCD sync fail on the missing cert-manager.io GVK. */ -}}
-{{- if and .Values.global.dnsZone (ne .Values.ingress.className "alb") }}
+{{- if and .Values.global.dnsZone (ne .Values.backend.ingress.className "alb") }}
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
