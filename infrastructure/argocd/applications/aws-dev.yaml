@@ -7,7 +7,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: nous-dev
+  name: nous-dev-aws
   namespace: argocd
   labels:
     app.kubernetes.io/part-of: nous-platform

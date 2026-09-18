@@ -12,7 +12,7 @@
 |---|---|---|
 | Kubernetes | DOKS `do-nyc3-rag-system-cluster` | EKS `nous-dev-cluster` (us-east-1) |
 | App namespace | `rag-dev` | `rag-dev` |
-| Helm release | `nous-dev` (ArgoCD app of same name) | `nous-dev` |
+| Helm release | `nous-dev` (ArgoCD app of same name) | `nous-dev-aws` |
 | Postgres | DO managed PG, db `multimodal_rag` | RDS PostgreSQL 16 (`db.t4g.small`) |
 | Redis | DO managed Valkey | ElastiCache `cache.t4g.small` (**no data migration — cold start**) |
 | Neo4j | STS `nous-dev-knowledge-graph-analytics-neo4j` (5.26) | same chart on EBS gp3 |
@@ -36,7 +36,7 @@ export EKS_CONTEXT=<EKS_CONTEXT>     # nous-dev-cluster
 > `argocd` CLI does NOT follow kubectl contexts — it talks to whatever server it
 > is logged into. Steps 1/9.3 run against the **DO** ArgoCD; the Step 0
 > pre-check, Step 6, and 9.1 run against the **EKS** ArgoCD. On EKS the app
-> names are: `aws-dev` (root app-of-apps) and `nous-dev` (child, Helm release).
+> names are: `aws-dev` (root app-of-apps) and `nous-dev-aws` (child, Helm release).
 > Re-run `argocd login` (or `argocd context`) when switching.
 
 ---
@@ -97,11 +97,11 @@ All boxes must be checked before starting. Any unchecked box = no go.
   kubectl get pods -n external-secrets --context $EKS_CONTEXT
   ```
   Expected: all Running/Ready.
-- [ ] EKS app stack deployed and both EKS ArgoCD apps exist but **paused** (sync none) per Task 5: root app-of-apps `aws-dev` and its `nous-dev` child. Verify:
+- [ ] EKS app stack deployed and both EKS ArgoCD apps exist but **paused** (sync none) per Task 5: root app-of-apps `aws-dev` and its `nous-dev-aws` child. Verify:
   ```bash
   argocd app list   # (EKS ArgoCD)
   ```
-  Expected: `aws-dev` (root) and `nous-dev` (child) on EKS, both `SyncPolicy: <none>` (manual).
+  Expected: `aws-dev` (root) and `nous-dev-aws` (child) on EKS, both `SyncPolicy: <none>` (manual).
 - [ ] ACM certificate issued (Task 3 terraform; DNS validation CNAME added manually in Cloudflare):
   ```bash
   aws acm list-certificates --region us-east-1 \
@@ -348,7 +348,7 @@ kubectl get pods -n rag-dev --context $EKS_CONTEXT -l app.kubernetes.io/componen
 
 Expected: no neo4j pods.
 
-**4e. Stage dump into the EKS PVC** via a helper pod mounting the STS's PVC `neo4j-data-nous-dev-knowledge-graph-analytics-neo4j-0`:
+**4e. Stage dump into the EKS PVC** via a helper pod mounting the STS's PVC `neo4j-data-nous-dev-aws-knowledge-graph-analytics-neo4j-0`:
 
 ```bash
 kubectl apply -n rag-dev --context $EKS_CONTEXT -f - <<'EOF'
@@ -368,7 +368,7 @@ spec:
   volumes:
     - name: neo4j-data
       persistentVolumeClaim:
-        claimName: neo4j-data-nous-dev-knowledge-graph-analytics-neo4j-0
+        claimName: neo4j-data-nous-dev-aws-knowledge-graph-analytics-neo4j-0
 EOF
 kubectl wait --for=condition=Ready pod/neo4j-stage -n rag-dev --context $EKS_CONTEXT --timeout=180s
 kubectl exec -n rag-dev --context $EKS_CONTEXT neo4j-stage -- mkdir -p /data/dumps
@@ -393,7 +393,7 @@ Expected: load completes, no error. (If the empty default database was ever crea
 kubectl delete pod neo4j-stage -n rag-dev --context $EKS_CONTEXT
 ```
 
-Note: the `neo4j` database dump carries graph data only — users/credentials live in the `system` db and are NOT migrated. Auth on EKS is governed by the chart secret `nous-dev-knowledge-graph-analytics-neo4j-credentials` (`NEO4J_AUTH`, password supplied at deploy per `values-aws.yaml`).
+Note: the `neo4j` database dump carries graph data only — users/credentials live in the `system` db and are NOT migrated. Auth on EKS is governed by the chart secret `nous-dev-aws-knowledge-graph-analytics-neo4j-credentials` (`NEO4J_AUTH`, password supplied at deploy per `values-aws.yaml`).
 
 ---
 
@@ -515,7 +515,7 @@ Expected: secrets saved. (KEDA reads `keda.redis.address` = `<ELASTICACHE_ENDPOI
 ```bash
 kubectl scale deployments --all -n rag-dev --context $EKS_CONTEXT --replicas=1
 kubectl scale statefulset nous-dev-knowledge-graph-analytics-neo4j -n rag-dev --context $EKS_CONTEXT --replicas=1
-argocd app set nous-dev --sync-policy automated   # EKS ArgoCD child app
+argocd app set nous-dev-aws --sync-policy automated   # EKS ArgoCD child app
 argocd app set aws-dev  --sync-policy automated   # EKS ArgoCD root app-of-apps
 kubectl get pods -n rag-dev --context $EKS_CONTEXT -w   # Ctrl-C when settled
 ```
