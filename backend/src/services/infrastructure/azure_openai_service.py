@@ -3,6 +3,7 @@ Azure OpenAI Service Integration
 Provides support for Azure OpenAI models alongside existing OpenAI and Anthropic integrations
 """
 
+import asyncio
 import logging
 import os
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -203,7 +204,8 @@ class AzureOpenAIService:
             # Handle different parameter names for newer models
             if deployment_name and "gpt-5" in deployment_name.lower():
                 # GPT-5 models use max_completion_tokens and temperature must be 1.0
-                response = chat_client.chat.completions.create(
+                response = await asyncio.to_thread(
+                    chat_client.chat.completions.create,
                     model=deployment_name,
                     messages=messages,
                     temperature=1.0,  # GPT-5 Nano only supports temperature=1.0
@@ -221,7 +223,9 @@ class AzureOpenAIService:
                 )
                 if tools:
                     kwargs["tools"] = tools
-                response = chat_client.chat.completions.create(**kwargs)
+                response = await asyncio.to_thread(
+                    chat_client.chat.completions.create, **kwargs
+                )
 
             if stream:
                 return response  # Return streaming response

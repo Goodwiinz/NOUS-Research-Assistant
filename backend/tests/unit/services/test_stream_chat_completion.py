@@ -1,5 +1,7 @@
-"""Unit tests for AzureOpenAIService.stream_chat_completion()."""
+"""Unit tests for AzureOpenAIService chat completion methods."""
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -139,3 +141,26 @@ async def test_propagates_exception(service: AzureOpenAIService) -> None:
                 messages=[{"role": "user", "content": "Hi"}],
             ):
                 pass
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_does_not_block_asyncio_deadlines(
+    service: AzureOpenAIService,
+) -> None:
+    """A slow synchronous SDK call must yield so wait_for can cancel it."""
+    response = MagicMock()
+    response.choices = []
+
+    def slow_create(**_kwargs):
+        time.sleep(0.05)
+        return response
+
+    service.client.chat.completions.create.side_effect = slow_create
+    with patch.object(service, "get_chat_deployment", return_value="gpt-4"):
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                service.chat_completion(
+                    messages=[{"role": "user", "content": "Hi"}],
+                ),
+                timeout=0.005,
+            )

@@ -90,7 +90,7 @@ async def test_repeated_ingest_is_rejected_before_enqueue(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_requires_shared_admission_before_atomic_claim(monkeypatch):
+async def test_stream_claims_before_shared_admission(monkeypatch):
     run = SimpleNamespace(
         id=uuid4(),
         blueprint_id=uuid4(),
@@ -104,8 +104,60 @@ async def test_stream_requires_shared_admission_before_atomic_claim(monkeypatch)
     blueprint_result.scalars.return_value.first.return_value = blueprint
     last_step_result = Mock()
     last_step_result.scalars.return_value.first.return_value = None
+    claim_result = Mock()
+    claim_result.rowcount = 1
     db = AsyncMock()
-    db.execute = AsyncMock(side_effect=[blueprint_result, last_step_result])
+    db_calls = 0
+    events = []
+
+    async def execute(_statement):
+        nonlocal db_calls
+        events.append("db")
+        result = [blueprint_result, last_step_result, claim_result][db_calls]
+        db_calls += 1
+        return result
+
+    db.execute = AsyncMock(side_effect=execute)
+    user = _user()
+
+    async def admit(*, user_id, organization_id):
+        events.append("admission")
+        return True
+
+    monkeypatch.setattr("src.api.research_engine.runs.admit_expensive_work", admit)
+    with patch(
+        "src.api.research_engine.runs._get_owned_run", AsyncMock(return_value=run)
+    ):
+        response = await stream_run(run.id, user, db)
+
+    assert response.status_code == 200
+    assert db.execute.await_count == 3
+    assert events == ["db", "db", "db", "admission"]
+
+
+@pytest.mark.asyncio
+async def test_stream_denied_admission_releases_claim(monkeypatch):
+    run = SimpleNamespace(
+        id=uuid4(),
+        blueprint_id=uuid4(),
+        status="pending",
+        total_tokens=0,
+        started_at=None,
+        reproducibility_manifest=None,
+    )
+    blueprint = SimpleNamespace(steps=[], parameters={}, version=1)
+    blueprint_result = Mock()
+    blueprint_result.scalars.return_value.first.return_value = blueprint
+    last_step_result = Mock()
+    last_step_result.scalars.return_value.first.return_value = None
+    claim_result = Mock()
+    claim_result.rowcount = 1
+    rollback_result = Mock()
+    rollback_result.rowcount = 1
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[blueprint_result, last_step_result, claim_result, rollback_result]
+    )
     user = _user()
 
     monkeypatch.setattr(
@@ -119,7 +171,7 @@ async def test_stream_requires_shared_admission_before_atomic_claim(monkeypatch)
             await stream_run(run.id, user, db)
 
     assert exc_info.value.status_code == 429
-    assert db.execute.await_count == 2
+    assert db.execute.await_count == 4
 
 
 @pytest.mark.asyncio

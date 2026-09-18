@@ -377,6 +377,7 @@ async def stream_run(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Run is in '{run.status}' state and cannot be streamed",
         )
+    was_paused = run.status == RunStatus.PAUSED.value
 
     # Look up the blueprint
     bp_query = select(ResearchBlueprint).where(
@@ -446,15 +447,6 @@ async def stream_run(
     from sqlalchemy import update as _sa_update
 
     organization_id = _get_verified_organization_id(current_user)
-    if not await admit_expensive_work(
-        user_id=current_user.id,
-        organization_id=organization_id,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many expensive research runs; retry later",
-        )
-
     connectors = _build_connectors(organization_id=str(organization_id))
 
     claim = await db.execute(
@@ -472,6 +464,34 @@ async def stream_run(
             detail="Run was just claimed by another stream",
         )
     await db.commit()
+
+    # Admit only after this request has won the atomic claim. Otherwise every
+    # concurrent loser consumes a shared paid-work slot before receiving 409.
+    if not await admit_expensive_work(
+        user_id=current_user.id,
+        organization_id=organization_id,
+    ):
+        release = await db.execute(
+            _sa_update(ResearchRun)
+            .where(
+                ResearchRun.id == run_id,
+                ResearchRun.status == RunStatus.RUNNING.value,
+            )
+            .values(
+                status=RunStatus.PAUSED.value if was_paused else RunStatus.PENDING.value
+            )
+        )
+        await db.commit()
+        if release.rowcount == 0:
+            logger.warning(
+                "Research run %s could not be released after admission denial",
+                run_id,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many expensive research runs; retry later",
+        )
+
     await db.refresh(run)
     run.started_at = run.started_at or datetime.now(timezone.utc)
     await db.commit()
@@ -510,7 +530,13 @@ async def stream_run(
                 initial_context=prior_outputs,
                 initial_total_tokens=total_tokens,
                 started_at=(
-                    run.started_at.timestamp() if run.started_at is not None else None
+                    None
+                    if was_paused
+                    else (
+                        run.started_at.timestamp()
+                        if run.started_at is not None
+                        else None
+                    )
                 ),
             ):
                 event_type = event.get("event")

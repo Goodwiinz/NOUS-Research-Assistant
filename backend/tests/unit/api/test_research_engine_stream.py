@@ -19,7 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.research_engine.runs import router
+from src.api.research_engine.runs import router, stream_run
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 
@@ -290,6 +290,46 @@ class TestStreamEndpointSuccess:
 
         assert response.status_code == 200
         stream_app.dependency_overrides.pop(get_db, None)
+
+    @pytest.mark.asyncio
+    async def test_resuming_paused_run_starts_a_fresh_active_deadline(self):
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        old_started_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        mock_run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="paused",
+            started_at=old_started_at,
+        )
+        mock_bp = _make_blueprint(id=bp_id)
+        db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+        captured_started_at = {}
+
+        async def mock_engine_run(blueprint, run_id, start_from_step=0, **kwargs):
+            captured_started_at["value"] = kwargs["started_at"]
+            yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
+
+        with (
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+            patch("src.api.research_engine.runs.ArxivConnector"),
+            patch("src.api.research_engine.runs.SemanticScholarConnector"),
+        ):
+            engine = Mock()
+            engine.run = mock_engine_run
+            engine_cls.return_value = engine
+            response = await stream_run(run_id, current_user, db)
+            async for _chunk in response.body_iterator:
+                pass
+
+        assert response.status_code == 200
+        assert captured_started_at["value"] is None
 
     def test_stream_pending_run_resumes_from_last_completed_step(
         self, stream_app, stream_client

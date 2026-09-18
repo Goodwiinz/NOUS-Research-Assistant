@@ -1,6 +1,8 @@
 """Regression coverage for shared arXiv persistence and deduplication."""
 
+import asyncio
 from datetime import datetime, timezone
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -510,6 +512,42 @@ async def test_transaction_failure_compensates_promoted_storage() -> None:
         await persist_arxiv_documents(
             [_source()], user_id=uuid4(), organization_id=uuid4()
         )
+
+    delete.assert_called_once_with(storage_fields)
+
+
+async def test_cancellation_during_storage_promotion_compensates_completed_upload() -> (
+    None
+):
+    lookup_db = MockAsyncSession().set_scalars_result([])
+    sessions = iter([lookup_db])
+    started = Event()
+    release = Event()
+    storage_fields = _storage_fields()
+
+    def _store(*_args: object) -> dict[str, object]:
+        started.set()
+        release.wait(timeout=1)
+        return storage_fields
+
+    with (
+        patch(
+            "src.core.database.AsyncSessionLocal", side_effect=lambda: next(sessions)
+        ),
+        patch.object(settings, "DO_KB_ENABLED", False),
+        patch("src.services.arxiv.persistence.store_arxiv_pdf", side_effect=_store),
+        patch("src.services.arxiv.persistence.delete_arxiv_storage") as delete,
+    ):
+        task = asyncio.create_task(
+            persist_arxiv_documents(
+                [_source()], user_id=uuid4(), organization_id=uuid4()
+            )
+        )
+        await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     delete.assert_called_once_with(storage_fields)
 
