@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import type { LucideIcon } from 'lucide-react';
 import {
+  Activity,
   BarChart3,
   BookOpen,
   FileText,
@@ -14,6 +15,7 @@ import {
   Network,
   Search,
   Settings,
+  Upload,
   Workflow,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -112,80 +114,108 @@ export function AppRail() {
       {/* Divider */}
       <div className="w-[22px] h-px bg-(--nous-border-1) dark:bg-(--nous-shade) my-1.5" />
 
-      {/* Navigation — hub */}
-      <RailButton
-        icon={LayoutGrid}
-        tip="Overview"
-        href="/dashboard"
-        active={isActive('/dashboard')}
-      />
-      <RailButton
-        icon={MessageSquare}
-        tip="Chat"
-        href="/chat"
-        active={isActive('/chat')}
-      />
-      <RailButton
-        icon={FileText}
-        tip="Documents"
-        href="/documents"
-        active={isActive('/documents')}
-      />
-      <RailButton
-        icon={Search}
-        tip="Search"
-        href="/search"
-        active={isActive('/search')}
-      />
+      <nav
+        aria-label="Primary navigation"
+        className="flex flex-col items-center gap-1"
+      >
+        <div
+          role="group"
+          aria-label="Main"
+          className="flex flex-col items-center gap-1"
+        >
+          <RailButton
+            icon={LayoutGrid}
+            tip="Overview"
+            href="/dashboard"
+            active={isActive('/dashboard')}
+          />
+          <RailButton
+            icon={MessageSquare}
+            tip="Chat"
+            href="/chat"
+            active={isActive('/chat')}
+          />
+          <RailButton
+            icon={Search}
+            tip="Search"
+            href="/search"
+            active={isActive('/search')}
+          />
+        </div>
 
-      {/* Divider — knowledge */}
-      <div className="w-[22px] h-px bg-(--nous-border-1) dark:bg-(--nous-shade) my-1.5" />
+        <div className="w-[22px] h-px bg-(--nous-border-1) dark:bg-(--nous-shade) my-1.5" />
 
-      <RailButton
-        icon={BookOpen}
-        tip="ArXiv Papers"
-        href="/arxiv"
-        active={isActive('/arxiv')}
-      />
-      <RailButton
-        icon={Network}
-        tip="Knowledge graph"
-        href="/entities"
-        active={isActive('/entities')}
-      />
-      <RailButton
-        icon={FlaskConical}
-        tip="Research"
-        href="/research"
-        active={isActive('/research')}
-      />
-      <RailButton
-        icon={Workflow}
-        tip="Research Engine"
-        href="/research-engine"
-        active={isActive('/research-engine')}
-      />
+        <div
+          role="group"
+          aria-label="Knowledge"
+          className="flex flex-col items-center gap-1"
+        >
+          <RailButton
+            icon={FileText}
+            tip="Documents"
+            href="/documents"
+            active={isActive('/documents')}
+          />
+          <RailButton
+            icon={Upload}
+            tip="Upload"
+            href="/documents/upload"
+            active={isActive('/documents/upload')}
+          />
+          <RailButton
+            icon={BookOpen}
+            tip="ArXiv Papers"
+            href="/arxiv"
+            active={isActive('/arxiv')}
+          />
+          <RailButton
+            icon={Network}
+            tip="Knowledge graph"
+            href="/entities"
+            active={isActive('/entities')}
+          />
+          <RailButton
+            icon={FlaskConical}
+            tip="Research"
+            href="/research"
+            active={isActive('/research')}
+          />
+          <RailButton
+            icon={Workflow}
+            tip="Research Engine"
+            href="/research-engine"
+            active={isActive('/research-engine')}
+          />
+        </div>
 
-      {/* Divider — system */}
-      <div className="w-[22px] h-px bg-(--nous-border-1) dark:bg-(--nous-shade) my-1.5" />
+        <div className="w-[22px] h-px bg-(--nous-border-1) dark:bg-(--nous-shade) my-1.5" />
 
-      <RailButton
-        icon={BarChart3}
-        tip="Analytics"
-        href="/analytics"
-        active={isActive('/analytics')}
-      />
-
-      {/* Divider */}
-      <div className="w-[22px] h-px bg-(--nous-border-1) dark:bg-(--nous-shade) my-1.5" />
-
-      <BellPopover active={isActive('/notifications')} />
-      <RailButton
-        icon={Settings}
-        tip="Settings"
-        href="/settings"
-        active={isActive('/settings')}
-      />
+        <div
+          role="group"
+          aria-label="System"
+          className="flex flex-col items-center gap-1"
+        >
+          <RailButton
+            icon={BarChart3}
+            tip="Analytics"
+            href="/analytics"
+            active={isActive('/analytics')}
+          />
+          <RailButton
+            icon={Activity}
+            tip="Diagnostics"
+            href="/diagnostics"
+            active={isActive('/diagnostics')}
+          />
+          <BellPopover active={isActive('/notifications')} />
+          <RailButton
+            icon={Settings}
+            tip="Settings"
+            href="/settings"
+            active={isActive('/settings')}
+          />
+        </div>
+      </nav>
 
       {/* Spacer */}
       <div className="flex-1" />
