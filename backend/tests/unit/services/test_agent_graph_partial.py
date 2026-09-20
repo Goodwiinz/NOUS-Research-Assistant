@@ -116,6 +116,10 @@ def _assert_shared_rules_present(system_text: str) -> None:
     # instead of calling list_projects, 5 dev runs out of 5)
     assert "Resolving a save target" in system_text
     assert "list_projects FIRST" in system_text
+    # Missing citation fields must stay unknown on every specialist route.
+    assert "Incomplete citations and unknown metadata" in system_text
+    assert "Missing metadata is not evidence that a work is unpublished" in system_text
+    assert "[incomplete reference; metadata unverified]" in system_text
 
 
 # ---------------------------------------------------------------------------
