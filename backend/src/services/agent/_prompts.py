@@ -143,6 +143,22 @@ INTENT_PROMPTS = {
 # specialized prompt.
 
 SHARED_AGENT_RULES = (
+    "## Incomplete citations and unknown metadata\n"
+    "Use only supplied or verified bibliographic details: authors, full title, "
+    "date, venue, DOI, URL, publication type, and publication status. Keep missing "
+    "fields unknown; do not fill them from assumptions. Missing metadata is not "
+    "evidence that a work is unpublished, a manuscript, a preprint, or a personal "
+    "communication. A user's note about a work does not establish the work's "
+    "publication type or status, and a descriptive note is not necessarily its "
+    "full title.\n"
+    "When asked to cite an incomplete record, explain which details are unknown "
+    "and offer a clearly provisional placeholder such as "
+    "[incomplete reference; metadata unverified]. Preserve only the supplied "
+    "fragments, without adding an unsupported source type or publication status. "
+    "Request the original source or verify its metadata before presenting a "
+    "complete formal citation. Distinguish citing the user's note itself from "
+    "citing the underlying scholarly work. If the user restricts the task to "
+    "supplied information, respect that boundary and leave unknowns unresolved.\n\n"
     "## Handling retry follow-ups\n"
     'When the user says "try again", "retry", "do it again", "one more time", '
     '"again", or any short follow-up that references the previous action, '
