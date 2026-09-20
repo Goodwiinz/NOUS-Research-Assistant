@@ -1,10 +1,43 @@
 # Live agent Q&A evaluation
 
-This Playwright suite sends the versioned cases in
-`e2e/fixtures/agent-qa.v1.json` through the deployed chat UI. Each case opens
-a new chat, waits for committed assistant prose, and checks a deterministic
-concept rubric. Reference answers document the intended meaning; the grader
-does not require exact wording except where a case explicitly requests it.
+This Playwright suite sends thirty short research-note questions from
+`e2e/fixtures/agent-qa.v1.json` through the deployed NOUS chat UI. Each case
+opens a new chat, waits for an answer, and checks a small concept rubric.
+Every answer should use only the note included in its question. The checks
+assess chat content; they do not create or inspect saved research notes.
+
+| Question             | Expected answer                                                     |
+| -------------------- | ------------------------------------------------------------------- |
+| Paper summary        | A search tool helped 20 students find papers faster.                |
+| Main finding         | Semantic search found more relevant papers.                         |
+| Study method         | Researchers interviewed 12 librarians.                              |
+| Study limitation     | Five students or one university limits the study.                   |
+| Supporting source    | Note A supports reduced reading time.                               |
+| Compare paper notes  | Paper A saved time; Paper B did not.                                |
+| Missing results      | No better method can be identified without results.                 |
+| Incomplete citation  | Mark it incomplete, verify the source, and avoid invented metadata. |
+| Draft research note  | State the relevance finding and small sample limitation in chat.    |
+| Next research step   | Test the tool with a larger group.                                  |
+| Paper author         | Maya Chen.                                                          |
+| Paper year           | 2022.                                                               |
+| Study sample         | 18 students.                                                        |
+| Study duration       | Six weeks.                                                          |
+| Search source        | Paper Search.                                                       |
+| Citation source      | Citation Checks.                                                    |
+| Study location       | The university is not stated.                                       |
+| Untested group       | Test the tool with students.                                        |
+| Comparison group     | Compare results with the old tool.                                  |
+| Search keywords      | Librarians; summaries.                                              |
+| Narrow search        | Add librarians.                                                     |
+| Citation title/year  | Useful Summaries (2020).                                            |
+| Citation author/year | Alex Rivera, 2024.                                                  |
+| Supporting studies   | Two papers.                                                         |
+| Total participants   | 25 students.                                                        |
+| Reading time         | Summaries saved 10 minutes.                                         |
+| Note section         | Limitation.                                                         |
+| Reading status       | To read.                                                            |
+| Project description  | Compare search tools used by librarians.                            |
+| Follow-up task       | Read the full paper.                                                |
 
 ## Run
 
@@ -58,49 +91,44 @@ explicit concepts and forbidden phrases. It is repeatable and easy to audit,
 but it cannot detect every factual contradiction or substitute for human or
 model-based semantic review.
 
-`exactAnswer` compares the displayed answer case-sensitively, including
-punctuation. Only surrounding whitespace from the browser extraction is
-trimmed. General concept checks continue to ignore case and punctuation.
+Concept checks ignore case and punctuation. They catch straightforward omissions and wrong answers, but cannot establish full factual correctness. The separate `tools/nous-playwright` workflow tests project creation, attachments, approval, and persistence in the actual NOUS workflow; this chat suite does not test those actions.
 
 To inspect cases without making model calls, leave `AGENT_QA_LIVE` unset and
 run `corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa --list`.
 
 ## Maintain the dataset
 
-Version 1.0.4 extends the citation check to entries in Markdown bullets,
-numbered lists, and blockquotes. These formats remain subject to the same
-metadata requirements; they must not bypass the unsupported-status check.
+Version 1.1.0 replaces the general research and instruction questions with
+self-contained research-note questions. Results are not directly comparable to
+1.0.x. The original examples in `agentQaParaphrases.test.ts` are authored
+offline checks. Captured live observations are labeled separately. The
+citation-integrity regression tests still cover unsupported publication status
+in a proposed reference.
 
-Version 1.0.3 accepts citation-integrity paraphrases such as "do not assign"
-and checks for unsupported "unpublished" labels in proposed reference entries.
-The case-specific `forbiddenPatterns` match the displayed answer with
-case-insensitive, multiline regular expressions; `reason` explains each failure.
-They distinguish the observed citation formats from prose warning against those
-labels, but are not a general semantic citation verifier. Regression cases in
-`agentQaCitationIntegrity.test.ts` cover both forms. The backend's shared agent
-guidance now explicitly keeps missing bibliographic metadata unknown; deploying
-that backend change is required before a live browser run can verify its effect.
+Version 1.2.0 adds twenty supplied-note cases without changing the first ten.
+Aggregate scores are not directly comparable with 1.1.0; compare the shared
+ten cases separately. The paper records and notes are synthetic. Organizational
+prompts ask for draft text in chat, not actual saves.
 
-Version 1.0.2 corrects false negatives observed in the first live run: it accepts
-"Digital Object Identifier", plural citation/paper terms, and method-only
-paraphrases, and removes the arbitrary minimum length for the percentage
-calculation. Reviewed answers and incorrect counterexamples are covered by
-`agentQaParaphrases.test.ts`. Regrading recorded answers checks the revised
-rubric; it is not a fresh live run or an independent estimate of agent quality.
+Version 1.2.1 clarifies three prompts and adds wording alternatives to their
+existing concept checks. All thirty cases remain in place, and the other
+twenty-seven cases are unchanged. Complete answers captured in the 2026-09-20
+version 1.2.0 run and the first version 1.2.1 three-case rerun are separate
+regression examples; the other paraphrase examples are authored offline. The
+historical 26/30 score has not been recomputed or rewritten. These lexical
+checks still have limits: passing them does not prove that every statement in
+an answer is supported by the note.
 
-- Keep prompts self-contained and independent of current events or tenant data.
-- Add explicit wording variants to each required concept group.
-- Update the semantic version when case meaning or grading changes.
-- Run the focused unit tests; they verify unique IDs and prove every reference
-  answer passes its rubric.
+- Keep prompts short, self-contained, and independent of current events or tenant data.
+- Accept normal wording variants without requiring arbitrary answer length.
+- Update the semantic version when a case or rubric changes.
+- Run the focused unit tests and inspect actual live answers alongside rubric results.
 
-## Verify the citation fix after deployment
+## Rerun the citation case
 
-After the backend revision containing the shared citation guidance is running,
-rerun the affected case using the saved session. The backend release process is
-documented in [the workflow guide](../../../.github/workflows/README.md).
-This command keeps the initial full-run artifacts by using separate output
-and report directories:
+Use the saved session to rerun the citation case against the target deployment.
+This command keeps prior full-run artifacts by using separate output and report
+directories:
 
 ```sh
 AGENT_QA_LIVE=1 \
@@ -116,5 +144,4 @@ corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa \
 
 Inspect the actual answer as well as the rubric result. A valid answer must
 leave missing publication details unknown and must not label the source as
-unpublished without evidence. Regrading a saved answer does not verify a
-deployed prompt change.
+unpublished without evidence. Regrading a saved answer does not verify live behavior.

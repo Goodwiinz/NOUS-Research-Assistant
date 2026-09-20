@@ -6,7 +6,7 @@ import { gradeAgentAnswer } from '../agentAnswerGrader';
 describe('agent Q&A dataset', () => {
   it('has a stable version and unique, complete cases', () => {
     expect(dataset.version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(dataset.cases.length).toBeGreaterThanOrEqual(8);
+    expect(dataset.cases).toHaveLength(30);
 
     const ids = dataset.cases.map((testCase) => testCase.id);
     expect(new Set(ids).size).toBe(ids.length);
