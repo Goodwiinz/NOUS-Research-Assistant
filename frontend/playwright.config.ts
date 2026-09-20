@@ -43,6 +43,8 @@ const REPORTS_PATH = path.join(__dirname, 'test-results', 'reports');
 export default defineConfig({
   // Test directory
   testDir: './e2e',
+  // Live model evaluation has its own explicit opt-in configuration.
+  testIgnore: '**/agent-qa/**',
 
   // Global settings
   timeout: GLOBAL_TIMEOUT,
@@ -71,7 +73,7 @@ export default defineConfig({
   // Reporter configuration
   reporter: [
     ['html', {
-      outputFolder: path.join(REPORTS_PATH, 'html'),
+      outputFolder: path.join(__dirname, 'playwright-report'),
       open: process.env.CI ? 'never' : 'on-failure'
     }],
     ['json', {
@@ -82,13 +84,11 @@ export default defineConfig({
       stripANSIControlSequences: true
     }],
     ['list'],
-    // Custom reporter for accessibility and performance metrics
-    ['./e2e/custom-reporter.ts']
   ],
 
   // Web server configuration
   webServer: {
-    command: 'npm run dev',
+    command: 'corepack pnpm@10.18.2 run dev',
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120000, // 2 minutes
@@ -158,7 +158,7 @@ export default defineConfig({
     {
       name: 'iPad',
       use: {
-        ...devices['iPad Pro'],
+        ...devices['iPad Pro 11'],
         viewport: { width: 1024, height: 1366 }
       },
       dependencies: ['setup'],
