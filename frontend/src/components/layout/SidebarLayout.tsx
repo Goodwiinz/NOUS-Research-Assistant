@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/breadcrumb';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
-import { AppRail } from './AppRail';
+import { AppRail, MobileNavigation } from './AppRail';
 import { GlobalJobCenter } from './GlobalJobCenter';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { useProjectStore } from '@/store/projectStore';
@@ -53,7 +53,7 @@ export function SidebarLayout({
   rightPanel,
   showBreadcrumb = true,
   showHeader = true,
-}: SidebarLayoutProps) {
+}: SidebarLayoutProps): React.ReactElement {
   const pathname = usePathname();
   const currentProject = useProjectStore((s) => s.currentProject);
 
@@ -77,6 +77,9 @@ export function SidebarLayout({
       <AppRail />
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          <div className="flex h-14 shrink-0 items-center border-b border-(--nous-border-1) bg-(--nous-bg-1) px-3 md:hidden">
+            <MobileNavigation />
+          </div>
           {showHeader && (
             <header className="flex h-12 sm:h-14 shrink-0 items-center gap-3 border-b border-(--nous-border-1) bg-(--nous-bg-1)/95 backdrop-blur-sm px-3 sm:px-4">
               {showBreadcrumb && (
