@@ -47,15 +47,15 @@ The CLI is an optional second view of the shared backend. Rehearse the workflow 
 
 ## Screenshots
 
-| Live overview | How it works |
+| 1. Compose a question | 2. Watch the answer stream |
 | --- | --- |
-| ![NOUS live overview](brand/screenshots/live-home.png) | ![How NOUS reads, retrieves, and answers](brand/screenshots/live-how-it-works.png) |
+| ![Compose an evidence-review question in NOUS](brand/screenshots/live-chat-01-compose.png) | ![NOUS streams its progress and answer](brand/screenshots/live-chat-02-streaming.png) |
 
-| Public arXiv discovery | Chat workspace |
+| 3. Review the structured answer | 4. Continue with a follow-up |
 | --- | --- |
-| ![Public arXiv discovery in NOUS](brand/screenshots/live-arxiv.png) | ![NOUS chat workspace](brand/screenshots/live-chat.png) |
+| ![Review a completed NOUS answer](brand/screenshots/live-chat-03-answer.png) | ![Ask a follow-up in the same NOUS conversation](brand/screenshots/live-chat-04-follow-up.png) |
 
-Captured from the live [NOUS deployment](https://goodwiinz.tech/). The chat view uses a blank conversation so private message content is excluded.
+Captured from the live [NOUS deployment](https://goodwiinz.tech/) using a fictional study record with workspace sources disabled, so no private source or message content is included.
 
 ## Architecture
 
