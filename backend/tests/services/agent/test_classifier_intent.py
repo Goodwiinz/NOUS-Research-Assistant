@@ -99,6 +99,36 @@ async def test_kb_query_rejects_semantic_graph_confusion(
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Search the entity graph, not the knowledge base.",
+        "Search the entity graph instead of the knowledge base.",
+        "Ignore the knowledge base and search the entity graph.",
+        'Search the entity graph for the term "knowledge base".',
+    ],
+)
+async def test_non_action_kb_phrase_preserves_semantic_graph_intent(
+    monkeypatch: pytest.MonkeyPatch, query: str
+) -> None:
+    semantic = AsyncMock(
+        return_value=ClassificationResult(
+            intent="knowledge_graph",
+            confidence=0.95,
+            reasoning="explicit entity graph request",
+            source="llm",
+        )
+    )
+    monkeypatch.setattr("src.services.agent.classifier.classify_intent_llm", semantic)
+
+    result = await classify_intent_with_fallback(query, page_context={})
+
+    assert result.intent == "knowledge_graph"
+    assert result.source == "llm"
+
+
+@pytest.mark.unit
 def test_our_docs_classified_research() -> None:
     """'our docs' phrasing routes to research."""
     result = classify_intent_keywords("Search our docs for RLHF")
