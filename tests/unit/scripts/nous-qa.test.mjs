@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { isFullIdentity, main, observeSourceIdentity, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { runCampaign, exitCodeForReport, checkExpectedBackendIdentity, sanitizeAssertionEvidence } from '../../../tests/e2e/qa/runner.mjs';
 import { renderHtml } from '../../../tests/e2e/qa/report.mjs';
-import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
+import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, latestAlertLocator, registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
 import {
   FixtureLedger,
   FixtureOwnershipError,
@@ -102,6 +102,24 @@ test('login smoke waits for delayed visible controls before checking uniqueness'
 test('login smoke fails within its bound when a required control is absent', async () => {
   const session = fakeLoginSession(loginLocators({ '#password': delayedVisibleLocator({ appearsAfterMs: 10_000 }) }), 25);
   await assert.rejects(() => smokeLogin(session), /Login password field is missing or not visible/);
+});
+
+test('latest alert locator scopes transport failures to the newest alert', () => {
+  let lastCalled = false;
+  const page = {
+    getByRole(role, options) {
+      assert.equal(role, 'alert');
+      assert.equal(options, undefined);
+      return {
+        last() {
+          lastCalled = true;
+          return 'newest-alert';
+        },
+      };
+    },
+  };
+  assert.equal(latestAlertLocator(page), 'newest-alert');
+  assert.equal(lastCalled, true);
 });
 
 test('rejects a credential-bearing target URL before a campaign can start', () => {

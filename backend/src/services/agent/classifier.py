@@ -20,7 +20,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from src.core.config import settings
-from src.services.agent._prompts import INTENT_KEYWORDS, INTENT_PRIORITY
+from src.services.agent._prompts import (
+    ACTION_INTENT_OVERRIDES,
+    INTENT_KEYWORDS,
+    INTENT_PRIORITY,
+)
 from src.services.agent._sanitize import (  # noqa: F401
     _PROMPT_FIELD_MAX_CHARS,
     _sanitize_prompt_field,
@@ -60,6 +64,10 @@ _CLASSIFIER_LLM_TIMEOUT_SECONDS = 25.0  # bumped from 10s for headroom after
 # costs ~50ms and creates pointless connection churn).
 _CLASSIFIER_LLM = None
 _CLASSIFIER_LLM_LOCK = threading.Lock()
+_RETRY_FOLLOWUP_RE = re.compile(
+    r"\s*(?:try again|retry|do it again|one more time|again)[.!?]*\s*",
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +294,83 @@ def classify_intent_keywords(query: str) -> ClassificationResult:
     )
 
 
+def _apply_semantic_guardrails(
+    query: str,
+    semantic_result: ClassificationResult,
+    keyword_result: ClassificationResult,
+) -> ClassificationResult:
+    """Correct deterministic knowledge-base routing drift."""
+    normalized_query = " ".join(query.casefold().split())
+    requested_intent = None
+    for phrase, intent in ACTION_INTENT_OVERRIDES:
+        match = re.search(rf"\b{re.escape(phrase)}\b", normalized_query)
+        if not match:
+            continue
+        clause_prefix = re.split(r"[.;!?,]|\bbut\b", normalized_query[: match.start()])[
+            -1
+        ]
+        negated = re.search(
+            r"\b(?:do not|don't|never|without|avoid(?:ing)?|ignore|exclude|instead of|rather than|not(?!\s+only\b))\b",
+            clause_prefix,
+        )
+        quoted = any(
+            span.start() <= match.start() and match.end() <= span.end()
+            for span in re.finditer(r"(?<!\w)([\"'])(.*?)\1(?!\w)", normalized_query)
+        )
+        if not negated and not quoted:
+            requested_intent = intent
+            break
+    if (
+        semantic_result.intent == "knowledge_graph"
+        and keyword_result.intent == "research"
+        and requested_intent == "research"
+    ):
+        return keyword_result
+
+    return semantic_result
+
+
+def _retry_intent_from_prior_tool(
+    query: str, prior_tool: Optional[Dict[str, Any]]
+) -> Optional[ClassificationResult]:
+    """Resolve an explicit retry when the preceding tool batch is unambiguous."""
+
+    if not prior_tool or not _RETRY_FOLLOWUP_RE.fullmatch(query):
+        return None
+    calls = prior_tool.get("calls")
+    if not isinstance(calls, list):
+        calls = [prior_tool]
+
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    specialist_intents: set[str] = set()
+    tool_names: list[str] = []
+    for call in calls:
+        if not isinstance(call, dict) or not call.get("name"):
+            return None
+        tool_name = str(call["name"])
+        descriptor = TOOL_REGISTRY.descriptor(tool_name)
+        call_intents = (
+            {intent.value for intent in descriptor.intents if intent.value != "general"}
+            if descriptor and descriptor.enabled
+            else set()
+        )
+        if len(call_intents) != 1:
+            return None
+        specialist_intents.update(call_intents)
+        tool_names.append(tool_name)
+    if len(specialist_intents) != 1:
+        return None
+    inherited_intent = specialist_intents.pop()
+    tool_label = tool_names[0] if len(tool_names) == 1 else "prior tool batch"
+    return ClassificationResult(
+        intent=inherited_intent,  # type: ignore[arg-type]
+        confidence=1.0,
+        reasoning=f"Retry inherited the registered intent for '{tool_label}'.",
+        source="shortcut",
+    )
+
+
 # ---------------------------------------------------------------------------
 # LLM classifier
 # ---------------------------------------------------------------------------
@@ -383,6 +468,9 @@ async def classify_intent_with_fallback(
         )
 
     keyword_result = classify_intent_keywords(query)
+    retry_result = _retry_intent_from_prior_tool(query, prior_tool)
+    if retry_result is not None:
+        return retry_result
     deadline = asyncio.get_running_loop().time() + _CLASSIFIER_LLM_TIMEOUT_SECONDS
     try:
         if settings.AGENT_INTENT_PROVIDER == "typesafe":
@@ -397,7 +485,7 @@ async def classify_intent_with_fallback(
             # TypeSafe has its own calibrated acceptance policy; never compare
             # its concentration statistic with Azure or keyword confidence.
             if result is not None:
-                return result
+                return _apply_semantic_guardrails(query, result, keyword_result)
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise asyncio.TimeoutError
@@ -405,6 +493,7 @@ async def classify_intent_with_fallback(
             classify_intent_llm(query, page_context, previous_turn, prior_tool),
             timeout=remaining,
         )
+        llm_result = _apply_semantic_guardrails(query, llm_result, keyword_result)
 
         if llm_result.confidence >= _LLM_CONFIDENCE_THRESHOLD:
             return llm_result
