@@ -78,7 +78,7 @@ jobs:
     steps:
       - name: Checkout repository
         # v4.2.2 - pinned for security
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install doctl
         # v2.2.0 - pinned for security
@@ -92,7 +92,7 @@ jobs:
 
       - name: Install Helm
         # v3.0.0 - pinned for security
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: "3.13.0"
 
@@ -155,7 +155,7 @@ jobs:
     steps:
       - name: Checkout repository
         # v4.2.2 - pinned for security
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install doctl
         # v2.2.0 - pinned for security
@@ -169,7 +169,7 @@ jobs:
 
       - name: Install Helm
         # v3.0.0 - pinned for security
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: "3.13.0"
 
