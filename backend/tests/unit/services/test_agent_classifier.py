@@ -332,7 +332,7 @@ class TestFallbackClassifier:
         assert result.confidence == 0.5
 
     async def test_shortcut_does_not_fire_with_prior_tool(self):
-        """Retry phrases (short, zero keywords) must still reach the LLM when prior_tool exists."""
+        """Non-retry short queries still reach semantics when prior_tool exists."""
         from src.services.agent.classifier import (
             ClassificationResult,
             classify_intent_with_fallback,
@@ -351,7 +351,7 @@ class TestFallbackClassifier:
             return_value=llm_result,
         ) as mock_llm:
             result = await classify_intent_with_fallback(
-                "try again",
+                "continue",
                 {"type": "unknown"},
                 prior_tool={"name": "ingest_arxiv_papers", "args": {}, "result": ""},
             )
@@ -769,6 +769,119 @@ class TestPriorToolContext:
         assert result.confidence == 0.0
         assert result.source == "keyword"
 
+    async def test_retry_inherits_intent_without_semantic_confidence_floor(self):
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
+
+        with patch(
+            "src.services.agent.classifier.classify_intent_llm",
+            new_callable=AsyncMock,
+            return_value=ClassificationResult(
+                "research", 0.52, "retry of prior search", "llm"
+            ),
+        ) as semantic:
+            result = await classify_intent_with_fallback(
+                "try again",
+                {"type": "unknown"},
+                prior_tool={
+                    "calls": [
+                        {
+                            "name": "search_arxiv",
+                            "result": "error: rate limited",
+                            "status": "error",
+                        }
+                    ]
+                },
+            )
+
+        assert result.intent == "research"
+        assert result.source == "shortcut"
+        semantic.assert_not_awaited()
+
+    async def test_retry_inherits_intent_when_semantic_provider_fails(self):
+        from src.services.agent.classifier import classify_intent_with_fallback
+
+        with patch(
+            "src.services.agent.classifier.classify_intent_llm",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("provider down"),
+        ) as semantic:
+            result = await classify_intent_with_fallback(
+                "try again",
+                {},
+                prior_tool={
+                    "calls": [
+                        {
+                            "name": "export_bibliography",
+                            "result": "error",
+                            "status": "error",
+                        }
+                    ]
+                },
+            )
+
+        assert result.intent == "writing"
+        assert result.source == "shortcut"
+        semantic.assert_not_awaited()
+
+    async def test_retry_keeps_semantic_result_for_mixed_intent_batch(self):
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
+
+        with patch(
+            "src.services.agent.classifier.classify_intent_llm",
+            new_callable=AsyncMock,
+            return_value=ClassificationResult(
+                "writing", 0.95, "retry the failed export", "llm"
+            ),
+        ) as semantic:
+            result = await classify_intent_with_fallback(
+                "try again",
+                {},
+                prior_tool={
+                    "calls": [
+                        {
+                            "name": "export_bibliography",
+                            "result": "error",
+                            "status": "error",
+                        },
+                        {
+                            "name": "search_arxiv",
+                            "result": "ok",
+                            "status": "success",
+                        },
+                    ]
+                },
+            )
+
+        assert result.intent == "writing"
+        assert result.source == "llm"
+        semantic.assert_awaited_once()
+
+    def test_prior_tool_does_not_cross_an_intervening_user_turn(self):
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from src.services.agent._nodes_classify import _extract_prior_tool
+
+        messages = [
+            HumanMessage(content="Search arxiv"),
+            AIMessage(
+                content="",
+                tool_calls=[{"id": "call_1", "name": "search_arxiv", "args": {}}],
+            ),
+            ToolMessage(content="ok", tool_call_id="call_1"),
+            AIMessage(content="Done"),
+            HumanMessage(content="Tell me a joke"),
+            AIMessage(content="A model walks into a bar."),
+            HumanMessage(content="again"),
+        ]
+
+        assert _extract_prior_tool(messages) is None
+
     async def test_llm_classifier_includes_prior_tool_in_prompt(self):
         """When prior_tool is supplied, the LLM system message should describe it."""
         from src.services.agent.classifier import classify_intent_llm
@@ -806,7 +919,7 @@ class TestPriorToolContext:
         assert "2310.11522" not in state_content
 
     async def test_fallback_propagates_prior_tool_to_llm(self):
-        """When keyword confidence is low, prior_tool should reach the LLM call."""
+        """Ambiguous non-retry context should reach the LLM call."""
         from src.services.agent.classifier import (
             ClassificationResult,
             classify_intent_with_fallback,
@@ -825,7 +938,7 @@ class TestPriorToolContext:
             return_value=llm_result,
         ) as mock_llm:
             await classify_intent_with_fallback(
-                "try again",
+                "continue",
                 {"type": "unknown"},
                 previous_turn="The ingest was skipped.",
                 prior_tool={
