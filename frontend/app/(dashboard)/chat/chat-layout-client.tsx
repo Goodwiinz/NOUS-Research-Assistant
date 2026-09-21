@@ -1,8 +1,9 @@
 'use client';
 
 import { ArtifactPanel } from '@/components/chat/artifact-panel/ArtifactPanel';
-import { ContextRail } from '@/components/context-rail';
+import { ContextRail, ContextRailDrawer } from '@/components/context-rail';
 import type { WorkingFoldersSelection } from '@/components/context-rail/WorkingFoldersPanel';
+import { ChatRagProvider, useChatRag } from '@/components/chat/ChatRagContext';
 import { useChatPersistence } from '@/hooks';
 import { cn } from '@/lib/utils';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
@@ -373,6 +374,7 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   const workspaceName = isAuthenticated
     ? (storeWorkspaces.find((w) => w.id === currentWorkspaceId)?.name ?? null)
     : null;
+  const { ragEnabled } = useChatRag();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   // Split-view artifact panel: when open it takes over the rail's slot, and
@@ -450,6 +452,17 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
     [projectId, router, openArtifact]
   );
 
+  const contextRailProps = {
+    threadId: currentThreadId ?? null,
+    workspaceName,
+    workspaceId: currentWorkspaceId ?? undefined,
+    ragEnabled,
+    projectId,
+    projectName: resolvedProjectName,
+    onProjectBound: handleProjectBound,
+    onSelect: handleRailSelect,
+  };
+
   // Global keyboard shortcut for command palette
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -482,16 +495,10 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
             button-toggled overlay so its content stays reachable. */}
           {isAuthenticated && (
             <>
+              <ContextRailDrawer {...contextRailProps} />
               {!showArtifactPanel && (
                 <ContextRail
-                  threadId={currentThreadId ?? null}
-                  workspaceName={workspaceName}
-                  workspaceId={currentWorkspaceId ?? undefined}
-                  ragEnabled={true}
-                  projectId={projectId}
-                  projectName={resolvedProjectName}
-                  onProjectBound={handleProjectBound}
-                  onSelect={handleRailSelect}
+                  {...contextRailProps}
                   className="hidden md:flex shrink-0 md:w-[280px] lg:w-[320px] border-l border-(--nous-border-1)"
                 />
               )}
@@ -517,13 +524,7 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
                         onClick={() => setRailOverlayOpen(false)}
                       />
                       <ContextRail
-                        threadId={currentThreadId ?? null}
-                        workspaceName={workspaceName}
-                        workspaceId={currentWorkspaceId ?? undefined}
-                        ragEnabled={true}
-                        projectId={projectId}
-                        projectName={resolvedProjectName}
-                        onProjectBound={handleProjectBound}
+                        {...contextRailProps}
                         onSelect={(node) => {
                           setRailOverlayOpen(false);
                           handleRailSelect(node);
@@ -580,7 +581,9 @@ export default function ChatLayout({
 }) {
   return (
     <Suspense>
-      <ChatLayoutContent>{children}</ChatLayoutContent>
+      <ChatRagProvider>
+        <ChatLayoutContent>{children}</ChatLayoutContent>
+      </ChatRagProvider>
     </Suspense>
   );
 }

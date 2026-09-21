@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { cn } from '@/lib/utils';
+import { useThreadSearch } from '@/hooks/chat/useThreadSearch';
 import { isToday, isYesterday, formatDistanceToNowStrict } from 'date-fns';
 import {
   CheckSquare,
@@ -31,6 +32,7 @@ interface SidebarConversation {
    *  return one today, so this is normally undefined and the row falls back to
    *  the preview snippet. Nothing here fabricates a count. */
   citationCount?: number;
+  matchingMessageCount?: number;
 }
 
 type FilterKey = 'all' | 'pinned' | 'drafts' | 'shared';
@@ -118,7 +120,18 @@ export const ChatSidebar = memo(function ChatSidebar({
   hasMoreThreads,
   onLoadMoreThreads,
 }: ChatSidebarProps) {
-  const [searchQuery, setSearchQuery] = useState('');
+  const {
+    query: searchQuery,
+    setQuery: setSearchQuery,
+    results: searchResults,
+    totalResults: searchTotalResults,
+    hasMore: hasMoreSearchResults,
+    isLoading: isSearching,
+    isFetchingNextPage: isFetchingMoreSearchResults,
+    isError: searchError,
+    retry: retrySearch,
+    loadMore: loadMoreSearchResults,
+  } = useThreadSearch(currentWorkspace?.id);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
@@ -130,22 +143,60 @@ export const ChatSidebar = memo(function ChatSidebar({
     Promise.resolve(onLoadMoreThreads()).finally(() => setIsLoadingMore(false));
   }, [onLoadMoreThreads, isLoadingMore]);
 
+  const hasSearchQuery = searchQuery.trim().length > 0;
+  const hasServerSearchQuery =
+    searchQuery.trim().length >= 2 && Boolean(currentWorkspace?.id);
+
+  const searchConversations = useMemo(() => {
+    const pinnedById = new Map(
+      conversations.map((conversation) => [
+        conversation.id,
+        conversation.pinned,
+      ])
+    );
+
+    return searchResults.map((result): SidebarConversation => {
+      const summary = result.summary?.trim() || undefined;
+      const updatedAt = Date.parse(result.last_message_at || result.created_at);
+      return {
+        id: result.thread_id,
+        title: result.title?.trim() || 'New Chat',
+        messages: [],
+        updatedAt: Number.isNaN(updatedAt) ? 0 : updatedAt,
+        previewText: summary,
+        messageCount: result.message_count,
+        matchingMessageCount: result.matching_message_count ?? undefined,
+        pinned: pinnedById.get(result.thread_id),
+      };
+    });
+  }, [conversations, searchResults]);
+
   const filteredConversations = useMemo(() => {
     let list = conversations;
-    const q = searchQuery.trim().toLowerCase();
-    if (q) {
-      list = list.filter((c) => c.title.toLowerCase().includes(q));
+    if (hasServerSearchQuery) {
+      list = searchConversations;
+    } else if (hasSearchQuery && currentWorkspace?.id) {
+      list = [];
+    } else {
+      const q = searchQuery.trim().toLowerCase();
+      if (q) list = list.filter((c) => c.title.toLowerCase().includes(q));
     }
     if (activeFilter === 'pinned') list = list.filter((c) => c.pinned);
     return list;
-  }, [conversations, searchQuery, activeFilter]);
+  }, [
+    activeFilter,
+    conversations,
+    currentWorkspace?.id,
+    hasServerSearchQuery,
+    hasSearchQuery,
+    searchConversations,
+    searchQuery,
+  ]);
 
   const sections = useMemo(
     () => groupByDate(filteredConversations),
     [filteredConversations]
   );
-  const hasSearchQuery = searchQuery.trim().length > 0;
-
   const pinnedCount = useMemo(
     () => conversations.filter((c) => c.pinned).length,
     [conversations]
@@ -168,9 +219,17 @@ export const ChatSidebar = memo(function ChatSidebar({
     exitSelectMode();
   }, [selectedIds, onBulkDelete, exitSelectMode]);
 
+  const handleSearchChange = useCallback(
+    (value: string): void => {
+      if (value.trim()) exitSelectMode();
+      setSearchQuery(value);
+    },
+    [exitSelectMode, setSearchQuery]
+  );
+
   // ⌘N shortcut
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    const handler = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault();
         exitSelectMode();
@@ -248,7 +307,7 @@ export const ChatSidebar = memo(function ChatSidebar({
             aria-label="Search threads"
             placeholder="Search threads..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             className="w-full h-8 bg-(--nous-bg-2) dark:bg-(--nous-obsidian) border border-(--nous-border-1) dark:border-(--nous-shade) rounded-[7px] py-0 pl-[30px] pr-2.5 text-xs text-(--nous-fg-1) placeholder-(--nous-fg-3) focus:outline-hidden focus:border-(--nous-sol) dark:focus:border-(--nous-helios) focus:bg-(--nous-bg-1) transition-colors"
             style={{ fontFamily: 'var(--nous-font-ui)' }}
           />
@@ -262,7 +321,9 @@ export const ChatSidebar = memo(function ChatSidebar({
             {
               key: 'all' as FilterKey,
               label: 'All',
-              count: conversations.length,
+              count: hasServerSearchQuery
+                ? searchTotalResults
+                : conversations.length,
             },
             { key: 'pinned' as FilterKey, label: 'Pinned', count: pinnedCount },
           ] as const
@@ -291,35 +352,37 @@ export const ChatSidebar = memo(function ChatSidebar({
         ))}
 
         {/* Select mode toggle */}
-        {selectMode ? (
-          <div className="ml-auto flex items-center gap-1 shrink-0">
+        {!hasSearchQuery ? (
+          selectMode ? (
+            <div className="ml-auto flex items-center gap-1 shrink-0">
+              <button
+                onClick={handleBulkDelete}
+                disabled={selectedIds.length === 0}
+                className="inline-flex items-center gap-1 px-2 py-[3px] rounded-full border border-(--nous-mars)/40 text-(--nous-mars) text-[10px] hover:bg-(--nous-mars)/10 transition-colors disabled:opacity-40"
+                style={{ fontFamily: 'var(--nous-font-mono)' }}
+              >
+                <Trash2 className="w-2.5 h-2.5" />
+                {selectedIds.length}
+              </button>
+              <button
+                onClick={exitSelectMode}
+                aria-label="Exit select mode"
+                className="min-w-11 min-h-11 md:w-5 md:h-5 md:min-w-0 md:min-h-0 flex items-center justify-center rounded-full border border-(--nous-border-1) hover:bg-(--nous-sol)/5 transition-colors"
+              >
+                <X className="w-2.5 h-2.5 text-(--nous-fg-3)" />
+              </button>
+            </div>
+          ) : (
             <button
-              onClick={handleBulkDelete}
-              disabled={selectedIds.length === 0}
-              className="inline-flex items-center gap-1 px-2 py-[3px] rounded-full border border-(--nous-mars)/40 text-(--nous-mars) text-[10px] hover:bg-(--nous-mars)/10 transition-colors disabled:opacity-40"
+              onClick={() => setSelectMode(true)}
+              aria-label="Select conversations"
+              className="ml-auto inline-flex items-center gap-1 px-[9px] py-[3px] rounded-full border border-(--nous-border-1) dark:border-(--nous-shade) text-[10px] text-(--nous-fg-3) hover:border-(--nous-fg-3) transition-colors shrink-0"
               style={{ fontFamily: 'var(--nous-font-mono)' }}
             >
-              <Trash2 className="w-2.5 h-2.5" />
-              {selectedIds.length}
+              <CheckSquare className="w-2.5 h-2.5" aria-hidden="true" />
             </button>
-            <button
-              onClick={exitSelectMode}
-              aria-label="Exit select mode"
-              className="min-w-11 min-h-11 md:w-5 md:h-5 md:min-w-0 md:min-h-0 flex items-center justify-center rounded-full border border-(--nous-border-1) hover:bg-(--nous-sol)/5 transition-colors"
-            >
-              <X className="w-2.5 h-2.5 text-(--nous-fg-3)" />
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => setSelectMode(true)}
-            aria-label="Select conversations"
-            className="ml-auto inline-flex items-center gap-1 px-[9px] py-[3px] rounded-full border border-(--nous-border-1) dark:border-(--nous-shade) text-[10px] text-(--nous-fg-3) hover:border-(--nous-fg-3) transition-colors shrink-0"
-            style={{ fontFamily: 'var(--nous-font-mono)' }}
-          >
-            <CheckSquare className="w-2.5 h-2.5" aria-hidden="true" />
-          </button>
-        )}
+          )
+        ) : null}
       </div>
 
       {/* Scroll region — only this scrolls */}
@@ -356,9 +419,11 @@ export const ChatSidebar = memo(function ChatSidebar({
                   ? `${citationCount} source${citationCount === 1 ? '' : 's'} · ${messageCount} turn${messageCount === 1 ? '' : 's'}`
                   : previewSource
                     ? truncatePreview(previewSource)
-                    : messageCount > 0
-                      ? `${messageCount} message${messageCount === 1 ? '' : 's'}`
-                      : 'No messages yet';
+                    : conv.matchingMessageCount
+                      ? `${conv.matchingMessageCount} matching message${conv.matchingMessageCount === 1 ? '' : 's'}`
+                      : messageCount > 0
+                        ? `${messageCount} message${messageCount === 1 ? '' : 's'}`
+                        : 'No messages yet';
 
               return (
                 <div
@@ -482,31 +547,77 @@ export const ChatSidebar = memo(function ChatSidebar({
           </div>
         ))}
 
-        {sections.length === 0 && (
+        {hasServerSearchQuery && isSearching && sections.length === 0 && (
+          <div
+            className="px-4 py-8 text-center"
+            role="status"
+            aria-live="polite"
+          >
+            <p
+              className="text-[11px] text-(--nous-fg-3)"
+              style={{ fontFamily: 'var(--nous-font-body)' }}
+            >
+              Searching threads…
+            </p>
+          </div>
+        )}
+
+        {hasServerSearchQuery && searchError && (
+          <div
+            className="mx-4 my-2 rounded-md border border-(--nous-mars)/30 px-3 py-2 text-center"
+            role="alert"
+          >
+            <p
+              className="text-[11px] text-(--nous-fg-3)"
+              style={{ fontFamily: 'var(--nous-font-body)' }}
+            >
+              Search failed. Try again.
+            </p>
+            <button
+              type="button"
+              onClick={() => void retrySearch()}
+              className="mt-2 px-2.5 py-1 rounded-md border border-(--nous-border-1) text-[11px] text-(--nous-fg-2) hover:border-(--nous-sol)/40 hover:text-(--nous-fg-1)"
+            >
+              Retry search
+            </button>
+          </div>
+        )}
+
+        {sections.length === 0 && !isSearching && !searchError && (
           <div className="px-4 py-8 text-center">
             <MessageSquare className="w-6 h-6 text-(--nous-fg-3)/40 mx-auto mb-2" />
             <p
               className="text-[11px] text-(--nous-fg-3)"
               style={{ fontFamily: 'var(--nous-font-body)' }}
             >
-              {hasSearchQuery ? 'No matching threads' : 'No conversations yet'}
+              {hasSearchQuery
+                ? searchQuery.trim().length < 2
+                  ? 'Type at least 2 characters to search'
+                  : 'No matching threads'
+                : 'No conversations yet'}
             </p>
           </div>
         )}
 
-        {/* CX8: filtering is explicitly over the currently loaded page. Keep
-            the paging action visible during a search so a matching older
-            thread can be brought into the client-side result set. */}
-        {hasMoreThreads && (
+        {hasServerSearchQuery && hasMoreSearchResults && (
           <div className="px-2.5 pb-2.5 pt-1">
-            {hasSearchQuery && (
-              <p
-                className="px-1 pb-2 text-[10px] leading-normal text-(--nous-fg-3)"
-                style={{ fontFamily: 'var(--nous-font-ui)' }}
-              >
-                Search covers loaded threads. Load older threads to search more.
-              </p>
-            )}
+            <button
+              type="button"
+              onClick={() => void loadMoreSearchResults()}
+              disabled={isFetchingMoreSearchResults}
+              className="w-full py-[7px] rounded-lg border border-(--nous-border-1) dark:border-(--nous-shade) text-[11px] text-(--nous-fg-3) hover:text-(--nous-fg-1) hover:border-(--nous-sol)/30 transition-colors disabled:opacity-50"
+              style={{ fontFamily: 'var(--nous-font-ui)' }}
+            >
+              {isFetchingMoreSearchResults
+                ? 'Loading…'
+                : 'Show more search results'}
+            </button>
+          </div>
+        )}
+
+        {/* CX8: the normal list pager is independent from server search. */}
+        {hasMoreThreads && !hasSearchQuery && (
+          <div className="px-2.5 pb-2.5 pt-1">
             <button
               type="button"
               onClick={handleLoadMore}
