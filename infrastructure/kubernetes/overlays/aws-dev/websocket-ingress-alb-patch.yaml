@@ -17,9 +17,9 @@ metadata:
     alb.ingress.kubernetes.io/healthcheck-path: /ws/health
     alb.ingress.kubernetes.io/idle-timeout: "4000"
     # TLS is AWS ACM (NOT cert-manager): terraform aws_acm_certificate
-    # (Task 3) with DNS validation — the validation CNAME is added manually
-    # in Cloudflare (DNS is on Cloudflare, not Route53).
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:267685730035:certificate/2fabe0a2-44f1-4e59-8160-69ccc5b4c8bb # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Cloudflare
+    # (Task 3) with DNS validation — the validation CNAME is managed manually
+    # in Namify, the current authoritative DNS provider.
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:267685730035:certificate/5e716108-f6cc-464a-9616-14f9d71754dd # Task 3 terraform aws_acm_certificate output; DNS validation CNAME added manually in Namify
     external-dns.alpha.kubernetes.io/hostname: dev-ws.goodwiinz.tech
     external-dns.alpha.kubernetes.io/ttl: "300"
     external-dns.alpha.kubernetes.io/provider: cloudflare
