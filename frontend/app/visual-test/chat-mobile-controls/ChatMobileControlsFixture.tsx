@@ -8,6 +8,8 @@ import { AgentFAB } from '@/components/agent-chat/AgentFAB';
 import { ChatSurface } from '@/components/chat/ChatSurface';
 import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
 import { ContextRail } from '@/components/context-rail';
+import { ContextRailDrawer } from '@/components/context-rail';
+import { ChatRagProvider, useChatRag } from '@/components/chat/ChatRagContext';
 import { SidebarLayout } from '@/components/layout/SidebarLayout';
 import { AuthProvider } from '@/hooks';
 import type { ChatConversation } from '@/hooks/chat/chatTypes';
@@ -121,7 +123,7 @@ function FixtureShell(): ReactElement {
     THREAD_ID
   );
   const [showLiveReasoning, setShowLiveReasoning] = useState(false);
-  const [enableRAG, setEnableRAG] = useState(true);
+  const { ragEnabled, setRagEnabled } = useChatRag();
   const [submissions, setSubmissions] = useState(0);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const drawer = useChatDrawer(chatInputRef);
@@ -424,7 +426,7 @@ function FixtureShell(): ReactElement {
             </div>
             <ContextRail
               threadId={activeThreadId}
-              ragEnabled={enableRAG}
+              ragEnabled={ragEnabled}
               workspaceName={visualWorkspace.name}
               workspaceId={WORKSPACE_ID}
               projectId="visual-project"
@@ -436,18 +438,30 @@ function FixtureShell(): ReactElement {
         }
       >
         <div className="h-full min-w-0">
-          <ChatSurface
-            session={session}
-            streaming={streaming}
-            threadActions={threadActions}
-            drawer={drawer}
-            citationPanel={citationPanel}
-            composerActions={composerActions}
-            slashCommands={slashCommands}
-            enableRAG={enableRAG}
-            setEnableRAG={setEnableRAG}
-            onSelectThread={setActiveThreadId}
-          />
+          <div className="flex h-full min-w-0 flex-col">
+            <ContextRailDrawer
+              threadId={activeThreadId}
+              ragEnabled={ragEnabled}
+              workspaceName={visualWorkspace.name}
+              workspaceId={WORKSPACE_ID}
+              projectId="visual-project"
+              projectName="Evidence project"
+            />
+            <div className="min-h-0 flex-1">
+              <ChatSurface
+                session={session}
+                streaming={streaming}
+                threadActions={threadActions}
+                drawer={drawer}
+                citationPanel={citationPanel}
+                composerActions={composerActions}
+                slashCommands={slashCommands}
+                enableRAG={ragEnabled}
+                setEnableRAG={setRagEnabled}
+                onSelectThread={setActiveThreadId}
+              />
+            </div>
+          </div>
         </div>
       </SidebarLayout>
 
@@ -459,7 +473,9 @@ function FixtureShell(): ReactElement {
 export function ChatMobileControlsFixture(): ReactElement {
   return (
     <AuthProvider>
-      <FixtureShell />
+      <ChatRagProvider>
+        <FixtureShell />
+      </ChatRagProvider>
     </AuthProvider>
   );
 }

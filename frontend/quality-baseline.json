@@ -24,7 +24,7 @@
   ],
   "eslint": {
     "errors": 116,
-    "warnings": 2005,
+    "warnings": 2003,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
         "errors": 1,
@@ -456,7 +456,7 @@
       },
       "src/components/chat/__tests__/ChatSidebar.test.tsx": {
         "errors": 0,
-        "warnings": 1
+        "warnings": 0
       },
       "src/components/chat/__tests__/renderWithChatRuntime.tsx": {
         "errors": 0,
@@ -504,7 +504,7 @@
       },
       "src/components/chat/ChatSidebar.tsx": {
         "errors": 0,
-        "warnings": 1
+        "warnings": 0
       },
       "src/components/chat/CitationLink.tsx": {
         "errors": 0,
