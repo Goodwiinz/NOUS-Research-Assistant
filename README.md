@@ -51,11 +51,11 @@ The CLI is an optional second view of the shared backend. Rehearse the workflow 
 | --- | --- |
 | ![NOUS live overview](brand/screenshots/live-home.png) | ![How NOUS reads, retrieves, and answers](brand/screenshots/live-how-it-works.png) |
 
-| Public arXiv discovery | Account access |
+| Public arXiv discovery | Chat workspace |
 | --- | --- |
-| ![Public arXiv discovery in NOUS](brand/screenshots/live-arxiv.png) | ![NOUS sign-in screen](brand/screenshots/live-sign-in.png) |
+| ![Public arXiv discovery in NOUS](brand/screenshots/live-arxiv.png) | ![NOUS chat workspace](brand/screenshots/live-chat.png) |
 
-Captured from the public [NOUS deployment](https://goodwiinz.tech/). Authenticated workspace data is intentionally excluded.
+Captured from the live [NOUS deployment](https://goodwiinz.tech/). The chat view uses a blank conversation so private message content is excluded.
 
 ## Architecture
 
