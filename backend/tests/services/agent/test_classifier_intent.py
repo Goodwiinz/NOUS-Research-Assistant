@@ -75,6 +75,30 @@ def test_kb_query_classified_research() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kb_query_rejects_semantic_graph_confusion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = AsyncMock(
+        return_value=ClassificationResult(
+            intent="knowledge_graph",
+            confidence=0.95,
+            reasoning="misread knowledge base as entity graph",
+            source="llm",
+        )
+    )
+    monkeypatch.setattr("src.services.agent.classifier.classify_intent_llm", semantic)
+
+    result = await classify_intent_with_fallback(
+        "What does our knowledge base say about transformer attention?",
+        page_context={},
+    )
+
+    assert result.intent == "research"
+    assert result.source == "keyword"
+
+
+@pytest.mark.unit
 def test_our_docs_classified_research() -> None:
     """'our docs' phrasing routes to research."""
     result = classify_intent_keywords("Search our docs for RLHF")

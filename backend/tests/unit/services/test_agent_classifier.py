@@ -769,6 +769,36 @@ class TestPriorToolContext:
         assert result.confidence == 0.0
         assert result.source == "keyword"
 
+    async def test_retry_inherits_intent_without_semantic_confidence_floor(self):
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
+
+        with patch(
+            "src.services.agent.classifier.classify_intent_llm",
+            new_callable=AsyncMock,
+            return_value=ClassificationResult(
+                "research", 0.52, "retry of prior search", "llm"
+            ),
+        ):
+            result = await classify_intent_with_fallback(
+                "try again",
+                {"type": "unknown"},
+                prior_tool={
+                    "calls": [
+                        {
+                            "name": "search_arxiv",
+                            "result": "error: rate limited",
+                            "status": "error",
+                        }
+                    ]
+                },
+            )
+
+        assert result.intent == "research"
+        assert result.source == "shortcut"
+
     async def test_llm_classifier_includes_prior_tool_in_prompt(self):
         """When prior_tool is supplied, the LLM system message should describe it."""
         from src.services.agent.classifier import classify_intent_llm

@@ -20,7 +20,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from src.core.config import settings
-from src.services.agent._prompts import INTENT_KEYWORDS, INTENT_PRIORITY
+from src.services.agent._prompts import (
+    ACTION_INTENT_OVERRIDES,
+    INTENT_KEYWORDS,
+    INTENT_PRIORITY,
+)
 from src.services.agent._sanitize import (  # noqa: F401
     _PROMPT_FIELD_MAX_CHARS,
     _sanitize_prompt_field,
@@ -60,6 +64,10 @@ _CLASSIFIER_LLM_TIMEOUT_SECONDS = 25.0  # bumped from 10s for headroom after
 # costs ~50ms and creates pointless connection churn).
 _CLASSIFIER_LLM = None
 _CLASSIFIER_LLM_LOCK = threading.Lock()
+_RETRY_FOLLOWUP_RE = re.compile(
+    r"\s*(?:try again|retry|do it again|one more time|again)[.!?]*\s*",
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +294,64 @@ def classify_intent_keywords(query: str) -> ClassificationResult:
     )
 
 
+def _apply_semantic_guardrails(
+    query: str,
+    prior_tool: Optional[Dict[str, Any]],
+    semantic_result: ClassificationResult,
+    keyword_result: ClassificationResult,
+) -> ClassificationResult:
+    """Correct two deterministic context signals that model routing can drift on."""
+    normalized_query = " ".join(query.casefold().split())
+    requested_intent = next(
+        (
+            intent
+            for phrase, intent in ACTION_INTENT_OVERRIDES
+            if re.search(rf"\b{re.escape(phrase)}\b", normalized_query)
+        ),
+        None,
+    )
+    if (
+        semantic_result.intent == "knowledge_graph"
+        and keyword_result.intent == "research"
+        and requested_intent == "research"
+    ):
+        return keyword_result
+
+    if not prior_tool or not _RETRY_FOLLOWUP_RE.fullmatch(query):
+        return semantic_result
+    calls = prior_tool.get("calls")
+    if not isinstance(calls, list):
+        calls = [prior_tool]
+    tool_name = next(
+        (
+            str(call.get("name"))
+            for call in reversed(calls)
+            if isinstance(call, dict) and call.get("name")
+        ),
+        "",
+    )
+    if not tool_name:
+        return semantic_result
+
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    descriptor = TOOL_REGISTRY.descriptor(tool_name)
+    specialist_intents = (
+        {intent.value for intent in descriptor.intents if intent.value != "general"}
+        if descriptor
+        else set()
+    )
+    if len(specialist_intents) != 1:
+        return semantic_result
+    inherited_intent = specialist_intents.pop()
+    return ClassificationResult(
+        intent=inherited_intent,  # type: ignore[arg-type]
+        confidence=1.0,
+        reasoning=f"Retry inherited the registered intent for '{tool_name}'.",
+        source="shortcut",
+    )
+
+
 # ---------------------------------------------------------------------------
 # LLM classifier
 # ---------------------------------------------------------------------------
@@ -397,13 +463,18 @@ async def classify_intent_with_fallback(
             # TypeSafe has its own calibrated acceptance policy; never compare
             # its concentration statistic with Azure or keyword confidence.
             if result is not None:
-                return result
+                return _apply_semantic_guardrails(
+                    query, prior_tool, result, keyword_result
+                )
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise asyncio.TimeoutError
         llm_result = await asyncio.wait_for(
             classify_intent_llm(query, page_context, previous_turn, prior_tool),
             timeout=remaining,
+        )
+        llm_result = _apply_semantic_guardrails(
+            query, prior_tool, llm_result, keyword_result
         )
 
         if llm_result.confidence >= _LLM_CONFIDENCE_THRESHOLD:
