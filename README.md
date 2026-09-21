@@ -47,15 +47,15 @@ The CLI is an optional second view of the shared backend. Rehearse the workflow 
 
 ## Screenshots
 
-| Dashboard | Chat | Search |
-| --- | --- | --- |
-| ![NOUS dashboard](brand/screenshots/01-dashboard.png) | ![NOUS chat](brand/screenshots/02-chat.png) | ![NOUS search](brand/screenshots/03-search.png) |
+| Live overview | How it works |
+| --- | --- |
+| ![NOUS live overview](brand/screenshots/live-home.png) | ![How NOUS reads, retrieves, and answers](brand/screenshots/live-how-it-works.png) |
 
-| Documents | Entity graph | Research |
-| --- | --- | --- |
-| ![Document collection](brand/screenshots/04-documents.png) | ![Entity graph](brand/screenshots/06-entities.png) | ![Research workspace](brand/screenshots/08-research.png) |
+| Public arXiv discovery | Account access |
+| --- | --- |
+| ![Public arXiv discovery in NOUS](brand/screenshots/live-arxiv.png) | ![NOUS sign-in screen](brand/screenshots/live-sign-in.png) |
 
-Screenshots capture particular UI versions. See the [showcase](https://goodwiins.github.io/nous/) for the broader product presentation.
+Captured from the public [NOUS deployment](https://goodwiinz.tech/). Authenticated workspace data is intentionally excluded.
 
 ## Architecture
 
