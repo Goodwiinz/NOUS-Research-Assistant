@@ -133,6 +133,7 @@ created at install time, so the pod crash-loops with
 (apply it via external-secrets or create the secret manually):
 
 ```sh
+eval "$(aws configure export-credentials --format env)" && \
 kubectl create secret generic cloudflare-api-token -n kube-system \
   --from-literal=api-token="<REAL_CLOUDFLARE_API_TOKEN>" \
   --save-config --dry-run=client -o yaml | kubectl apply -f -
@@ -141,6 +142,7 @@ kubectl create secret generic cloudflare-api-token -n kube-system \
 DO NOT commit the token anywhere.
 
 ```sh
+eval "$(aws configure export-credentials --format env)" && \
 helm upgrade --install external-dns external-dns/external-dns \
   -n kube-system \
   --version 1.22.0 \
@@ -153,6 +155,19 @@ helm upgrade --install external-dns external-dns/external-dns \
   --set 'sources[0]=ingress' \
   --set 'sources[1]=service' \
   --set 'domainFilters[0]=goodwiinz.tech'
+```
+
+For the existing Helm-managed deployment that was installed with the stale
+`gen-text.app` filter, apply this guarded one-time patch and restart. The Helm
+command above is already the source of truth for subsequent upgrades:
+
+```sh
+eval "$(aws configure export-credentials --format env)" && \
+kubectl patch deployment external-dns -n kube-system --type=json \
+  -p='[{"op":"test","path":"/spec/template/spec/containers/0/args/8","value":"--domain-filter=gen-text.app"},{"op":"replace","path":"/spec/template/spec/containers/0/args/8","value":"--domain-filter=goodwiinz.tech"}]'
+
+eval "$(aws configure export-credentials --format env)" && \
+kubectl rollout restart deployment/external-dns -n kube-system
 ```
 
 ## Verify
