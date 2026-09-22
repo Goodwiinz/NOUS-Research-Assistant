@@ -63,14 +63,15 @@ RUN \
     pip install --upgrade pip wheel "setuptools<72" && \
     if [ "$TORCH_CPU_ONLY" = "true" ]; then \
         grep -viE '^(torch|torchvision|torchaudio)' requirements.txt > requirements-no-torch.txt && \
-        pip install torch --index-url https://download.pytorch.org/whl/cpu && \
-        pip install -r requirements-no-torch.txt && \
-        rm requirements-no-torch.txt && \
-        pip uninstall -y nvidia-cublas-cu12 nvidia-cuda-cupti-cu12 nvidia-cuda-nvrtc-cu12 \
+        pip install "torch==2.6.0+cpu" --index-url https://download.pytorch.org/whl/cpu && \
+        python -c 'import torch; print("torch==" + torch.__version__)' > torch-constraint.txt && \
+        pip install -c torch-constraint.txt -r requirements-no-torch.txt && \
+        rm requirements-no-torch.txt torch-constraint.txt && \
+        (pip uninstall -y nvidia-cublas-cu12 nvidia-cuda-cupti-cu12 nvidia-cuda-nvrtc-cu12 \
             nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cufft-cu12 nvidia-cufile-cu12 \
             nvidia-curand-cu12 nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-cusparselt-cu12 \
             nvidia-nccl-cu12 nvidia-nvjitlink-cu12 nvidia-nvshmem-cu12 nvidia-nvtx-cu12 \
-            triton cuda-bindings cuda-pathfinder 2>/dev/null || true; \
+            triton cuda-bindings cuda-pathfinder 2>/dev/null || true); \
     else \
         pip install -r requirements.txt; \
     fi && \
@@ -93,7 +94,7 @@ COPY backend/docker/start-production.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/start-production.sh
 
 # Download spaCy model using pip (more reliable than spacy download)
-RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 
 # Create necessary directories
 RUN mkdir -p uploads logs models && \
