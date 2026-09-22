@@ -53,7 +53,9 @@ export EKS_CONTEXT=<EKS_CONTEXT>     # nous-dev-cluster
 
 ## 0. Preconditions checklist
 
-All boxes must be checked before starting. Any unchecked box = no go.
+All **required** boxes must be checked before starting. The two optional AWS
+S3 backup checks below do not gate a phase 1 cutover because DO Spaces remains
+the live store.
 
 - [ ] AWS session active: `aws login`, then `aws sts get-caller-identity` — Expected: account ARN printed.
 - [ ] Both kubectl contexts present and authorized:
@@ -65,17 +67,16 @@ All boxes must be checked before starting. Any unchecked box = no go.
   kubectl get nodes --context $EKS_CONTEXT
   ```
   Expected: DOKS nodes Ready; EKS ≥1 node Ready.
-- [ ] rclone remotes configured and reachable:
+- [ ] **Optional backup:** rclone remotes configured and reachable:
   ```bash
   rclone lsd spaces: && rclone lsd s3:
   rclone lsf spaces:rag-system-storage --max-depth 1 | head
   rclone lsf s3:nous-development-storage-3ilp9pj2 --max-depth 1 | head
   ```
   Expected: both remotes list without auth errors (`spaces` = DO Spaces keys, `s3` = AWS profile).
-- [ ] Disk space for dumps on the operator machine: `df -h .` — need ≥ (Spaces usage + 2×PG dump size + 2×Neo4j dump). Check source sizes first:
-  ```bash
-  rclone size spaces:rag-system-storage --exclude '/buildcache/**'
-  ```
+- [ ] Disk space for dumps on the operator machine: `df -h .` — need ≥
+  (2×PG dump size + 2×Neo4j dump). The optional Spaces backup streams
+  bucket-to-bucket and needs no local Spaces-sized staging area.
 - [ ] `infrastructure/terraform/terraform.tfvars` placeholders filled before the last `terraform apply`: `owner_email`, `alert_email`, and **`cluster_admin_role_arns` non-empty** (aws-auth lockout otherwise). Verify:
   ```bash
   grep -E "owner_email|alert_email|cluster_admin_role_arns" infrastructure/terraform/terraform.tfvars
@@ -95,11 +96,12 @@ All boxes must be checked before starting. Any unchecked box = no go.
   aws ecr describe-images --repository-name nous/frontend --region us-east-1
   ```
   Expected: image tagged with the same source SHA currently running on DO (`kubectl -n rag-dev --context $DOKS_CONTEXT get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.template.spec.containers[0].image}{"\n"}{end}'` — match digests, not tags).
-- [ ] Task 7 first rclone sync done and clean:
+- [ ] **Optional backup:** Task 7 first rclone sync done and clean:
   ```bash
   rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**'
   ```
-  Expected: `0 differences` (pre-freeze drift acceptable; final delta synced in Step 3).
+  Expected: `0 differences` at the time of the check. Later DO writes can
+  legitimately change the live bucket; Step 3 is optional in phase 1.
 - [ ] Phase 1 document path is live on EKS: `values-aws.yaml` sets
   `S3_ENDPOINT_URL=https://nyc3.digitaloceanspaces.com`,
   `S3_BUCKET_NAME=rag-system-storage`, `S3_REGION=nyc3`; the
@@ -318,9 +320,11 @@ kubectl delete pod pg-mig -n multimodal-rag-system --context $EKS_CONTEXT
 
 ---
 
-## 3. Spaces → S3 backup checkpoint (not a serving switch)
+## 3. Optional Spaces → S3 backup checkpoint (not a serving switch)
 
-DO app writers are frozen (Step 1), so take a consistent pre-cutover copy.
+If rclone is available, DO app writers are frozen (Step 1), so take a
+consistent pre-cutover copy. Skip this step if rclone is unavailable; AWS S3
+is not the serving path in phase 1. Record the last verified copy's age.
 After EKS starts, new document writes intentionally continue to DO Spaces;
 the AWS S3 copy may then diverge. **Never delete or disable Spaces.**
 
@@ -331,7 +335,8 @@ rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --ex
 
 Expected: check reports `0 differences` and `0 errors`.
 
-**HALT:** any difference or error → re-run sync; repeated failures (auth, >5 min) → halt window.
+If the optional copy fails, report it and leave the last verified AWS copy
+untouched; do not switch storage away from DO Spaces to compensate.
 
 Do **not** point `values-aws.yaml` at this AWS bucket in phase 1. Its
 `S3_BUCKET_NAME` must remain `rag-system-storage`, with the DO endpoint and
