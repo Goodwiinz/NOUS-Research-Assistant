@@ -6,7 +6,6 @@ import pytest
 
 from src.services.agent.tools_impl import _tool_create_draft
 
-
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 
