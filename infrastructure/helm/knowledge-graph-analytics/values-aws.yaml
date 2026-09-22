@@ -40,7 +40,7 @@ infisical:
   # The chart default /spaces sync is required while DO Spaces serves files.
 
 # ──────────────────────────────────────────────
-# Frontend deployed via Vercel — no in-cluster manifests (unchanged by AWS move).
+# Frontend deployed via Vercel — no in-cluster manifests; rebuild with AWS API/WS URLs in cutover Step 7.
 # ──────────────────────────────────────────────
 # ──────────────────────────────────────────────
 # Backend

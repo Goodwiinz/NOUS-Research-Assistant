@@ -325,6 +325,7 @@ data/archives/
 **/.vercel/
 
 # Local scratch artifacts
+.cutover/
 picker-check.png
 picker-snapshot.txt
 .venv/
