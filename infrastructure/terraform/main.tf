@@ -502,11 +502,11 @@ resource "aws_security_group" "rds" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
-    description     = "PostgreSQL from EKS nodes"
+    description     = "PostgreSQL from EKS managed nodes"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [module.eks.cluster_security_group_id]
+    security_groups = [module.eks.cluster_primary_security_group_id]
   }
 
   egress {
@@ -579,11 +579,11 @@ resource "aws_security_group" "redis" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
-    description     = "Redis from EKS nodes"
+    description     = "Redis from EKS managed nodes"
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
-    security_groups = [module.eks.cluster_security_group_id]
+    security_groups = [module.eks.cluster_primary_security_group_id]
   }
 
   egress {
