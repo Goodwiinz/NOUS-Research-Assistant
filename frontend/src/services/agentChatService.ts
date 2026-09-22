@@ -597,6 +597,13 @@ export interface ThreadMessagesResponse {
       error?: string;
       duration_ms?: number;
     }>;
+    plan?: Array<{
+      step: number;
+      description: string;
+      tool: string;
+      args_hint?: Record<string, unknown>;
+      depends_on?: number[];
+    }>;
     progress_steps?: AgentProgressStep[];
   }>;
   total: number;

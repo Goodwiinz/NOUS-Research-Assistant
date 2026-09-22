@@ -931,7 +931,49 @@ def _encode_tool_result(output: Any) -> str:
                 encoded = _json.dumps(compact, default=str)
                 if len(encoded) <= 500:
                     return encoded
-            return encoded[:500]
+            if isinstance(output, dict):
+                priority_keys = (
+                    "status",
+                    "task_id",
+                    "draft_id",
+                    "project_id",
+                    "error",
+                    "message",
+                )
+                priority_limits = {
+                    "status": 32,
+                    "task_id": 88,
+                    "draft_id": 88,
+                    "project_id": 88,
+                    "error": 40,
+                    "message": 40,
+                }
+                summary = {
+                    key: (
+                        output[key][: priority_limits[key]] + "…"
+                        if isinstance(output[key], str)
+                        and len(output[key]) > priority_limits[key]
+                        else output[key]
+                    )
+                    for key in priority_keys
+                    if key in output
+                }
+                summary["truncated"] = True
+                encoded = _json.dumps(summary, default=str)
+                if len(encoded) <= 500:
+                    return encoded
+                # Extremely long/non-string optional details must never evict
+                # the terminal status and durable identifiers the client uses.
+                core = {
+                    key: summary[key]
+                    for key in ("status", "task_id", "draft_id", "project_id")
+                    if key in summary
+                }
+                core["truncated"] = True
+                encoded = _json.dumps(core, default=str)
+                if len(encoded) <= 500:
+                    return encoded
+            return _json.dumps({"truncated": True})
         except (TypeError, ValueError):
             pass
     return str(output)[:500]

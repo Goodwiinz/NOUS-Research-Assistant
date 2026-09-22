@@ -23,6 +23,7 @@ from src.models.collection import Collection
 from src.models.document import Document
 from src.models.draft_citation import DraftCitation
 from src.models.generated_draft import GeneratedDraft
+from src.services.research.evidence_selection import select_relevant_passages
 
 logger = structlog.get_logger(__name__)
 
@@ -331,32 +332,20 @@ class DraftGenerationService:
             self._validate_citations(draft_content, documents, require_one=True)
 
             async with AsyncSessionLocal() as db:
-                citation_review: Optional[Dict[str, Any]] = None
-                from src.core.config import settings
-
-                if settings.DRAFT_CITATION_REVIEW_ENABLED and citations_data:
-                    self._update_status(
-                        task_id,
-                        DraftGenerationStatus.REVIEWING,
-                        85,
-                        "Verifying citations",
-                    )
-                    try:
-                        from src.services.research.citation_verification_service import (
-                            CitationVerificationService,
-                        )
-
-                        citation_review = await CitationVerificationService(
-                            db
-                        ).verify_draft_citations(draft_content, documents)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        # Reviewer failure must never fail the draft.
-                        logger.warning(
-                            "citation_review_failed", task_id=task_id, error=str(exc)
-                        )
-                        citation_review = {"error": str(exc)}
+                self._update_status(
+                    task_id,
+                    DraftGenerationStatus.REVIEWING,
+                    85,
+                    "Verifying citations",
+                )
+                citation_review = await self._review_citations(
+                    db, draft_content, documents
+                )
+                self._require_passing_citation_review(
+                    citation_review,
+                    [int(citation["citation_index"]) for citation in citations_data],
+                )
+                self._apply_review_evidence(citations_data, citation_review)
 
                 # Phase 4: Finalizing
                 self._update_status(
@@ -403,11 +392,7 @@ class DraftGenerationService:
                         # Mark template-fallback drafts so a degraded
                         # generation is distinguishable from a real one.
                         **({"fallback_template": True} if used_fallback else {}),
-                        **(
-                            {"citation_review": citation_review}
-                            if citation_review is not None
-                            else {}
-                        ),
+                        "citation_review": citation_review,
                     },
                     is_current=True,
                 )
@@ -559,7 +544,7 @@ class DraftGenerationService:
         include_abstract: bool,
     ) -> str:
         """Generate draft content via OpenAI LLM."""
-        doc_context = self._build_document_context(documents)
+        doc_context = self._build_document_context(documents, queries=themes)
 
         style_instruction = self._STYLE_PROMPTS.get(
             style, self._STYLE_PROMPTS["academic"]
@@ -628,6 +613,7 @@ class DraftGenerationService:
         cls,
         documents: List[Document],
         max_chars: int = _DOCUMENT_CONTEXT_BUDGET,
+        queries: Optional[List[str]] = None,
     ) -> str:
         """Build bounded evidence blocks while retaining every document marker."""
         if not documents:
@@ -652,9 +638,13 @@ class DraftGenerationService:
                 title_chars = min(len(title), 160, block_budget - 3)
                 block += f' "{title[:title_chars]}"'
                 block_budget -= title_chars + 3
-            evidence = str(doc.content_text or doc.content_summary or "")
+            evidence = select_relevant_passages(
+                str(doc.content_text or doc.content_summary or ""),
+                queries=queries or [title],
+                max_chars=max(0, block_budget - 1),
+            )
             if evidence and block_budget >= 2:
-                block += "\n" + evidence[: block_budget - 1]
+                block += "\n" + evidence
             blocks.append(block)
         return "\n\n".join(blocks)
 
@@ -777,9 +767,16 @@ class DraftGenerationService:
         revised = (content or "").strip()
         if not revised:
             raise ValueError("Revision returned empty content")
-        cls._validate_citations(
-            revised, documents, require_one=mode == "citations_only"
-        )
+
+        if mode != "citations_only":
+            if cls._REFUSAL_RE.search(revised[:500]):
+                raise ValueError("Revision returned a refusal or error placeholder")
+            base_words = len(base_content.split())
+            revised_words = len(revised.split())
+            if revised_words < max(1, base_words // 4):
+                raise ValueError("Revision unexpectedly collapsed the base draft")
+
+        cls._validate_citations(revised, documents, require_one=True)
 
         if mode == "citations_only":
             if cls._without_citation_markers(revised) != cls._without_citation_markers(
@@ -789,13 +786,6 @@ class DraftGenerationService:
                     "Citation-only revision changed draft prose or structure"
                 )
             return
-
-        if cls._REFUSAL_RE.search(revised[:500]):
-            raise ValueError("Revision returned a refusal or error placeholder")
-        base_words = len(base_content.split())
-        revised_words = len(revised.split())
-        if revised_words < max(1, base_words // 4):
-            raise ValueError("Revision unexpectedly collapsed the base draft")
 
     async def _build_revision_with_llm(
         self,
@@ -904,12 +894,23 @@ class DraftGenerationService:
             base_content=base.content,
             instructions=instructions,
             mode=mode,
-            document_context=self._build_document_context(documents),
+            document_context=self._build_document_context(
+                documents,
+                queries=[instructions, *(base.themes or [])],
+            ),
         )
         self._validate_revision_content(revised_content, base.content, documents, mode)
         citations_data = self._extract_citations_from_content(
             revised_content, documents
         )
+        citation_review = await self._review_citations(
+            self.db, revised_content, documents
+        )
+        self._require_passing_citation_review(
+            citation_review,
+            [int(citation["citation_index"]) for citation in citations_data],
+        )
+        self._apply_review_evidence(citations_data, citation_review)
 
         try:
             await self._lock_project_for_draft_version(self.db, project_id)
@@ -944,6 +945,7 @@ class DraftGenerationService:
                 generation_params={
                     "mode": mode,
                     "base_version": base.version,
+                    "citation_review": citation_review,
                 },
                 is_current=False,
             )
@@ -988,6 +990,87 @@ class DraftGenerationService:
         }
 
     @staticmethod
+    async def _review_citations(
+        db: AsyncSession,
+        content: str,
+        documents: List[Document],
+    ) -> Dict[str, Any]:
+        from src.services.research.citation_verification_service import (
+            CitationVerificationService,
+        )
+
+        return await CitationVerificationService(db).verify_draft_citations(
+            content, documents
+        )
+
+    @staticmethod
+    def _require_passing_citation_review(
+        review: Dict[str, Any], cited_document_indices: List[int]
+    ) -> None:
+        """Fail closed unless every cited document received an acceptable verdict."""
+        if not isinstance(review, dict):
+            raise ValueError("Citation review did not return a usable result")
+        if int(review.get("docs_skipped") or 0) > 0:
+            raise ValueError("Citation review skipped cited documents")
+        verdicts = review.get("verdicts")
+        expected_indices = set(cited_document_indices)
+        if not isinstance(verdicts, list) or len(verdicts) != len(expected_indices):
+            raise ValueError("Citation review did not cover every cited document")
+        try:
+            reviewed_indices = {int(entry["doc_index"]) for entry in verdicts}
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(
+                "Citation review returned invalid document indices"
+            ) from None
+        if reviewed_indices != expected_indices:
+            raise ValueError("Citation review did not cover every cited document")
+        missing_evidence = [
+            entry
+            for entry in verdicts
+            if entry.get("verdict") in {"exact", "minor"}
+            and (
+                not str(entry.get("evidence") or "").strip()
+                or str(entry.get("location") or "") == "source excerpt"
+            )
+        ]
+        if missing_evidence:
+            raise ValueError("Citation review did not provide grounded evidence")
+        blocked = [
+            entry
+            for entry in verdicts
+            if entry.get("verdict") not in {"exact", "minor"}
+        ]
+        if blocked:
+            labels = ", ".join(
+                f"[Doc {entry.get('doc_index', '?')}] {entry.get('verdict')}"
+                for entry in blocked
+            )
+            raise ValueError(f"Citation review blocked persistence: {labels}")
+
+    @staticmethod
+    def _apply_review_evidence(
+        citations_data: List[Dict[str, Any]], review: Dict[str, Any]
+    ) -> None:
+        by_index = {
+            int(entry["doc_index"]): entry
+            for entry in review.get("verdicts", [])
+            if entry.get("doc_index") is not None
+        }
+        for citation in citations_data:
+            entry = by_index.get(int(citation["citation_index"]))
+            if entry is None:
+                continue
+            citation["snippet"] = str(entry.get("evidence") or "")[:2000]
+            location = str(entry.get("location") or "source excerpt")
+            page_number = entry.get("page_number")
+            if page_number is not None:
+                location = f"Page {page_number}"
+            citation["context"] = (
+                f"Referenced as [Doc {citation['citation_index']}]; {location}; "
+                f"review={entry.get('verdict', 'unknown')}"
+            )
+
+    @staticmethod
     def _build_draft_template(
         documents: List[Document],
         themes: List[str],
@@ -1001,7 +1084,7 @@ class DraftGenerationService:
         if include_abstract:
             abstract = f"""## Abstract
 
-This literature review synthesizes research from {len(documents)} documents, focusing on the themes of {', '.join(themes)}. The review provides a comprehensive analysis of current research and identifies key findings and trends in the field.
+This literature review synthesizes research from {len(documents)} documents, focusing on the themes of {", ".join(themes)}. The review provides a comprehensive analysis of current research and identifies key findings and trends in the field.
 
 """
             sections.append(abstract)
@@ -1009,7 +1092,7 @@ This literature review synthesizes research from {len(documents)} documents, foc
         source_marker = " [Doc 1]" if documents else ""
         intro = f"""## 1. Introduction
 
-The field encompassing {themes[0] if themes else 'this research area'} has seen significant developments in recent years. This literature review examines {len(documents)} key publications to understand the current state of research and identify emerging trends{source_marker}.
+The field encompassing {themes[0] if themes else "this research area"} has seen significant developments in recent years. This literature review examines {len(documents)} key publications to understand the current state of research and identify emerging trends{source_marker}.
 
 """
         sections.append(intro)
@@ -1021,7 +1104,7 @@ The field encompassing {themes[0] if themes else 'this research area'} has seen 
 
             section = f"""## {i}. {theme.title()}
 
-Research on {theme} has been extensively documented in the literature {' '.join(doc_refs)}. Studies have shown various approaches to understanding and addressing challenges in this area.
+Research on {theme} has been extensively documented in the literature {" ".join(doc_refs)}. Studies have shown various approaches to understanding and addressing challenges in this area.
 
 Key findings indicate that {theme} plays a significant role in the broader context of the research domain. Multiple researchers have contributed to our understanding of these phenomena, each building upon previous work to advance the field.
 
@@ -1030,7 +1113,7 @@ Key findings indicate that {theme} plays a significant role in the broader conte
 
         conclusion = f"""## {len(themes) + 2 if len(themes) < max_sections else max_sections}. Conclusion
 
-This review has synthesized findings from {len(documents)} publications across the themes of {', '.join(themes)}. The literature demonstrates significant progress in understanding these interconnected areas, while also highlighting opportunities for future research.
+This review has synthesized findings from {len(documents)} publications across the themes of {", ".join(themes)}. The literature demonstrates significant progress in understanding these interconnected areas, while also highlighting opportunities for future research.
 
 Key takeaways include the importance of continued investigation and the potential for cross-disciplinary collaboration to address remaining challenges in the field.
 
@@ -1111,6 +1194,33 @@ Key takeaways include the importance of continued investigation and the potentia
         if not status:
             return None
         return {**status, "task_id": task_id}
+
+    @classmethod
+    async def wait_for_terminal_status(
+        cls,
+        task_id: str,
+        *,
+        timeout_seconds: float = 120.0,
+        poll_interval: float = 0.25,
+    ) -> Dict[str, Any]:
+        """Wait boundedly for a background draft to reach a durable terminal state."""
+        deadline = time.monotonic() + timeout_seconds
+        terminal = {
+            DraftGenerationStatus.COMPLETED,
+            DraftGenerationStatus.FAILED,
+            DraftGenerationStatus.CANCELLED,
+        }
+        while True:
+            status = cls.get_status(task_id)
+            if status is not None and str(status.get("status")) in terminal:
+                return status
+            if time.monotonic() >= deadline:
+                return status or {
+                    "task_id": task_id,
+                    "status": DraftGenerationStatus.PENDING,
+                    "current_step": "Draft generation is still running",
+                }
+            await asyncio.sleep(poll_interval)
 
     @staticmethod
     def _status_timestamp(payload: Dict[str, Any]) -> datetime:

@@ -3223,10 +3223,25 @@ async def _tool_create_draft(
             style=style,
         )
 
+        task_id = str(result.get("task_id", ""))
+        terminal = await DraftGenerationService.wait_for_terminal_status(
+            task_id, timeout_seconds=105.0
+        )
+        status = str(terminal.get("status", result.get("status", "pending")))
+        if status == "completed":
+            message = f"Draft generated for project '{project.name}'."
+        elif status in {"failed", "cancelled"}:
+            detail = str(terminal.get("current_step") or "Draft generation failed")
+            message = detail.removeprefix("Error: ").strip()
+        else:
+            message = f"Draft generation for project '{project.name}' is still running."
+
         return {
-            "task_id": result.get("task_id", ""),
-            "status": str(result.get("status", "pending")),
-            "message": f"Draft generation started for project '{project.name}'. It will appear in the Drafts tab once complete.",
+            **terminal,
+            "task_id": task_id,
+            "status": status,
+            "message": message,
+            **({"error": message} if status in {"failed", "cancelled"} else {}),
             "project_id": str(project.id),
             "project_name": project.name,
         }

@@ -65,6 +65,16 @@ class TestClaimsByDocIndex:
         assert "scaling" not in claims  # no stray keys
         assert "scales well with data" in claims[2][0]
 
+    def test_preserves_decimal_numbers_in_claim_sentence(self) -> None:
+        content = (
+            "The model achieved 28.4 BLEU and 41.8 BLEU, then trained for "
+            "3.5 days on 8 GPUs [Doc 1]."
+        )
+
+        claims = CitationVerificationService._claims_by_doc_index(content)
+
+        assert claims[1] == [content]
+
 
 @pytest.mark.asyncio
 class TestVerifyDraftCitations:
@@ -253,14 +263,16 @@ class TestVerifyDraftCitations:
         assert entry["identity_source"] is None
         assert entry["verdict"] == "exact"
 
-    async def test_fulltext_escalation_receives_full_excerpt_not_400_chars(
+    async def test_fulltext_escalation_selects_claim_relevant_late_pages(
         self,
     ) -> None:
-        """F1: source_text must reach the LLM uncut by the 400-char
-        classifier cap — a sentinel placed at char 3000 of content_text
-        must survive into the escalated (full-text) prompt."""
-        sentinel = "SENTINEL-3000"
-        content_text = ("x" * 3000) + sentinel + ("y" * 200)
+        content_text = (
+            "[Page 1]\n"
+            + ("unrelated background. " * 600)
+            + "\n[Page 8]\nThe model achieved 28.4 BLEU on English-to-German."
+            + "\n[Page 9]\nIt achieved 41.8 BLEU on English-to-French."
+            + "\n[Page 12]\nTraining took 3.5 days on 8 GPUs."
+        )
         document = _make_document(
             content_summary="Short abstract that will not fully verify.",
             content_text=content_text,
@@ -274,14 +286,18 @@ class TestVerifyDraftCitations:
 
         with patch(f"{_MODULE}.build_lightweight_llm", return_value=llm):
             result = await service.verify_draft_citations(
-                "The method scales linearly [Doc 1].", [document]
+                "The benchmarks were 28.4 BLEU and 41.8 BLEU, and training "
+                "took 3.5 days on 8 GPUs [Doc 1].",
+                [document],
             )
 
         assert structured.ainvoke.await_count == 2
         escalated_messages = structured.ainvoke.await_args_list[1].args[0]
         escalated_user_content = escalated_messages[1]["content"]
-        assert sentinel in escalated_user_content
-        assert len(escalated_user_content) > 400
+        assert "28.4 BLEU" in escalated_user_content
+        assert "41.8 BLEU" in escalated_user_content
+        assert "3.5 days on 8 GPUs" in escalated_user_content
+        assert "[Page 8]" in escalated_user_content
         assert result["verdicts"][0]["escalated_to_fulltext"] is True
 
     async def test_summary_counts_and_max_docs_cap(self) -> None:
