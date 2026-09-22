@@ -95,7 +95,13 @@ the live store.
   aws ecr describe-images --repository-name nous/backend --region us-east-1
   aws ecr describe-images --repository-name nous/frontend --region us-east-1
   ```
-  Expected: image tagged with the same source SHA currently running on DO (`kubectl -n rag-dev --context $DOKS_CONTEXT get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.template.spec.containers[0].image}{"\n"}{end}'` — match digests, not tags).
+  Expected: the pinned ECR backend digest is from a tested source commit that
+  contains the source commit of the currently running DO backend image. Resolve
+  the DO image digest to its build SHA, then verify that SHA is an ancestor of
+  the ECR source SHA with `git merge-base --is-ancestor <DO_SHA> <ECR_SHA>`.
+  Verify the tag resolves to the exact digest pinned in `values-aws.yaml`;
+  do not rely on a matching tag alone. The Vercel frontend is verified
+  separately against its recorded DO-backed deployment below.
 - [ ] **Optional backup:** Task 7 first rclone sync done and clean:
   ```bash
   rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**'

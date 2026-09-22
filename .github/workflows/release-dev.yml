@@ -126,7 +126,7 @@ jobs:
           fi
           PR_URL="$(gh pr list --base develop --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
           if [ -z "$PR_URL" ]; then
-            printf 'Deploy tested source %s at immutable digest %s.\n\nImage producer: %s\n\nMerge after Test Pipeline, Secret Scan, and Helm Validate pass. Argo CD applies the merged values.\n' "$SOURCE_SHA" "$DIGEST" "$BUILD_URL" > "$RUNNER_TEMP/release-pr.md"
+            printf 'Deploy tested source %s at immutable digest %s.\n\nImage producer: %s\n\nMerge after Test Pipeline, Secret Scan, and Helm Validate pass. AWS Argo CD applies after its targetRevision switches to develop.\n' "$SOURCE_SHA" "$DIGEST" "$BUILD_URL" > "$RUNNER_TEMP/release-pr.md"
             PR_URL="$(gh pr create --base develop --head "$BRANCH" --title "chore(gitops): deploy dev image ${SOURCE_SHA:0:7}" --body-file "$RUNNER_TEMP/release-pr.md")"
           fi
           # Token-created PR events need approval. Explicit dispatch runs the
@@ -134,4 +134,4 @@ jobs:
           for workflow in test-pipeline.yml secret-scan.yml helm-validate.yml; do
             gh workflow run "$workflow" --ref "$BRANCH"
           done
-          printf '## Dev image proposed\n\n%s\n\nMerge after its checks pass to deploy.\n' "$PR_URL" >> "$GITHUB_STEP_SUMMARY"
+          printf '## Dev image proposed\n\n%s\n\nMerge after its checks pass; AWS Argo CD applies after its targetRevision switch.\n' "$PR_URL" >> "$GITHUB_STEP_SUMMARY"
