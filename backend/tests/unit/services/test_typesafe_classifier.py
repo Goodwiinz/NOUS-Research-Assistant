@@ -348,6 +348,9 @@ def test_replay_cases_have_valid_capability_contracts() -> None:
     cases = load_cases(Path(__file__).parents[2] / "eval" / "intent_routing_cases.json")
     assert len(cases) == 20
     assert sum(case.unsupported for case in cases) == 1
+    revise = next(case for case in cases if case.id == "revise-draft")
+    assert revise.required_tools == ["revise_draft"]
+    assert "create_draft" not in revise.required_tools
 
 
 def test_retry_batch_does_not_reuse_a_later_result() -> None:

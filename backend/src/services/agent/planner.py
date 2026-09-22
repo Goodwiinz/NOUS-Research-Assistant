@@ -277,13 +277,21 @@ async def generate_plan(
         "them (e.g. search_arxiv → ingest_arxiv_papers) BEFORE any step that "
         "summarizes, drafts, or saves notes about them — a write step must "
         "depend_on the resolve/ingest steps.\n"
+        "create_draft returns pending and MUST be the final planned step with "
+        "no same-turn dependents. revise_draft is synchronous and may have "
+        "later reporting steps.\n"
         "Also provide a top-level ``reasoning`` string explaining the "
         "overall approach (required)."
     )
 
-    result = await structured_llm.ainvoke(
+    result: AgentPlan = await structured_llm.ainvoke(
         [HumanMessage(content=prompt)], config=internal_llm_config()
     )
+    for index, step in enumerate(result.steps):
+        if step.tool == "create_draft":
+            return AgentPlan(
+                steps=result.steps[: index + 1], reasoning=result.reasoning
+            )
     return result
 
 
@@ -347,7 +355,9 @@ def render_plan_directive(plan: list[dict] | None) -> str | None:
         "documents to already be resolved + ingested — if the plan lists a "
         "write step before the sources exist, run the search/ingest steps "
         "FIRST, then the write. Never write a note/draft/summary for a paper "
-        "you only have a title for.\n"
+        "you only have a title for. create_draft returns pending, so it is "
+        "terminal for this turn; do not execute later planned steps. "
+        "revise_draft is synchronous.\n"
         f"{plan_block}"
     )
 

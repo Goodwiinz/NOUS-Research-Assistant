@@ -204,6 +204,51 @@ describe('useChatStreaming HITL confirm tool steps', () => {
     });
   });
 
+  it('invalidates the revision result project after approval resumes', async () => {
+    const invalidate = vi
+      .spyOn(QueryClient.prototype, 'invalidateQueries')
+      .mockResolvedValue(undefined);
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks) => {
+        cb.onConfirmation('agent-thread-1', { tool: 'revise_draft' });
+        cb.onDone({});
+        return Promise.resolve();
+      }
+    );
+    streamConfirmMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks) => {
+        cb.onToolStart('revise_draft', {});
+        cb.onToolEnd(
+          'revise_draft',
+          '{"status":"completed","project_id":"project-from-result"}',
+          false
+        );
+        cb.onToken('revision saved');
+        cb.onDone({});
+        return Promise.resolve();
+      }
+    );
+
+    try {
+      const params = makeParams();
+      const { result } = renderHook(() => useChatStreaming(params), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.handleSubmit('revise the draft');
+      });
+      await act(async () => {
+        await result.current.handleConfirmation(true);
+      });
+
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: ['project', 'project-from-result'],
+      });
+    } finally {
+      invalidate.mockRestore();
+    }
+  });
+
   it('tracks live streamingSteps during the confirm stream and commits toolExecutions', async () => {
     // Main stream: one settled tool, then interrupt for confirmation.
     streamMessageMock.mockImplementation(

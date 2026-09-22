@@ -41,6 +41,7 @@ import {
 } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
+import { projectIdFromToolResult } from '@/store/agentChatStore';
 import {
   toolLabel,
   toolStatusLabel,
@@ -194,6 +195,7 @@ const PROJECT_MUTATING_TOOLS = new Set([
   'create_project',
   'create_project_note',
   'create_draft',
+  'revise_draft',
 ]);
 
 // ============================================
@@ -843,14 +845,17 @@ export function useChatStreaming(
   // succeeds, so the rail shows agent-created sources/notes/drafts without
   // waiting out the 5-minute staleTime.
   const invalidateProjectDataForTool = useCallback(
-    (tool: string, isError: boolean) => {
+    (tool: string, result: string, isError: boolean) => {
       if (isError || !PROJECT_MUTATING_TOOLS.has(tool)) return;
+      const resultProjectId =
+        tool === 'revise_draft' ? projectIdFromToolResult(result) : undefined;
+      const projectId = resultProjectId ?? boundProjectId;
       // Scope to the bound project so we don't invalidate every
       // ['project', …] query (project list, unrelated project details,
       // metadata). Fall back to broad invalidation when no project is
       // bound (global chat has no narrower key to target).
       void queryClient.invalidateQueries({
-        queryKey: boundProjectId ? ['project', boundProjectId] : ['project'],
+        queryKey: projectId ? ['project', projectId] : ['project'],
       });
     },
     [queryClient, boundProjectId]
@@ -1253,7 +1258,7 @@ export function useChatStreaming(
                   .getState()
                   .pushToolEnd(currentThreadId, tool, !isError, callId);
               }
-              invalidateProjectDataForTool(tool, isError);
+              invalidateProjectDataForTool(tool, result, isError);
               maybeAutoFocusCreatedNote(
                 tool,
                 result,
@@ -2737,7 +2742,7 @@ export function useChatStreaming(
                   );
                 // HITL-confirmed tools are exactly the mutating ones (ingest,
                 // create_note, create_draft) — refresh the rail here too.
-                invalidateProjectDataForTool(tool, isError);
+                invalidateProjectDataForTool(tool, result, isError);
                 // create_project_note is destructive, so its successful
                 // tool_end arrives HERE (post-approval resume stream), not on
                 // the primary stream — auto-focus must run from this path.

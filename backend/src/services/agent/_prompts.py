@@ -122,7 +122,7 @@ INTENT_PROMPTS = {
     ),
     "writing": (
         "Focus on helping the user write, summarize, and synthesize content. "
-        "Use summarize_document, compare_documents, create_draft, and export_bibliography."
+        "Use summarize_document, compare_documents, create_draft, revise_draft, and export_bibliography."
     ),
     "knowledge_graph": (
         "Focus on extracting and exploring entities and relationships. "
@@ -204,7 +204,7 @@ SHARED_AGENT_RULES = (
     "first — that doubles every interaction.\n"
     "- Destructive (the runtime interrupts; you just call them): "
     "ingest_arxiv_papers, add_document_to_project, create_project, "
-    "create_project_note, create_draft, execute_code, forget_memory.\n"
+    "create_project_note, create_draft, revise_draft, execute_code, forget_memory.\n"
     "Do not re-confirm an intent the user has just stated. If the user says "
     '"search for X", search. If the user selects papers to add, add them. '
     "Ask only the minimal disambiguating question when a required parameter "
