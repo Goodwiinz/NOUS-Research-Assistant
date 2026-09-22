@@ -1,9 +1,11 @@
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
+from src.models.user import User
 from src.services.agent.tools_impl import _tool_create_draft
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
@@ -11,7 +13,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 async def test_create_draft_tool_returns_completed_terminal_payload() -> None:
     project = SimpleNamespace(id=uuid4(), name="Transformers")
-    user = SimpleNamespace(id=uuid4())
+    user = cast(User, SimpleNamespace(id=uuid4()))
     service = MagicMock()
     service.generate_draft = AsyncMock(
         return_value={"task_id": "task-1", "status": "pending"}
@@ -48,7 +50,7 @@ async def test_create_draft_tool_returns_completed_terminal_payload() -> None:
 
 async def test_create_draft_tool_returns_readable_terminal_failure() -> None:
     project = SimpleNamespace(id=uuid4(), name="Transformers")
-    user = SimpleNamespace(id=uuid4())
+    user = cast(User, SimpleNamespace(id=uuid4()))
     service = MagicMock()
     service.generate_draft = AsyncMock(
         return_value={"task_id": "task-2", "status": "pending"}
