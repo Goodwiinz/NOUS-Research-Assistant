@@ -1,11 +1,13 @@
-# AWS overlay for NOUS on EKS us-east-1 — fill <PLACEHOLDERS> from terraform outputs (Task 2)
+# AWS overlay for NOUS on EKS us-east-1 — phased compute/database cutover
 # Cluster: nous-dev-cluster (lean EKS: 1x t3.large spot, ALB ingress, gp3)
-# Sibling of values-dev.yaml (DO dev) — same chart, AWS-managed infra.
+# Sibling of values-dev.yaml (DO dev) — same chart, phased AWS compute cutover.
 # Schema notes (differs from the migration-plan sketch):
 #   - The chart has NO postgres.host / redis.host keys: Postgres (RDS) and
 #     Redis (ElastiCache) endpoints are injected via envFrom Secrets synced
 #     from Infisical (/database, /redis). Update those during cutover.
 #   - Frontend is NOT in this chart (Vercel) — no frontend key.
+#   - DO Spaces and DO Knowledge Base remain the live document services in
+#     phase 1; the staged AWS S3 bucket is not the serving bucket.
 #   - backend.image.repository is used verbatim by templates/_helpers.tpl
 #     (includes the registry host); worker/beat share it.
 # rationale/rollback levers for per-var values: see values-dev.yaml (identical values)
@@ -35,10 +37,7 @@ commonLabels:
 infisical:
   enabled: true
   envSlug: "dev"
-  # Chart-default secrets map merges over this, so prune the DO Spaces
-  # folder explicitly (null deletes the key): S3 auth rides IRSA instead.
-  secrets:
-    spaces-credentials: null
+  # The chart default /spaces sync is required while DO Spaces serves files.
 
 # ──────────────────────────────────────────────
 # Frontend deployed via Vercel — no in-cluster manifests (unchanged by AWS move).
@@ -121,17 +120,14 @@ backend:
         name: supabase-credentials
     - secretRef:
         name: redis-credentials
-    # spaces-credentials intentionally DROPPED on AWS: S3 auth rides the
-    # backend service account IRSA role (Task 3) via the default boto3
-    # credential chain — no static access keys.
+    - secretRef:
+        name: spaces-credentials
     - secretRef:
         name: langsmith-credentials
         optional: true
-    # DigitalOcean Knowledge Base credentials. TODO(cutover): remove once
-    # DO-KB data is migrated / no longer referenced.
+    # DO Knowledge Base remains the primary retrieval service in phase 1.
     - secretRef:
         name: do-kb-credentials
-        optional: true
   env:
     - name: ENVIRONMENT
       value: "dev"
@@ -198,20 +194,27 @@ backend:
     - name: NEO4J_URI
       # In-cluster neo4j service: <release>-<chart>-neo4j (release nous-dev-aws)
       value: "bolt://nous-dev-aws-knowledge-graph-analytics-neo4j:7687"
-    # ── S3 object storage: AWS S3 proper (replaces DO Spaces) ──
-    # NO S3_ENDPOINT_URL: the AWS SDK default endpoint is used (virtual-hosted
-    # style, us-east-1) — this is what replaces the Spaces path-style setup.
+    # ── S3-compatible object storage: DO Spaces remains live in phase 1 ──
     - name: STORAGE_BACKEND
       value: "s3"
-    # nous-development-storage-3ilp9pj2 = terraform output application_storage
-    # bucket name (Task 2).
+    - name: S3_ENDPOINT_URL
+      value: "https://nyc3.digitaloceanspaces.com"
     - name: S3_BUCKET_NAME
-      value: "nous-development-storage-3ilp9pj2"
+      value: "rag-system-storage"
     - name: S3_REGION
-      value: "us-east-1"
-    # S3_CDN_ENDPOINT dropped: DO CDN does not exist on AWS. Re-add with a
-    # CloudFront distribution URL if/when one is stood up (Task 5+).
-    # S3_ACCESS_KEY / S3_SECRET_KEY dropped: IRSA (Task 3) via default chain.
+      value: "nyc3"
+    - name: S3_CDN_ENDPOINT
+      value: "https://rag-system-storage.nyc3.cdn.digitaloceanspaces.com"
+    - name: S3_ACCESS_KEY
+      valueFrom:
+        secretKeyRef:
+          name: spaces-credentials
+          key: S3_ACCESS_KEY
+    - name: S3_SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: spaces-credentials
+          key: S3_SECRET_KEY
     # ── Azure OpenAI (Chat / Agent) — unchanged ──
     - name: AZURE_OPENAI_CHAT_ENDPOINT
       valueFrom:
@@ -377,9 +380,8 @@ podDisruptionBudget:
 
 serviceAccount:
   create: true
-  # IRSA: S3 access for the backend (boto3 default chain — no static keys).
-  # Role: terraform app-s3-irsa.tf (nous-development-app-s3), trust pinned to
-  # this exact SA (multimodal-rag-system/nous-dev-aws-knowledge-graph-analytics).
+  # IRSA role is retained for the staged AWS S3 bucket, but the phase 1 app
+  # serves files from DO Spaces via spaces-credentials, not this role.
   annotations:
     eks.amazonaws.com/role-arn: "arn:aws:iam::267685730035:role/nous-development-app-s3"
   name: ""
