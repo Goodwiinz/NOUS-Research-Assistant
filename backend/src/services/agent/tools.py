@@ -15,7 +15,7 @@ import inspect
 import logging
 import re
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import Field
@@ -771,6 +771,36 @@ async def create_draft(
 
 
 @tool
+async def revise_draft(
+    instructions: str,
+    project_id: Optional[str] = None,
+    base_version: Optional[int] = None,
+    mode: Literal["revise", "citations_only"] = "revise",
+    config: RunnableConfig = None,  # type: ignore[assignment]
+) -> Dict[str, Any]:
+    """Revise a saved draft version using its server-loaded durable content."""
+    config = config or {}
+    from src.services.agent.tools_impl import _tool_revise_draft
+
+    async with _tool_context(config) as (db, current_user, page_ctx):
+        resolved_pid = _resolve_project_id(project_id, page_ctx)
+        if not resolved_pid:
+            return _missing_project_error("revise_draft")
+        if base_version is not None and base_version < 1:
+            return {"error": "base_version must be a positive integer"}
+        return await _tool_revise_draft(
+            {
+                "project_id": resolved_pid,
+                "instructions": instructions,
+                "base_version": base_version,
+                "mode": mode,
+            },
+            db,
+            current_user,
+        )
+
+
+@tool
 async def export_bibliography(
     document_ids: List[str],
     format: str = "bibtex",
@@ -1161,7 +1191,7 @@ TOOL_REGISTRY = ToolRegistry(
             tool=get_current_draft,
             intents=frozenset({AgentIntent.WRITING}),
             subgraphs=frozenset({AgentSubgraph.WRITING}),
-            subgraph_positions=((AgentSubgraph.WRITING, 13),),
+            subgraph_positions=((AgentSubgraph.WRITING, 14),),
             policy_tags=frozenset(),
             exposed_in_all_tools=False,
         ),
@@ -1231,6 +1261,20 @@ TOOL_REGISTRY = ToolRegistry(
             intents=frozenset({AgentIntent.WRITING}),
             subgraphs=frozenset({AgentSubgraph.WRITING}),
             subgraph_positions=((AgentSubgraph.WRITING, 0),),
+            policy_tags=frozenset(
+                {
+                    ToolPolicyTag.DESTRUCTIVE,
+                    ToolPolicyTag.SLOW,
+                    ToolPolicyTag.NO_OUTER_RETRY,
+                }
+            ),
+        ),
+        ToolDescriptor(
+            name="revise_draft",
+            tool=revise_draft,
+            intents=frozenset({AgentIntent.WRITING}),
+            subgraphs=frozenset({AgentSubgraph.WRITING}),
+            subgraph_positions=((AgentSubgraph.WRITING, 13),),
             policy_tags=frozenset(
                 {
                     ToolPolicyTag.DESTRUCTIVE,

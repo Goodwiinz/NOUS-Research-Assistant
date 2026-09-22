@@ -1322,6 +1322,7 @@ const TOOL_LABELS: Record<string, string> = {
   create_project: 'Create new project',
   create_project_note: 'Save note to project',
   create_draft: 'Generate draft document',
+  revise_draft: 'Revise saved draft',
   execute_code: 'Execute code',
 };
 

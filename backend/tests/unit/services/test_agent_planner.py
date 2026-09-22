@@ -114,6 +114,9 @@ class TestGeneratePlan:
         assert "proj-123" in prompt
         # Complexity gating folded into the prompt
         assert "FEWER" in prompt and "empty steps list" in prompt
+        assert "create_draft returns pending" in prompt
+        assert "final planned step" in prompt
+        assert "revise_draft is synchronous" in prompt
 
         # Empty plan passes through unmodified (node layer treats it as "simple").
         assert result.steps == []

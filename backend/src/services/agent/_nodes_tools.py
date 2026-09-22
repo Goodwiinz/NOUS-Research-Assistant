@@ -412,6 +412,7 @@ SIDE_EFFECT_TOOLS = frozenset(
         "create_project",
         "create_project_note",
         "create_draft",
+        "revise_draft",
         "ingest_arxiv_papers",
         "execute_code",
     }

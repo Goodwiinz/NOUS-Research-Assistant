@@ -24,6 +24,7 @@ const PROJECT_MUTATING_TOOLS = new Set([
   'add_document_to_project',
   'ingest_arxiv_papers',
   'create_draft',
+  'revise_draft',
   'create_project_note',
 ]);
 
@@ -81,7 +82,10 @@ interface AgentChatStore extends AgentChatState, AgentChatActions {
  */
 function settleStreamingMessage(
   message: AgentMessage,
-  options: { fallbackContent?: string; toolStatus?: 'failed' | 'cancelled' } = {}
+  options: {
+    fallbackContent?: string;
+    toolStatus?: 'failed' | 'cancelled';
+  } = {}
 ): void {
   message.isStreaming = false;
   const toolStatus = options.toolStatus ?? 'failed';

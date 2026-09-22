@@ -61,12 +61,14 @@ def _make_bg_session(documents, add_sink: list):
 
     docs_result = MagicMock()
     docs_result.scalars.return_value.all.return_value = documents
+    lock_result = MagicMock()
+    lock_result.scalar_one_or_none.return_value = uuid4()
     version_result = MagicMock()
     version_result.scalar.return_value = 0
     update_result = MagicMock()
 
     session.execute = AsyncMock(
-        side_effect=[docs_result, version_result, update_result]
+        side_effect=[docs_result, lock_result, version_result, update_result]
     )
     session.add = MagicMock(side_effect=add_sink.append)
     session.flush = AsyncMock()
@@ -222,7 +224,7 @@ async def test_flag_on_verifier_raises_draft_still_persists_completed():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_no_citations_verifier_skipped():
+async def test_create_without_citations_fails_before_persistence():
     documents = [_make_document()]
     add_sink: list = []
     bg_session = _make_bg_session(documents, add_sink)
@@ -240,8 +242,10 @@ async def test_flag_on_no_citations_verifier_skipped():
             patcher.stop()
 
     verifier_cls.assert_not_called()
-    draft = _draft_from_sink(add_sink)
-    assert "citation_review" not in draft.generation_params
+    assert not add_sink
+    assert bg_session.commit.await_count == 0
+    status = DraftGenerationService.get_status("task-no-citations")
+    assert status["status"] == DraftGenerationStatus.FAILED
 
 
 @pytest.mark.asyncio

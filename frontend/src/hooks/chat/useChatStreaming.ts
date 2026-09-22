@@ -194,6 +194,7 @@ const PROJECT_MUTATING_TOOLS = new Set([
   'create_project',
   'create_project_note',
   'create_draft',
+  'revise_draft',
 ]);
 
 // ============================================
