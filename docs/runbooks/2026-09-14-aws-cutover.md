@@ -127,15 +127,17 @@ All boxes must be checked before starting. Any unchecked box = no go.
   ```bash
   kubectl get secret infisical-universal-auth -n multimodal-rag-system --context $EKS_CONTEXT
   ```
-- [ ] EKS app stack deployed and both EKS ArgoCD apps exist with **SyncPolicy
-  automated**: root app-of-apps `aws-dev` and its `nous-dev-aws` child. (The
-  writer-freeze comes from the DO-side Step 1; nothing on EKS needs pausing —
-  the app runs from already-rendered manifests until Step 6 scales it up.)
+- [ ] EKS app stack deployed and both EKS ArgoCD apps exist. The AWS values
+  are pinned to **zero** backend/worker/beat replicas, worker HPA off, and
+  synthetic CronJob suspended until Step 6. ArgoCD may auto-sync this safe
+  preflight state; no EKS app writer may be running before the DO freeze.
   Verify:
   ```bash
   argocd app list   # (EKS ArgoCD)
+  kubectl get deploy,cronjob -n multimodal-rag-system --context $EKS_CONTEXT
   ```
-  Expected: `aws-dev` (root) and `nous-dev-aws` (child) on EKS, `SyncPolicy: automated`.
+  Expected: `aws-dev` and `nous-dev-aws` Synced; all three app Deployments
+  desired/ready `0`, and `nous-dev-aws-synthetic-traffic` `SUSPEND=true`.
 - [ ] ACM certificate issued (Task 3 terraform; DNS validation CNAME added manually in Cloudflare):
   ```bash
   aws acm list-certificates --region us-east-1 \
@@ -154,13 +156,13 @@ cat /tmp/do-replicas.txt /tmp/do-ingress.txt
 
 Expected: e.g. `nous-dev-knowledge-graph-analytics-backend 1`, `nous-dev-celery-beat 1`, `nous-dev-celery-worker 1`. `/tmp/do-ingress.txt` records the DO ingress and its actual hosts; it does **not** prove `dev-api.goodwiinz.tech` routes to DO.
 
-**Infisical rollback anchor (needed by 9.4):** rollback restores `/database` and
+**Infisical rollback anchor (needed by 9.2):** rollback restores `/database` and
 `/redis` from **Infisical secret version history** — Infisical keeps every prior
 version, so no secret values are copied to disk. Before freezing, record the
 current version number of each secret in `/database` (`DATABASE_URL`,
 `POSTGRES_USER`, `POSTGRES_PASSWORD`) and `/redis` (`REDIS_URL`, `REDIS_PASSWORD`)
 into `/tmp/infisical-versions.txt` (Infisical UI → project `nous-platform`,
-env `dev` → each secret's history), so 9.4 can restore the exact prior versions.
+env `dev` → each secret's history), so 9.2 can restore the exact prior versions.
 
 **HALT:** any precondition fails → fix before freeze. Do not enter the window.
 
@@ -376,9 +378,14 @@ ls -lh /tmp/nous-neo4j.dump
 
 Expected: local file, same size as listed in 4b.
 
-**4d. Pause EKS Neo4j before first data-bearing start.** If the EKS STS has already started once with an empty volume that's fine — the load below overwrites — but the STS must be at 0 during the load:
+**4d. Pause EKS GitOps and Neo4j before loading.** If the EKS STS has already
+started once with an empty volume that's fine — the load below overwrites —
+but it must stay at 0 during the load. Pause the root app first so it cannot
+restore child auto-sync:
 
 ```bash
+argocd app set aws-dev --sync-policy none
+argocd app set nous-dev-aws --sync-policy none
 kubectl scale statefulset nous-dev-aws-knowledge-graph-analytics-neo4j -n multimodal-rag-system \
   --context $EKS_CONTEXT --replicas=0
 kubectl get pods -n multimodal-rag-system --context $EKS_CONTEXT -l app.kubernetes.io/component=neo4j
@@ -480,10 +487,14 @@ Expected: secrets saved. (KEDA reads `keda.redis.address` = `<ELASTICACHE_ENDPOI
 
 **HALT:** auth token unavailable → stop; do not guess.
 
-**6d. Scale up + enable GitOps:**
+**6d. Open the AWS writer gate and enable GitOps.** In the existing
+`migration/aws` worktree, edit `values-aws.yaml` to set
+`backend.replicaCount=1`, `celeryWorker.replicaCount=1`,
+`celeryBeat.replicaCount=1`, and `celeryWorker.autoscaling.enabled=true`.
+Leave `syntheticTraffic.suspend=true` until user-path smoke tests pass.
+Render and verify the chart, commit and push this scoped values change, then:
 
 ```bash
-kubectl scale deployments --all -n multimodal-rag-system --context $EKS_CONTEXT --replicas=1
 kubectl scale statefulset nous-dev-aws-knowledge-graph-analytics-neo4j -n multimodal-rag-system --context $EKS_CONTEXT --replicas=1
 argocd app set nous-dev-aws --sync-policy automated   # EKS ArgoCD child app
 argocd app set aws-dev  --sync-policy automated   # EKS ArgoCD root app-of-apps
@@ -546,7 +557,7 @@ Run all from outside the cluster (real user path, via ALB). Use the
 | 7 | Celery worker | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-worker --tail=50` | Tasks consumed from ElastiCache queue |
 | 8 | Worker autoscaling (HPA) | `kubectl get hpa -n multimodal-rag-system --context $EKS_CONTEXT` | Worker HPA present (KEDA is NOT installed on EKS — `keda.enabled: false`; re-test ScaledObject after KEDA install) |
 | 9 | DO Spaces round-trip | Download a pre-migration file and upload/download a small new file through the UI/app | Both served from DO Spaces (`rag-system-storage`); new file indexes in DO KB and is searchable |
-| 10 | Synthetic traffic | `kubectl get cronjob -n multimodal-rag-system --context $EKS_CONTEXT` → wait for next `*/20` tick → check job logs | Synthetic job succeeds |
+| 10 | Synthetic traffic | After tests 1-9 pass, commit `syntheticTraffic.suspend=false` in `values-aws.yaml`, wait for Argo sync and next `*/20` tick, then check job logs | Synthetic job succeeds; leave suspended if earlier smoke tests fail |
 
 **HALT:** any test fails → capture logs, then decide: quick fix inside the window, or rollback (Step 9). Timebox: if >2 smoke tests fail or the failure class is data-related, roll back.
 
@@ -569,8 +580,8 @@ Requires: a **fresh shell** — re-export `$DOKS_CONTEXT`/`$EKS_CONTEXT` and `ar
 **9.1. Pause GitOps, then scale EKS down** (prevents split-brain writers):
 
 ```bash
-argocd app set nous-dev-aws --sync-policy none   # EKS ArgoCD child app
 argocd app set aws-dev  --sync-policy none   # EKS ArgoCD root app-of-apps
+argocd app set nous-dev-aws --sync-policy none   # EKS ArgoCD child app
 kubectl scale deployments --all -n multimodal-rag-system --context $EKS_CONTEXT --replicas=0
 kubectl get deploy -n multimodal-rag-system --context $EKS_CONTEXT
 ```
