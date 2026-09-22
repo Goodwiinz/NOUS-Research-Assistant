@@ -1,5 +1,13 @@
 # Decommission Runbook: DigitalOcean (post-AWS cutover)
 
+> **BLOCKED for phase 1.** The 2026-09-22 cutover plan keeps DigitalOcean
+> Spaces `rag-system-storage` and DigitalOcean Knowledge Base as live EKS
+> dependencies. Do not execute any teardown or key revocation in this runbook,
+> even after the 14-day soak. First complete and verify a separately approved
+> storage **and** Knowledge Base migration, update this runbook to match the
+> new serving paths, and obtain a new explicit decommission GO. An AWS S3
+> backup copy alone does not satisfy this gate.
+
 **Date:** <EXECUTION_DATE> (template written 2026-09-15)
 **Design:** `docs/plans/2026-09-14-do-to-aws-migration-design.md`
 **Plan:** `docs/plans/2026-09-14-do-to-aws-migration.md` (Task 9)

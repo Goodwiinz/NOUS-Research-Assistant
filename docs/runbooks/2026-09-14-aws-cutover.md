@@ -4,6 +4,10 @@
 **Design:** `docs/plans/2026-09-14-do-to-aws-migration-design.md`
 **Plan:** `docs/plans/2026-09-14-do-to-aws-migration.md` (Task 8; Tasks 1-7 are pre-stage prerequisites)
 **Window:** single freeze-and-migrate window, hours of acceptable downtime
+**Phase 1 scope:** move API/workers, PostgreSQL, Redis, and Neo4j to AWS. Keep
+DigitalOcean Spaces and DigitalOcean Knowledge Base as the live document store
+and retrieval service. The AWS S3 copy is a backup/staging copy, not a serving
+target. A later storage/KB migration needs its own plan and approval.
 **Rollback:** DO kept frozen (not deleted) for 2 weeks — see [Step 9](#9-halt-criteria--rollback)
 
 ## Environments
@@ -16,11 +20,12 @@
 | Postgres | DO managed PG, db `multimodal_rag` | RDS PostgreSQL 16 (`db.t4g.small`) |
 | Redis | DO managed Valkey | ElastiCache `cache.t4g.small` (**no data migration — cold start**) |
 | Neo4j | STS `nous-dev-knowledge-graph-analytics-neo4j` (5.26) | same chart on EBS gp3 |
-| Qdrant | STS in `rag-dev` (1.13, manually applied — not in git) | same on EBS gp3 |
-| Object storage | Spaces `rag-system-storage` (nyc3) | S3 `nous-development-storage-3ilp9pj2` (`buildcache/` excluded) |
+| Qdrant | Not used; only a stale PVC remains | Not deployed; skip Step 5 |
+| Object storage | Spaces `rag-system-storage` (nyc3) | **Same DO Spaces bucket remains live**; AWS S3 copy excludes `buildcache/` |
+| Document retrieval | DO Knowledge Base | **Same DO Knowledge Base remains live** |
 | Images | DO registry | ECR `nous/backend`, `nous/frontend` |
 | DNS | Cloudflare (external-dns) | Cloudflare (external-dns) → ALB group `nous-dev` |
-| Frontend | Vercel `dev-app.goodwiinz.tech` | unchanged |
+| Frontend | Vercel (verify the actual live URL in Step 0) | unchanged |
 
 **Working contexts** (set once, verify per step):
 
@@ -38,6 +43,11 @@ export EKS_CONTEXT=<EKS_CONTEXT>     # nous-dev-cluster
 > pre-check, Step 6, and 9.1 run against the **EKS** ArgoCD. On EKS the app
 > names are: `aws-dev` (root app-of-apps) and `nous-dev-aws` (child, Helm release).
 > Re-run `argocd login` (or `argocd context`) when switching.
+>
+> AWS sessions expire. Prefix **each** command touching `aws`, `kubectl`,
+> `helm`, or `terraform` with `eval "$(aws configure export-credentials --format env)" &&`.
+> On `ExpiredToken`, stop and run `aws login` before retrying. Never pipe a
+> long-running Terraform command to `grep`/`head`; redirect it to a file first.
 
 ---
 
@@ -90,6 +100,20 @@ All boxes must be checked before starting. Any unchecked box = no go.
   rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**'
   ```
   Expected: `0 differences` (pre-freeze drift acceptable; final delta synced in Step 3).
+- [ ] Phase 1 document path is live on EKS: `values-aws.yaml` sets
+  `S3_ENDPOINT_URL=https://nyc3.digitaloceanspaces.com`,
+  `S3_BUCKET_NAME=rag-system-storage`, `S3_REGION=nyc3`; the
+  `infisical-spaces-credentials` CR is Ready and the generated
+  `spaces-credentials` Secret contains `S3_ACCESS_KEY` and `S3_SECRET_KEY`.
+  `do-kb-credentials` exists with `DO_KB_ENABLED=true` and
+  `DO_KB_PRIMARY_READ=true`. Inspect key names and flags only; never print keys.
+- [ ] Rollback route is real: verify the currently working DO API hostname
+  (observed `dev-api.gen-text.app`) and a TLS-valid way for the **actual live
+  frontend** to switch back to it. Do not assume the DO ingress serves
+  `dev-api.goodwiinz.tech`: on 2026-09-22 it did not, while that hostname
+  already pointed at the AWS ALB and returned 503 with EKS replicas at zero.
+  Record the frontend URL, its API setting, the exact rollback change, and
+  a tested response before freezing. **No verified route = no GO.**
 - [ ] EKS addons healthy (Task 3) — required before Step 6 scale-up, check now:
   ```bash
   kubectl get pods -n kube-system --context $EKS_CONTEXT \
@@ -128,7 +152,7 @@ kubectl get ingress -n rag-dev --context $DOKS_CONTEXT -o wide > /tmp/do-ingress
 cat /tmp/do-replicas.txt /tmp/do-ingress.txt
 ```
 
-Expected: e.g. `nous-dev-knowledge-graph-analytics-backend 1`, `nous-dev-celery-beat 1`, `nous-dev-celery-worker 1`. `/tmp/do-ingress.txt` shows the current DO LB address behind `dev-api.goodwiinz.tech`.
+Expected: e.g. `nous-dev-knowledge-graph-analytics-backend 1`, `nous-dev-celery-beat 1`, `nous-dev-celery-worker 1`. `/tmp/do-ingress.txt` records the DO ingress and its actual hosts; it does **not** prove `dev-api.goodwiinz.tech` routes to DO.
 
 **Infisical rollback anchor (needed by 9.4):** rollback restores `/database` and
 `/redis` from **Infisical secret version history** — Infisical keeps every prior
@@ -144,7 +168,7 @@ env `dev` → each secret's history), so 9.4 can restore the exact prior version
 
 ## 1. Freeze DigitalOcean
 
-Goal: stop all writers (Deployments) while keeping StatefulSets (Neo4j, Qdrant) up for dumps.
+Goal: stop all writers (Deployments) while keeping the Neo4j StatefulSet up for its dump. The DO Spaces bucket and DO Knowledge Base remain provisioned and live for EKS after cutover.
 
 **1a. Pause ArgoCD auto-sync on DO** — `nous-root` first (it self-heals child apps; pausing it prevents the child policy from being reverted from git):
 
@@ -167,15 +191,15 @@ kubectl get deploy -n rag-dev --context $DOKS_CONTEXT
 kubectl get statefulset -n rag-dev --context $DOKS_CONTEXT
 ```
 
-Expected: every Deployment `0/1`; Neo4j and Qdrant StatefulSets still `1/1` Ready.
+Expected: every Deployment `0/1`; Neo4j StatefulSet still `1/1` Ready. A stale Qdrant PVC is not a running workload.
 
 **1c. Confirm quiescence externally** (pods are gone, so check through the LB):
 
 ```bash
-sleep 60 && curl -sS -m 5 https://dev-api.goodwiinz.tech/health; echo "exit=$?"
+sleep 60 && curl -sS -m 5 https://dev-api.gen-text.app/health; echo "exit=$?"
 ```
 
-Expected: non-200 / connection failure — no backend is running, so no writers can reach PG/Neo4j/Qdrant.
+Expected: non-200 / connection failure — no DO backend is running, so no DO writers can reach PG/Neo4j.
 
 **1d. (optional, self-protection)** DO-side ArgoCD UI: mark `nous-dev` app as suspended so nobody clicks sync.
 
@@ -292,9 +316,11 @@ kubectl delete pod pg-mig -n multimodal-rag-system --context $EKS_CONTEXT
 
 ---
 
-## 3. Final Spaces → S3 sync + verify
+## 3. Spaces → S3 backup checkpoint (not a serving switch)
 
-DO writes are frozen (Step 1), so this is the last delta.
+DO app writers are frozen (Step 1), so take a consistent pre-cutover copy.
+After EKS starts, new document writes intentionally continue to DO Spaces;
+the AWS S3 copy may then diverge. **Never delete or disable Spaces.**
 
 ```bash
 rclone sync spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**' --progress
@@ -305,7 +331,9 @@ Expected: check reports `0 differences` and `0 errors`.
 
 **HALT:** any difference or error → re-run sync; repeated failures (auth, >5 min) → halt window.
 
-Then confirm the target bucket name matches the chart: `storage_bucket_name` terraform output must equal `S3_BUCKET_NAME` in `values-aws.yaml`.
+Do **not** point `values-aws.yaml` at this AWS bucket in phase 1. Its
+`S3_BUCKET_NAME` must remain `rag-system-storage`, with the DO endpoint and
+`spaces-credentials` secret, for upload and DO KB ingestion to work.
 
 ---
 
@@ -407,87 +435,11 @@ Note: the `neo4j` database dump carries graph data only — users/credentials li
 
 ---
 
-## 5. Qdrant: per-collection snapshots → restore on EKS
+## 5. Qdrant — not part of this cutover
 
-> **NOTE (pre-cutover decision logged):** the EKS Qdrant restore target is
-> **NOT YET DEPLOYED** (no Qdrant manifests in `infrastructure/kubernetes/`).
-> Either deploy the Qdrant manifests into `multimodal-rag-system` before the
-> cutover window, or DEFER the Qdrant migration to a fast-follow (leaving dev
-> on DO-frozen snapshots until then). Decide explicitly — do not improvise
-> mid-window.
-
-Qdrant's StatefulSet in `rag-dev` was applied manually (not in git) — discover the real pod/service name first. Port `6333` (HTTP).
-
-**5a. Discover:**
-
-```bash
-kubectl get statefulset,svc,pvc -n rag-dev --context $DOKS_CONTEXT | grep -i qdrant
-export QDRANT_POD=<qdrant-pod-0>        # from statefulset output above
-export QDRANT_SVC=<qdrant-service>      # from svc output above
-```
-
-**HALT:** no Qdrant found → confirm with the team whether dev still runs Qdrant; if truly absent, skip Step 5 and record it.
-
-**5b. Snapshot every collection on DO** (collections are frozen since Step 1):
-
-```bash
-mkdir -p /tmp/qdrant-snaps
-kubectl port-forward -n rag-dev --context $DOKS_CONTEXT $QDRANT_POD 6333:6333 &
-curl -s http://localhost:6333/collections | jq -r '.result.collections[].name' | tee /tmp/qdrant-collections.txt
-while read -r c; do
-  curl -s -X POST "http://localhost:6333/collections/$c/snapshots" | jq . | tee "/tmp/qdrant-snaps/${c}.snap.json"
-done < /tmp/qdrant-collections.txt
-```
-
-Expected: non-empty collection list; each POST returns snapshot info incl. `name` and `size`, saved to `/tmp/qdrant-snaps/<collection>.snap.json` (5c downloads the exact snapshot named there).
-
-**HALT:** empty collection list → verify with team (could be legitimately empty; record and continue only on confirmation).
-
-**5c. Download snapshots:**
-
-```bash
-while read -r c; do
-  snap=$(jq -r '.result.name' "/tmp/qdrant-snaps/${c}.snap.json")
-  if [ -z "$snap" ]; then echo "MISSING: no snapshot recorded for $c — rerun 5b"; continue; fi
-  curl -s "http://localhost:6333/collections/$c/snapshots/$snap" \
-    -o "/tmp/qdrant-snaps/${c}.snapshot"
-done < /tmp/qdrant-collections.txt
-ls -lh /tmp/qdrant-snaps
-```
-
-Expected: one `.snapshot` file per collection, sizes matching 5b.
-
-**HALT:** any 0-byte file → re-download that collection before proceeding.
-
-**5d. Restore on EKS** — port-forward the EKS qdrant pod and upload each snapshot:
-
-```bash
-kubectl get statefulset,svc,pvc -n multimodal-rag-system --context $EKS_CONTEXT | grep -i qdrant
-export EKS_QDRANT_POD=<eks-qdrant-pod-0>
-kubectl port-forward -n multimodal-rag-system --context $EKS_CONTEXT $EKS_QDRANT_POD 6334:6333 &
-for f in /tmp/qdrant-snaps/*.snapshot; do
-  c=$(basename "$f" .snapshot)
-  curl -s -X POST "http://localhost:6334/collections/$c/snapshots/upload?priority=snapshot" \
-    -F "snapshot=@$f" | jq .
-done
-```
-
-Expected: each upload returns `status: ok` and the restored collection name. (If the EKS STS pods aren't running yet because ArgoCD is paused, scale the qdrant STS to 1 first — same pattern as 4d in reverse.)
-
-**5e. Verify collection counts match:**
-
-```bash
-while read -r c; do
-  src=$(curl -s "http://localhost:6333/collections/$c" | jq -r '.result.points_count')
-  dst=$(curl -s "http://localhost:6334/collections/$c" | jq -r '.result.points_count')
-  printf '%s src=%s dst=%s\n' "$c" "$src" "$dst"
-done < /tmp/qdrant-collections.txt
-kill %1 %2 2>/dev/null   # both port-forwards
-```
-
-Expected: `src` == `dst` for every collection.
-
-**HALT:** any mismatch → re-upload that collection; repeated mismatch → halt window.
+Qdrant is not used: the user confirmed this, and preflight found no Qdrant
+workload on DO or EKS. A stale DO PVC is not a service or a data source.
+Skip this step. Do not deploy Qdrant or migrate the PVC.
 
 ---
 
@@ -506,17 +458,18 @@ Expected: all Running/Ready. **HALT:** ALB controller or external-dns not ready 
 
 ```bash
 kubectl -n multimodal-rag-system --context $EKS_CONTEXT get secret \
-  database-credentials redis-credentials app-secrets supabase-credentials azure-openai-credentials -o name
+  database-credentials redis-credentials app-secrets supabase-credentials azure-openai-credentials spaces-credentials do-kb-credentials -o name
 kubectl -n multimodal-rag-system --context $EKS_CONTEXT get infisicalsecrets
 ```
 
-Expected: all secrets present, CRDs synced. (`spaces-credentials` must be absent — pruned by `values-aws.yaml`; `do-kb-credentials` optional during transition.)
+Expected: all secrets present and CRDs synced. Confirm the two DO document
+service secrets without printing their secret values. Missing either = HALT.
 
 **6c. Sync Redis endpoint into Infisical** (ElastiCache auth token — transit encryption is ON, so clients use `rediss://` + AUTH token):
 
 ```bash
-# Auth token was generated by terraform: random_password.redis_auth_token
-terraform -chdir=infrastructure/terraform state show random_password.redis_auth_token | grep result
+# Retrieve the terraform-generated Redis auth token privately from the
+# approved secrets store; do not print it in terminal logs or this runbook.
 ```
 
 In Infisical UI, env `dev`, folder `/redis`:
@@ -525,7 +478,7 @@ In Infisical UI, env `dev`, folder `/redis`:
 
 Expected: secrets saved. (KEDA reads `keda.redis.address` = `<ELASTICACHE_ENDPOINT>:6379` from `values-aws.yaml` and the password from secret `redis-credentials` key `REDIS_PASSWORD`, TLS on.)
 
-**HALT:** `terraform state show` fails (state elsewhere) → fetch the auth token from your secrets manager; do not guess.
+**HALT:** auth token unavailable → stop; do not guess.
 
 **6d. Scale up + enable GitOps:**
 
@@ -537,7 +490,7 @@ argocd app set aws-dev  --sync-policy automated   # EKS ArgoCD root app-of-apps
 kubectl get pods -n multimodal-rag-system --context $EKS_CONTEXT -w   # Ctrl-C when settled
 ```
 
-Expected: backend, celery-worker, celery-beat, neo4j (and qdrant) pods Running/Ready; backend `wait-for-postgres` init container passes (RDS reachable).
+Expected: backend, celery-worker, celery-beat, and neo4j pods Running/Ready; backend `wait-for-postgres` init container passes (RDS reachable). Qdrant is not deployed.
 
 **HALT:** CrashLoopBackOff on backend/worker → `kubectl logs` the pod; most common cause is a wrong endpoint in Infisical — fix value, let the operator re-sync, restart the deployment.
 
@@ -578,11 +531,13 @@ Expected: issuer `Amazon`, HTTP 200 (or the app's health response), no cert warn
 
 ## 8. Smoke tests
 
-Run all from outside the cluster (real user path, via ALB). Frontend: `https://dev-app.goodwiinz.tech` (Vercel, unchanged).
+Run all from outside the cluster (real user path, via ALB). Use the
+**verified live frontend URL** recorded in Step 0; do not assume
+`dev-app.goodwiinz.tech` exists.
 
 | # | Test | Command / action | Expected |
 |---|---|---|---|
-| 1 | Auth/login | Log in on dev-app | Session created; no 5xx on `/api` calls |
+| 1 | Auth/login | Log in on the verified live frontend | Session created; no 5xx on `/api` calls |
 | 2 | Upload → embed → search | Upload a small document in the UI, wait for ingestion, run a search | Doc status becomes ingested; search returns it |
 | 3 | Chat streaming (SSE) | Send a chat message | Tokens stream incrementally (ALB `idle-timeout: 300` ≥ app `TIMEOUT: 300`) |
 | 4 | WebSocket | Open a session that uses the ws path | Socket connects (ALB `idle-timeout: 4000` on websocket-ingress); `/ws/health` 200 |
@@ -590,7 +545,7 @@ Run all from outside the cluster (real user path, via ALB). Frontend: `https://d
 | 6 | Celery beat | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-beat --tail=50` | Heartbeat/tick lines; no task failures |
 | 7 | Celery worker | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-worker --tail=50` | Tasks consumed from ElastiCache queue |
 | 8 | Worker autoscaling (HPA) | `kubectl get hpa -n multimodal-rag-system --context $EKS_CONTEXT` | Worker HPA present (KEDA is NOT installed on EKS — `keda.enabled: false`; re-test ScaledObject after KEDA install) |
-| 9 | S3 round-trip | Download a pre-migration file through the UI/app | File served from S3 (`nous-development-storage-3ilp9pj2`) |
+| 9 | DO Spaces round-trip | Download a pre-migration file and upload/download a small new file through the UI/app | Both served from DO Spaces (`rag-system-storage`); new file indexes in DO KB and is searchable |
 | 10 | Synthetic traffic | `kubectl get cronjob -n multimodal-rag-system --context $EKS_CONTEXT` → wait for next `*/20` tick → check job logs | Synthetic job succeeds |
 
 **HALT:** any test fails → capture logs, then decide: quick fix inside the window, or rollback (Step 9). Timebox: if >2 smoke tests fail or the failure class is data-related, roll back.
@@ -603,23 +558,32 @@ Run all from outside the cluster (real user path, via ALB). Frontend: `https://d
 
 - a precondition in Step 0 was skipped or failed
 - any "HALT" criterion in Steps 1-8 triggers and cannot be resolved within the window
-- PG row counts differ (Step 2f) or Qdrant counts differ (Step 5e)
+- PG row counts differ (Step 2f)
 - smoke tests fail per the Step 8 timebox rule
 - window timebox exceeded — better an aborted cutover than a half-migrated dev
 
 ### Rollback (independently executable — EKS becomes irrelevant)
 
-Requires: a **fresh shell** — re-export `$DOKS_CONTEXT`/`$EKS_CONTEXT` and `argocd login` to **both** ArgoCDs (EKS for 9.1, DO for 9.3; rollback must not depend on shell state from the cutover window). Also: `/tmp/do-replicas.txt`, `/tmp/do-ingress.txt`, `/tmp/infisical-versions.txt` (recorded in Step 0), DO ArgoCD still installed with `nous-root`/`nous-dev` apps present (they were only paused, not deleted).
+Requires: a **fresh shell** — re-export `$DOKS_CONTEXT`/`$EKS_CONTEXT` and `argocd login` to **both** ArgoCDs (EKS for 9.1, DO for 9.3; rollback must not depend on shell state from the cutover window). Also: `/tmp/do-replicas.txt`, `/tmp/do-ingress.txt`, `/tmp/infisical-versions.txt` (recorded in Step 0), the tested frontend rollback route, and DO ArgoCD still installed with `nous-root`/`nous-dev` apps present (they were only paused, not deleted).
 
-**9.1. Scale EKS down** (prevents split-brain writers when DNS flips back):
+**9.1. Pause GitOps, then scale EKS down** (prevents split-brain writers):
 
 ```bash
-kubectl scale deployments --all -n multimodal-rag-system --context $EKS_CONTEXT --replicas=0
 argocd app set nous-dev-aws --sync-policy none   # EKS ArgoCD child app
 argocd app set aws-dev  --sync-policy none   # EKS ArgoCD root app-of-apps
+kubectl scale deployments --all -n multimodal-rag-system --context $EKS_CONTEXT --replicas=0
+kubectl get deploy -n multimodal-rag-system --context $EKS_CONTEXT
 ```
 
-**9.2. DNS back to DO:** in Cloudflare, point the CNAMEs that were moved (e.g. `dev-api`, ws host) back to the DO LB hostname from `/tmp/do-ingress.txt`. TTL 60. (If external-dns on EKS fights the records, scale it to 0 first: `kubectl scale deploy -n kube-system external-dns --context $EKS_CONTEXT --replicas=0`.)
+Expected: all EKS app Deployments remain at zero after GitOps is paused.
+
+**9.2. Revert shared Infisical secrets before restarting DO:** restore
+`/database` (DO PG values) and `/redis` (DO Valkey values) from Infisical
+secret version history, using the versions in `/tmp/infisical-versions.txt`.
+These `dev` secrets sync into **both** clusters; wait until the DO
+`database-credentials` and `redis-credentials` Secrets show the restored
+versions before scaling any DO pod. Do not retype values from memory or print
+them. DO PG/Valkey are still running.
 
 **9.3. Unfreeze DO:**
 
@@ -633,11 +597,18 @@ done < /tmp/do-replicas.txt
 kubectl get pods -n rag-dev --context $DOKS_CONTEXT -w
 ```
 
-**9.4. Revert Infisical:** restore `/database` (DO PG values) and `/redis` (DO Valkey values) from **Infisical secret version history** — roll each secret back to the versions recorded in Step 0 (see `/tmp/infisical-versions.txt`); do not retype values from memory. (DO PG/Valkey are still running — nothing was deleted on DO.)
+**9.4. Restore the tested frontend → DO API route:** execute the exact
+rollback change and TLS-valid hostname recorded in Step 0. Merely pointing
+`dev-api.goodwiinz.tech` at the DO LB is **not sufficient** unless the DO
+ingress and its certificate have been verified for that host. If external-dns
+on EKS fights a DNS change, scale it to 0 first:
+`kubectl scale deploy -n kube-system external-dns --context $EKS_CONTEXT --replicas=0`.
 
-Expected after 9.2-9.4: `curl -s https://dev-api.goodwiinz.tech/health` returns 200 within TTL (60s) + pod-ready time; dev-app login + chat work again.
+Expected after 9.2-9.4: the Step 0 recorded DO API hostname returns 200
+after pod-ready time; the actual live frontend login + chat work again.
 
-**9.5. Decision point:** schedule retry window; bring `nous.dump`, `/tmp/nous-neo4j.dump`, `/tmp/qdrant-snaps/` forward (re-dump in the next window — do not reuse stale dumps). RCA the failure before re-entry.
+**9.5. Decision point:** schedule a retry window; re-dump PG and Neo4j in the
+next window rather than reusing stale dumps. RCA the failure before re-entry.
 
 ---
 
@@ -649,7 +620,14 @@ Expected after 9.2-9.4: `curl -s https://dev-api.goodwiinz.tech/health` returns 
     CloudWatch + Sentry until a monitoring stack is stood up (fast-follow)
   - CloudWatch (us-east-1): ALB 5xx/target health, RDS connections+CPU, ElastiCache evictions
   - Sentry (`SENTRY_ENVIRONMENT=dev`): new error classes vs pre-cutover baseline
-  - `rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**'` daily for the first week (Spaces must not receive new non-cache writes; if it does, some component still points at DO → fix immediately)
-- **DO stays frozen 2 weeks** as the rollback source. Do not delete DO resources in this window. Do not resume `nous-dev`/`nous-root` auto-sync on the DO ArgoCD.
-- After the soak, follow the decommission checklist: `docs/runbooks/aws-decommission.md` (covers DO LB deletion, final data archive to S3 Glacier, DOKS destruction, Spaces key revocation).
+  - Check that new uploads land in DO Spaces and are indexed by DO KB. The
+    AWS S3 copy is only a checkpoint; a fresh `rclone check` may show expected
+    differences after new writes. If desired, run a new cache-excluded backup
+    sync and verify it without deleting the DO source.
+- **DO app workloads stay frozen 2 weeks** as the rollback source. DO Spaces
+  and DO KB remain live dependencies throughout this phase. Do not delete DO
+  resources or resume `nous-dev`/`nous-root` auto-sync on DO ArgoCD.
+- **Do not execute** `docs/runbooks/aws-decommission.md` after this soak.
+  It assumes Spaces/KB have already moved and would delete live dependencies.
+  A separate storage/KB migration and explicit go/no-go are required first.
 - Close-out notes: record actual cutover times, any deviations from this runbook, and the ECR tag ↔ source SHA mapping for the deployed images.
