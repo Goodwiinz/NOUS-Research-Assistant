@@ -121,6 +121,47 @@ class TestGeneratePlan:
         # Empty plan passes through unmodified (node layer treats it as "simple").
         assert result.steps == []
 
+    async def test_generate_plan_truncates_steps_after_pending_create_draft(self):
+        model_plan = AgentPlan(
+            steps=[
+                PlanStep(
+                    step=1,
+                    description="Find sources",
+                    tool="search_arxiv",
+                ),
+                PlanStep(
+                    step=2,
+                    description="Create the draft",
+                    tool="create_draft",
+                    depends_on=[1],
+                ),
+                PlanStep(
+                    step=3,
+                    description="Read the pending draft",
+                    tool="get_current_draft",
+                    depends_on=[2],
+                ),
+            ],
+            reasoning="Find evidence, then start draft generation.",
+        )
+        mock_llm = _mock_llm_structured(model_plan)
+
+        with patch(
+            "src.services.agent.planner._build_planner_llm", return_value=mock_llm
+        ):
+            result = await generate_plan(
+                "Find sources, create a draft, then inspect it",
+                ["search_arxiv", "create_draft", "get_current_draft"],
+                PAGE_CONTEXT,
+            )
+
+        assert [step.tool for step in result.steps] == [
+            "search_arxiv",
+            "create_draft",
+        ]
+        assert result.steps[-1].depends_on == [1]
+        assert result.reasoning == model_plan.reasoning
+
 
 # ---------------------------------------------------------------------------
 # test_planner_node_skips_if_plan_exists

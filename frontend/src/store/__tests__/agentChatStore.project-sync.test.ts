@@ -107,6 +107,33 @@ describe('agentChatStore project sync', () => {
         callbacks.onToolStart?.('revise_draft', {});
         callbacks.onToolEnd?.(
           'revise_draft',
+          '{"status":"completed","version":4,"project_id":"p2"}'
+        );
+        callbacks.onDone?.();
+      }
+    );
+
+    await act(async () => {
+      useAgentChatStore.getState().setInputValue('revise the draft');
+      await useAgentChatStore.getState().sendMessage();
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ['project', 'p2'],
+    });
+  });
+
+  it('falls back to the bound project for a legacy revision result', async () => {
+    useAgentChatStore.getState().setPageContext({
+      type: 'project',
+      label: 'Project X',
+      projectId: 'p1',
+    });
+    mockAgentChatService.streamMessage.mockImplementation(
+      async (_request, callbacks) => {
+        callbacks.onToolStart?.('revise_draft', {});
+        callbacks.onToolEnd?.(
+          'revise_draft',
           '{"status":"completed","version":4}'
         );
         callbacks.onDone?.();

@@ -284,9 +284,14 @@ async def generate_plan(
         "overall approach (required)."
     )
 
-    result = await structured_llm.ainvoke(
+    result: AgentPlan = await structured_llm.ainvoke(
         [HumanMessage(content=prompt)], config=internal_llm_config()
     )
+    for index, step in enumerate(result.steps):
+        if step.tool == "create_draft":
+            return AgentPlan(
+                steps=result.steps[: index + 1], reasoning=result.reasoning
+            )
     return result
 
 

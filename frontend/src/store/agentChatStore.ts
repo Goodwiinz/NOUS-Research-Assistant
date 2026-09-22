@@ -28,6 +28,18 @@ const PROJECT_MUTATING_TOOLS = new Set([
   'create_project_note',
 ]);
 
+export function projectIdFromToolResult(result: unknown): string | undefined {
+  try {
+    const parsed: unknown =
+      typeof result === 'string' ? JSON.parse(result) : result;
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    const projectId = (parsed as Record<string, unknown>).project_id;
+    return typeof projectId === 'string' && projectId ? projectId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Dual-cache reconciliation (docs/engineering/frontend.md, "Legacy
 // server-state stores"): project-mutating agent tools bump
 // projectDataVersion so the project page refetches its projectStore copy —
@@ -187,6 +199,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
         const { agentChatService } =
           await import('@/services/agentChatService');
         let didMutateProjectData = false;
+        let mutatedProjectId: string | undefined;
 
         // Build messages array for the API (only user/assistant roles)
         const apiMessages: AgentExecuteRequest['messages'] =
@@ -323,6 +336,10 @@ export const useAgentChatStore = create<AgentChatStore>()(
                   });
                   if (PROJECT_MUTATING_TOOLS.has(tool)) {
                     didMutateProjectData = true;
+                    if (!isError && tool === 'revise_draft') {
+                      mutatedProjectId =
+                        projectIdFromToolResult(result) ?? mutatedProjectId;
+                    }
                   }
                 },
                 // The event's second argument (the planner's rationale) is
@@ -452,7 +469,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       null;
                   });
                   if (didMutateProjectData) {
-                    invalidateProjectQueries(pageContext.projectId);
+                    invalidateProjectQueries(
+                      mutatedProjectId ?? pageContext.projectId
+                    );
                   }
                   // Read the panel state NOW, not at send time: closing the
                   // panel mid-answer used to leave the unread badge unset.
@@ -486,7 +505,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       null;
                   });
                   if (didMutateProjectData) {
-                    invalidateProjectQueries(pageContext.projectId);
+                    invalidateProjectQueries(
+                      mutatedProjectId ?? pageContext.projectId
+                    );
                   }
                 },
               },
@@ -530,7 +551,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                 (state as unknown as AgentChatStore)._abortController = null;
               });
               if (didMutateProjectData) {
-                invalidateProjectQueries(pageContext.projectId);
+                invalidateProjectQueries(
+                  mutatedProjectId ?? pageContext.projectId
+                );
               }
               return;
             }
@@ -840,6 +863,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
         // Try SSE streaming confirm first
         let streamedContent = '';
         let didMutateProjectData = false;
+        let mutatedProjectId: string | undefined;
 
         try {
           await agentChatService.streamConfirm(
@@ -915,6 +939,10 @@ export const useAgentChatStore = create<AgentChatStore>()(
                   }
                   if (PROJECT_MUTATING_TOOLS.has(tool)) {
                     didMutateProjectData = true;
+                    if (!isError && tool === 'revise_draft') {
+                      mutatedProjectId =
+                        projectIdFromToolResult(result) ?? mutatedProjectId;
+                    }
                   }
                 });
               },
@@ -1029,7 +1057,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                   (state as unknown as AgentChatStore)._abortController = null;
                 });
                 if (didMutateProjectData) {
-                  invalidateProjectQueries(get().pageContext.projectId);
+                  invalidateProjectQueries(
+                    mutatedProjectId ?? get().pageContext.projectId
+                  );
                 }
               },
               onError: (error: string, category?: AgentErrorCategory) => {
@@ -1210,10 +1240,19 @@ export const useAgentChatStore = create<AgentChatStore>()(
             if (!isCurrentGeneration()) return;
 
             if (job.status === 'completed' && job.result) {
-              const hasMutation =
-                job.result.tool_executions?.some((te) =>
-                  PROJECT_MUTATING_TOOLS.has(te.tool_name)
-                ) ?? false;
+              const completedMutations =
+                job.result.tool_executions?.filter(
+                  (te) =>
+                    te.status === 'completed' &&
+                    PROJECT_MUTATING_TOOLS.has(te.tool_name)
+                ) ?? [];
+              const hasMutation = completedMutations.length > 0;
+              const revisionExecution = [...completedMutations]
+                .reverse()
+                .find((te) => te.tool_name === 'revise_draft');
+              const mutatedProjectId = projectIdFromToolResult(
+                revisionExecution?.result
+              );
               set((state) => {
                 const lastAsst = [...state.messages]
                   .reverse()
@@ -1247,7 +1286,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                 }
               });
               if (hasMutation) {
-                invalidateProjectQueries(get().pageContext.projectId);
+                invalidateProjectQueries(
+                  mutatedProjectId ?? get().pageContext.projectId
+                );
               }
               return;
             }

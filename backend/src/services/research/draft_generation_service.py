@@ -214,6 +214,7 @@ class DraftGenerationService:
                 # filter retracted/removed papers get synthesized into the
                 # draft and cited (sibling read paths already guard it).
                 Document.is_deleted.is_(False),
+                CollectionDocument.is_deleted.is_(False),
             )
             .order_by(Document.id)
         )
@@ -628,21 +629,34 @@ class DraftGenerationService:
         documents: List[Document],
         max_chars: int = _DOCUMENT_CONTEXT_BUDGET,
     ) -> str:
-        """Build stable, bounded evidence blocks without tiny per-doc prefixes."""
-        if not documents or max_chars <= 0:
+        """Build bounded evidence blocks while retaining every document marker."""
+        if not documents:
             return ""
 
-        headers = [
-            f'[Doc {idx}] "{doc.title or f"Untitled Document {idx}"}"\n'
-            for idx, doc in enumerate(documents, start=1)
-        ]
-        available = max(0, max_chars - sum(len(header) for header in headers))
-        per_document = max(1, available // len(documents))
-        blocks = []
-        for header, doc in zip(headers, documents):
+        markers = [f"[Doc {idx}]" for idx in range(1, len(documents) + 1)]
+        separators_chars = 2 * (len(documents) - 1)
+        minimum_chars = sum(len(marker) for marker in markers) + separators_chars
+        if max_chars < minimum_chars:
+            raise ValueError(
+                "Document context budget is too small to represent every document"
+            )
+
+        available = max_chars - minimum_chars
+        per_document, extra_slots = divmod(available, len(documents))
+        blocks: List[str] = []
+        for position, (marker, doc) in enumerate(zip(markers, documents)):
+            block_budget = per_document + (1 if position < extra_slots else 0)
+            block = marker
+            title = str(doc.title or f"Untitled Document {position + 1}")
+            if block_budget >= 4:
+                title_chars = min(len(title), 160, block_budget - 3)
+                block += f' "{title[:title_chars]}"'
+                block_budget -= title_chars + 3
             evidence = str(doc.content_text or doc.content_summary or "")
-            blocks.append(header + evidence[:per_document])
-        return "\n\n".join(blocks)[:max_chars]
+            if evidence and block_budget >= 2:
+                block += "\n" + evidence[: block_budget - 1]
+            blocks.append(block)
+        return "\n\n".join(blocks)
 
     @classmethod
     def _order_revision_documents(
@@ -780,7 +794,7 @@ class DraftGenerationService:
             raise ValueError("Revision returned a refusal or error placeholder")
         base_words = len(base_content.split())
         revised_words = len(revised.split())
-        if base_words >= 80 and revised_words < max(20, base_words // 4):
+        if revised_words < max(1, base_words // 4):
             raise ValueError("Revision unexpectedly collapsed the base draft")
 
     async def _build_revision_with_llm(
@@ -992,9 +1006,10 @@ This literature review synthesizes research from {len(documents)} documents, foc
 """
             sections.append(abstract)
 
+        source_marker = " [Doc 1]" if documents else ""
         intro = f"""## 1. Introduction
 
-The field encompassing {themes[0] if themes else 'this research area'} has seen significant developments in recent years. This literature review examines {len(documents)} key publications to understand the current state of research and identify emerging trends.
+The field encompassing {themes[0] if themes else 'this research area'} has seen significant developments in recent years. This literature review examines {len(documents)} key publications to understand the current state of research and identify emerging trends{source_marker}.
 
 """
         sections.append(intro)

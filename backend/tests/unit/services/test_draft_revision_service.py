@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.document import Document
 from src.models.draft_citation import DraftCitation
@@ -36,7 +38,7 @@ def _draft(version: int, content: str, *, current: bool) -> MagicMock:
     return draft
 
 
-def _citation(index: int, document_id, *, context: str = "") -> MagicMock:
+def _citation(index: int, document_id: UUID, *, context: str = "") -> MagicMock:
     citation = MagicMock(spec=DraftCitation)
     citation.citation_index = index
     citation.document_id = document_id
@@ -58,7 +60,7 @@ class _RevisionSession:
         self.commits = 0
         self.current_id = base.id
 
-    async def _execute(self, statement):
+    async def _execute(self, statement: Any) -> MagicMock:
         sql = str(statement)
         result = MagicMock()
         if "FROM collections" in sql and "FOR UPDATE" in sql:
@@ -110,7 +112,7 @@ async def _service(
         "_init_openai_client",
         return_value=(MagicMock(), "gpt-5-test"),
     ):
-        service = DraftGenerationService(session)
+        service = DraftGenerationService(cast(AsyncSession, session))
     return service, session
 
 
@@ -119,22 +121,19 @@ async def test_explicit_base_version_is_used_even_when_later_version_is_current(
 ):
     base_v2 = _draft(2, "## Review\n\nOriginal v2 prose [Doc 1].", current=False)
     service, session = await _service(base_v2, [_document("Paper")])
-    service._build_revision_with_llm = AsyncMock(
-        return_value="## Review\n\nRevised v2 prose [Doc 1]."
-    )
+    revision_mock = AsyncMock(return_value="## Review\n\nRevised v2 prose [Doc 1].")
 
-    result = await service.revise_draft(
-        project_id=uuid4(),
-        instructions="Clarify the claim",
-        base_version=2,
-    )
+    with patch.object(service, "_build_revision_with_llm", new=revision_mock):
+        result = await service.revise_draft(
+            project_id=uuid4(),
+            instructions="Clarify the claim",
+            base_version=2,
+        )
 
     assert result["base_version"] == 2
     assert result["version"] == 4
-    assert (
-        service._build_revision_with_llm.await_args.kwargs["base_content"]
-        == base_v2.content
-    )
+    assert revision_mock.await_args is not None
+    assert revision_mock.await_args.kwargs["base_content"] == base_v2.content
     assert session.commits == 2  # release read transaction, then persist
 
 
@@ -142,15 +141,16 @@ async def test_citations_only_preserves_prose_and_persists_visible_doc_index() -
     base = _draft(3, "## Review\n\nBenchmark reached 28.4 BLEU.", current=True)
     documents = [_document("Other"), _document("Attention Is All You Need")]
     service, session = await _service(base, documents)
-    service._build_revision_with_llm = AsyncMock(
+    revision_mock = AsyncMock(
         return_value="## Review\n\nBenchmark reached 28.4 BLEU [Doc 2]."
     )
 
-    result = await service.revise_draft(
-        project_id=uuid4(),
-        instructions="Add citations only",
-        mode="citations_only",
-    )
+    with patch.object(service, "_build_revision_with_llm", new=revision_mock):
+        result = await service.revise_draft(
+            project_id=uuid4(),
+            instructions="Add citations only",
+            mode="citations_only",
+        )
 
     citations = [value for value in session.added if isinstance(value, DraftCitation)]
     saved = next(value for value in session.added if isinstance(value, GeneratedDraft))
@@ -166,11 +166,13 @@ async def test_revision_preserves_base_doc_two_identity_when_order_changes() -> 
     base = _draft(3, "Claim [Doc 2].", current=True)
     base.citations = [_citation(2, cited.id, context="Referenced as [Doc 2]")]
     service, session = await _service(base, [cited, newly_first])
-    service._build_revision_with_llm = AsyncMock(return_value="Clearer claim [Doc 2].")
+    revision_mock = AsyncMock(return_value="Clearer claim [Doc 2].")
 
-    await service.revise_draft(project_id=uuid4(), instructions="Clarify")
+    with patch.object(service, "_build_revision_with_llm", new=revision_mock):
+        await service.revise_draft(project_id=uuid4(), instructions="Clarify")
 
-    documents = service._build_revision_with_llm.await_args.kwargs["document_context"]
+    assert revision_mock.await_args is not None
+    documents = revision_mock.await_args.kwargs["document_context"]
     assert f'[Doc 2] "{cited.title}"' in documents
     saved_citation = next(
         value for value in session.added if isinstance(value, DraftCitation)
@@ -184,9 +186,10 @@ async def test_legacy_context_marker_overrides_renumbered_citation_index() -> No
     base = _draft(3, "Claim [Doc 2].", current=True)
     base.citations = [_citation(1, cited.id, context="Referenced as [Doc 2]")]
     service, session = await _service(base, [cited, other])
-    service._build_revision_with_llm = AsyncMock(return_value="Claim improved [Doc 2].")
+    revision_mock = AsyncMock(return_value="Claim improved [Doc 2].")
 
-    await service.revise_draft(project_id=uuid4(), instructions="Clarify")
+    with patch.object(service, "_build_revision_with_llm", new=revision_mock):
+        await service.revise_draft(project_id=uuid4(), instructions="Clarify")
 
     saved_citation = next(
         value for value in session.added if isinstance(value, DraftCitation)
@@ -206,9 +209,12 @@ async def test_default_revision_rejects_stale_current_after_model_call() -> None
     base = _draft(3, "Original [Doc 1].", current=True)
     service, session = await _service(base, [_document("Paper")])
     session.current_id = uuid4()
-    service._build_revision_with_llm = AsyncMock(return_value="Improved [Doc 1].")
+    revision_mock = AsyncMock(return_value="Improved [Doc 1].")
 
-    with pytest.raises(ValueError, match="Current draft changed"):
+    with (
+        patch.object(service, "_build_revision_with_llm", new=revision_mock),
+        pytest.raises(ValueError, match="Current draft changed"),
+    ):
         await service.revise_draft(project_id=uuid4(), instructions="Clarify")
 
     assert session.added == []
@@ -218,9 +224,10 @@ async def test_default_revision_rejects_stale_current_after_model_call() -> None
 async def test_revision_uses_project_row_lock_for_version_allocation() -> None:
     base = _draft(3, "Original [Doc 1].", current=True)
     service, session = await _service(base, [_document("Paper")])
-    service._build_revision_with_llm = AsyncMock(return_value="Improved [Doc 1].")
+    revision_mock = AsyncMock(return_value="Improved [Doc 1].")
 
-    await service.revise_draft(project_id=uuid4(), instructions="Clarify")
+    with patch.object(service, "_build_revision_with_llm", new=revision_mock):
+        await service.revise_draft(project_id=uuid4(), instructions="Clarify")
 
     statements = [str(call.args[0]) for call in session.execute.await_args_list]
     assert any("FROM collections" in sql and "FOR UPDATE" in sql for sql in statements)
@@ -237,16 +244,19 @@ async def test_revision_uses_project_row_lock_for_version_allocation() -> None:
     ],
 )
 async def test_invalid_revisions_never_persist(
-    mode: str, output: str, message: str
+    mode: Literal["revise", "citations_only"], output: str, message: str
 ) -> None:
     base_content = (
         "Original prose. " * 120 if message == "collapsed" else "Original prose."
     )
     base = _draft(3, base_content, current=True)
     service, session = await _service(base, [_document("Paper")])
-    service._build_revision_with_llm = AsyncMock(return_value=output)
+    revision_mock = AsyncMock(return_value=output)
 
-    with pytest.raises(ValueError, match=message):
+    with (
+        patch.object(service, "_build_revision_with_llm", new=revision_mock),
+        pytest.raises(ValueError, match=message),
+    ):
         await service.revise_draft(project_id=uuid4(), instructions="Revise", mode=mode)
 
     assert session.added == []
@@ -257,9 +267,12 @@ async def test_invalid_revisions_never_persist(
 async def test_model_failure_leaves_current_pointer_unchanged() -> None:
     base = _draft(3, "Original prose.", current=True)
     service, session = await _service(base, [_document("Paper")])
-    service._build_revision_with_llm = AsyncMock(side_effect=RuntimeError("model down"))
+    revision_mock = AsyncMock(side_effect=RuntimeError("model down"))
 
-    with pytest.raises(RuntimeError, match="model down"):
+    with (
+        patch.object(service, "_build_revision_with_llm", new=revision_mock),
+        pytest.raises(RuntimeError, match="model down"),
+    ):
         await service.revise_draft(project_id=uuid4(), instructions="Revise")
 
     assert session.added == []
@@ -271,11 +284,12 @@ async def test_persistence_failure_rolls_back_without_changing_base() -> None:
     base = _draft(3, "Original prose [Doc 1].", current=True)
     service, session = await _service(base, [_document("Paper")])
     session.fail_persistence = True
-    service._build_revision_with_llm = AsyncMock(
-        return_value="Improved complete prose [Doc 1]."
-    )
+    revision_mock = AsyncMock(return_value="Improved complete prose [Doc 1].")
 
-    with pytest.raises(RuntimeError, match="write failed"):
+    with (
+        patch.object(service, "_build_revision_with_llm", new=revision_mock),
+        pytest.raises(RuntimeError, match="write failed"),
+    ):
         await service.revise_draft(project_id=uuid4(), instructions="Revise")
 
     session.rollback.assert_awaited_once()
@@ -291,6 +305,49 @@ async def test_document_context_includes_evidence_beyond_500_and_is_bounded() ->
 
     assert "BENCHMARK_EVIDENCE" in context
     assert len(context) <= 2_000
+
+
+async def test_document_context_retains_every_marker_at_minimum_budget() -> None:
+    documents = [_document("x" * 500) for _ in range(12)]
+    markers = [f"[Doc {index}]" for index in range(1, len(documents) + 1)]
+    minimum_budget = len("\n\n".join(markers))
+
+    context = DraftGenerationService._build_document_context(
+        documents, max_chars=minimum_budget
+    )
+
+    assert context == "\n\n".join(markers)
+    with pytest.raises(ValueError, match="too small to represent every document"):
+        DraftGenerationService._build_document_context(
+            documents, max_chars=minimum_budget - 1
+        )
+
+
+async def test_short_base_revision_still_rejects_proportional_collapse() -> None:
+    base = " ".join(f"word-{index}" for index in range(79))
+
+    with pytest.raises(ValueError, match="collapsed"):
+        DraftGenerationService._validate_revision_content(
+            "Done.", base, [_document("Paper")], "revise"
+        )
+
+    DraftGenerationService._validate_revision_content(
+        "Done.", "Tiny base.", [_document("Paper")], "revise"
+    )
+
+
+async def test_two_section_fallback_template_always_cites_available_document() -> None:
+    content = DraftGenerationService._build_draft_template(
+        documents=[_document("Paper")],
+        themes=["attention"],
+        style="academic",
+        max_sections=2,
+        include_abstract=False,
+    )
+
+    DraftGenerationService._validate_citations(
+        content, [_document("Paper")], require_one=True
+    )
 
 
 async def test_citation_syntax_must_be_canonical() -> None:
