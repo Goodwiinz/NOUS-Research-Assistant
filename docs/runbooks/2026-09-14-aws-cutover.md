@@ -17,7 +17,7 @@
 | Redis | DO managed Valkey | ElastiCache `cache.t4g.small` (**no data migration — cold start**) |
 | Neo4j | STS `nous-dev-knowledge-graph-analytics-neo4j` (5.26) | same chart on EBS gp3 |
 | Qdrant | STS in `rag-dev` (1.13, manually applied — not in git) | same on EBS gp3 |
-| Object storage | Spaces `rag-system-storage` (nyc3) | S3 `nous-development-storage-3ilp9pj2` |
+| Object storage | Spaces `rag-system-storage` (nyc3) | S3 `nous-development-storage-3ilp9pj2` (`buildcache/` excluded) |
 | Images | DO registry | ECR `nous/backend`, `nous/frontend` |
 | DNS | Cloudflare (external-dns) | Cloudflare (external-dns) → ALB group `nous-dev` |
 | Frontend | Vercel `dev-app.goodwiinz.tech` | unchanged |
@@ -64,7 +64,7 @@ All boxes must be checked before starting. Any unchecked box = no go.
   Expected: both remotes list without auth errors (`spaces` = DO Spaces keys, `s3` = AWS profile).
 - [ ] Disk space for dumps on the operator machine: `df -h .` — need ≥ (Spaces usage + 2×PG dump size + 2×Neo4j dump). Check source sizes first:
   ```bash
-  rclone size spaces:rag-system-storage
+  rclone size spaces:rag-system-storage --exclude '/buildcache/**'
   ```
 - [ ] `infrastructure/terraform/terraform.tfvars` placeholders filled before the last `terraform apply`: `owner_email`, `alert_email`, and **`cluster_admin_role_arns` non-empty** (aws-auth lockout otherwise). Verify:
   ```bash
@@ -87,7 +87,7 @@ All boxes must be checked before starting. Any unchecked box = no go.
   Expected: image tagged with the same source SHA currently running on DO (`kubectl -n rag-dev --context $DOKS_CONTEXT get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.template.spec.containers[0].image}{"\n"}{end}'` — match digests, not tags).
 - [ ] Task 7 first rclone sync done and clean:
   ```bash
-  rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2
+  rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**'
   ```
   Expected: `0 differences` (pre-freeze drift acceptable; final delta synced in Step 3).
 - [ ] EKS addons healthy (Task 3) — required before Step 6 scale-up, check now:
@@ -297,8 +297,8 @@ kubectl delete pod pg-mig -n multimodal-rag-system --context $EKS_CONTEXT
 DO writes are frozen (Step 1), so this is the last delta.
 
 ```bash
-rclone sync spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --progress
-rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2
+rclone sync spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**' --progress
+rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**'
 ```
 
 Expected: check reports `0 differences` and `0 errors`.
@@ -649,7 +649,7 @@ Expected after 9.2-9.4: `curl -s https://dev-api.goodwiinz.tech/health` returns 
     CloudWatch + Sentry until a monitoring stack is stood up (fast-follow)
   - CloudWatch (us-east-1): ALB 5xx/target health, RDS connections+CPU, ElastiCache evictions
   - Sentry (`SENTRY_ENVIRONMENT=dev`): new error classes vs pre-cutover baseline
-  - `rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2` daily for the first week (Spaces must not receive new writes; if it does, some component still points at DO → fix immediately)
+  - `rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**'` daily for the first week (Spaces must not receive new non-cache writes; if it does, some component still points at DO → fix immediately)
 - **DO stays frozen 2 weeks** as the rollback source. Do not delete DO resources in this window. Do not resume `nous-dev`/`nous-root` auto-sync on the DO ArgoCD.
 - After the soak, follow the decommission checklist: `docs/runbooks/aws-decommission.md` (covers DO LB deletion, final data archive to S3 Glacier, DOKS destruction, Spaces key revocation).
 - Close-out notes: record actual cutover times, any deviations from this runbook, and the ECR tag ↔ source SHA mapping for the deployed images.

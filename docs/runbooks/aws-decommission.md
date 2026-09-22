@@ -57,7 +57,7 @@ All boxes checked before anything destructive. Any unchecked box = no go.
   Expected: account ARN printed.
 - [ ] **Disk space on operator machine** for final dumps: `df -h .` — need ≥ (Spaces usage + PG dump + Neo4j dump + Qdrant snapshots). Check source sizes:
   ```bash
-  rclone lsd spaces: && rclone size spaces:rag-system-storage
+  rclone lsd spaces: && rclone size spaces:rag-system-storage --exclude '/buildcache/**'
   ```
 - [ ] **ECR parity confirmed** (cutover Step 0 images still current):
   ```bash
@@ -118,10 +118,10 @@ decommission artifact in this runbook (dumps, manifests, state) goes to
 `<ARCHIVE_BUCKET>` under `do-decommission-<YYYY-MM-DD>/`.
 
 ```bash
-rclone sync spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --progress
-rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2
-rclone size spaces:rag-system-storage | tee /tmp/spaces-final-size.txt
-rclone lsjson -R --files-only spaces:rag-system-storage | gzip > /tmp/spaces-manifest.json.gz
+rclone sync spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**' --progress
+rclone check spaces:rag-system-storage s3:nous-development-storage-3ilp9pj2 --exclude '/buildcache/**'
+rclone size spaces:rag-system-storage --exclude '/buildcache/**' | tee /tmp/spaces-final-size.txt
+rclone lsjson -R --files-only spaces:rag-system-storage --exclude '/buildcache/**' | gzip > /tmp/spaces-manifest.json.gz
 aws s3 cp /tmp/spaces-manifest.json.gz \
   s3://<ARCHIVE_BUCKET>/do-decommission-<YYYY-MM-DD>/spaces-manifest.json.gz --storage-class DEEP_ARCHIVE
 ```
@@ -258,6 +258,8 @@ Expected: repos listed first (audit line for Section 6); registry deleted; final
 **HALT:** `registry delete` flag mismatch on installed doctl → run `doctl registry --help`, use documented delete; do not force-invent flags.
 
 **4.4. Empty + delete Spaces bucket.**
+
+Confirm that the skipped `buildcache/` objects can be discarded before deleting the DO bucket; they were not copied to AWS or included in the manifest.
 
 ```bash
 aws s3 rm s3://rag-system-storage --recursive \
