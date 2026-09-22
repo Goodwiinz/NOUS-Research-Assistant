@@ -20,6 +20,10 @@ agent state and a compact `summary` for quick scans.
 
 Disabled when ``settings.AGENT_LEDGER_DIR`` is empty/None — zero-cost
 when the user doesn't want it.
+
+Everything written here goes through ``_pii_redact`` first (R7-L4): the
+records are plain files on a shared volume that outlive the run, and they
+carry raw prompts, model output and tool arguments.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.core.config import get_settings
+from src.services.agent._pii_redact import redact_nested_pii, redact_pii
 
 logger = logging.getLogger(__name__)
 
@@ -103,16 +108,20 @@ def _next_turn_number(thread_dir: Path) -> int:
 def _serialize_message(msg: Any) -> dict:
     """Compact dict for one LangChain message — drops bulky fields."""
     if isinstance(msg, HumanMessage):
-        return {"role": "human", "content": str(msg.content)[:2000]}
+        return {"role": "human", "content": redact_pii(msg.content)[:2000]}
     if isinstance(msg, AIMessage):
         out: dict[str, Any] = {
             "role": "ai",
-            "content": str(msg.content)[:4000],
+            "content": redact_pii(msg.content)[:4000],
         }
         tool_calls = getattr(msg, "tool_calls", None) or []
         if tool_calls:
             out["tool_calls"] = [
-                {"name": tc.get("name"), "args": tc.get("args"), "id": tc.get("id")}
+                {
+                    "name": tc.get("name"),
+                    "args": redact_nested_pii(tc.get("args")),
+                    "id": tc.get("id"),
+                }
                 for tc in tool_calls
             ]
         meta = getattr(msg, "response_metadata", None) or {}
@@ -133,9 +142,12 @@ def _serialize_message(msg: Any) -> dict:
         return {
             "role": "tool",
             "tool_call_id": getattr(msg, "tool_call_id", None),
-            "content": str(msg.content)[:2000],
+            "content": redact_pii(msg.content)[:2000],
         }
-    return {"role": getattr(msg, "type", "unknown"), "content": str(msg)[:500]}
+    return {
+        "role": getattr(msg, "type", "unknown"),
+        "content": redact_pii(str(msg))[:500],
+    }
 
 
 def _build_record(state: dict, turn: int) -> dict:
@@ -153,11 +165,11 @@ def _build_record(state: dict, turn: int) -> dict:
     ai_content = ""
     for m in in_turn_msgs:
         if isinstance(m, HumanMessage) and not user_msg:
-            user_msg = str(m.content)[:1000]
+            user_msg = redact_pii(m.content)[:1000]
         if isinstance(m, AIMessage) and m.content:
-            ai_content = str(m.content)[:4000]
+            ai_content = redact_pii(m.content)[:4000]
 
-    tool_executions = list(state.get("tool_executions") or [])
+    tool_executions = redact_nested_pii(list(state.get("tool_executions") or []))
 
     # Compact retrieved_contexts: titles + scores only, drop full chunk text.
     retrieved = state.get("retrieved_contexts") or []
@@ -233,7 +245,7 @@ def _maybe_write_config(thread_dir: Path, state: dict) -> None:
     first_user = ""
     for m in messages:
         if isinstance(m, HumanMessage) and m.content:
-            first_user = str(m.content)[:1000]
+            first_user = redact_pii(m.content)[:1000]
             break
     config = {
         "thread_id": (state.get("thread_id") or thread_dir.name),

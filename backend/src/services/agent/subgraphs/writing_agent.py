@@ -1,7 +1,7 @@
 """Writing Agent sub-graph.
 
 Specialized for content creation, summarization, and bibliography tasks.
-Tools: create_draft, create_project_note, export_bibliography,
+Tools: create_draft, revise_draft, create_project_note, export_bibliography,
        summarize_document, compare_documents
 
 Shared machinery (routers, interrupt, forced synthesis, wiring) comes from
@@ -79,36 +79,54 @@ def _build_writing_system_prompt() -> str:
 async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     """Writing-specialized LLM node."""
     from src.core.config import get_settings
-    from src.services.agent.graph import AGENT_LLM_TIMEOUT_SECONDS
+    from src.services.agent._nodes_llm import _attachment_status_part
+    from src.services.agent.graph import (
+        AGENT_LLM_TIMEOUT_SECONDS,
+        _build_page_context_line,
+    )
 
     sanitized = _sanitize_messages(state["messages"])
+    trailing_tools = []
+    for message in reversed(sanitized):
+        if not isinstance(message, ToolMessage):
+            break
+        trailing_tools.append(message)
+    parent_index = len(sanitized) - len(trailing_tools) - 1
+    mixed_pending_create = False
     if (
-        len(sanitized) >= 2
-        and isinstance(sanitized[-1], ToolMessage)
-        and getattr(sanitized[-1], "status", "success") == "success"
-        and isinstance(sanitized[-2], AIMessage)
-        and len(sanitized[-2].tool_calls) == 1
+        trailing_tools
+        and parent_index >= 0
+        and isinstance(sanitized[parent_index], AIMessage)
     ):
-        tool_message = sanitized[-1]
-        parent = sanitized[-2]
-        create_draft_call = next(
-            (
-                tool_call
-                for tool_call in getattr(parent, "tool_calls", [])
-                if isinstance(tool_call, dict)
-                and tool_call.get("id") == tool_message.tool_call_id
-                and tool_call.get("name") == "create_draft"
-            ),
-            None,
-        )
-        if create_draft_call is not None:
+        parent = sanitized[parent_index]
+        create_call_ids = {
+            tool_call.get("id")
+            for tool_call in getattr(parent, "tool_calls", [])
+            if isinstance(tool_call, dict) and tool_call.get("name") == "create_draft"
+        }
+        pending_create_payload = None
+        for tool_message in trailing_tools:
+            if (
+                tool_message.tool_call_id not in create_call_ids
+                or getattr(tool_message, "status", "success") != "success"
+            ):
+                continue
             try:
                 payload = json.loads(tool_message.content)
             except (TypeError, json.JSONDecodeError):
                 payload = None
             if isinstance(payload, dict) and payload.get("status") == "pending":
-                message = payload.get("message")
-                task_id = payload.get("task_id")
+                pending_create_payload = payload
+                break
+        if pending_create_payload is not None:
+            parent_tool_calls = getattr(parent, "tool_calls", [])
+            mixed_pending_create = any(
+                isinstance(tool_call, dict) and tool_call.get("name") != "create_draft"
+                for tool_call in parent_tool_calls
+            )
+            if not mixed_pending_create:
+                message = pending_create_payload.get("message")
+                task_id = pending_create_payload.get("task_id")
                 if isinstance(message, str) and isinstance(task_id, str):
                     return {
                         "messages": [
@@ -121,11 +139,21 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
                         ]
                     }
     messages = [SystemMessage(content=_build_writing_system_prompt())]
+    context_line = _build_page_context_line(state.get("page_context", {}))
+    if context_line:
+        messages.append(SystemMessage(content=context_line))
+    attachment_status_prompt = _attachment_status_part(
+        state.get("attachment_status", [])
+    )
+    if attachment_status_prompt:
+        messages.append(SystemMessage(content=attachment_status_prompt))
     retrieved = state.get("retrieved_contexts", [])
     if retrieved:
         from src.services.agent._nodes_llm import _retrieval_context_part
 
-        messages.append(SystemMessage(content=_retrieval_context_part(retrieved)))
+        messages.append(
+            SystemMessage(content=_retrieval_context_part(retrieved, sanitized))
+        )
     from src.services.agent.runtime_snapshot import render_project_skill_catalog
 
     skill_catalog_prompt = render_project_skill_catalog(
@@ -133,6 +161,16 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     )
     if skill_catalog_prompt:
         messages.append(SystemMessage(content=skill_catalog_prompt))
+    if mixed_pending_create:
+        messages.append(
+            SystemMessage(
+                content=(
+                    "The create_draft result in this batch is pending and terminal for "
+                    "this turn. Report that pending status together with substantive "
+                    "completed tool results. Do not request or promise any more tools."
+                )
+            )
+        )
     messages += sanitized
 
     # Post-tool synthesis turn → use the synthesis deployment. Mirrors
@@ -153,9 +191,12 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         retrieved and _is_grounded_summary_flow(last_user_query)
     )
     use_synthesis = bool(
-        settings.AGENT_LIGHTWEIGHT_SYNTHESIS
-        and sanitized
-        and (isinstance(sanitized[-1], ToolMessage) or grounded_direct_synthesis)
+        mixed_pending_create
+        or (
+            settings.AGENT_LIGHTWEIGHT_SYNTHESIS
+            and sanitized
+            and (isinstance(sanitized[-1], ToolMessage) or grounded_direct_synthesis)
+        )
     )
 
     # Inject the planner's plan on the pre-tool pass so the executor follows
@@ -190,7 +231,7 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
 
     bound_tools = (
         []
-        if grounded_direct_synthesis
+        if grounded_direct_synthesis or mixed_pending_create
         else tools_for_runtime_snapshot(WRITING_TOOLS, state)
     )
     llm_with_tools = llm.bind_tools(

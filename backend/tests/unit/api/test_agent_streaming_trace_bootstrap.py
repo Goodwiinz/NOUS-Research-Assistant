@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from tests.utils.agent_stream import make_stream_request
+from tests.utils.agent_thread_access import editable_thread_getter
 
 
 class _FakeGraph:
@@ -160,7 +161,9 @@ async def test_stream_confirm_event_generator_bootstraps_langsmith_before_compil
     # _graph_events_with_keepalive (checks is_disconnected() before each
     # event), so True would cancel the resumed run before the `done` frame.
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-1", confirmed=True)
+    body = SimpleNamespace(
+        thread_id="11111111-1111-4111-8111-111111111623", confirmed=True
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     current_snapshot = SimpleNamespace(
@@ -210,6 +213,10 @@ async def test_stream_confirm_event_generator_bootstraps_langsmith_before_compil
         patch(
             "src.api.agent.streaming._jobs_mod._persist_assistant_message_safe",
             new=AsyncMock(return_value="assistant-row-1"),
+        ),
+        patch(
+            "src.services.threads.workspace_access.get_thread",
+            new=editable_thread_getter(),
         ),
     ):
         events = []

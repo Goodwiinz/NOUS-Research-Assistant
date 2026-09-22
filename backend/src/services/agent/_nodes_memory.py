@@ -96,7 +96,8 @@ async def _persist_memory_async(  # noqa: PLR0913
     try:
         from src.services.agent.memory import save_memory
 
-        await save_memory(store, user_id, mem_key, mem_value)
+        org_id = str(config.get("configurable", {}).get("organization_id", "") or "")
+        await save_memory(store, user_id, mem_key, mem_value, organization_id=org_id)
 
         # Insight extraction every N turns — an LLM call that distils the
         # conversation into preference-shaped strings far more useful for
@@ -111,14 +112,16 @@ async def _persist_memory_async(  # noqa: PLR0913
 
                 from src.services.agent.memory_store import extract_insights
 
+                # R7-M1: assistant turns are excluded. An AIMessage can be a
+                # verbatim restatement of injected document text, and an
+                # insight distilled from it becomes a permanent, per-user
+                # instruction recalled into every future thread. Only what the
+                # user actually typed is eligible.
                 insight_messages = trim_model_history(
-                    [m for m in messages if isinstance(m, (HumanMessage, AIMessage))]
+                    [m for m in messages if isinstance(m, HumanMessage)]
                 )
                 serialised = [
-                    {
-                        "role": "user" if isinstance(m, HumanMessage) else "assistant",
-                        "content": m.content,
-                    }
+                    {"role": "user", "content": m.content}
                     for m in insight_messages
                     if getattr(m, "content", "")
                 ]
@@ -142,7 +145,9 @@ async def _persist_memory_async(  # noqa: PLR0913
                             "turn_index": turn_index,
                             "created_at": datetime.now(timezone.utc).isoformat(),
                             "memory_type": "insight",
+                            "source": "insight",
                         },
+                        organization_id=org_id,
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.debug("insight extraction skipped: %s", exc)
@@ -157,6 +162,7 @@ async def memory_retrieval_node(state: AgentState, config: RunnableConfig) -> di
     # Ids-only configurable (audit B8): memory is keyed by the scalar
     # user_id — no ORM User needed here.
     user_id = str(configurable.get("user_id", "") or "")
+    org_id = str(configurable.get("organization_id", "") or "")
 
     if not user_id:
         return {"user_memories": []}
@@ -193,7 +199,9 @@ async def memory_retrieval_node(state: AgentState, config: RunnableConfig) -> di
         if not store:
             return {"user_memories": []}
 
-        memories = await search_memories(store, user_id, last_user_msg, limit=5)
+        memories = await search_memories(
+            store, user_id, last_user_msg, limit=5, organization_id=org_id
+        )
         # Defense-in-depth — search_memories already passes limit=5 to the
         # store, but a misbehaving backend (or a future bump in callers)
         # could return more. Sorting by score puts the ranked entries

@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
-from src.services.agent._sanitize import _sanitize_prompt_field
+from src.services.agent._sanitize import _sanitize_prompt_field, sanitize_page_context
 from src.services.agent.llm_factory import build_lightweight_llm
 from src.services.agent.trace_metadata import internal_llm_config
 
@@ -251,10 +251,9 @@ async def generate_plan(
     structured_llm = llm.with_structured_output(AgentPlan, method="function_calling")
 
     safe_query = _sanitize_prompt_field(query)
-    safe_page_context = {
-        k: _sanitize_prompt_field(str(v)) if isinstance(v, str) else v
-        for k, v in page_context.items()
-    }
+    # Recursive: the top-level-only comprehension this replaced embedded the
+    # free-form ``metadata`` dict raw (R7-H1).
+    safe_page_context = sanitize_page_context(page_context)
     prompt = (
         "Given the user query and available tools, generate a step-by-step "
         "execution plan.\n\n"
@@ -278,14 +277,38 @@ async def generate_plan(
         "them (e.g. search_arxiv → ingest_arxiv_papers) BEFORE any step that "
         "summarizes, drafts, or saves notes about them — a write step must "
         "depend_on the resolve/ingest steps.\n"
+        "create_draft returns pending and MUST be the final planned step with "
+        "no same-turn dependents. revise_draft is synchronous and may have "
+        "later reporting steps.\n"
         "Also provide a top-level ``reasoning`` string explaining the "
         "overall approach (required)."
     )
 
-    result = await structured_llm.ainvoke(
+    result: AgentPlan = await structured_llm.ainvoke(
         [HumanMessage(content=prompt)], config=internal_llm_config()
     )
+    for index, step in enumerate(result.steps):
+        if step.tool == "create_draft":
+            return AgentPlan(
+                steps=result.steps[: index + 1], reasoning=result.reasoning
+            )
     return result
+
+
+_PLAN_LINE_BREAK_RE = re.compile(r"[\r\n\x0b\x0c\x85\u2028\u2029]")
+
+
+def _one_line(value: str, max_chars: int = 400) -> str:
+    """Cap + collapse line breaks, no brace escaping.
+
+    The plan directive is rendered straight into a SystemMessage (never
+    str.format), so doubling braces would only corrupt dict-shaped
+    args_hint values (review on #1595).
+    """
+    text = str(value or "")
+    if len(text) > max_chars:
+        text = text[:max_chars] + "..."
+    return _PLAN_LINE_BREAK_RE.sub(" ", text)
 
 
 def render_plan_directive(plan: list[dict] | None) -> str | None:
@@ -303,15 +326,19 @@ def render_plan_directive(plan: list[dict] | None) -> str | None:
     """
     if not plan:
         return None
+    # R7-L2: description / tool / args_hint are model-emitted and can echo
+    # injected document text. Sanitising each rendered string keeps them on a
+    # single line so nothing can impersonate a prompt section (execution is
+    # already tool-allowlisted, so this is the whole fix).
     lines: list[str] = []
     for step in plan:
-        tool = (step.get("tool") or "").strip()
-        desc = (step.get("description") or "").strip()
+        tool = _one_line((step.get("tool") or "").strip())
+        desc = _one_line((step.get("description") or "").strip())
         if not desc:
             continue
         if tool and tool.upper() != "N/A":
             args = step.get("args_hint")
-            arg_str = f"  args: {args}" if args else ""
+            arg_str = f"  args: {_one_line(str(args))}" if args else ""
             lines.append(f"{step.get('step', '?')}. [{tool}] {desc}{arg_str}")
         else:
             lines.append(f"{step.get('step', '?')}. {desc}")
@@ -328,7 +355,9 @@ def render_plan_directive(plan: list[dict] | None) -> str | None:
         "documents to already be resolved + ingested — if the plan lists a "
         "write step before the sources exist, run the search/ingest steps "
         "FIRST, then the write. Never write a note/draft/summary for a paper "
-        "you only have a title for.\n"
+        "you only have a title for. create_draft returns pending, so it is "
+        "terminal for this turn; do not execute later planned steps. "
+        "revise_draft is synchronous.\n"
         f"{plan_block}"
     )
 

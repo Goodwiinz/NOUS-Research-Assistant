@@ -34,10 +34,7 @@ export function FileRow({ node }: { node: FileNode }) {
           {node.label}
         </span>
         {node.meta && (
-          <span
-            className="shrink-0 text-[12px]"
-            style={{ color: 'var(--nous-fg-3)' }}
-          >
+          <span className="shrink-0 text-[11px] text-(--nous-fg-3)">
             {node.meta}
           </span>
         )}

@@ -61,3 +61,13 @@ def test_request_rejects_non_uuid_thread_id():
     with pytest.raises(ValidationError) as excinfo:
         _build(thread_id="not-a-uuid")
     assert excinfo.value.errors()[0]["loc"] == ("thread_id",)
+
+
+def test_page_context_accepts_only_uuid_workspace_id():
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+    request = _build(page_context={"workspace_id": workspace_id})
+    assert str(request.page_context.workspace_id) == workspace_id
+
+    with pytest.raises(ValidationError) as excinfo:
+        _build(page_context={"workspace_id": "not-a-uuid"})
+    assert excinfo.value.errors()[0]["loc"] == ("page_context", "workspace_id")

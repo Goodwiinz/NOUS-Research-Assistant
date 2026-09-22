@@ -16,9 +16,9 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          'bg-primary text-primary-foreground hover:bg-primary/90 hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(10,10,14,0.15)]',
+          'bg-primary text-primary-foreground hover:bg-primary/90 hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(var(--nous-erebus-rgb),0.15)]',
         destructive:
-          'bg-destructive text-destructive-foreground hover:bg-destructive/90 hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(239,68,68,0.25)]',
+          'bg-destructive text-destructive-foreground hover:bg-destructive/90 hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(var(--nous-mars-rgb),0.25)]',
         outline:
           'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
         secondary:
@@ -26,9 +26,9 @@ const buttonVariants = cva(
         ghost: 'hover:bg-accent hover:text-accent-foreground',
         link: 'text-primary underline-offset-4 hover:underline',
         erebus:
-          'bg-(--nous-erebus) text-white hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(10,10,14,0.2)]',
+          'bg-(--nous-erebus) text-white hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(var(--nous-erebus-rgb),0.2)]',
         accent:
-          'bg-(--nous-sol) text-white hover:-translate-y-px hover:shadow-[0_8px_30px_rgba(212,160,57,0.3)]',
+          'bg-(--nous-sol) text-white hover:-translate-y-px hover:shadow-[0_8px_30px_rgba(var(--nous-sol-rgb),0.3)]',
         'nous-ghost':
           'bg-transparent text-(--nous-fg-2) hover:bg-(--nous-aurum) hover:text-(--nous-fg-1)',
       },

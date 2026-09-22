@@ -7,12 +7,26 @@ import {
 } from '@assistant-ui/react';
 import { cn } from '@/lib/utils';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   SlashCommandMenu,
   SLASH_LISTBOX_ID,
   slashOptionId,
 } from './SlashCommandMenu';
 import { useSlashCommandMenu } from './useSlashCommandMenu';
-import type { SlashCommand, SlashCommandId } from './slashCommands';
+import {
+  isSlashTrigger,
+  type SlashCommand,
+  type SlashCommandId,
+} from './slashCommands';
 import {
   AlertCircle,
   ArrowRight,
@@ -103,7 +117,11 @@ export function ChatInput({
   const textareaRef = inputRef ?? internalRef;
   const [isFocused, setIsFocused] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [pendingCommand, setPendingCommand] = useState<SlashCommand | null>(
+    null
+  );
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const draftSelectionRef = useRef<{ start: number; end: number } | null>(null);
   // Browser capability, read through useSyncExternalStore so the server
   // snapshot is explicitly `false`. It used to be useState(false) + a mount
   // effect, which is a setState-in-effect (an extra render) — and it could not
@@ -136,6 +154,17 @@ export function ChatInput({
     documentId?: string;
   };
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const attachmentStatus = attachments.reduce(
+    (status, attachment) => {
+      return {
+        uploading: status.uploading || attachment.state === 'uploading',
+        error: status.error || attachment.state === 'error',
+      };
+    },
+    { uploading: false, error: false }
+  );
+  const hasUnsettledAttachments =
+    attachmentStatus.uploading || attachmentStatus.error;
   const [submittedDraft, setSubmittedDraft] = useState<string | null>(null);
   const submittedDraftBecameBusyRef = useRef(false);
   // Monotonic counter behind each chip's id — see addFiles.
@@ -313,10 +342,59 @@ export function ChatInput({
     }
   }, [aui, value]);
 
+  const restoreDraftSelection = (): void => {
+    const textarea = textareaRef.current;
+    const selection = draftSelectionRef.current;
+    if (!textarea || !selection) return;
+    textarea.focus();
+    textarea.setSelectionRange(selection.start, selection.end);
+  };
+
+  const executeCommand = (
+    command: SlashCommand,
+    discardDraft = false
+  ): void => {
+    const typedSlash = isSlashTrigger(value);
+    if (typedSlash || discardDraft) onChange('');
+    menu.dismiss();
+    onCommand?.(command.id);
+    if (!typedSlash && !discardDraft) {
+      restoreDraftSelection();
+    }
+    draftSelectionRef.current = null;
+  };
+
+  const commandReplacesDraft = (command: SlashCommand): boolean =>
+    command.id === 'new' ||
+    command.id === 'retry' ||
+    command.id === 'clear' ||
+    command.id === 'summarize' ||
+    command.id === 'keypoints' ||
+    command.id === 'gaps' ||
+    command.id === 'timeline';
+
   const runCommand = (command: SlashCommand | undefined): void => {
     if (!command) return;
-    onChange('');
-    onCommand?.(command.id);
+    if (menu.isManual && value.trim() && commandReplacesDraft(command)) {
+      // Commands opened from the button can otherwise replace/send a real
+      // draft. Make that choice explicit instead of losing text on selection.
+      menu.dismiss();
+      setPendingCommand(command);
+      return;
+    }
+    executeCommand(command);
+  };
+
+  const openCommands = (): void => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      draftSelectionRef.current = {
+        start: textarea.selectionStart,
+        end: textarea.selectionEnd,
+      };
+    }
+    menu.open();
+    restoreDraftSelection();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent): void => {
@@ -327,43 +405,49 @@ export function ChatInput({
     // the highlighted command and never submits. The menu can only be open
     // while the whole value is a "/word" token, which is never a sendable
     // message — so normal send-on-Enter is unaffected.
-    if (menu.isOpen && menu.filtered.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        menu.move(1);
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        menu.move(-1);
-        return;
-      }
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        menu.move(e.shiftKey ? -1 : 1);
-        return;
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        runCommand(menu.filtered[menu.highlightedIndex]);
-        return;
+    if (menu.isOpen) {
+      if (menu.filtered.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          menu.move(1);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          menu.move(-1);
+          return;
+        }
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          menu.move(e.shiftKey ? -1 : 1);
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          runCommand(menu.filtered[menu.highlightedIndex]);
+          return;
+        }
       }
       if (e.key === 'Escape') {
         e.preventDefault();
+        const wasManual = menu.isManual;
         menu.dismiss();
+        if (wasManual) restoreDraftSelection();
+        draftSelectionRef.current = null;
         return;
       }
     }
   };
 
   const prepareSubmission = (e: React.SyntheticEvent): boolean => {
-    if (isDisabled || !value.trim() || isOverLimit) {
+    if (isDisabled || !value.trim() || isOverLimit || hasUnsettledAttachments) {
       e.preventDefault();
       console.warn('[Chat] Composer submit swallowed', {
         isLoading,
         disabled,
         empty: !value.trim(),
         isOverLimit,
+        hasUnsettledAttachments,
       });
       return false;
     }
@@ -386,6 +470,10 @@ export function ChatInput({
     prepareSubmission(e);
   };
 
+  const closeCommandConfirmation = (): void => {
+    setPendingCommand(null);
+  };
+
   const isDisabled = disabled;
   const charCount = value.length;
   const maxChars = 4000;
@@ -400,7 +488,7 @@ export function ChatInput({
 
   return (
     <div
-      className="z-40 px-2 sm:px-6 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-4 border-t"
+      className="@container z-40 px-2 sm:px-4 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t"
       style={{
         background: 'var(--nous-bg-1)',
         borderColor: 'var(--nous-border-1)',
@@ -420,18 +508,16 @@ export function ChatInput({
           style={{
             background: 'var(--nous-bg-2)',
             border: `1px solid ${
-              isFocused
-                ? 'rgba(var(--nous-sol-rgb), 0.4)'
-                : 'var(--nous-border-1)'
+              isFocused ? 'var(--nous-sol-safe)' : 'var(--nous-border-1)'
             }`,
             boxShadow: isFocused
-              ? '0 0 0 3px rgba(var(--nous-sol-rgb), 0.10), 0 8px 24px rgba(var(--nous-erebus-rgb), 0.06)'
+              ? '0 0 0 2px var(--nous-sol-safe)'
               : '0 1px 2px rgba(var(--nous-erebus-rgb), 0.04)',
             transition:
               'border-color 260ms var(--nous-ease-out), box-shadow 260ms var(--nous-ease-out)',
           }}
         >
-          {/* Top strip — live status, Ultra Thinking, counter */}
+          {/* Top strip — live status, sources switch, counter */}
           <div
             className="flex items-center justify-between gap-2 px-3 py-2 border-b"
             style={{
@@ -442,57 +528,53 @@ export function ChatInput({
             <div className="flex items-center gap-2 min-w-0">
               <button
                 type="button"
+                role="switch"
                 onClick={() => onRAGToggle(!enableRAG)}
                 disabled={isLoading}
-                aria-pressed={enableRAG}
-                aria-label={
-                  enableRAG
-                    ? 'Ultra Thinking on. Grounds answers in your sources.'
-                    : 'Ultra Thinking off. Answers without your sources.'
-                }
+                aria-checked={enableRAG}
+                aria-label="Use my sources"
                 title={
                   enableRAG
-                    ? 'Ultra Thinking on. Grounds answers in your sources.'
-                    : 'Ultra Thinking off. Answers without your sources.'
+                    ? 'Grounds answers in your sources.'
+                    : 'Answers without your sources.'
                 }
-                className="inline-flex items-center gap-[7px] rounded-md shrink-0 transition-all disabled:opacity-50"
-                style={{
-                  padding: '4px 9px 4px 7px',
-                  background: enableRAG ? 'var(--nous-aurum)' : 'transparent',
-                  border: `1px solid ${
-                    enableRAG
-                      ? 'rgba(var(--nous-sol-rgb), 0.25)'
-                      : 'var(--nous-border-1)'
-                  }`,
-                }}
+                className="inline-flex items-center gap-2 shrink-0 rounded-md px-1 py-0.5 transition-colors disabled:opacity-50 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
               >
                 <span
-                  className="w-1.5 h-1.5 rounded-full"
+                  aria-hidden
+                  className="relative block w-7 h-4 rounded-full transition-colors"
                   style={{
                     background: enableRAG
                       ? 'var(--nous-sol)'
-                      : 'var(--nous-fg-3)',
-                    boxShadow: enableRAG
-                      ? '0 0 5px rgba(var(--nous-sol-rgb), 0.5)'
-                      : 'none',
-                  }}
-                />
-                <span
-                  className="font-nous-mono text-[10px] font-semibold whitespace-nowrap"
-                  style={{
-                    letterSpacing: '0.04em',
-                    color: enableRAG
-                      ? 'var(--nous-sol-safe)'
-                      : 'var(--nous-fg-3)',
+                      : 'var(--nous-border-2)',
                   }}
                 >
-                  Ultra Thinking
+                  <span
+                    className="absolute top-0.5 left-0.5 block w-3 h-3 rounded-full"
+                    style={{
+                      background: 'var(--nous-bg-1)',
+                      transform: enableRAG
+                        ? 'translateX(12px)'
+                        : 'translateX(0)',
+                      transition: 'transform 160ms var(--nous-ease-out)',
+                    }}
+                  />
+                </span>
+                <span
+                  aria-hidden
+                  className="text-[12px] whitespace-nowrap"
+                  style={{
+                    fontFamily: 'var(--nous-font-ui)',
+                    color: enableRAG ? 'var(--nous-fg-1)' : 'var(--nous-fg-3)',
+                  }}
+                >
+                  Use my sources
                 </span>
               </button>
             </div>
 
             <div
-              className="inline-flex items-center gap-2 font-nous-mono text-[10px] tabular-nums whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-2 font-nous-mono text-[12px] tabular-nums whitespace-nowrap shrink-0"
               style={{
                 color: isOverLimit
                   ? 'var(--nous-mars)'
@@ -503,7 +585,7 @@ export function ChatInput({
               }}
             >
               <span
-                className="hidden sm:inline"
+                className={isNearLimit ? 'inline' : 'hidden sm:inline'}
                 aria-live="polite"
                 aria-atomic="true"
               >
@@ -533,7 +615,7 @@ export function ChatInput({
 
           {/* Body — serif input */}
           <div
-            className="px-4 pt-3.5 pb-3"
+            className="px-3 pt-2.5 pb-2"
             style={{ background: 'var(--nous-bg-2)' }}
           >
             {attachments.length > 0 && submittedDraft === null && (
@@ -580,7 +662,7 @@ export function ChatInput({
                       className="max-w-[140px] truncate"
                       title={
                         att.state === 'error'
-                          ? `${att.name} — upload failed`
+                          ? `${att.name}, upload failed`
                           : att.name
                       }
                     >
@@ -626,6 +708,19 @@ export function ChatInput({
               </ul>
             )}
 
+            {hasUnsettledAttachments && submittedDraft === null && (
+              <p
+                role="status"
+                aria-live="polite"
+                className="mb-3 font-nous-mono text-[10px]"
+                style={{ color: 'var(--nous-fg-3)' }}
+              >
+                {attachmentStatus.uploading
+                  ? 'Wait for attachments to finish uploading before sending.'
+                  : 'Remove failed attachments before sending.'}
+              </p>
+            )}
+
             <ComposerPrimitive.Queue>
               {({ queueItem }) => (
                 <div
@@ -637,7 +732,7 @@ export function ChatInput({
                   }}
                 >
                   <span
-                    className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.08em]"
+                    className="shrink-0 text-[10px] font-semibold"
                     style={{ color: 'var(--nous-fg-3)' }}
                   >
                     Queued
@@ -670,9 +765,10 @@ export function ChatInput({
                 onFocus={() => setIsFocused(true)}
                 onBlur={() => setIsFocused(false)}
                 placeholder="Ask anything, or paste a passage to discuss…"
+                aria-label="Message"
                 rows={1}
                 disabled={isDisabled}
-                aria-expanded={menu.isOpen}
+                aria-haspopup={menu.isOpen ? 'listbox' : undefined}
                 aria-controls={menu.isOpen ? SLASH_LISTBOX_ID : undefined}
                 aria-activedescendant={
                   activeCommand ? slashOptionId(activeCommand.id) : undefined
@@ -680,7 +776,7 @@ export function ChatInput({
                 aria-autocomplete="list"
                 aria-invalid={isOverLimit || undefined}
                 aria-describedby={isOverLimit ? 'nous-input-limit' : undefined}
-                className="w-full bg-transparent resize-none outline-hidden font-nous-body text-[16px]"
+                className="w-full bg-transparent resize-none outline-hidden font-nous-body text-[16px] placeholder:text-(--nous-fg-3)"
                 style={{
                   color: 'var(--nous-fg-1)',
                   lineHeight: '1.6',
@@ -703,12 +799,12 @@ export function ChatInput({
             )}
 
             <div
-              className="flex flex-wrap items-center justify-between gap-2 mt-2.5 pt-2.5 border-t"
+              className="flex flex-wrap items-center justify-between gap-2 mt-1.5 pt-1.5"
               style={{ borderColor: 'var(--nous-border-1)' }}
             >
               <div className="flex items-center gap-0.5">
                 <label
-                  className="grid place-items-center w-11 h-11 rounded-md cursor-pointer transition-all"
+                  className="grid place-items-center w-11 h-11 rounded-md cursor-pointer transition-colors"
                   style={{ color: 'var(--nous-fg-3)' }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.background = 'var(--nous-aurum)';
@@ -718,14 +814,14 @@ export function ChatInput({
                     e.currentTarget.style.background = 'transparent';
                     e.currentTarget.style.color = 'var(--nous-fg-3)';
                   }}
-                  aria-label="Attach file"
                   title="Attach file"
                 >
                   <Paperclip className="w-3.5 h-3.5" strokeWidth={1.7} />
                   <input
                     type="file"
                     multiple
-                    className="hidden"
+                    aria-label="Attach file"
+                    className="sr-only"
                     onChange={(e) => {
                       const files = e.target.files;
                       if (files && files.length > 0) {
@@ -736,7 +832,7 @@ export function ChatInput({
                   />
                 </label>
                 <label
-                  className="grid place-items-center w-11 h-11 rounded-md cursor-pointer transition-all"
+                  className="grid place-items-center w-11 h-11 rounded-md cursor-pointer transition-colors"
                   style={{ color: 'var(--nous-fg-3)' }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.background = 'var(--nous-aurum)';
@@ -746,7 +842,6 @@ export function ChatInput({
                     e.currentTarget.style.background = 'transparent';
                     e.currentTarget.style.color = 'var(--nous-fg-3)';
                   }}
-                  aria-label="Attach image"
                   title="Attach image"
                 >
                   <ImageIcon className="w-3.5 h-3.5" strokeWidth={1.7} />
@@ -754,7 +849,8 @@ export function ChatInput({
                     type="file"
                     accept="image/*"
                     multiple
-                    className="hidden"
+                    aria-label="Attach image"
+                    className="sr-only"
                     onChange={(e) => {
                       const files = e.target.files;
                       if (files && files.length > 0) {
@@ -784,7 +880,7 @@ export function ChatInput({
                         : 'Voice input'
                   }
                   className={cn(
-                    'grid place-items-center w-11 h-11 rounded-md transition-all',
+                    'grid place-items-center w-11 h-11 rounded-md transition-colors',
                     !voiceSupported && 'opacity-40 cursor-not-allowed'
                   )}
                   style={{
@@ -807,16 +903,14 @@ export function ChatInput({
 
                 <button
                   type="button"
-                  onClick={() => {
-                    onChange('/');
-                    textareaRef.current?.focus();
-                  }}
-                  className="hidden sm:inline-flex items-center gap-1.5 rounded-md ml-1.5 min-h-[44px] font-nous-mono text-[10px] cursor-pointer transition-colors hover:bg-(--nous-aurum)"
+                  onClick={openCommands}
+                  className="hidden @min-[480px]:inline-flex items-center gap-1.5 rounded-md ml-1.5 min-h-[44px] text-[12px] cursor-pointer transition-colors hover:bg-(--nous-aurum)"
                   style={{
                     padding: '4px 8px',
                     border: '1px solid var(--nous-border-1)',
                     background: 'var(--nous-bg-1)',
                     color: 'var(--nous-fg-2)',
+                    fontFamily: 'var(--nous-font-ui)',
                   }}
                   aria-label="Open commands"
                   title="Type / to open commands"
@@ -824,7 +918,7 @@ export function ChatInput({
                   <kbd
                     className="font-nous-mono font-bold rounded-sm"
                     style={{
-                      fontSize: '9px',
+                      fontSize: '10px',
                       padding: '1px 4px',
                       background: 'var(--nous-bg-1)',
                       border: '1px solid var(--nous-border-1)',
@@ -840,7 +934,7 @@ export function ChatInput({
               <div className="flex items-center gap-2">
                 {isLoading && (
                   <ComposerPrimitive.Cancel
-                    className="inline-flex min-h-11 items-center gap-2 font-medium rounded-lg transition-all active:scale-[0.97]"
+                    className="inline-flex min-h-11 items-center gap-2 font-medium rounded-lg transition-colors active:scale-[0.97]"
                     style={{
                       padding: '8px 16px',
                       fontSize: '12px',
@@ -856,16 +950,23 @@ export function ChatInput({
                   </ComposerPrimitive.Cancel>
                 )}
                 <ComposerPrimitive.Send
-                  disabled={!value.trim() || isDisabled || isOverLimit}
+                  disabled={
+                    !value.trim() ||
+                    isDisabled ||
+                    isOverLimit ||
+                    hasUnsettledAttachments
+                  }
                   onClick={prepareSubmission}
                   title={
                     isOverLimit
                       ? `Message is over the ${maxChars}-character limit`
-                      : isLoading
-                        ? 'Queue follow-up (Enter)'
-                        : 'Send (Enter)'
+                      : hasUnsettledAttachments
+                        ? 'Finish or remove attachments before sending'
+                        : isLoading
+                          ? 'Queue follow-up (Enter)'
+                          : 'Send (Enter)'
                   }
-                  className="group inline-flex min-h-11 items-center gap-2 font-semibold rounded-lg transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
+                  className="group inline-flex min-h-11 items-center gap-2 font-semibold rounded-lg transition-colors active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
                   style={{
                     padding: '8px 16px',
                     fontSize: '12px',
@@ -897,53 +998,42 @@ export function ChatInput({
             </div>
           </div>
         </ComposerPrimitive.Root>
-
-        <div
-          className="font-nous-mono text-[10px] text-center mt-2 opacity-60 hidden sm:block"
-          style={{ color: 'var(--nous-fg-3)' }}
-        >
-          <kbd
-            className="px-1.5 py-0.5 rounded-sm font-nous-mono text-[9px]"
-            style={{
-              background: 'var(--nous-bg-2)',
-              border: '1px solid var(--nous-border-1)',
-            }}
-          >
-            ↵
-          </kbd>{' '}
-          {isLoading ? 'to queue' : 'to send'} ·{' '}
-          <kbd
-            className="px-1.5 py-0.5 rounded-sm font-nous-mono text-[9px]"
-            style={{
-              background: 'var(--nous-bg-2)',
-              border: '1px solid var(--nous-border-1)',
-            }}
-          >
-            shift
-          </kbd>
-          +
-          <kbd
-            className="px-1.5 py-0.5 rounded-sm font-nous-mono text-[9px]"
-            style={{
-              background: 'var(--nous-bg-2)',
-              border: '1px solid var(--nous-border-1)',
-            }}
-          >
-            ↵
-          </kbd>{' '}
-          for newline ·{' '}
-          <kbd
-            className="px-1.5 py-0.5 rounded-sm font-nous-mono text-[9px]"
-            style={{
-              background: 'var(--nous-bg-2)',
-              border: '1px solid var(--nous-border-1)',
-            }}
-          >
-            /
-          </kbd>{' '}
-          for commands
-        </div>
       </div>
+
+      <AlertDialog
+        open={pendingCommand !== null}
+        onOpenChange={(open) => {
+          if (!open) closeCommandConfirmation();
+        }}
+      >
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            restoreDraftSelection();
+            draftSelectionRef.current = null;
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Run {pendingCommand?.label}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Running this command will discard your unsent draft.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={closeCommandConfirmation}>
+              Keep draft
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingCommand) executeCommand(pendingCommand, true);
+                setPendingCommand(null);
+              }}
+            >
+              Run and discard draft
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

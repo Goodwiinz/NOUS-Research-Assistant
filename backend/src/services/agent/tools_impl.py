@@ -6,6 +6,7 @@ and returns a dict result.
 """
 
 import asyncio
+import json
 import logging
 import re
 import threading
@@ -92,7 +93,12 @@ from src.models.user import User
 from src.services.agent.trace_metadata import internal_llm_config
 
 from .error_recovery import tool_error_payload
-from .tool_helpers import _escape_like, _resolve_document_id, _verify_project_ownership
+from .tool_helpers import (
+    _escape_like,
+    _reject_invalid_arxiv_ids,
+    _resolve_document_id,
+    _verify_project_ownership,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +240,15 @@ AGENT_TOOLS = [
                         "type": "integer",
                         "description": "Number of chunks to return (1-20).",
                         "default": 8,
+                    },
+                    "document_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Canonical document UUIDs returned by search_documents. "
+                            "When supplied, retrieval is limited to these documents "
+                            "(maximum 20)."
+                        ),
                     },
                 },
                 "required": ["query"],
@@ -562,6 +577,36 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "revise_draft",
+            "description": "Revise a saved project draft using a durable server-loaded base version. Use for edits, updates, or citation-only changes to an existing draft; never use create_draft for revisions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "The UUID of the project. Optional if on a project page.",
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "The requested changes. Do not include draft content.",
+                    },
+                    "base_version": {
+                        "type": "integer",
+                        "description": "Exact saved version to revise. Defaults to current.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["revise", "citations_only"],
+                        "default": "revise",
+                    },
+                },
+                "required": ["instructions"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "export_bibliography",
             "description": "Export bibliography/references for documents in a specific citation format.",
             "parameters": {
@@ -666,6 +711,133 @@ def _registry_descriptor(tool_name: str):
     return TOOL_REGISTRY.descriptor(tool_name)
 
 
+# Audit R7-M4: no tool bounded its own output — a 50 MB sandbox stdout or a
+# verbose connector payload went straight into the message history (the
+# compactor never truncates). One cap at the dispatcher covers every tool.
+_MAX_TOOL_RESULT_BYTES = 32 * 1024
+_MIN_TRUNCATED_FIELD_CHARS = 200
+
+
+def _string_slots(node: Any, out: list) -> list:
+    """Collect ``(container, key, value)`` for every string leaf in *node*."""
+    items: Any
+    if isinstance(node, dict):
+        items = node.items()
+    elif isinstance(node, list):
+        items = enumerate(node)
+    else:
+        return out
+    for key, value in items:
+        if isinstance(value, str):
+            out.append((node, key, value))
+        else:
+            _string_slots(value, out)
+    return out
+
+
+def _leaf_slots(node: Any, out: list) -> list:
+    """Collect ``(container, key, value)`` for every non-container leaf."""
+    items: Any
+    if isinstance(node, dict):
+        items = node.items()
+    elif isinstance(node, list):
+        items = enumerate(node)
+    else:
+        return out
+    for key, value in items:
+        if isinstance(value, (dict, list)):
+            _leaf_slots(value, out)
+        else:
+            out.append((node, key, value))
+    return out
+
+
+def _redact_bytes(node: Any) -> None:
+    """Replace ``bytes``/``bytearray`` leaves with a size note, in place."""
+    items: Any
+    if isinstance(node, dict):
+        items = list(node.items())
+    elif isinstance(node, list):
+        items = list(enumerate(node))
+    else:
+        return
+    for key, value in items:
+        if isinstance(value, (bytes, bytearray)):
+            node[key] = f"<bytes: {len(value)}>"
+        else:
+            _redact_bytes(value)
+
+
+def _cap_tool_result(result: Any) -> Any:
+    """Bound the serialized size of a tool result (audit R7-M4)."""
+    if not isinstance(result, dict):
+        return result
+
+    def _size() -> Optional[int]:
+        try:
+            return len(json.dumps(result, default=str))
+        except (TypeError, ValueError):
+            return None
+
+    size = _size()
+    if size is None:
+        return result
+    if size <= _MAX_TOOL_RESULT_BYTES:
+        return result
+
+    # A binary leaf (execute_code's PNG) can blow the cap on its own, and no
+    # amount of *string* truncation reaches it — swap it for a size note
+    # before the string budget is computed.
+    _redact_bytes(result)
+    size = _size()
+    if size is None:
+        return result
+
+    slots = _string_slots(result, [])
+    total = sum(len(value) for _, _, value in slots)
+    # 10% headroom absorbs the "…[truncated N chars]" markers we append.
+    budget = int((_MAX_TOOL_RESULT_BYTES - (size - total)) * 0.9)
+    if budget > 0 and slots:
+        # Water-fill: the largest per-field length whose clamped total fits.
+        lengths = sorted(len(value) for _, _, value in slots)
+        remaining = budget
+        limit = lengths[-1]
+        for i, length in enumerate(lengths):
+            left = len(lengths) - i
+            if length * left <= remaining:
+                remaining -= length
+                continue
+            limit = max(_MIN_TRUNCATED_FIELD_CHARS, remaining // left)
+            break
+
+        for container, key, value in slots:
+            if len(value) > limit:
+                container[key] = (
+                    value[:limit] + f"…[truncated {len(value) - limit} chars]"
+                )
+    result["truncated"] = True
+
+    # String truncation alone can leave us over the cap (a long tail of
+    # already-short fields, or structural overhead). Drop the biggest
+    # remaining leaves until it fits — the dispatcher's cap must hold for
+    # every payload it returns, not just the string-dominated ones.
+    while True:
+        size = _size()
+        if size is None or size <= _MAX_TOOL_RESULT_BYTES:
+            return result
+        candidates = [
+            (len(json.dumps(value, default=str)), container, key)
+            for container, key, value in _leaf_slots(result, [])
+        ]
+        # A placeholder is ~30 chars; swapping anything smaller grows the
+        # payload instead of shrinking it.
+        biggest = max(candidates, key=lambda item: item[0], default=None)
+        if biggest is None or biggest[0] <= 48:
+            return {"error": "Tool result too large to return.", "truncated": True}
+        n, container, key = biggest
+        container[key] = f"<omitted: {type(container[key]).__name__}, {n} bytes>"
+
+
 async def execute_tool(
     tool_name: str,
     args: Dict[str, Any],
@@ -697,27 +869,33 @@ async def execute_tool(
     from src.services.agent.tool_registry import ToolPolicyTag
 
     if descriptor and ToolPolicyTag.CONTEXT_FREE in descriptor.policy_tags:
-        return await _dispatch_tool(
-            tool_name,
-            args,
-            user_id,
-            db,
-            current_user,
-            thread_id,
-            runtime_snapshot_id,
-            project_id,
+        return _cap_tool_result(
+            await _dispatch_tool(
+                tool_name,
+                args,
+                user_id,
+                db,
+                current_user,
+                thread_id,
+                runtime_snapshot_id,
+                project_id,
+                organization_id=organization_id,
+            )
         )
 
     if db is not None or current_user is not None:
-        return await _dispatch_tool(
-            tool_name,
-            args,
-            user_id,
-            db,
-            current_user,
-            thread_id,
-            runtime_snapshot_id,
-            project_id,
+        return _cap_tool_result(
+            await _dispatch_tool(
+                tool_name,
+                args,
+                user_id,
+                db,
+                current_user,
+                thread_id,
+                runtime_snapshot_id,
+                project_id,
+                organization_id=organization_id,
+            )
         )
 
     from src.services.agent.tool_session import resolve_tool_user, tool_session
@@ -729,15 +907,18 @@ async def execute_tool(
         # expire_on_commit=False keeps the loaded User usable and the tool's
         # own statements transparently begin a new transaction.
         await session.commit()
-        return await _dispatch_tool(
-            tool_name,
-            args,
-            user_id,
-            session,
-            resolved_user,
-            thread_id,
-            runtime_snapshot_id,
-            project_id,
+        return _cap_tool_result(
+            await _dispatch_tool(
+                tool_name,
+                args,
+                user_id,
+                session,
+                resolved_user,
+                thread_id,
+                runtime_snapshot_id,
+                project_id,
+                organization_id=organization_id,
+            )
         )
 
 
@@ -750,6 +931,7 @@ async def _dispatch_tool(
     thread_id: str = "",
     runtime_snapshot_id: str = "",
     project_id: str = "",
+    organization_id: str = "",
 ) -> Dict[str, Any]:
     """Route a tool call to its ``_tool_*`` implementation."""
     if tool_name == "search_arxiv":
@@ -788,6 +970,8 @@ async def _dispatch_tool(
         return await _tool_get_graph_stats(args, current_user)
     if tool_name == "create_draft":
         return await _tool_create_draft(args, db, current_user)
+    if tool_name == "revise_draft":
+        return await _tool_revise_draft(args, db, current_user)
     if tool_name == "export_bibliography":
         return await _tool_export_bibliography(args, db, current_user)
     if tool_name == "execute_code":
@@ -799,9 +983,15 @@ async def _dispatch_tool(
     if tool_name == "list_external_databases":
         return await _tool_list_external_databases(args)
     if tool_name == "forget_memory":
+        # Audit R7-L9: a DESTRUCTIVE tool acts only for a user that
+        # resolve_tool_user actually verified (active, not deleted, in the
+        # asserted org) — never for a raw config-supplied user_id.
+        if current_user is None:
+            return {"error": "forget_memory: authentication required"}
         return await _tool_forget_memory(
             query=args.get("query", ""),
-            user_id=user_id,
+            user_id=str(current_user.id),
+            organization_id=organization_id or None,
             page_context=None,
         )
     if tool_name == "load_project_skill":
@@ -1285,6 +1475,13 @@ async def _tool_ingest_arxiv(
     if len(paper_ids) > 10:
         return {"error": "Maximum 10 papers per ingest request"}
 
+    # R7-L11 lived only in the LangChain wrapper, which production dispatch
+    # (_nodes_tools -> execute_tool -> here) never runs, so an id like
+    # "../../robots.txt?x=" reached the arXiv fetch unvalidated.
+    invalid = _reject_invalid_arxiv_ids(paper_ids)
+    if invalid:
+        return invalid
+
     # Reject placeholder/hallucinated project_ids early so we don't ingest
     # papers we can't link. Trace 019e1a1c showed the planner passing
     # project_id="proj_12345" (non-UUID) and the tool happily continuing.
@@ -1602,10 +1799,11 @@ async def _tool_search_documents(
             # this the model reported "no documents found" while do_kb_retrieve
             # sat unused one call away (live miss 2026-08-12).
             payload["suggestion"] = (
-                "No title/filename matched. This tool does not search "
-                "document content — retry with do_kb_retrieve for a "
-                "content-level (semantic) search before telling the "
-                "user nothing was found."
+                "No title/filename matched. If the user requested a specific named "
+                "source, state that it could not be identified and do not substitute "
+                "broad retrieval. This tool does not search document content; for "
+                "topical discovery not tied to a named source, retry with "
+                "do_kb_retrieve before telling the user nothing was found."
             )
         return payload
     except Exception as e:
@@ -1634,8 +1832,119 @@ async def _tool_do_kb_retrieve(
 
     top_k = max(1, min(int(args.get("top_k", _kb_settings.DO_KB_DEFAULT_TOP_K)), 20))
 
-    if not getattr(_kb_settings, "DO_KB_ENABLED", False):
+    scoped_intent = "document_ids" in args
+    requested_document_ids: list[UUID] = []
+    provider_filters: Optional[dict[str, Any]] = None
+
+    def scoped_limitation(reason: str) -> Dict[str, Any]:
+        return {
+            "chunks": [],
+            "total": 0,
+            "source": "do_kb",
+            "reason": reason,
+            "note": (
+                "The requested document could not be retrieved as evidence. "
+                "No other document was substituted."
+            ),
+            "evidence_mode": False,
+        }
+
+    if scoped_intent:
+        raw_document_ids = args.get("document_ids")
+        if (
+            not isinstance(raw_document_ids, list)
+            or not raw_document_ids
+            or len(raw_document_ids) > 20
+        ):
+            return scoped_limitation("invalid_document_scope")
+
+        seen_document_ids: set[UUID] = set()
+        for raw_document_id in raw_document_ids:
+            if not isinstance(raw_document_id, str) or not raw_document_id.strip():
+                return scoped_limitation("invalid_document_scope")
+            try:
+                document_id = UUID(raw_document_id.strip())
+            except (ValueError, TypeError, AttributeError):
+                return scoped_limitation("invalid_document_scope")
+            if document_id not in seen_document_ids:
+                seen_document_ids.add(document_id)
+                requested_document_ids.append(document_id)
+
+    kb_enabled = getattr(_kb_settings, "DO_KB_ENABLED", False)
+    if not kb_enabled and not scoped_intent:
         return {"chunks": [], "total": 0, "source": "do_kb", "reason": "disabled"}
+
+    resolved_project_id: Optional[str] = None
+    if scoped_intent:
+        if db is None:
+            return scoped_limitation("requested_documents_unavailable")
+        try:
+            authorized_rows = await db.execute(
+                select(
+                    Document.id,
+                    Document.storage_path,
+                    Document.storage_backend,
+                ).where(
+                    Document.id.in_(requested_document_ids),
+                    Document.organization_id == current_user.organization_id,
+                    Document.is_deleted == False,
+                )
+            )
+            authorized_documents = {
+                UUID(str(document_id)): (storage_path, storage_backend)
+                for document_id, storage_path, storage_backend in authorized_rows.all()
+            }
+            requested_document_id_set = set(requested_document_ids)
+            if set(authorized_documents) != requested_document_id_set:
+                return scoped_limitation("requested_documents_unavailable")
+
+            project_id = args.get("project_id")
+            if project_id:
+                project = await _verify_project_ownership(project_id, db, current_user)
+                if not project:
+                    return scoped_limitation("requested_documents_unavailable")
+                resolved_project_id = str(project.id)
+                membership_rows = await db.execute(
+                    select(CollectionDocument.document_id).where(
+                        CollectionDocument.collection_id == project.id,
+                        CollectionDocument.document_id.in_(requested_document_ids),
+                        CollectionDocument.is_deleted == False,
+                    )
+                )
+                member_document_ids = {
+                    UUID(str(document_id))
+                    for document_id in membership_rows.scalars().all()
+                }
+                if member_document_ids != requested_document_id_set:
+                    return scoped_limitation("requested_documents_unavailable")
+
+            item_names: list[str] = []
+            seen_item_names: set[str] = set()
+            for document_id in requested_document_ids:
+                candidate_names = [f"{document_id}.txt"]
+                storage_path, storage_backend = authorized_documents[document_id]
+                if storage_backend == "s3" and storage_path:
+                    original_leaf = storage_path.rsplit("/", 1)[-1]
+                    if original_leaf:
+                        candidate_names.append(original_leaf)
+                for item_name in candidate_names:
+                    if item_name not in seen_item_names:
+                        seen_item_names.add(item_name)
+                        item_names.append(item_name)
+
+            clauses = [
+                {"equals": {"key": "item_name", "value": item_name}}
+                for item_name in item_names
+            ]
+            provider_filters = clauses[0] if len(clauses) == 1 else {"or_all": clauses}
+        except Exception as exc:
+            logger.warning(
+                "do_kb_retrieve named-document authorization failed: %s", exc
+            )
+            return scoped_limitation("requested_documents_unavailable")
+
+        if not kb_enabled:
+            return scoped_limitation("scoped_retrieval_unavailable")
 
     # Read kb_uuid from the org. Lazy import to keep cold-start light.
     from src.services.do_kb.retrieval import (
@@ -1649,6 +1958,8 @@ async def _tool_do_kb_retrieve(
         kb_uuid = await resolve_org_kb_uuid(db, current_user.organization_id)
 
     if not kb_uuid:
+        if scoped_intent:
+            return scoped_limitation("scoped_retrieval_unavailable")
         return {
             "chunks": [],
             "total": 0,
@@ -1661,14 +1972,19 @@ async def _tool_do_kb_retrieve(
     # helper. A non-DOKnowledgeBaseError propagates out of the helper and is
     # caught by the broad except below, preserving the tool's error-dict path.
     try:
-        outcome = await retrieve_kb_chunks(
-            kb_uuid=kb_uuid,
-            query=query,
-            org_id=current_user.organization_id,
-            top_k=top_k,
-        )
+        retrieve_kwargs: Dict[str, Any] = {
+            "kb_uuid": kb_uuid,
+            "query": query,
+            "org_id": current_user.organization_id,
+            "top_k": top_k,
+        }
+        if provider_filters is not None:
+            retrieve_kwargs["filters"] = provider_filters
+        outcome = await retrieve_kb_chunks(**retrieve_kwargs)
     except Exception as exc:
         logger.warning("do_kb_retrieve failed: %s", exc)
+        if scoped_intent:
+            return scoped_limitation("scoped_retrieval_unavailable")
         return {
             "chunks": [],
             "total": 0,
@@ -1677,6 +1993,8 @@ async def _tool_do_kb_retrieve(
         }
 
     if outcome.status is not DOKBRetrieveStatus.SUCCESS:
+        if scoped_intent:
+            return scoped_limitation("scoped_retrieval_unavailable")
         failure = (
             asyncio.TimeoutError()
             if outcome.status is DOKBRetrieveStatus.TIMEOUT
@@ -1697,8 +2015,7 @@ async def _tool_do_kb_retrieve(
     # using it as a filter — otherwise passing another (in-org) project's id
     # would reveal which org documents belong to it (membership inference).
     # Mirrors the _verify_project_ownership guard the sibling project tools use.
-    resolved_project_id: Optional[str] = None
-    if project_id:
+    if project_id and not scoped_intent:
         if db is None:
             # Can't verify without a session — drop the filter rather than
             # trust an unverified id (fall back to org-wide scoping).
@@ -1728,12 +2045,15 @@ async def _tool_do_kb_retrieve(
     if db is not None and result.chunks:
         from src.services.do_kb.resolve import resolve_and_filter_chunks
 
-        title_by_key, chunks_to_emit = await resolve_and_filter_chunks(
-            chunks=result.chunks,
-            org_id=current_user.organization_id,
-            session=db,
-            project_id=resolved_project_id,
-        )
+        resolve_kwargs: Dict[str, Any] = {
+            "chunks": result.chunks,
+            "org_id": current_user.organization_id,
+            "session": db,
+            "project_id": resolved_project_id,
+        }
+        if scoped_intent:
+            resolve_kwargs["allowed_document_ids"] = set(requested_document_ids)
+        title_by_key, chunks_to_emit = await resolve_and_filter_chunks(**resolve_kwargs)
 
     from src.services.do_kb.postprocess import sanitize_and_deduplicate_chunks
 
@@ -1749,6 +2069,8 @@ async def _tool_do_kb_retrieve(
     )
     chunks_to_emit = postprocessed.chunks
     if not chunks_to_emit:
+        if scoped_intent:
+            return scoped_limitation("no_scoped_chunks")
         return {
             "chunks": [],
             "total": 0,
@@ -1766,6 +2088,8 @@ async def _tool_do_kb_retrieve(
 
     chunks_to_emit = drop_low_relevance_chunks(chunks_to_emit)
     if not chunks_to_emit:
+        if scoped_intent:
+            return scoped_limitation("no_scoped_chunks")
         return {
             "chunks": [],
             "total": 0,
@@ -1814,7 +2138,7 @@ async def _tool_do_kb_retrieve(
 
     payload = {
         "chunks": chunks_payload,
-        "total": len(chunks_payload) if project_id else result.total,
+        "total": len(chunks_payload) if project_id or scoped_intent else result.total,
         "source": "do_kb",
         "query": query,
         "evidence_mode": evidence_mode,
@@ -2566,7 +2890,7 @@ async def _tool_extract_entities(
         result = await service.extract_entities(text, entity_types=entity_types)
 
         if result.entities:
-            return {
+            payload: Dict[str, Any] = {
                 "entities": [
                     {
                         "name": e.name,
@@ -2582,13 +2906,24 @@ async def _tool_extract_entities(
                 "document_id": document_id,
                 "title": doc.title or "Untitled",
             }
+            if result.error:
+                # B8-S3: a partial extraction (skipped chunks) must reach the
+                # model, but NOT under "error" — `_execute_single_tool`
+                # classifies on that key's presence, so reporting a partial
+                # success there would count a usable result as a tool failure.
+                payload["partial_error"] = result.error
+            return payload
 
-        return {
+        # B8-S2: only claim a failure when there actually was one; an empty
+        # document legitimately yields zero entities with error=None.
+        empty: Dict[str, Any] = {
             "entities": [],
             "total": 0,
             "document_id": document_id,
-            "error": result.error,
         }
+        if result.error:
+            empty["error"] = result.error
+        return empty
     except Exception as e:
         logger.error("extract_entities tool failed", exc_info=e)
         return tool_error_payload("extract_entities", e)
@@ -2900,6 +3235,57 @@ async def _tool_create_draft(
         return tool_error_payload("create_draft", e)
 
 
+async def _tool_revise_draft(
+    args: Dict[str, Any],
+    db: Optional[AsyncSession],
+    current_user: Optional[User],
+) -> Dict[str, Any]:
+    """Revise a durable project draft and return the completed new version."""
+    if not db or not current_user:
+        return {"error": "Authentication required"}
+
+    project_id = args.get("project_id", "")
+    instructions = str(args.get("instructions", "") or "").strip()
+    base_version = args.get("base_version")
+    mode = args.get("mode", "revise")
+    if not project_id:
+        return {"error": "project_id is required"}
+    if not instructions:
+        return {"error": "Revision instructions are required"}
+    if base_version is not None and (
+        not isinstance(base_version, int)
+        or isinstance(base_version, bool)
+        or base_version < 1
+    ):
+        return {"error": "base_version must be a positive integer"}
+    if mode not in {"revise", "citations_only"}:
+        return {"error": "mode must be 'revise' or 'citations_only'"}
+
+    try:
+        project = await _verify_project_ownership(project_id, db, current_user)
+        if not project:
+            return {"error": "Project not found or access denied"}
+
+        from src.services.research.draft_generation_service import (
+            DraftGenerationService,
+        )
+
+        result = await DraftGenerationService(db).revise_draft(
+            project_id=project.id,
+            instructions=instructions,
+            base_version=base_version,
+            mode=mode,
+        )
+        return {
+            **result,
+            "project_id": str(project.id),
+            "project_name": project.name,
+        }
+    except Exception as e:
+        logger.error("revise_draft tool failed", exc_info=e)
+        return tool_error_payload("revise_draft", e)
+
+
 @dataclass
 class _CitationProxy:
     """Lightweight stand-in for Citation ORM objects.
@@ -3056,6 +3442,12 @@ async def _tool_execute_code(
 
     if not code:
         return {"error": "No code provided"}
+
+    # Audit R7-L10: the sandbox is keyed by thread_id and is stateful, so an
+    # empty key would put every context-less call into one shared box. The
+    # wrapper's guard is unreachable — _nodes_tools calls execute_tool direct.
+    if not thread_id:
+        return {"error": "Code execution requires a conversation thread."}
 
     from src.services.sandbox.e2b_sandbox_manager import get_sandbox_manager
 
@@ -3249,6 +3641,7 @@ async def _tool_forget_memory(
     *,
     query: str,
     user_id: str,
+    organization_id: str | None = None,
     page_context: dict | None = None,
 ) -> dict:
     """Handler for the forget_memory agent tool."""
@@ -3263,7 +3656,17 @@ async def _tool_forget_memory(
     if store is None:
         return {"error": "forget_memory: memory store unavailable"}
 
-    result = await delete_memory_by_query(store, user_id=user_id, query=query, limit=5)
+    try:
+        result = await delete_memory_by_query(
+            store,
+            user_id=user_id,
+            query=query,
+            limit=5,
+            organization_id=organization_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("forget_memory tool failed", exc_info=exc)
+        return tool_error_payload("forget_memory", exc)
     return {
         "status": "completed",
         "deleted": result["deleted"],

@@ -641,6 +641,7 @@ class TestExecuteToolDispatch:
         """execute_tool must route forget_memory to its handler (was Unknown tool)."""
         from src.api.agent.execute import execute_tool
 
+        acting_user = _mock_user()
         with patch(
             "src.services.agent.tools_impl._tool_forget_memory",
             new_callable=AsyncMock,
@@ -651,15 +652,18 @@ class TestExecuteToolDispatch:
                 args={"query": "forget my transformer searches"},
                 user_id="user-1",
                 db=AsyncMock(),
-                current_user=_mock_user(),
+                current_user=acting_user,
             )
 
         mock_handler.assert_awaited_once()
-        # keyword-only handler — routing must pass query + user_id through
+        # keyword-only handler — routing must pass query + user_id through.
+        # Audit R7-L9: the id is the *resolved* user's, not the raw
+        # config-supplied user_id — a destructive delete never runs for a
+        # caller nobody verified.
         assert (
             mock_handler.await_args.kwargs["query"] == "forget my transformer searches"
         )
-        assert mock_handler.await_args.kwargs["user_id"] == "user-1"
+        assert mock_handler.await_args.kwargs["user_id"] == str(acting_user.id)
         assert result.get("status") == "completed"
         assert "error" not in result  # must NOT be the "Unknown tool" catch-all
 

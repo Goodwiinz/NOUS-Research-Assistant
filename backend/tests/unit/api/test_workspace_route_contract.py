@@ -102,6 +102,7 @@ NESTED_ROUTES = [
         201,
         False,
     ),
+    ("GET", "/{workspace_id}/threads", ThreadListResponse, 200, False),
     (
         "GET",
         "/{workspace_id}/conversations/{conversation_id}/threads",
@@ -264,7 +265,7 @@ def _expected_table(
 
 
 def test_nested_router_route_count_unchanged() -> None:
-    assert len(workspaces_router.routes) == len(NESTED_ROUTES) == 28
+    assert len(workspaces_router.routes) == len(NESTED_ROUTES) == 29
 
 
 def test_nested_router_contract_unchanged() -> None:
@@ -291,9 +292,9 @@ def test_standalone_router_prefix_and_tags_unchanged() -> None:
     assert workspaces_standalone_router.tags == ["workspaces-flat"]
 
 
-def test_total_endpoint_count_is_47() -> None:
+def test_total_endpoint_count_is_48() -> None:
     total = len(workspaces_router.routes) + len(workspaces_standalone_router.routes)
-    assert total == 47
+    assert total == 48
 
 
 def test_module_level_constant_unchanged() -> None:

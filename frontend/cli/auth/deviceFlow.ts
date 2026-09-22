@@ -1,6 +1,7 @@
 import { saveConfig } from './store';
+import { getApiBase } from '../services/client';
 
-const BACKEND_URL = process.env.NOUS_API_URL ?? 'http://localhost:8000/api/v1';
+const BACKEND_URL = getApiBase();
 
 interface PollOptions {
   fetchFn?: typeof fetch;

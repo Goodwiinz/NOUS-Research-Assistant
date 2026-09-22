@@ -19,6 +19,7 @@ from tests.utils.agent_stream import (
     sse_event_name,
     workflow_frames,
 )
+from tests.utils.agent_thread_access import editable_thread_getter
 
 
 class _FakeGraph:
@@ -102,7 +103,8 @@ async def test_stream_confirm_event_generator_emits_trace_event_before_workflow_
     from src.api.agent.streaming import stream_confirm_event_generator
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-456", confirmed=True)
+    thread_id = "11111111-1111-4111-8111-111111111624"
+    body = SimpleNamespace(thread_id=thread_id, confirmed=True)
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (
@@ -142,6 +144,10 @@ async def test_stream_confirm_event_generator_emits_trace_event_before_workflow_
             "src.api.agent.streaming._jobs_mod._persist_assistant_message_safe",
             new=AsyncMock(return_value="assistant-row-1"),
         ),
+        patch(
+            "src.services.threads.workspace_access.get_thread",
+            new=editable_thread_getter(),
+        ),
     ):
         events = []
         async for event in stream_confirm_event_generator(body, request, current_user):
@@ -151,7 +157,7 @@ async def test_stream_confirm_event_generator_emits_trace_event_before_workflow_
     assert sse_event_name(workflow[0]) == "trace"
     assert sse_event_name(workflow[1]) == "token"
     trace_payload = workflow[0].split("data: ", 1)[1].strip()
-    assert '"thread_id": "thread-456"' in trace_payload
+    assert f'"thread_id": "{thread_id}"' in trace_payload
     assert '"cli_session_id": ""' in trace_payload
     run_id = trace_payload.split('"langsmith_run_id": "', 1)[1].split('"', 1)[0]
     UUID(run_id)

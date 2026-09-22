@@ -19,7 +19,10 @@ import { createTestHelpers, TEST_DATA } from "../utils/test-helpers";
 const STREAM_URL = "**/api/v1/agent/stream";
 const CONFIRM_URL = "**/api/v1/agent/stream/confirm";
 const RESUME_URL = "**/agent/stream/resume/**";
-const TOOL_NAME = "ingest_arxiv";
+const TOOL_NAME = "ingest_arxiv_papers";
+// The banner renders the humanized vocabulary label from toolLabels.ts, not
+// the raw tool name (HitlApprovalToolUI passes tool.name through toolLabel).
+const TOOL_LABEL = "Ingest arXiv papers";
 const APPROVED_MARKER = "hitl-approved";
 const DENIED_MARKER = "hitl-denied";
 
@@ -80,10 +83,9 @@ test.describe("Chat HITL approval gate @regression", () => {
 
     const banner = page.getByRole("alertdialog", { name: "Approval needed" });
     await expect(banner).toBeVisible({ timeout: 15000 });
-    // Scope the tool-name assertion to the banner: the prompt we typed echoes
-    // `ingest_arxiv` back in the transcript, so an unscoped getByText matches
-    // both the user bubble and the banner's tool chip (strict-mode violation).
-    await expect(banner.getByText(TOOL_NAME)).toBeVisible();
+    // Scope the label assertion to the banner: the transcript may echo
+    // similar copy, so an unscoped getByText risks a strict-mode violation.
+    await expect(banner.getByText(TOOL_LABEL)).toBeVisible();
   }
 
   test("approving the gate resumes the turn and clears the banner", async ({

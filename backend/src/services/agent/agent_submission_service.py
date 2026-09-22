@@ -49,7 +49,8 @@ race, and the loser re-reads the winner.
 per thread" a database invariant. A new submission rejects while another run
 is queued, running, or stopping. A parked ``awaiting_confirmation`` run is safe
 to abandon because no graph invocation is active; it is cancelled atomically
-with accepting the fresh turn, then the caller clears the stale checkpoint.
+with accepting the fresh turn, then the producer/new-turn path clears any
+stale checkpoint after claiming the replacement.
 
 **Tenancy.** ``organization_id`` is nullable (org-less users exist), compared
 null-safely, and NEVER stringified — ``str(None) == "None"`` has merged tenants
@@ -64,7 +65,9 @@ which is keyed only by a server-generated run id.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
@@ -141,6 +144,15 @@ class AcceptedSubmission:
     # updates nothing yet still needs the resync.
     tombstoned: bool = False
     tombstoned_count: int = 0
+
+
+@dataclass(frozen=True)
+class RunCancellationResult:
+    """Outcome of the durable normal-Stop claim."""
+
+    run_id: str
+    status: JobStatus
+    claimed: bool
 
 
 def stream_idempotency_key(request: Any, current_user: Any) -> Optional[str]:
@@ -246,6 +258,7 @@ async def _insert_user_message(
     user_id: Any,
     content: str,
     client_message_id: Optional[UUID],
+    attachment_ids: Optional[Sequence[Any]] = None,
 ) -> tuple[Optional[str], bool]:
     """Insert the turn's user row idempotently. Does NOT commit.
 
@@ -264,6 +277,11 @@ async def _insert_user_message(
     on conflict, and ``agent_runs.user_message_id`` needs that id), and it is
     dialect-agnostic, so the fault-injection suite can exercise the real
     transaction on SQLite.
+
+    ``attachment_ids`` are linked exactly as ``/execute`` does (R7-M5): only
+    against a row THIS call inserted, and only after ownership filtering, so a
+    retried turn cannot double-attach and no caller can hang another tenant's
+    document off their message.
     """
     message = ChatMessage(
         thread_id=thread_id,
@@ -299,6 +317,18 @@ async def _insert_user_message(
         )
         .execution_options(synchronize_session=False)
     )
+
+    if attachment_ids:
+        from src.models.message_attachment import MessageAttachment
+        from src.services.threads import workspace_access
+
+        owned_ids = await workspace_access.filter_owned_document_ids(
+            db, list(attachment_ids), user_id
+        )
+        for doc_id in owned_ids:
+            db.add(MessageAttachment(message_id=message.id, document_id=doc_id))
+        await db.flush()
+
     return str(message.id), True
 
 
@@ -394,22 +424,28 @@ async def abandon_awaiting_submission(
     organization_id: Any,
     user_id: Any,
     reason: str,
+    expected_run_id: Optional[str] = None,
 ) -> Optional[str]:
     """Cancel one caller-owned parked run without committing.
 
     The guarded UPDATE is the claim: concurrent Stop/new-turn requests cannot
-    both close the same run or append two terminal ledger events.
+    both close the same run or append two terminal ledger events. When a Stop
+    route has already selected a parked run, ``expected_run_id`` keeps a later
+    run that replaced it from being cancelled by the stale request.
     """
     now = _utcnow()
+    predicates = [
+        AgentRun.thread_id == _coerce_uuid(thread_id),
+        AgentRun.organization_id == _coerce_uuid(organization_id),
+        AgentRun.user_id == _coerce_uuid(user_id),
+        AgentRun.status == JobStatus.AWAITING_CONFIRMATION.value,
+    ]
+    if expected_run_id is not None:
+        predicates.append(AgentRun.job_id == expected_run_id)
     row = (
         await db.execute(
             update(AgentRun)
-            .where(
-                AgentRun.thread_id == _coerce_uuid(thread_id),
-                AgentRun.organization_id == _coerce_uuid(organization_id),
-                AgentRun.user_id == _coerce_uuid(user_id),
-                AgentRun.status == JobStatus.AWAITING_CONFIRMATION.value,
-            )
+            .where(*predicates)
             .values(
                 status=JobStatus.CANCELLED.value,
                 completed_at=now,
@@ -430,6 +466,100 @@ async def abandon_awaiting_submission(
         organization_id=organization_id,
     )
     return run_id
+
+
+async def request_run_cancellation(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    thread_id: Any,
+    organization_id: Any,
+    user_id: Any,
+    reason: str,
+    request_id: Optional[str] = None,
+) -> Optional[RunCancellationResult]:
+    """Durably request cancellation of one caller-owned active run.
+
+    The guarded update is the cancellation claim.  Only queued/running rows
+    may transition to ``stopping``; a repeated request observes the existing
+    stopping row and never appends a second ``run.stopping`` event.  The
+    producer owns the later acknowledgement transition to ``cancelled``.
+    This function deliberately does not commit so the API can combine the
+    claim and its ledger event in one transaction.
+    """
+    now = _utcnow()
+    claimed = (
+        await db.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.job_id == run_id,
+                AgentRun.thread_id == _coerce_uuid(thread_id),
+                AgentRun.organization_id == _coerce_uuid(organization_id),
+                AgentRun.user_id == _coerce_uuid(user_id),
+                AgentRun.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),
+            )
+            .values(
+                status=JobStatus.STOPPING.value,
+                cancel_requested_at=now,
+                updated_at=now,
+            )
+            .returning(AgentRun.job_id)
+            .execution_options(synchronize_session=False)
+        )
+    ).first()
+    if claimed is not None:
+        stopping_payload: dict[str, Any] = {"reason": reason}
+        if request_id:
+            stopping_payload["request_id"] = request_id
+        await append_event(
+            db,
+            run_id=run_id,
+            event_type=RunEventType.RUN_STOPPING,
+            payload=stopping_payload,
+            organization_id=organization_id,
+        )
+        return RunCancellationResult(
+            run_id=run_id,
+            status=JobStatus.STOPPING,
+            claimed=True,
+        )
+
+    # A request racing the first claim is idempotent.  The exact owner filters
+    # below also ensure a stale or foreign request cannot discover a different
+    # run on the same thread.
+    current = (
+        await db.execute(
+            select(AgentRun.status).where(
+                AgentRun.job_id == run_id,
+                AgentRun.thread_id == _coerce_uuid(thread_id),
+                AgentRun.organization_id == _coerce_uuid(organization_id),
+                AgentRun.user_id == _coerce_uuid(user_id),
+            )
+        )
+    ).scalar_one_or_none()
+    if current is None:
+        return None
+    try:
+        current_status = JobStatus(current)
+    except ValueError:
+        return None
+    if current_status == JobStatus.STOPPING:
+        return RunCancellationResult(
+            run_id=run_id,
+            status=current_status,
+            claimed=False,
+        )
+    if current_status.is_terminal:
+        return RunCancellationResult(
+            run_id=run_id,
+            status=current_status,
+            claimed=False,
+        )
+    return RunCancellationResult(
+        run_id=run_id,
+        status=current_status,
+        claimed=False,
+    )
 
 
 async def fail_queued_submission(
@@ -641,6 +771,7 @@ async def accept_submission(
             user_id=current_user.id,
             content=last_user.content,
             client_message_id=client_message_id,
+            attachment_ids=getattr(request, "attachment_ids", None),
         )
         tombstones = await _apply_tombstones(
             db,
@@ -845,7 +976,7 @@ async def finalize_submission(
     error_code: Optional[str] = None,
     error: Optional[str] = None,
     run_metadata: Optional[dict[str, Any]] = None,
-) -> None:
+) -> bool:
     """Move the run to *status* at the end of the turn and commit.
 
     The run row must reach a terminal status or ``uq_agent_runs_active_thread``
@@ -858,8 +989,10 @@ async def finalize_submission(
     ledger must stay OPEN — the run genuinely continues on ``/stream/confirm``.
 
     Terminal failures propagate so callers cannot emit ``done`` while the
-    thread's single-writer slot is still held. Non-terminal HITL parking stays
-    best-effort: the checkpoint remains the authoritative resume state.
+    thread's single-writer slot is still held. Non-terminal HITL parking also
+    propagates an unknown storage failure; callers can distinguish that from a
+    ``False`` guarded-update result, which means another writer won the race.
+    The checkpoint remains the authoritative resume state for the former.
     """
     now = _utcnow()
     values: dict[str, Any] = {
@@ -896,15 +1029,43 @@ async def finalize_submission(
     # the retry checks out a fresh one (see pool_pre_ping in src/core/database).
     for attempt in range(_FINALIZE_ATTEMPTS):
         try:
-            await db.execute(
+            transition = (
                 update(AgentRun)
                 .where(
                     AgentRun.job_id == run_id,
                     AgentRun.status.notin_(_TERMINAL_RUN_STATUSES),
+                    # A producer that observed the durable stop marker must
+                    # acknowledge it as cancelled; it may never publish a
+                    # late completed/failed transition over ``stopping``.
+                    *(
+                        []
+                        if status == JobStatus.CANCELLED
+                        else [AgentRun.status != JobStatus.STOPPING.value]
+                    ),
                 )
                 .values(**values)
+                .returning(AgentRun.job_id)
                 .execution_options(synchronize_session=False)
             )
+            transition_result = await db.execute(transition)
+            if transition_result is None:
+                # A few lightweight test doubles model execute() as a write
+                # with no result object. Real SQLAlchemy UPDATE..RETURNING
+                # always supplies one. An absent result cannot prove that the
+                # guarded UPDATE claimed the row, so fail closed: do not
+                # append a terminal event or report a successful transition.
+                transitioned = None
+            else:
+                first = getattr(transition_result, "first", None)
+                transitioned = first() if callable(first) else transition_result
+                if inspect.isawaitable(transitioned):
+                    transitioned = await transitioned
+            if transitioned is None:
+                # The guarded UPDATE is the ownership/race decision. A
+                # stopping or terminal row is already owned by another
+                # terminalizer; there is no event to append from this call.
+                await db.commit()
+                return False
             if event_type is not None:
                 try:
                     await append_event(
@@ -920,7 +1081,7 @@ async def finalize_submission(
                         "finalize_submission: ledger already closed for %s", run_id
                     )
             await db.commit()
-            return
+            return True
         except Exception as exc:
             try:
                 await db.rollback()
@@ -944,17 +1105,18 @@ async def finalize_submission(
             logger.warning(
                 "finalize_submission failed for run %s", run_id, exc_info=True
             )
-            if status in TERMINAL_JOB_STATUSES:
-                raise
-            return
+            raise
+    return False
 
 
 __all__ = [
     "DISPATCH_KIND_STREAM",
     "AcceptedSubmission",
+    "RunCancellationResult",
     "accept_submission",
     "fail_queued_submission",
     "finalize_submission",
     "mark_submission_dispatched",
+    "request_run_cancellation",
     "stream_idempotency_key",
 ]

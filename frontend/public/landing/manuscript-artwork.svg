@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300" fill="none" stroke="#996d1a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Curved leaves meet at a gently receding sewn gutter. -->
+  <path d="M179 135 C141 104 91 91 43 102 L27 204 C83 194 143 213 190 239 C234 211 299 189 356 199 L326 94 C274 87 218 108 179 135 Z"/>
+  <path d="M179 135 C179 166 186 210 190 239"/>
+  <path d="M174 137 C172 163 179 208 184 229 M185 137 C187 162 192 198 195 224" stroke-width="1"/>
+  <!-- Thin page block and the two projecting boards. -->
+  <path d="M28 205 L29 214 C86 204 145 223 190 249 C236 220 301 200 359 209 L356 199"/>
+  <path d="M30 209 C87 199 145 219 184 240 M200 237 C247 212 307 197 357 204" stroke-width="1"/>
+  <path d="M39 104 L35 103 L23 218 C82 207 143 229 185 254 Q191 256 197 251 C245 224 308 206 363 213 L332 99 L328 99"/>
+  <path d="M190 240 L191 248 M47 208 L46 212 M59 207 L58 211 M72 208 L71 212 M324 203 L326 207 M337 203 L339 207" stroke-width="1"/>
+  <!-- Short manuscript rules follow the shallow bow of each leaf. -->
+  <path d="M62 118 C91 115 126 123 150 135 M60 129 C85 127 119 134 157 151 M59 141 C86 139 115 145 139 155 M57 152 C91 151 124 161 159 177 M55 164 C80 162 109 170 131 179 M53 175 C84 174 118 184 151 199 M52 187 C76 185 101 191 119 198" stroke-width="1.1"/>
+  <!-- Two small, raised marginal footnote strokes. -->
+  <path d="M47 140 L49 136 L49 141 M43 174 L45 170 M47 174 L49 170" stroke-width="1"/>
+  <path d="M204 132 L218 127 M206 145 L220 140 M209 158 L222 153 M212 171 L226 166 M217 184 C228 179 239 175 249 172 M220 196 C247 182 278 175 306 174 M235 204 C269 189 303 182 327 184 M316 110 L324 111 M319 124 L328 125 M320 138 L331 139 M318 152 L334 153 M312 166 L321 166" stroke-width="1.1"/>
+  <!-- A handleless lens, with a fine lower lip lifted above the page. -->
+  <circle cx="270" cy="124" r="43" fill="#d4a039" fill-opacity="0.08" stroke-width="1.6"/>
+  <path d="M227.5 131 C231 156 249 173 272 173 C294 173 310 156 313 131" stroke-width="1.1"/>
+  <path d="M237 103 A39 39 0 0 1 298 97 M305 141 A39 39 0 0 1 250 157" stroke="#d4a039" stroke-width="1"/>
+  <!-- Nine points resolve into a small, irregular knowledge graph. -->
+  <path d="M241 119 L253 100 L273 107 L293 101 M241 119 L261 125 L273 107 L290 130 L293 101 M261 125 L248 143 L269 151 L290 130 L299 145 M261 125 L269 151 M290 130 L299 145" stroke="#d4a039" stroke-width="1.1"/>
+  <g stroke="#d4a039" stroke-width="1" fill="#d4a039">
+    <circle cx="241" cy="119" r="1.9"/>
+    <circle cx="253" cy="100" r="1.7"/>
+    <circle cx="273" cy="107" r="2"/>
+    <circle cx="293" cy="101" r="1.6"/>
+    <circle cx="261" cy="125" r="2.3"/>
+    <circle cx="290" cy="130" r="2"/>
+    <circle cx="248" cy="143" r="1.6"/>
+    <circle cx="269" cy="151" r="1.8"/>
+    <circle cx="299" cy="145" r="1.7"/>
+  </g>
+</svg>

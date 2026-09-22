@@ -158,7 +158,7 @@ function ToolFallbackTrigger({
     <CollapsibleTrigger
       data-slot="tool-fallback-trigger"
       className={cn(
-        "aui-tool-fallback-trigger group/trigger text-foreground/55 hover:text-foreground/90 flex min-h-11 w-full origin-left items-center gap-2 py-1.5 text-[13.5px] transition-[color,scale] outline-none active:scale-[0.98]",
+        "aui-tool-fallback-trigger group/trigger text-foreground/55 hover:text-foreground/90 flex min-h-11 w-full origin-left items-center gap-2 py-1.5 text-[13.5px] transition-[color,scale] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40 active:scale-[0.98]",
         className,
       )}
       {...props}
@@ -255,13 +255,13 @@ function ToolFallbackArgs({
       )}
       {...props}
     >
-      <p className={cn("aui-tool-fallback-args-header text-foreground/35 mb-1", mono)}>
+      <p className={"aui-tool-fallback-args-header mb-1 text-[11px] text-(--nous-fg-3)"}>
         Request
       </p>
       {/* `break-words` matters here: the panel clips its overflow, and
           whitespace-pre-wrap alone will not split an unbroken URL, hash or
           base64 blob, so the tail would silently disappear. */}
-      <pre className="aui-tool-fallback-args-value text-foreground/55 font-mono text-xs break-words whitespace-pre-wrap">
+      <pre className="aui-tool-fallback-args-value font-mono text-xs break-words whitespace-pre-wrap text-(--nous-fg-2)">
         {argsText}
       </pre>
     </div>
@@ -287,7 +287,7 @@ function ToolFallbackResult({
       )}
       {...props}
     >
-      <p className={cn("aui-tool-fallback-result-header text-foreground/35 mb-1", mono)}>
+      <p className={"aui-tool-fallback-result-header mb-1 text-[11px] text-(--nous-fg-3)"}>
         Result
       </p>
       <pre className="aui-tool-fallback-result-content text-foreground/90 text-xs break-words whitespace-pre-wrap">

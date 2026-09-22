@@ -64,6 +64,7 @@ class Citation(BaseModel):
     )  # Flag for incomplete metadata
 
     # Chunk information
+    source_position = Column(Integer, nullable=True)
     chunk_index = Column(Integer, nullable=True)  # Index of the vector chunk
     chunk_id = Column(String(255), nullable=True)  # Qdrant chunk ID
 
@@ -126,6 +127,8 @@ class Citation(BaseModel):
             "snippet": self.snippet,
             "snippet_preview": self.snippet_preview,
             "page_number": self.page_number,
+            "source_position": self.source_position,
+            "chunk_id": self.chunk_id,
             "score": self.score,
             "chunk_index": self.chunk_index,
             # Scholarly metadata

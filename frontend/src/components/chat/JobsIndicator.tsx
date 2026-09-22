@@ -58,7 +58,10 @@ function JobRow({ job }: { job: ProcessingJobStatus }): React.ReactElement {
         ) : cancelled ? (
           // Terminal but not a success: a tick here told the reader their
           // cancelled ingest had finished.
-          <Ban className="h-3.5 w-3.5 shrink-0 text-(--nous-fg-3)" aria-hidden />
+          <Ban
+            className="h-3.5 w-3.5 shrink-0 text-(--nous-fg-3)"
+            aria-hidden
+          />
         ) : active ? (
           <Loader2
             className="h-3.5 w-3.5 shrink-0 animate-spin text-(--nous-sol) motion-reduce:animate-none"
@@ -108,9 +111,9 @@ function JobRow({ job }: { job: ProcessingJobStatus }): React.ReactElement {
           aria-label={`${jobTitle(job)} progress`}
         >
           <span
-            className="block h-full rounded-sm transition-[width] duration-500"
+            className="block h-full w-full origin-left rounded-sm transition-transform duration-500"
             style={{
-              width: `${Math.max(percent, 4)}%`,
+              transform: `scaleX(${Math.max(percent, 4) / 100})`,
               background: 'var(--nous-sol)',
             }}
           />
@@ -170,15 +173,13 @@ export function JobsIndicator(): React.ReactElement | null {
       >
         <div className="border-b border-(--nous-border-1) bg-(--nous-bg-2) px-3 py-2">
           <p className="font-nous-ui text-[11px] font-medium text-(--nous-fg-2)">
-            {activeCount > 0
-              ? `${activeCount} running`
-              : 'No jobs running'}
+            {activeCount > 0 ? `${activeCount} running` : 'No jobs running'}
           </p>
         </div>
 
         {error && (
           <p className="border-b border-(--nous-border-1) px-3 py-2 font-nous-ui text-[11px] text-(--nous-fg-3)">
-            Showing the last known state — {error}
+            Showing the last known state. {error}
           </p>
         )}
 

@@ -63,37 +63,40 @@ def _prune_checkpoint_history(messages: List[Any]) -> List[RemoveMessage]:
 
 
 def _extract_prior_tool(messages: List[Any]) -> Optional[Dict[str, Any]]:
-    """Walk *messages* backwards and return the most recent tool call.
-
-    Returns a dict with keys ``name``, ``args``, and ``result`` (the matching
-    ToolMessage content as a string), or ``None`` if no tool call exists in
-    the conversation. Used to pass retry context to the intent classifier so
-    short follow-ups like "try again" route to the same intent as the prior
-    tool.
-    """
-    for ai_idx in range(len(messages) - 1, -1, -1):
+    """Return bounded tool outcomes from the immediately preceding user turn."""
+    user_indexes = [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message, HumanMessage)
+    ]
+    current_user_idx = user_indexes[-1] if user_indexes else len(messages)
+    previous_user_idx = user_indexes[-2] if len(user_indexes) > 1 else -1
+    for ai_idx in range(current_user_idx - 1, previous_user_idx, -1):
         msg = messages[ai_idx]
         if not isinstance(msg, AIMessage):
             continue
         tool_calls = getattr(msg, "tool_calls", None)
         if not tool_calls:
             continue
-        first = tool_calls[0]
-        tool_call_id = first.get("id")
-        result = ""
-        # Only scan AFTER the AIMessage we found — otherwise a stale
-        # ToolMessage from a previous turn that happens to share an id
-        # (or a synthetic placeholder) gets returned, misleading the
-        # classifier about what just happened.
+        results = {}
+        # Only match within this batch; never reuse a stale result with the
+        # same call ID from an earlier/later assistant or user turn.
         for follow in messages[ai_idx + 1 :]:
-            if isinstance(follow, ToolMessage) and follow.tool_call_id == tool_call_id:
-                result = str(follow.content)
+            if isinstance(follow, (AIMessage, HumanMessage)):
                 break
-        return {
-            "name": first.get("name", ""),
-            "args": first.get("args", {}) or {},
-            "result": result,
-        }
+            if isinstance(follow, ToolMessage):
+                results[follow.tool_call_id] = follow
+        calls = []
+        for call in tool_calls[-8:]:
+            result = results.get(call.get("id"))
+            calls.append(
+                {
+                    "name": call.get("name", ""),
+                    "result": result.content if result is not None else "",
+                    "status": getattr(result, "status", "missing"),
+                }
+            )
+        return {"calls": calls, "truncated": len(tool_calls) > 8}
     return None
 
 

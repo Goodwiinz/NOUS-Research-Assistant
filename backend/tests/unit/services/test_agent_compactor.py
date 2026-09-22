@@ -17,12 +17,14 @@ from src.services.agent.compactor import (
     validate_and_fix_compacted,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _tool_msg(content: str, tool_call_id: str = "tc-1", msg_id: str = "m-1") -> ToolMessage:
+
+def _tool_msg(
+    content: str, tool_call_id: str = "tc-1", msg_id: str = "m-1"
+) -> ToolMessage:
     return ToolMessage(content=content, tool_call_id=tool_call_id, id=msg_id)
 
 
@@ -72,10 +74,7 @@ class TestExtractIds:
         assert arxiv_ids == {"2301.07041", "2305.12345v2"}
 
     def test_extracts_both(self):
-        text = (
-            "UUID: a1b2c3d4-e5f6-7890-abcd-ef1234567890 "
-            "arXiv: 2401.00001v1"
-        )
+        text = "UUID: a1b2c3d4-e5f6-7890-abcd-ef1234567890 " "arXiv: 2401.00001v1"
         uuids, arxiv_ids = extract_ids(text)
         assert uuids == {"a1b2c3d4-e5f6-7890-abcd-ef1234567890"}
         assert arxiv_ids == {"2401.00001v1"}
@@ -149,14 +148,23 @@ class TestFindCompactionCandidates:
         assert candidates[0].id == "m-old"
 
     def test_skips_already_compacted(self):
-        """Messages with [Compacted] prefix are not candidates."""
+        """Messages flagged as compaction output are not candidates.
+
+        Flagged via ``additional_kwargs`` — the ``[Compacted]`` prefix alone
+        is attacker-settable text (R7-L5) and no longer exempts anything.
+        """
         messages = [
             HumanMessage(content="hello"),
             AIMessage(
                 content="",
                 tool_calls=[{"id": "tc-1", "name": "search", "args": {}}],
             ),
-            _tool_msg("[Compacted] summary", tool_call_id="tc-1", msg_id="m-1"),
+            ToolMessage(
+                content="[Compacted] summary",
+                tool_call_id="tc-1",
+                id="m-1",
+                additional_kwargs={"compacted": True},
+            ),
             AIMessage(
                 content="",
                 tool_calls=[{"id": "tc-2", "name": "search", "args": {}}],
@@ -224,8 +232,7 @@ class TestValidateAndFixCompacted:
             {"2301.07041"},
         )
         compacted = (
-            "Summary mentioning 550e8400-e29b-41d4-a716-446655440000 "
-            "and 2301.07041"
+            "Summary mentioning 550e8400-e29b-41d4-a716-446655440000 " "and 2301.07041"
         )
         result = validate_and_fix_compacted(compacted, original_ids)
         assert result == compacted

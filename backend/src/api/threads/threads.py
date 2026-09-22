@@ -1011,6 +1011,7 @@ def _format_message_response(message) -> ChatMessageResponse:
                 id=c.id,
                 document_id=c.document_id,
                 external_reference_id=c.external_reference_id,  # For arXiv IDs, etc.
+                source_position=c.source_position,
                 chunk_index=c.chunk_index,
                 chunk_id=c.chunk_id,
                 snippet=c.snippet,
@@ -1065,6 +1066,7 @@ def _format_message_response(message) -> ChatMessageResponse:
     return ChatMessageResponse(
         id=message.id,
         thread_id=message.thread_id,
+        client_message_id=message.client_message_id,
         user_id=message.user_id,
         role=message.role,
         content=message.content,
@@ -1077,6 +1079,7 @@ def _format_message_response(message) -> ChatMessageResponse:
         tool_executions=redact_tool_executions(message.tool_executions),
         plan=message.plan,
         plan_reasoning=message.plan_reasoning,
+        reasoning_summary=message.reasoning_summary,
         token_usage=message.token_usage,
         progress_steps=message.progress_steps,
         model_name=message.model_name,

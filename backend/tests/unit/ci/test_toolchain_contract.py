@@ -42,7 +42,9 @@ def _workspace_overrides() -> dict[str, str]:
 
     overrides: dict[str, str] = {}
     for line in block.group("body").splitlines():
-        entry = re.match(r"^\s{2}(?P<name>[\w-]+):\s*['\"]?(?P<value>[^'\"\s#]+)", line)
+        entry = re.match(
+            r"^\s{2}(?P<name>[\w>-]+):\s*['\"]?(?P<value>[^'\"\s#]+)", line
+        )
         if entry:
             overrides[entry.group("name")] = entry.group("value")
     return overrides
@@ -863,7 +865,7 @@ def _assert_react_override_matches_frontend_declaration(name: str) -> None:
     dependencies = _json("frontend/package.json")["dependencies"]
     overrides = _workspace_overrides()
     declaration = dependencies.get(name)
-    override = overrides.get(name)
+    override = overrides.get(f"multimodal-rag-frontend>{name}")
     assert declaration == CANONICAL_REACT, (
         f"frontend/package.json dependencies.{name} is {declaration!r}; "
         f"expected {CANONICAL_REACT!r}"

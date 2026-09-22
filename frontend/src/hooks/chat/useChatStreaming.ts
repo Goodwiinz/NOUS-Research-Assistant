@@ -1,5 +1,7 @@
 'use client';
 
+import { extractConfirmationPreview } from '@nous/chat-runtime/message';
+
 import type {
   ActivityStep,
   ChatPageMessage,
@@ -17,6 +19,14 @@ import {
   ChatConversation,
   generateConversationTitle,
 } from '@/hooks/chat/chatTypes';
+import type { ChatAuthRecoveryRoute } from '@/hooks/chat/useChatSession';
+import {
+  clearArmedChatAuthRecovery,
+  consumeChatAuthRecovery,
+  discardChatAuthRecovery,
+  markChatAuthRecoveryReady,
+  stageChatAuthRecovery,
+} from '@/hooks/chat/chatAuthRecovery';
 import { agentChatService } from '@/services/agentChatService';
 import type { AgentStreamCallbacks } from '@/services/agentChatService';
 import type {
@@ -31,19 +41,25 @@ import {
 } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
+import { projectIdFromToolResult } from '@/store/agentChatStore';
 import {
   toolLabel,
   toolStatusLabel,
 } from '@/components/context-rail/toolLabels';
 import { deriveAgentName, deriveTask } from '@/components/context-rail';
 import { Conversation as DBConversation } from '@/types/workspace';
-import type { CitationCreate, DbToolExecution } from '@/types/workspace';
+import type {
+  CitationCreate,
+  DbToolExecution,
+  Workspace,
+} from '@/types/workspace';
 import type { PlanStep } from '@/types/agent-chat';
 import { normalizeCitation } from '@/utils/citationNormalizer';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useProjectStore } from '@/store/projectStore';
+import { useAuthStore } from '@/stores/authStore';
 import { v5 as uuidv5 } from 'uuid';
 
 /**
@@ -83,44 +99,6 @@ export function parseCreatedNoteResult(
   }
 }
 
-/** Tool name + args preview from an interrupt's confirmation payload — flat
- * (tool_name/tool_args) or the first entry of a `tools` list. Mirrors the
- * page-level banner's extractToolCall (P4). */
-function extractConfirmationPreview(
-  confirmation: Record<string, unknown> | undefined
-): { tools: Array<{ name: string; args: Record<string, unknown> }> } {
-  if (!confirmation) return { tools: [{ name: 'this action', args: {} }] };
-  const rawTools = Array.isArray(confirmation.tools) ? confirmation.tools : [];
-  const tools = rawTools.flatMap((raw) => {
-    if (!raw || typeof raw !== 'object') return [];
-    const item = raw as Record<string, unknown>;
-    if (typeof item.name !== 'string' || !item.name.trim()) return [];
-    const args =
-      item.args && typeof item.args === 'object' && !Array.isArray(item.args)
-        ? (item.args as Record<string, unknown>)
-        : {};
-    return [{ name: item.name, args }];
-  });
-  if (tools.length > 0) return { tools };
-
-  const flatName = confirmation.tool_name;
-  const rawArgs = confirmation.tool_args ?? confirmation.args;
-  if (typeof flatName === 'string' && flatName.trim()) {
-    return {
-      tools: [
-        {
-          name: flatName,
-          args:
-            rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)
-              ? (rawArgs as Record<string, unknown>)
-              : {},
-        },
-      ],
-    };
-  }
-  return { tools: [{ name: 'this action', args: {} }] };
-}
-
 export function toCitationCreate(ctx: Record<string, unknown>): CitationCreate {
   const documentId =
     (ctx.document_id as string | undefined) ??
@@ -139,6 +117,21 @@ export function toCitationCreate(ctx: Record<string, unknown>): CitationCreate {
       (ctx.document_title as string | undefined),
     snippet: snippet.slice(0, 2000),
     ...(typeof ctx.score === 'number' ? { score: ctx.score } : {}),
+    ...(typeof (ctx.source_position ?? ctx.sourcePosition) === 'number'
+      ? {
+          source_position: (ctx.source_position ??
+            ctx.sourcePosition) as number,
+        }
+      : {}),
+    ...(typeof (ctx.chunk_id ?? ctx.chunkId) === 'string'
+      ? { chunk_id: (ctx.chunk_id ?? ctx.chunkId) as string }
+      : {}),
+    ...(typeof (ctx.chunk_index ?? ctx.chunkIndex) === 'number'
+      ? { chunk_index: (ctx.chunk_index ?? ctx.chunkIndex) as number }
+      : {}),
+    ...(typeof (ctx.page_number ?? ctx.pageNumber) === 'number'
+      ? { page_number: (ctx.page_number ?? ctx.pageNumber) as number }
+      : {}),
   };
 }
 
@@ -153,6 +146,18 @@ const RESUME_MAX_ATTEMPTS = 3;
 const RESUME_BACKOFF_MS = [1_000, 4_000];
 const MAX_PROGRESS_STEPS = 16;
 const MAX_REASONING_SUMMARY_CHARS = 8_000;
+
+function chatDraftContextKey(
+  userId: string | null | undefined,
+  workspaceId: string | null | undefined,
+  threadId: string | null | undefined
+): string {
+  return JSON.stringify([
+    userId ?? 'anonymous',
+    workspaceId ?? 'workspace-pending',
+    threadId ?? 'new-chat',
+  ]);
+}
 
 export function appendProgressStep(
   steps: AgentProgressStep[],
@@ -173,6 +178,7 @@ function resetStreamingTurnState(): void {
     streamingCitations: [],
     streamingSteps: [],
     streamingPlan: [],
+    streamingPlanReasoning: '',
     streamingProgress: [],
     streamingReasoning: '',
     streamingElapsedMs: null,
@@ -189,6 +195,7 @@ const PROJECT_MUTATING_TOOLS = new Set([
   'create_project',
   'create_project_note',
   'create_draft',
+  'revise_draft',
 ]);
 
 // ============================================
@@ -209,6 +216,8 @@ export interface PendingConfirmation {
   plan?: PlanStep[];
   /** Planner's top-level rationale for `plan`, carried the same way. */
   planReasoning?: string;
+  /** Provider-authored summary captured before a confirmation pause. */
+  reasoningSummary?: string;
   progress?: AgentProgressStep[];
   /** RAG citations retrieved before the interrupt — the interrupt exit
    * clears streamingCitations, so they must ride the confirmation. */
@@ -216,6 +225,17 @@ export interface PendingConfirmation {
   /** Stable identities for reconciliation across the interrupt/resume split. */
   userRuntimeId?: string;
   assistantRuntimeId?: string;
+  /** Durable AgentRun id used to fence Stop after remount/resume. */
+  runId?: string;
+}
+
+interface StreamAuthRecoveryAttempt {
+  attemptId: string;
+  ownerUserId: string | null;
+  threadId: string;
+  promptStaged: boolean;
+  authRefreshStarted: boolean;
+  navigationStarted: boolean;
 }
 
 /** Map raw planner SSE steps onto the structured inline-plan shape. */
@@ -314,6 +334,16 @@ export function replacePreservingApproval(
   };
 }
 
+function withoutReplacementMarkers(
+  messages: ChatPageMessage[]
+): ChatPageMessage[] {
+  return messages.map((message) => {
+    if (!message.replacesClientMessageId) return message;
+    const { replacesClientMessageId: _replaced, ...withoutMarker } = message;
+    return withoutMarker;
+  });
+}
+
 export function confirmationBelongsToThread(
   pending: PendingConfirmation | null,
   displayedThreadId: string | null
@@ -335,7 +365,15 @@ export interface UseChatStreamingParams {
   conversations: ChatConversation[];
   setConversations: React.Dispatch<React.SetStateAction<ChatConversation[]>>;
   dbConversation: DBConversation | null;
+  /** Active workspace scopes durable thread creation and agent authorization. */
+  workspace?: Workspace | null;
   enableRAG: boolean;
+  /** Embedded surfaces may own URL synchronization without navigating away.
+   * The production chat defaults to the canonical `/chat` route. */
+  navigateToThread?: (threadId: string) => void;
+  /** Omission disables draft restoration. Route owners must explicitly prove
+   * that URL intent, initialization, and selected thread have converged. */
+  authRecoveryRoute?: ChatAuthRecoveryRoute;
 }
 
 export interface UseChatStreamingReturn {
@@ -380,10 +418,12 @@ export function useChatStreaming(
     messages,
     displayedMessages,
     setMessages,
-    conversations,
     setConversations,
     dbConversation,
+    workspace,
     enableRAG,
+    navigateToThread,
+    authRecoveryRoute,
   } = params;
 
   // ---- Project context (for agent page_context) ----
@@ -406,7 +446,18 @@ export function useChatStreaming(
     : undefined;
 
   // ---- State ----
-  const [input, setInput] = useState('');
+  const draftValuesRef = useRef(new Map<string, string>());
+  const pendingPreflightDraftsRef = useRef(new Map<string, string>());
+  const draftContextKeyRef = useRef<string | null>(null);
+  const draftContextMetaRef = useRef<{
+    userId: string | null;
+    workspaceId: string | null;
+    threadId: string | null;
+  } | null>(null);
+  const inputContextKeyRef = useRef<string | null>(null);
+  const draftWorkspaceIdRef = useRef<string | null>(null);
+  const inputValueRef = useRef('');
+  const [input, setInputState] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pendingConfirmations, setPendingConfirmations] = useState<
     Record<string, PendingConfirmation>
@@ -448,6 +499,7 @@ export function useChatStreaming(
   const streamingTimestampRef = useRef<number | null>(null);
   const streamingRafRef = useRef<number | null>(null);
   const pendingStreamContentRef = useRef<string | null>(null);
+  const authRecoveryAttemptRef = useRef<StreamAuthRecoveryAttempt | null>(null);
   // rAF-batched SSE seq cursor (same pattern as streamingRafRef for tokens):
   // onSeq fires per frame, but the activity store only needs the latest value
   // once per paint.
@@ -462,6 +514,15 @@ export function useChatStreaming(
   // Run-correlation id per thread (envelope stream_id) — persisted with the
   // seq cursor so resume pins to the run the cursor came from.
   const streamIdByThreadRef = useRef<Record<string, string>>({});
+  // Durable AgentRun id from the accepted status frame. Stop sends this as an
+  // expected identity so a delayed browser action cannot cancel a newer run
+  // that has since taken ownership of the same thread.
+  const runIdByThreadRef = useRef<Record<string, string>>({});
+  // One Stop command per durable run. The producer may take a few polling
+  // intervals to turn `stopping` into `cancelled`; sharing this promise keeps
+  // an accepted-frame race from issuing duplicate commands and prevents a
+  // late ACK from closing a newer run on the same thread.
+  const durableStopByRunRef = useRef<Record<string, Promise<void>>>({});
   // Flush-then-cancel for the seq rAF at terminals: the last streamed seq is
   // the resume cursor, so a pending value must be committed synchronously —
   // cancelling the frame alone would drop it.
@@ -504,6 +565,113 @@ export function useChatStreaming(
   const storeIsRetrievingRag = useChatStore((state) => state.isRetrievingRag);
   const streamingThreadId = useChatStore((state) => state.streamingThreadId);
   const activeThreadId = useChatStore((state) => state.currentThreadId);
+  const authIsAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const authenticatedUserId = useAuthStore((state) => state.user?.id ?? null);
+  const draftWorkspaceId =
+    workspace?.id ?? dbConversation?.workspace_id ?? null;
+  // During the initial URL/workspace handoff, the store can still contain a
+  // warm selection from a previous route. Draft text entered in that window
+  // belongs to the explicit URL intent and must follow the selection that the
+  // session initializer will publish. Once initialization settles, the live
+  // store selection owns drafts so a deliberate sidebar navigation cannot be
+  // mistaken for stale URL intent.
+  const initialRouteOwnsDraft = authRecoveryRoute?.isInitializing === true;
+  const draftThreadId = initialRouteOwnsDraft
+    ? authRecoveryRoute?.isNewChatIntent
+      ? null
+      : (authRecoveryRoute?.threadId ?? activeThreadId ?? null)
+    : (activeThreadId ?? authRecoveryRoute?.threadId ?? null);
+  const liveDraftThreadId = useCallback((): string | null => {
+    if (initialRouteOwnsDraft) {
+      return authRecoveryRoute?.isNewChatIntent
+        ? null
+        : (authRecoveryRoute?.threadId ??
+            useChatStore.getState().currentThreadId ??
+            null);
+    }
+    return useChatStore.getState().currentThreadId ?? null;
+  }, [
+    initialRouteOwnsDraft,
+    authRecoveryRoute?.isNewChatIntent,
+    authRecoveryRoute?.threadId,
+  ]);
+  const draftContextKey = chatDraftContextKey(
+    authenticatedUserId,
+    draftWorkspaceId,
+    draftThreadId
+  );
+  const setInput = useCallback<React.Dispatch<React.SetStateAction<string>>>(
+    (nextValue) => {
+      const next =
+        typeof nextValue === 'function'
+          ? nextValue(inputValueRef.current)
+          : nextValue;
+      inputValueRef.current = next;
+      // Store writes can change the account/thread before React has rendered
+      // this hook again (for example when a preflight is superseded). Resolve
+      // the owner from the live stores so a draft entered in the new context
+      // cannot be written under the old callback's key.
+      const contextKey = chatDraftContextKey(
+        useAuthStore.getState().user?.id,
+        workspace?.id ??
+          dbConversation?.workspace_id ??
+          draftWorkspaceIdRef.current,
+        liveDraftThreadId()
+      );
+      inputContextKeyRef.current = contextKey;
+      if (contextKey) {
+        if (next) draftValuesRef.current.set(contextKey, next);
+        else draftValuesRef.current.delete(contextKey);
+      }
+      setInputState(next);
+    },
+    [dbConversation?.workspace_id, liveDraftThreadId, workspace?.id]
+  );
+
+  useEffect(() => {
+    draftWorkspaceIdRef.current = draftWorkspaceId;
+    const previousContextKey = draftContextKeyRef.current;
+    const previousContextMeta = draftContextMetaRef.current;
+    const currentContextMeta = {
+      userId: authenticatedUserId,
+      workspaceId: draftWorkspaceId,
+      threadId: draftThreadId,
+    };
+    let carriedDraft: string | undefined;
+    if (previousContextKey && previousContextKey !== draftContextKey) {
+      const previousDraft = inputValueRef.current;
+      const workspaceBecameKnown =
+        previousContextMeta?.userId === currentContextMeta.userId &&
+        previousContextMeta.threadId === currentContextMeta.threadId &&
+        previousContextMeta.workspaceId === null &&
+        currentContextMeta.workspaceId !== null;
+      if (workspaceBecameKnown && previousDraft) {
+        carriedDraft = previousDraft;
+      } else if (inputContextKeyRef.current === previousContextKey) {
+        if (previousDraft) {
+          draftValuesRef.current.set(previousContextKey, previousDraft);
+        } else {
+          draftValuesRef.current.delete(previousContextKey);
+        }
+      }
+    }
+
+    draftContextKeyRef.current = draftContextKey;
+    draftContextMetaRef.current = currentContextMeta;
+    inputContextKeyRef.current = draftContextKey;
+    const restoredDraft =
+      draftValuesRef.current.get(draftContextKey) ??
+      pendingPreflightDraftsRef.current.get(draftContextKey) ??
+      carriedDraft ??
+      '';
+    if (pendingPreflightDraftsRef.current.has(draftContextKey)) {
+      pendingPreflightDraftsRef.current.delete(draftContextKey);
+    }
+    if (inputValueRef.current !== restoredDraft) {
+      inputValueRef.current = restoredDraft;
+      setInputState(restoredDraft);
+    }
+  }, [authenticatedUserId, draftContextKey, draftThreadId, draftWorkspaceId]);
   const pendingConfirmation = activeThreadId
     ? (pendingConfirmations[activeThreadId] ?? null)
     : null;
@@ -530,6 +698,97 @@ export function useChatStreaming(
   const router = useRouter();
   const queryClient = useQueryClient();
 
+  const finishAuthRecoveryAttempt = useCallback(
+    (attempt: StreamAuthRecoveryAttempt | undefined): void => {
+      if (!attempt) return;
+      clearArmedChatAuthRecovery(attempt.attemptId);
+      if (authRecoveryAttemptRef.current === attempt) {
+        authRecoveryAttemptRef.current = null;
+      }
+    },
+    []
+  );
+
+  const beginAuthRecovery = useCallback(
+    (attempt: StreamAuthRecoveryAttempt): void => {
+      if (
+        authRecoveryAttemptRef.current !== attempt ||
+        attempt.navigationStarted
+      ) {
+        return;
+      }
+
+      const auth = useAuthStore.getState();
+      // The response belongs to the snapshotted user. If another account has
+      // already replaced it, discard that user's staged text and leave the
+      // newer session completely untouched.
+      if (
+        auth.user &&
+        (attempt.ownerUserId === null || auth.user.id !== attempt.ownerUserId)
+      ) {
+        if (attempt.promptStaged) {
+          discardChatAuthRecovery(attempt.attemptId);
+        }
+        authRecoveryAttemptRef.current = null;
+        return;
+      }
+
+      const draftSaved =
+        attempt.promptStaged && markChatAuthRecoveryReady(attempt.attemptId);
+      // Latch before mutating auth. The synchronous store update rerenders the
+      // hook and its recovery effect, which must not issue a second replace.
+      attempt.navigationStarted = true;
+
+      if (attempt.threadId) {
+        useAgentActivityStore.getState().finishRun(attempt.threadId, 'error');
+      }
+
+      if (auth.isAuthenticated) {
+        auth.invalidateRejectedSession(attempt.ownerUserId);
+      }
+
+      const nextPath = attempt.threadId
+        ? getSelectedThreadUrl(attempt.threadId)
+        : '/chat';
+      const recoveryParams = new URLSearchParams();
+      recoveryParams.set('reauth', 'chat');
+      if (draftSaved) recoveryParams.set('draft', 'saved');
+      recoveryParams.set('next', nextPath);
+      router.replace(`/login?${recoveryParams.toString()}`);
+    },
+    [router]
+  );
+
+  const requestDurableStop = useCallback(
+    (threadId: string, runId: string): Promise<void> => {
+      const existing = durableStopByRunRef.current[runId];
+      if (existing) return existing;
+
+      const request: Promise<void> = agentChatService
+        .cancelActiveRun(threadId, runId)
+        .then(() => {
+          // A delayed ACK from an older run must never stop a newer run that
+          // has taken ownership of this thread in the meantime.
+          const current = useAgentActivityStore.getState().runs[threadId];
+          if (current?.runId === runId) {
+            useAgentActivityStore.getState().finishRun(threadId, 'stopped');
+          }
+        })
+        .catch((error) => {
+          console.error('[Chat] Failed to cancel active agent run:', error);
+          toast.error('Could not stop this response. Please try again.');
+        })
+        .then(() => {
+          if (durableStopByRunRef.current[runId] === request) {
+            delete durableStopByRunRef.current[runId];
+          }
+        });
+      durableStopByRunRef.current[runId] = request;
+      return request;
+    },
+    []
+  );
+
   // Recovery is once per activation, not once per component lifetime. A
   // failed resume/probe can be retried by leaving and returning to the thread.
   useEffect(() => {
@@ -542,18 +801,61 @@ export function useChatStreaming(
     }
   }, [activeThreadId]);
 
+  // A rejected Supabase refresh can emit SIGNED_OUT before the retried fetch
+  // settles. Promote the already-staged draft and navigate here, while the
+  // routed hook is still mounted; its later cleanup may then abort the fetch
+  // without losing the handoff.
+  useEffect(() => {
+    if (authIsAuthenticated) return;
+    const attempt = authRecoveryAttemptRef.current;
+    if (!attempt?.authRefreshStarted) return;
+    beginAuthRecovery(attempt);
+  }, [authIsAuthenticated, beginAuthRecovery]);
+
+  // Recovery is composer-only. Consumption removes the record first, then
+  // restores text for the same account and thread without dispatching Send.
+  useEffect(() => {
+    const recoveryThreadId = authRecoveryRoute?.threadId;
+    if (
+      !authRecoveryRoute?.isReady ||
+      !authIsAuthenticated ||
+      !authenticatedUserId ||
+      !recoveryThreadId
+    ) {
+      return;
+    }
+    const liveAuth = useAuthStore.getState();
+    if (
+      !liveAuth.isAuthenticated ||
+      liveAuth.user?.id !== authenticatedUserId ||
+      useChatStore.getState().currentThreadId !== recoveryThreadId
+    ) {
+      return;
+    }
+    const restoredPrompt = consumeChatAuthRecovery({
+      ownerUserId: authenticatedUserId,
+      threadId: recoveryThreadId,
+    });
+    if (restoredPrompt !== null) {
+      setInput(restoredPrompt);
+    }
+  }, [authIsAuthenticated, authenticatedUserId, authRecoveryRoute, setInput]);
+
   // Refetch the Working-folders queries once a project-mutating tool
   // succeeds, so the rail shows agent-created sources/notes/drafts without
   // waiting out the 5-minute staleTime.
   const invalidateProjectDataForTool = useCallback(
-    (tool: string, isError: boolean) => {
+    (tool: string, result: string, isError: boolean) => {
       if (isError || !PROJECT_MUTATING_TOOLS.has(tool)) return;
+      const resultProjectId =
+        tool === 'revise_draft' ? projectIdFromToolResult(result) : undefined;
+      const projectId = resultProjectId ?? boundProjectId;
       // Scope to the bound project so we don't invalidate every
       // ['project', …] query (project list, unrelated project details,
       // metadata). Fall back to broad invalidation when no project is
       // bound (global chat has no narrower key to target).
       void queryClient.invalidateQueries({
-        queryKey: boundProjectId ? ['project', boundProjectId] : ['project'],
+        queryKey: projectId ? ['project', projectId] : ['project'],
       });
     },
     [queryClient, boundProjectId]
@@ -667,6 +969,9 @@ export function useChatStreaming(
        * re-activating the thread can try again — the run itself may well
        * still be alive on the backend. */
       keepRunOnFailure?: boolean;
+      /** Resume: retain the accepted AgentRun id when replay starts after it. */
+      preserveRunId?: boolean;
+      authRecoveryAttempt?: StreamAuthRecoveryAttempt;
       start: (
         callbacks: AgentStreamCallbacks,
         signal: AbortSignal
@@ -680,6 +985,8 @@ export function useChatStreaming(
         quietWhenEmpty,
         suppressCommit,
         keepRunOnFailure,
+        preserveRunId,
+        authRecoveryAttempt,
         start,
       } = opts;
 
@@ -750,6 +1057,7 @@ export function useChatStreaming(
         client_message_id?: string | null;
         tool_executions?: Array<Record<string, unknown>>;
         progress_steps?: AgentProgressStep[];
+        reasoning_summary?: string | null;
       } = {};
 
       try {
@@ -792,6 +1100,7 @@ export function useChatStreaming(
           streamingContent: '',
           streamingSteps: [],
           streamingPlan: [],
+          streamingPlanReasoning: '',
           streamingProgress: [],
           streamingReasoning: '',
           // Only "retrieving" when RAG is on; cleared on first token / context.
@@ -823,6 +1132,12 @@ export function useChatStreaming(
         // Fresh turn — record the thread so Stop can finalize this run's
         // activity indicator. (No stop-flag reset needed: a previous turn's
         // stop target can't match this turn's claim.)
+        if (currentThreadId && !preserveRunId) {
+          // The previous turn's id is no longer a safe cancellation target
+          // once this new producer owns the thread. Wait for this turn's
+          // accepted frame before allowing Stop to issue a run command.
+          delete runIdByThreadRef.current[currentThreadId];
+        }
         activeRunThreadRef.current = currentThreadId || null;
 
         const streamAbort = new AbortController();
@@ -867,6 +1182,20 @@ export function useChatStreaming(
                 streamingStatusDetail: detail ?? null,
                 streamingProgress: [...turnProgress],
               });
+            },
+            onRunId: (runId) => {
+              if (!currentThreadId || streamOwnerRef.current !== streamOwner) {
+                return;
+              }
+              runIdByThreadRef.current[currentThreadId] = runId;
+              useAgentActivityStore.getState().setRunId(currentThreadId, runId);
+              // Stop can race the accepted frame while the server is still
+              // opening the response. Once the producer gives us its exact
+              // identity, issue the fenced command instead of losing the
+              // durable stop behind the local abort.
+              if (isStoppedByUser()) {
+                void requestDurableStop(currentThreadId, runId);
+              }
             },
             onStreamId: (sid) => {
               if (!currentThreadId) return;
@@ -929,7 +1258,7 @@ export function useChatStreaming(
                   .getState()
                   .pushToolEnd(currentThreadId, tool, !isError, callId);
               }
-              invalidateProjectDataForTool(tool, isError);
+              invalidateProjectDataForTool(tool, result, isError);
               maybeAutoFocusCreatedNote(
                 tool,
                 result,
@@ -979,6 +1308,7 @@ export function useChatStreaming(
               // after commit. Plan events fire once per run, not per token.
               useChatStore.setState({
                 streamingPlan: [...turnPlan],
+                streamingPlanReasoning: turnPlanReasoning,
                 streamingStatusDetail: 'Working through the plan',
               });
               if (!currentThreadId) return;
@@ -999,9 +1329,20 @@ export function useChatStreaming(
               pendingStreamContentRef.current = '';
               useChatStore.setState({ streamingContent: '' });
             },
-            onConfirmation: (threadId, confirmation) => {
+            onConfirmation: (threadId, confirmation, runId) => {
               console.log('[Agent] HITL confirmation needed:', confirmation);
               streamHadConfirmation = true;
+              const confirmationRunId =
+                runId ??
+                (currentThreadId
+                  ? runIdByThreadRef.current[currentThreadId]
+                  : undefined);
+              if (currentThreadId && confirmationRunId) {
+                runIdByThreadRef.current[currentThreadId] = confirmationRunId;
+                useAgentActivityStore
+                  .getState()
+                  .setRunId(currentThreadId, confirmationRunId);
+              }
               setPendingConfirmation({
                 threadId,
                 workspaceThreadId: currentThreadId || '',
@@ -1013,16 +1354,35 @@ export function useChatStreaming(
                 steps: turnSteps.filter((s) => s.status !== 'running'),
                 plan: [...turnPlan],
                 planReasoning: turnPlanReasoning || undefined,
+                reasoningSummary: turnReasoning || undefined,
                 progress: [...turnProgress],
                 // Snapshot NOW — the streamHadConfirmation exit below clears
                 // streamingCitations before the confirm stream starts.
                 citations: useChatStore.getState().streamingCitations,
                 userRuntimeId,
                 assistantRuntimeId,
+                runId: confirmationRunId,
               });
+            },
+            onAuthRefreshAttempt: () => {
+              if (
+                authRecoveryAttemptRef.current === authRecoveryAttempt &&
+                authRecoveryAttempt
+              ) {
+                authRecoveryAttempt.authRefreshStarted = true;
+              }
+            },
+            onAuthRefreshSuccess: () => {
+              if (
+                authRecoveryAttemptRef.current === authRecoveryAttempt &&
+                authRecoveryAttempt
+              ) {
+                authRecoveryAttempt.authRefreshStarted = false;
+              }
             },
             onDone: (payload) => {
               console.log('[Agent] Stream complete');
+              finishAuthRecoveryAttempt(authRecoveryAttempt);
               if (payload) {
                 doneIds = payload;
               }
@@ -1032,14 +1392,27 @@ export function useChatStreaming(
                   .finishRun(currentThreadId, 'done');
               }
             },
-            onError: (error, category) => {
-              console.error('[Agent] Stream error:', error, category);
+            onError: (error, category, localFailure) => {
+              console.error(
+                '[Agent] Stream error:',
+                error,
+                category,
+                localFailure
+              );
               streamHadError = true;
               if (currentThreadId) {
                 useAgentActivityStore
                   .getState()
                   .finishRun(currentThreadId, 'error');
               }
+              if (
+                localFailure === 'authentication_required' &&
+                authRecoveryAttempt
+              ) {
+                beginAuthRecovery(authRecoveryAttempt);
+                return;
+              }
+              finishAuthRecoveryAttempt(authRecoveryAttempt);
               // Show error as assistant message instead of blank bubble.
               // The server authored this failure, so its category wins; the
               // legacy client-side 'stream-error' is only the fallback for a
@@ -1049,17 +1422,20 @@ export function useChatStreaming(
                 runtimeId: crypto.randomUUID(),
                 source: 'local-only',
                 role: 'assistant',
-                content: `Stream error: ${error}`,
+                content: '',
                 timestamp: Date.now(),
                 error: {
                   message:
                     'This response failed to generate. Please try again.',
-                  category: category ?? 'stream-error',
+                  category: localFailure ?? category ?? 'stream-error',
                 },
               };
               if (isTurnDisplayed())
                 setMessages(
-                  replacePreservingApproval([...newMessages, errorMsg])
+                  replacePreservingApproval([
+                    ...withoutReplacementMarkers(newMessages),
+                    errorMsg,
+                  ])
                 );
             },
           },
@@ -1103,7 +1479,9 @@ export function useChatStreaming(
         // upstream" failure (DNS, auth, model error) used to look identical from
         // the UI side.
         const finalContent = assistantContent || lastStreamedContentRef.current;
-        if (!finalContent.trim()) {
+        const finalReasoningSummary =
+          doneIds.reasoning_summary ?? turnReasoning;
+        if (!finalContent.trim() && !finalReasoningSummary.trim()) {
           // A user-stop before the first token: just unwind quietly — no error
           // bubble for an answer the user chose not to wait for.
           if (!isStoppedByUser() && !quietWhenEmpty) {
@@ -1119,12 +1497,17 @@ export function useChatStreaming(
               },
             };
             if (isTurnDisplayed())
-              setMessages([...newMessages, emptyResponseMessage]);
+              setMessages([
+                ...withoutReplacementMarkers(newMessages),
+                emptyResponseMessage,
+              ]);
           } else if (isTurnDisplayed()) {
             // Quiet/stopped unwind with no content: drop the placeholder so no
             // empty streaming bubble is left behind — but keep any pending
             // approval, which this path used to delete on every HITL pause.
-            setMessages(replacePreservingApproval(newMessages));
+            setMessages(
+              replacePreservingApproval(withoutReplacementMarkers(newMessages))
+            );
           }
           resetStreamingTurnState();
           if (isStoppedByUser()) {
@@ -1185,6 +1568,8 @@ export function useChatStreaming(
             finalTurnSteps.length > 0 ? finalTurnSteps : undefined,
           plan: turnPlan.length > 0 ? turnPlan : undefined,
           planReasoning: turnPlanReasoning || undefined,
+          reasoningSummary:
+            (doneIds.reasoning_summary ?? turnReasoning) || undefined,
           progressSteps:
             doneIds.progress_steps && doneIds.progress_steps.length > 0
               ? doneIds.progress_steps
@@ -1263,7 +1648,7 @@ export function useChatStreaming(
 
           if (isTurnDisplayed())
             setMessages([
-              ...newMessages,
+              ...withoutReplacementMarkers(newMessages),
               {
                 runtimeId: crypto.randomUUID(),
                 source: 'local-only',
@@ -1299,6 +1684,7 @@ export function useChatStreaming(
           await reconcileUser('exception');
         }
       } finally {
+        finishAuthRecoveryAttempt(authRecoveryAttempt);
         submitLockRef.current = false;
         setIsLoading(false);
         // A token that landed just before an exception can leave a scheduled
@@ -1340,12 +1726,15 @@ export function useChatStreaming(
     },
     [
       flushPendingSeq,
+      beginAuthRecovery,
+      finishAuthRecoveryAttempt,
       setMessages,
       setConversations,
       enableRAG,
       invalidateProjectDataForTool,
       maybeAutoFocusCreatedNote,
       setPendingConfirmation,
+      requestDurableStop,
       displayedMessages.length,
     ]
   );
@@ -1357,6 +1746,9 @@ export function useChatStreaming(
       supersedesClientMessageId?: string,
       attachmentIds?: string[]
     ) => {
+      // This identity must be captured before the stream's token refresh can
+      // synchronously emit SIGNED_OUT and clear the auth store.
+      const ownerUserId = useAuthStore.getState().user?.id;
       if (submitLockRef.current) {
         console.warn('[Chat] Send ignored: submit already in flight');
         return;
@@ -1377,12 +1769,48 @@ export function useChatStreaming(
       // installs the live stream controller.
       const preflightAbort = new AbortController();
       abortControllerRef.current = preflightAbort;
-      const rollbackPreflight = (): void => {
-        setMessages(messages);
-        setInput(content);
+      const preflightOwner = {
+        threadId: useChatStore.getState().currentThreadId,
+        contextKey: draftContextKey,
+      };
+      const preflightDraftContextKey = draftContextKey;
+      const currentPreflightContextKey = (): string =>
+        chatDraftContextKey(
+          useAuthStore.getState().user?.id,
+          draftWorkspaceIdRef.current,
+          initialRouteOwnsDraft
+            ? authRecoveryRoute?.isNewChatIntent
+              ? null
+              : (authRecoveryRoute?.threadId ??
+                useChatStore.getState().currentThreadId ??
+                null)
+            : (useChatStore.getState().currentThreadId ?? null)
+        );
+      const ownsPreflight = (): boolean =>
+        useAuthStore.getState().user?.id === ownerUserId &&
+        useChatStore.getState().currentThreadId === preflightOwner.threadId &&
+        currentPreflightContextKey() === preflightOwner.contextKey;
+      const abandonPreflight = (): void => {
         setIsLoading(false);
         submitLockRef.current = false;
         stopTargetRef.current = null;
+      };
+      const rollbackPreflight = (): void => {
+        if (!ownsPreflight()) {
+          abandonPreflight();
+          return;
+        }
+        setMessages(messages);
+        pendingPreflightDraftsRef.current.delete(preflightDraftContextKey);
+        pendingPreflightDraftsRef.current.delete(preflightOwner.contextKey);
+        setInput(content);
+        abandonPreflight();
+      };
+      const preflightWasSuperseded = (): boolean => {
+        if (preflightAbort.signal.aborted) return true;
+        if (ownsPreflight()) return false;
+        abandonPreflight();
+        return true;
       };
       // A cold-load confirmation probe still in flight is now stale: whatever
       // interrupt it might replay predates this turn, and the server abandons
@@ -1407,6 +1835,9 @@ export function useChatStreaming(
           role: 'user',
           content,
           timestamp: Date.now(),
+          ...(supersedesClientMessageId
+            ? { replacesClientMessageId: supersedesClientMessageId }
+            : {}),
         };
 
         // CX2: build the turn from the RECONCILED view (local ∪ store) — the
@@ -1432,6 +1863,13 @@ export function useChatStreaming(
         ];
         setMessages(newMessages);
         setInput('');
+        // The optimistic clear above must not erase the originating context's
+        // draft before a Stop/preflight failure can restore it. A later
+        // switch to another context never reads this entry.
+        pendingPreflightDraftsRef.current.set(
+          preflightDraftContextKey,
+          content
+        );
         setIsLoading(true);
         preflightAbort.signal.addEventListener('abort', rollbackPreflight, {
           once: true,
@@ -1442,6 +1880,7 @@ export function useChatStreaming(
         // state, then Zustand store as final fallback.
         let currentConversationId = useChatStore.getState().currentThreadId;
         let currentThreadId = currentConversationId;
+        let activeWorkspaceId = workspace?.id ?? dbConversation?.workspace_id;
 
         if (!currentConversationId) {
           try {
@@ -1450,17 +1889,20 @@ export function useChatStreaming(
             // before creating the thread instead of streaming with no thread ID.
             let threadConversation = dbConversation;
             if (!threadConversation) {
-              const defaultWorkspace =
-                await workspaceService.getOrCreateDefaultWorkspace();
-              if (preflightAbort.signal.aborted) return;
+              if (!activeWorkspaceId) {
+                const defaultWorkspace =
+                  await workspaceService.getOrCreateDefaultWorkspace();
+                if (preflightWasSuperseded()) return;
+                activeWorkspaceId = defaultWorkspace.id;
+              }
               threadConversation =
                 await workspaceService.getOrCreateDefaultConversation(
-                  defaultWorkspace.id
+                  activeWorkspaceId
                 );
-              if (preflightAbort.signal.aborted) return;
+              if (preflightWasSuperseded()) return;
             }
 
-            if (preflightAbort.signal.aborted) return;
+            if (preflightWasSuperseded()) return;
             const dynamicTitle = generateConversationTitle(content);
             console.log(
               '[Chat] Creating new thread in database with title:',
@@ -1473,7 +1915,7 @@ export function useChatStreaming(
                 projectId: boundProjectId,
               })
             );
-            if (preflightAbort.signal.aborted) return;
+            if (preflightWasSuperseded()) return;
 
             // Register in the chat store: the binding selectors and
             // setThreadProjectBinding read store.threads, and without this the
@@ -1483,6 +1925,12 @@ export function useChatStreaming(
 
             currentConversationId = newThread.id;
             currentThreadId = newThread.id;
+            preflightOwner.threadId = newThread.id;
+            preflightOwner.contextKey = chatDraftContextKey(
+              ownerUserId,
+              draftWorkspaceIdRef.current,
+              newThread.id
+            );
 
             const newConv: ChatConversation = {
               id: newThread.id,
@@ -1491,34 +1939,68 @@ export function useChatStreaming(
               createdAt: Date.now(),
               updatedAt: Date.now(),
               threadId: newThread.id,
-              conversationId: threadConversation.id,
+              conversationId: newThread.conversation_id,
               previewText: content,
               messageCount: 1,
             };
 
             setConversations((prev) => [newConv, ...prev]);
             useChatStore.getState().setCurrentThread(newConv.id);
-            queueMicrotask(() =>
-              router.replace(getSelectedThreadUrl(newThread.id))
-            );
+            queueMicrotask(() => {
+              if (
+                preflightAbort.signal.aborted ||
+                !ownsPreflight() ||
+                useChatStore.getState().currentThreadId !== newThread.id
+              ) {
+                return;
+              }
+              if (navigateToThread) {
+                navigateToThread(newThread.id);
+              } else {
+                router.replace(getSelectedThreadUrl(newThread.id));
+              }
+            });
             console.log('[Chat] Created new thread:', newThread.id);
           } catch (error) {
-            if (preflightAbort.signal.aborted) return;
+            if (preflightWasSuperseded()) return;
             console.error('[Chat] Failed to create thread:', error);
             // Roll back the optimistic turn: the user message was appended and
             // the composer cleared before this call. Without this the bubble
             // ghosts (never sent, gone on reload) and the typed text is lost.
             // Restore both and tell the user, so they can retry.
-            setMessages(messages);
-            setInput(content);
+            rollbackPreflight();
             toast.error('Could not start the conversation. Please try again.');
-            submitLockRef.current = false;
-            setIsLoading(false);
             return;
           }
         }
 
-        if (preflightAbort.signal.aborted) return;
+        if (preflightWasSuperseded()) return;
+
+        if (!currentThreadId) {
+          rollbackPreflight();
+          return;
+        }
+
+        pendingPreflightDraftsRef.current.delete(preflightDraftContextKey);
+        pendingPreflightDraftsRef.current.delete(preflightOwner.contextKey);
+
+        const authRecoveryAttempt: StreamAuthRecoveryAttempt = {
+          attemptId: crypto.randomUUID(),
+          ownerUserId: ownerUserId ?? null,
+          threadId: currentThreadId ?? '',
+          promptStaged: false,
+          authRefreshStarted: false,
+          navigationStarted: false,
+        };
+        if (ownerUserId && currentThreadId) {
+          authRecoveryAttempt.promptStaged = stageChatAuthRecovery({
+            attemptId: authRecoveryAttempt.attemptId,
+            ownerUserId,
+            threadId: currentThreadId,
+            prompt: content,
+          });
+        }
+        authRecoveryAttemptRef.current = authRecoveryAttempt;
 
         // Stream via Agent (LangGraph) backend.
         // The workspace thread IS the agent thread (server-canonical).
@@ -1542,6 +2024,7 @@ export function useChatStreaming(
             currentConversationId,
             newMessages,
             assistantRuntimeId,
+            authRecoveryAttempt,
             start: (streamCallbacks, signal) =>
               agentChatService.streamMessage(
                 {
@@ -1560,6 +2043,9 @@ export function useChatStreaming(
                     })),
                   page_context: {
                     type: boundProjectId ? 'project' : 'chat',
+                    ...(activeWorkspaceId && {
+                      workspace_id: activeWorkspaceId,
+                    }),
                     ...(boundProjectId && {
                       project_id: boundProjectId,
                       project_name: resolvedProjectName || '',
@@ -1612,12 +2098,19 @@ export function useChatStreaming(
       input,
       isLoading,
       storeIsStreaming,
+      draftContextKey,
+      initialRouteOwnsDraft,
+      authRecoveryRoute?.isNewChatIntent,
+      authRecoveryRoute?.threadId,
       messages,
       displayedMessages,
       setMessages,
+      setInput,
       dbConversation,
+      workspace,
       setConversations,
       router,
+      navigateToThread,
       enableRAG,
       boundProjectId,
       resolvedProjectName,
@@ -1636,16 +2129,34 @@ export function useChatStreaming(
     // wipe and would otherwise commit + persist a stopped RAG answer with
     // zero sources.
     stopCitationsRef.current = useChatStore.getState().streamingCitations;
+
+    // Stop during a confirmation continuation has no main-stream active ref;
+    // use the pending gate's workspace thread while the confirm lock owns the
+    // producer. The parked (legacy) confirmation path stays no-body below.
+    const runThread =
+      activeRunThreadRef.current ??
+      (confirmLockRef.current
+        ? pendingConfirmation?.workspaceThreadId || null
+        : null);
+    const normalRunStop = Boolean(
+      runThread && (!pendingConfirmation || confirmLockRef.current)
+    );
+    const activityRun = runThread
+      ? useAgentActivityStore.getState().runs[runThread]
+      : undefined;
+    const expectedRunId = runThread
+      ? (runIdByThreadRef.current[runThread] ??
+        activityRun?.runId ??
+        pendingConfirmation?.runId)
+      : undefined;
+    if (normalRunStop && runThread && expectedRunId) {
+      // Issue the durable command before aborting the local transport. The
+      // activity rail stays running until the producer's `cancelled` ACK is
+      // observed; a failed or timed-out command remains visibly retryable.
+      void requestDurableStop(runThread, expectedRunId);
+    }
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
-
-    // Close out the agent activity indicator — onDone won't fire on abort.
-    // 'stopped', not 'done': a user abort must not strike through the
-    // remaining plan items as if they completed.
-    const runThread = activeRunThreadRef.current;
-    if (runThread) {
-      useAgentActivityStore.getState().finishRun(runThread, 'stopped');
-    }
 
     // A parked confirmation has no live graph task for AbortController to
     // cancel. Close its durable run explicitly; if confirmation execution has
@@ -1682,6 +2193,7 @@ export function useChatStreaming(
   }, [
     pendingConfirmation,
     setPendingConfirmation,
+    requestDurableStop,
     storeIsStreaming,
     storeStopStreaming,
   ]);
@@ -1723,6 +2235,7 @@ export function useChatStreaming(
       quietWhenEmpty: true,
       suppressCommit: () => replayGapSeen,
       keepRunOnFailure: true,
+      preserveRunId: true,
       start: async (streamCallbacks, signal) => {
         // The buffer trims old frames: if the replay starts past our cursor,
         // whatever we rebuild locally is missing a prefix of the answer. The
@@ -1808,10 +2321,12 @@ export function useChatStreaming(
     if (!threadId || isLoading || storeIsStreaming) return;
     if (pendingConfirmation) return;
     if (useChatStore.getState().isStreaming) return;
-    // Any run record at all means this session already owns the thread's
-    // lifecycle (running → the resume effect; stopped/done/error → the user
-    // already saw and settled the gate).
-    if (useAgentActivityStore.getState().runs[threadId]) return;
+    // A running run belongs to the resume effect; stopped/done means this
+    // session already saw and settled the gate. An error run is different: an
+    // auth-navigation abort can leave its confirmation parked server-side, so
+    // allow the confirmation-only probe to check it once.
+    const run = useAgentActivityStore.getState().runs[threadId];
+    if (run && run.state !== 'error') return;
     if (confirmationProbedRef.current.has(threadId)) return;
     confirmationProbedRef.current.add(threadId);
 
@@ -1832,7 +2347,7 @@ export function useChatStreaming(
         threadId,
         0,
         {
-          onConfirmation: (agentThreadId, confirmation) => {
+          onConfirmation: (agentThreadId, confirmation, runId) => {
             // A submit fired while the probe was in flight aborts it; a
             // confirmation frame that raced the abort must not arm a gate for
             // an interrupt the new turn just abandoned server-side.
@@ -1845,15 +2360,17 @@ export function useChatStreaming(
               approvalId: crypto.randomUUID(),
               confirmation,
               // No userRuntimeId/assistantRuntimeId here (unlike the live path):
-              // the SSE confirmation frame carries only {thread_id, confirmation}
-              // — the interrupted turn's ids live in the server-side run ledger,
-              // which this probe never sees. Deriving them from the last
+              // the SSE confirmation frame carries thread_id/confirmation and
+              // the durable run_id when one exists; the interrupted turn's
+              // message ids live in the server-side run ledger, which this
+              // probe never sees. Deriving them from the last
               // displayed user row is unsafe: legacy rows have no
               // client_message_id (their runtimeId is the persisted db id, not a
               // cmid), so a guessed identity could be WRONG, which mis-targets
               // reconciliation — absence degrades gracefully instead (the
               // confirm stream's done.client_message_id stays the primary key,
               // and confirmRuntimeId falls back to crypto.randomUUID()).
+              runId,
             });
             probeAbort.abort();
           },
@@ -1882,6 +2399,7 @@ export function useChatStreaming(
 
   const handleConfirmation = useCallback(
     async (confirmed: boolean) => {
+      const ownerUserId = useAuthStore.getState().user?.id;
       if (!pendingConfirmation) return;
       // CX1 belt: block a synchronous double-click before it can fire a
       // second streamConfirm call (see confirmLockRef declaration).
@@ -1910,6 +2428,23 @@ export function useChatStreaming(
           );
         const confirmationThreadId =
           pendingConfirmation.workspaceThreadId || null;
+        // The confirmation continuation is still the same durable AgentRun.
+        // Keep its thread/id live while streamConfirm is open so Stop can send
+        // the exact fenced command even though the main stream has ended.
+        activeRunThreadRef.current = confirmationThreadId;
+        const carriedRunId =
+          pendingConfirmation.runId ??
+          (confirmationThreadId
+            ? (runIdByThreadRef.current[confirmationThreadId] ??
+              useAgentActivityStore.getState().runs[confirmationThreadId]
+                ?.runId)
+            : undefined);
+        if (confirmationThreadId && carriedRunId) {
+          runIdByThreadRef.current[confirmationThreadId] = carriedRunId;
+          useAgentActivityStore
+            .getState()
+            .setRunId(confirmationThreadId, carriedRunId);
+        }
         const confirmationDiagnostic = (terminalReason: string) => ({
           terminalReason,
           localCount: messages.length,
@@ -1963,13 +2498,13 @@ export function useChatStreaming(
         const confirmToolStartTimes = new Map<string, number[]>();
         // Pre-interrupt provenance carried on the confirmation — the interrupt
         // exit cleared the live streaming state, so restore it here.
-        const carriedCitations = pendingConfirmation.citations ?? [];
+        let confirmCitations = pendingConfirmation.citations ?? [];
         let confirmPlan: PlanStep[] = [...(pendingConfirmation.plan ?? [])];
         let confirmPlanReasoning = pendingConfirmation.planReasoning ?? '';
+        let confirmReasoning = pendingConfirmation.reasoningSummary ?? '';
         let confirmProgress: AgentProgressStep[] = [
           ...(pendingConfirmation.progress ?? []),
         ];
-        let confirmReasoning = '';
         // CX5: the confirm-resume path is a SEPARATE live-stream owner from
         // runStreamTurn (a resumed HITL turn belongs to the confirmation's
         // workspace thread, which may differ from whatever thread is
@@ -1984,9 +2519,10 @@ export function useChatStreaming(
           // Seed from the pre-interrupt plan so it survives the HITL
           // resume — the interrupt exit already cleared streamingPlan.
           streamingPlan: [...confirmPlan],
+          streamingPlanReasoning: confirmPlanReasoning,
           streamingProgress: [...confirmProgress],
-          streamingReasoning: '',
-          streamingCitations: carriedCitations,
+          streamingReasoning: confirmReasoning,
+          streamingCitations: confirmCitations,
           streamingElapsedMs: null,
           streamingPhase: 'accepted',
           streamingStatusDetail: null,
@@ -1995,11 +2531,9 @@ export function useChatStreaming(
         });
 
         let confirmContent = '';
-        // Post-confirm retrieval contexts (the resumed turn can run RAG); the
-        // confirm parser previously dropped rag_context entirely, so a
-        // confirmed action's sources never reached the UI (sync-audit gap 2).
-        // Committed alongside the carried pre-interrupt citations.
-        let resumeCitations: Array<Record<string, unknown>> = [];
+        // `rag_context` events are cumulative snapshots for the interrupted
+        // turn. `confirmCitations` starts with the carried pre-interrupt
+        // snapshot and is replaced whenever the resume emits a newer one.
         // Token usage emitted by the confirm path (backend fires event: usage
         // before done). Without capturing this, confirmed turns showed no token
         // cost — inconsistent with the main stream.
@@ -2019,6 +2553,7 @@ export function useChatStreaming(
           assistant_message_id?: string | null;
           client_message_id?: string | null;
           progress_steps?: AgentProgressStep[];
+          reasoning_summary?: string | null;
         } = {};
         const confirmMessages = [...messages];
         const confirmRuntimeId =
@@ -2028,15 +2563,14 @@ export function useChatStreaming(
           content: string,
           stopped: boolean
         ): ChatPageMessage => {
-          const allCitations = [...carriedCitations, ...resumeCitations];
           return {
             runtimeId: confirmRuntimeId,
             source: 'optimistic',
             role: 'assistant',
             content,
             timestamp: Date.now(),
-            ...(allCitations.length > 0
-              ? { citations: allCitations.map(normalizeCitation) }
+            ...(confirmCitations.length > 0
+              ? { citations: confirmCitations.map(normalizeCitation) }
               : {}),
             ...(confirmSteps.length > 0
               ? { toolExecutions: [...confirmSteps] }
@@ -2045,6 +2579,7 @@ export function useChatStreaming(
             ...(confirmPlanReasoning
               ? { planReasoning: confirmPlanReasoning }
               : {}),
+            ...(confirmReasoning ? { reasoningSummary: confirmReasoning } : {}),
             ...(confirmProgress.length > 0
               ? { progressSteps: [...confirmProgress] }
               : {}),
@@ -2064,6 +2599,15 @@ export function useChatStreaming(
 
         const confirmAbort = new AbortController();
         abortControllerRef.current = confirmAbort;
+        const authRecoveryAttempt: StreamAuthRecoveryAttempt = {
+          attemptId: crypto.randomUUID(),
+          ownerUserId: ownerUserId ?? null,
+          threadId: pendingConfirmation.workspaceThreadId,
+          promptStaged: false,
+          authRefreshStarted: false,
+          navigationStarted: false,
+        };
+        authRecoveryAttemptRef.current = authRecoveryAttempt;
 
         try {
           await agentChatService.streamConfirm(
@@ -2111,6 +2655,21 @@ export function useChatStreaming(
                   streamingStatusDetail: detail ?? null,
                   streamingProgress: [...confirmProgress],
                 });
+              },
+              onRunId: (runId) => {
+                if (
+                  !confirmationThreadId ||
+                  streamOwnerRef.current !== confirmStreamOwner
+                ) {
+                  return;
+                }
+                runIdByThreadRef.current[confirmationThreadId] = runId;
+                useAgentActivityStore
+                  .getState()
+                  .setRunId(confirmationThreadId, runId);
+                if (isConfirmStopped()) {
+                  void requestDurableStop(confirmationThreadId, runId);
+                }
               },
               // Same resume-cursor bookkeeping as the primary stream. Without
               // it the cursor froze at whatever seq the pre-interrupt turn
@@ -2183,7 +2742,7 @@ export function useChatStreaming(
                   );
                 // HITL-confirmed tools are exactly the mutating ones (ingest,
                 // create_note, create_draft) — refresh the rail here too.
-                invalidateProjectDataForTool(tool, isError);
+                invalidateProjectDataForTool(tool, result, isError);
                 // create_project_note is destructive, so its successful
                 // tool_end arrives HERE (post-approval resume stream), not on
                 // the primary stream — auto-focus must run from this path.
@@ -2223,9 +2782,9 @@ export function useChatStreaming(
                 });
               },
               onRagContext: (contexts) => {
-                resumeCitations = contexts;
+                confirmCitations = contexts;
                 useChatStore.setState({
-                  streamingCitations: [...carriedCitations, ...contexts],
+                  streamingCitations: confirmCitations,
                   isRetrievingRag: false,
                   streamingStatusDetail: `Reading ${contexts.length} ${
                     contexts.length === 1 ? 'source' : 'sources'
@@ -2237,6 +2796,7 @@ export function useChatStreaming(
                 confirmPlanReasoning = reasoning;
                 useChatStore.setState({
                   streamingPlan: [...confirmPlan],
+                  streamingPlanReasoning: confirmPlanReasoning,
                   streamingStatusDetail: 'Working through the plan',
                 });
                 const items = toActivityPlanItems(steps);
@@ -2246,7 +2806,7 @@ export function useChatStreaming(
                     .setPlan(pendingConfirmation.workspaceThreadId, items);
                 }
               },
-              onConfirmation: (threadId, confirmation) => {
+              onConfirmation: (threadId, confirmation, runId) => {
                 nestedConfirmation = {
                   threadId,
                   workspaceThreadId: pendingConfirmation.workspaceThreadId,
@@ -2255,10 +2815,17 @@ export function useChatStreaming(
                   steps: confirmSteps.filter((s) => s.status !== 'running'),
                   plan: [...confirmPlan],
                   planReasoning: confirmPlanReasoning || undefined,
-                  citations: [...carriedCitations, ...resumeCitations],
+                  reasoningSummary: confirmReasoning || undefined,
+                  citations: [...confirmCitations],
                   progress: [...confirmProgress],
                   userRuntimeId: pendingConfirmation.userRuntimeId,
                   assistantRuntimeId: pendingConfirmation.assistantRuntimeId,
+                  runId:
+                    runId ??
+                    carriedRunId ??
+                    (confirmationThreadId
+                      ? runIdByThreadRef.current[confirmationThreadId]
+                      : undefined),
                 };
               },
               onUsage: (inputTokens, outputTokens) => {
@@ -2273,9 +2840,25 @@ export function useChatStreaming(
                 pendingStreamContentRef.current = '';
                 useChatStore.setState({ streamingContent: '' });
               },
+              onAuthRefreshAttempt: () => {
+                if (
+                  authRecoveryAttempt &&
+                  authRecoveryAttemptRef.current === authRecoveryAttempt
+                ) {
+                  authRecoveryAttempt.authRefreshStarted = true;
+                }
+              },
+              onAuthRefreshSuccess: () => {
+                if (authRecoveryAttemptRef.current === authRecoveryAttempt) {
+                  authRecoveryAttempt.authRefreshStarted = false;
+                }
+              },
               onDone: (payload) => {
+                finishAuthRecoveryAttempt(authRecoveryAttempt);
                 confirmDoneIds = payload ?? {};
-                if (confirmContent.trim()) {
+                const reasoningSummary =
+                  payload?.reasoning_summary ?? confirmReasoning;
+                if (confirmContent.trim() || reasoningSummary.trim()) {
                   const baseMessage = buildConfirmMessage(
                     confirmContent,
                     false
@@ -2295,6 +2878,7 @@ export function useChatStreaming(
                     ...(payload?.assistant_message_id
                       ? { id: payload.assistant_message_id }
                       : {}),
+                    ...(reasoningSummary ? { reasoningSummary } : {}),
                     ...(serverSteps && serverSteps.length > 0
                       ? {
                           toolExecutions: serverSteps,
@@ -2310,8 +2894,16 @@ export function useChatStreaming(
                     setMessages([...confirmMessages, msg]);
                 }
               },
-              onError: (error, category) => {
+              onError: (error, category, localFailure) => {
                 confirmHadError = true;
+                if (
+                  localFailure === 'authentication_required' &&
+                  authRecoveryAttempt
+                ) {
+                  beginAuthRecovery(authRecoveryAttempt);
+                  return;
+                }
+                finishAuthRecoveryAttempt(authRecoveryAttempt);
                 // The confirm path used to commit a PLAIN content bubble for a
                 // failure — no `error` block, so no Retry affordance and no
                 // category. Same shape as the main stream now: server category
@@ -2320,12 +2912,12 @@ export function useChatStreaming(
                   runtimeId: crypto.randomUUID(),
                   source: 'local-only',
                   role: 'assistant',
-                  content: `Confirmation error: ${error}`,
+                  content: '',
                   timestamp: Date.now(),
                   error: {
                     message:
                       'This confirmation failed to complete. Please try again.',
-                    category: category ?? 'stream-error',
+                    category: localFailure ?? category ?? 'stream-error',
                   },
                 };
                 confirmCommitted = true;
@@ -2343,7 +2935,7 @@ export function useChatStreaming(
           if (
             !confirmCommitted &&
             isConfirmStopped() &&
-            confirmContent.trim()
+            (confirmContent.trim() || confirmReasoning.trim())
           ) {
             confirmCommitted = true;
             if (isConfirmDisplayed())
@@ -2352,7 +2944,11 @@ export function useChatStreaming(
                 buildConfirmMessage(confirmContent, true),
               ]);
           }
-          if (nestedConfirmation || confirmHadError) {
+          if (
+            nestedConfirmation ||
+            confirmHadError ||
+            authRecoveryAttempt.navigationStarted
+          ) {
             await reconcileConfirmationUser(
               nestedConfirmation ? 'confirmation-paused' : 'confirmation-error'
             );
@@ -2366,16 +2962,12 @@ export function useChatStreaming(
                   : 'confirmation-rejected'
             );
           }
-        } catch (err) {
-          const errorMessage =
-            err instanceof Error
-              ? err.message
-              : 'Network error during confirmation';
+        } catch {
           const msg: ChatPageMessage = {
             runtimeId: crypto.randomUUID(),
             source: 'local-only',
             role: 'assistant',
-            content: `Confirmation failed: ${errorMessage}`,
+            content: '',
             timestamp: Date.now(),
             // Without the error block this bubble rendered as plain assistant
             // prose: no failure styling and no retry affordance, unlike every
@@ -2389,24 +2981,31 @@ export function useChatStreaming(
           confirmThrew = true;
           await reconcileConfirmationUser('confirmation-exception');
         } finally {
+          finishAuthRecoveryAttempt(authRecoveryAttempt);
           // Close out the agent activity rail — the interrupt left the run
           // "running" and neither onDone (confirm path) nor handleStop
           // (activeRunThreadRef is null here) ever finished it (round-3 M1).
           // A nested interrupt keeps the run open: the turn isn't over.
           // A failed attempt leaves the graph interrupted, so the run is not
           // over either — only finish it when the turn genuinely ended.
-          const confirmFailed = confirmHadError || confirmThrew;
+          const confirmFailed =
+            confirmHadError ||
+            confirmThrew ||
+            authRecoveryAttempt.navigationStarted;
           if (
             !nestedConfirmation &&
             !confirmFailed &&
             pendingConfirmation.workspaceThreadId
           ) {
-            useAgentActivityStore
-              .getState()
-              .finishRun(
-                pendingConfirmation.workspaceThreadId,
-                isConfirmStopped() ? 'stopped' : 'done'
-              );
+            // A user Stop is closed by requestDurableStop only after the
+            // producer reports `cancelled`. The normal completion path can
+            // finish immediately because onDone is the producer's terminal
+            // acknowledgement.
+            if (!isConfirmStopped()) {
+              useAgentActivityStore
+                .getState()
+                .finishRun(pendingConfirmation.workspaceThreadId, 'done');
+            }
           }
           // A nested interrupt re-arms the banner with the new confirmation
           // (carrying the turn's accumulated provenance).
@@ -2428,7 +3027,7 @@ export function useChatStreaming(
                     ),
                     plan: [...confirmPlan],
                     planReasoning: confirmPlanReasoning || undefined,
-                    citations: [...carriedCitations, ...resumeCitations],
+                    citations: [...confirmCitations],
                     progress: [...confirmProgress],
                   }
                 : null),
@@ -2459,6 +3058,9 @@ export function useChatStreaming(
           if (streamOwnerRef.current === confirmStreamOwner) {
             resetStreamingTurnState();
           }
+          if (activeRunThreadRef.current === confirmationThreadId) {
+            activeRunThreadRef.current = null;
+          }
         }
       } catch (err) {
         // A throw between lock-set and the try/finally used to leave the
@@ -2472,12 +3074,15 @@ export function useChatStreaming(
     },
     [
       flushPendingSeq,
+      beginAuthRecovery,
+      finishAuthRecoveryAttempt,
       pendingConfirmation,
       messages,
       setMessages,
       invalidateProjectDataForTool,
       maybeAutoFocusCreatedNote,
       setPendingConfirmation,
+      requestDurableStop,
     ]
   );
 

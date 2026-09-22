@@ -1,0 +1,479 @@
+{
+  "version": "1.2.1",
+  "description": "Short, self-contained research-note questions for the NOUS chat workflow.",
+  "cases": [
+    {
+      "id": "paper-summary",
+      "category": "research-summary",
+      "question": "Use only this note: 'Researchers tested a search tool with 20 students. Students found papers faster with the tool.' Summarize it in one sentence.",
+      "referenceAnswer": "Researchers tested a search tool with 20 students, who found papers faster with it.",
+      "criteria": {
+        "requiredConcepts": [
+          ["20 students", "twenty students"],
+          [
+            "found papers faster",
+            "find papers faster",
+            "faster paper search",
+            "faster at finding papers"
+          ]
+        ],
+        "forbiddenPhrases": ["20 researchers", "slower with the tool"]
+      }
+    },
+    {
+      "id": "main-finding",
+      "category": "research-summary",
+      "question": "Use only this note: 'A study compared keyword search and semantic search. Semantic search found more relevant papers.' What was the main finding?",
+      "referenceAnswer": "Semantic search found more relevant papers than keyword search.",
+      "criteria": {
+        "requiredConcepts": [
+          ["semantic search"],
+          [
+            "more relevant papers",
+            "more relevant results",
+            "more relevant articles"
+          ]
+        ],
+        "forbiddenPhrases": [
+          "keyword search found more relevant",
+          "semantic search found fewer"
+        ]
+      }
+    },
+    {
+      "id": "study-method",
+      "category": "research-method",
+      "question": "Use only this note: 'Researchers interviewed 12 librarians about how they choose papers.' How was the study done?",
+      "referenceAnswer": "Researchers interviewed 12 librarians about how they choose papers.",
+      "criteria": {
+        "requiredConcepts": [
+          ["interviewed", "interviews", "interviewing"],
+          ["12 librarians", "twelve librarians"]
+        ],
+        "forbiddenPhrases": ["surveyed 12", "interviewed 12 students"]
+      }
+    },
+    {
+      "id": "study-limitation",
+      "category": "research-limitation",
+      "question": "Use only this note: 'The tool was tested with five students at one university.' What is one limitation?",
+      "referenceAnswer": "The sample was small: only five students took part.",
+      "criteria": {
+        "requiredConcepts": [
+          [
+            "five students",
+            "5 students",
+            "small sample",
+            "sample was small",
+            "small group",
+            "one university",
+            "single university",
+            "only one university"
+          ]
+        ],
+        "forbiddenPhrases": ["large sample", "multiple universities"]
+      }
+    },
+    {
+      "id": "supporting-source",
+      "category": "source-selection",
+      "question": "Which note supports the claim that summaries saved reading time? Note A: 'Summaries reduced reading time.' Note B: 'Search found more papers.'",
+      "referenceAnswer": "Note A supports that claim because it says summaries reduced reading time.",
+      "criteria": {
+        "requiredConcepts": [["note a", "source a", "the first note"]],
+        "forbiddenPhrases": ["note b supports", "note b says summaries"]
+      }
+    },
+    {
+      "id": "compare-paper-notes",
+      "category": "research-comparison",
+      "question": "Use only these notes. Paper A: 'The tool saved reading time.' Paper B: 'The tool did not save reading time.' Compare them in one sentence.",
+      "referenceAnswer": "Paper A found that the tool saved reading time, while Paper B found that it did not.",
+      "criteria": {
+        "requiredConcepts": [
+          ["paper a", "study a", "a found"],
+          ["saved reading time", "save reading time", "saved time"],
+          ["paper b", "study b", "b found"],
+          ["did not", "didn't", "no time savings", "not save", "failed to save"]
+        ],
+        "forbiddenPhrases": [
+          "both saved reading time",
+          "neither saved reading time"
+        ]
+      }
+    },
+    {
+      "id": "missing-results",
+      "category": "evidence-boundaries",
+      "question": "Use only this note: 'Researchers compared two search methods. Results are not included.' Can you identify which method worked better? Briefly explain your answer.",
+      "referenceAnswer": "The note does not say which method worked better because the results are missing.",
+      "criteria": {
+        "requiredConcepts": [
+          [
+            "cannot tell",
+            "cannot determine",
+            "impossible to determine",
+            "cannot identify",
+            "can't determine",
+            "cannot be determined",
+            "can't be determined",
+            "cannot be identified",
+            "unable to determine",
+            "not possible to determine",
+            "does not say",
+            "doesn't say",
+            "not enough information",
+            "unknown"
+          ],
+          [
+            "results are missing",
+            "results are not included",
+            "does not include results",
+            "doesn't include results",
+            "results are absent",
+            "results are not provided",
+            "no results",
+            "missing results",
+            "without results"
+          ]
+        ],
+        "forbiddenPhrases": [
+          "first method worked better",
+          "second method worked better",
+          "statistically significant"
+        ]
+      }
+    },
+    {
+      "id": "incomplete-citation",
+      "category": "citation-integrity",
+      "question": "My paper note says only 'Deep learning survey, 2021.' In a short reply, how should I verify this citation and handle missing details without guessing?",
+      "referenceAnswer": "Mark the citation incomplete, find the original source, and do not invent authors, a journal, DOI, or publication status.",
+      "criteria": {
+        "requiredConcepts": [
+          [
+            "do not fabricate",
+            "do not invent",
+            "should not fabricate",
+            "should not invent",
+            "do not assign",
+            "rather than guessing",
+            "without inventing"
+          ],
+          ["incomplete", "insufficient"],
+          [
+            "original source",
+            "locate the source",
+            "find the source",
+            "request",
+            "verify the record against a reliable source",
+            "verify the citation against a reliable source",
+            "verify the bibliographic details against a reliable source",
+            "original record",
+            "source record",
+            "publisher's record",
+            "identify the exact source",
+            "locate the exact source"
+          ],
+          ["author", "authors"],
+          ["doi", "identifier", "journal", "venue"]
+        ],
+        "forbiddenPhrases": ["smith et al.", "nature 2021"],
+        "forbiddenPatterns": [
+          {
+            "pattern": "(?:^|\\n)\\s*(?:(?:[-*+]\\s+|\\d+[.)]\\s+|>\\s*))?(?:(?:reference(?: list)?|citation)\\s*:\\s*)?(?:deep learning survey[.,]?\\s*\\(2021\\)[.,]?\\s*)?\\[?unpublished\\s+(?:manuscript(?:/note)?|note)\\b",
+            "reason": "unverified publication status in the proposed citation"
+          }
+        ]
+      }
+    },
+    {
+      "id": "draft-research-note",
+      "category": "research-drafting",
+      "question": "Use only this note: 'Paper A tested a search tool with ten students. It found more relevant papers. The sample was small.' Draft a short research note here in chat with the finding and limitation.",
+      "referenceAnswer": "Paper A found more relevant papers with its search tool, but its sample of ten students was small.",
+      "criteria": {
+        "requiredConcepts": [
+          [
+            "more relevant papers",
+            "more relevant results",
+            "more relevant articles"
+          ],
+          [
+            "small sample",
+            "sample was small",
+            "sample of ten students was small",
+            "only ten students",
+            "only 10 students"
+          ]
+        ],
+        "forbiddenPhrases": ["less relevant papers", "large sample"]
+      }
+    },
+    {
+      "id": "next-research-step",
+      "category": "research-next-step",
+      "question": "Use only this note: 'A search tool worked well in one small study. It has not been tested with a larger group.' What follow-up study should researchers do to address the stated evidence gap?",
+      "referenceAnswer": "Researchers should test whether the tool works well with a larger group.",
+      "criteria": {
+        "requiredConcepts": [
+          [
+            "larger group",
+            "larger sample",
+            "larger and more diverse group",
+            "larger and more diverse sample",
+            "larger participant group",
+            "larger study",
+            "larger scale study",
+            "larger cohort",
+            "bigger group",
+            "bigger sample",
+            "more people",
+            "larger trial",
+            "more participants",
+            "more students"
+          ],
+          ["test", "study", "check", "evaluate", "replicate"]
+        ],
+        "forbiddenPhrases": ["already tested with a larger group"]
+      }
+    },
+    {
+      "id": "extract-paper-author",
+      "category": "paper-metadata",
+      "question": "Use this supplied paper record: 'Title: Finding Useful Papers. Author: Maya Chen. Year: 2023.' Who is the author?",
+      "referenceAnswer": "Maya Chen.",
+      "criteria": {
+        "requiredConcepts": [["Maya Chen"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "extract-paper-year",
+      "category": "paper-metadata",
+      "question": "Use this supplied paper record: 'Title: Reading with Summaries. Author: Alex Rivera. Year: 2022.' What year is listed?",
+      "referenceAnswer": "2022.",
+      "criteria": {
+        "requiredConcepts": [["2022"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "extract-study-sample",
+      "category": "paper-metadata",
+      "question": "Paper note: 'Researchers tested a reading tool with 18 students.' How many students took part?",
+      "referenceAnswer": "18 students.",
+      "criteria": {
+        "requiredConcepts": [["18", "eighteen"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "extract-study-duration",
+      "category": "paper-metadata",
+      "question": "Paper note: 'Ten researchers used the search tool for six weeks.' How long did they use it?",
+      "referenceAnswer": "Six weeks.",
+      "criteria": {
+        "requiredConcepts": [["six weeks", "6 weeks"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "select-search-source",
+      "category": "source-selection",
+      "question": "Which supplied paper should I read about finding papers? 'Paper Search' studies search tools. 'Reading Notes' studies note taking.",
+      "referenceAnswer": "Paper Search.",
+      "criteria": {
+        "requiredConcepts": [["Paper Search"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "select-citation-source",
+      "category": "source-selection",
+      "question": "Which supplied paper discusses checking references? 'Citation Checks' studies reference errors. 'Fast Reading' studies reading speed.",
+      "referenceAnswer": "Citation Checks.",
+      "criteria": {
+        "requiredConcepts": [["Citation Checks"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "missing-study-location",
+      "category": "evidence-boundaries",
+      "question": "Use only this note: 'Researchers interviewed eight students about reading habits.' Which university were they from?",
+      "referenceAnswer": "The note does not say which university.",
+      "criteria": {
+        "requiredConcepts": [
+          [
+            "does not say",
+            "doesn't say",
+            "does not specify",
+            "doesn't specify",
+            "does not name",
+            "not stated",
+            "not specified",
+            "not mentioned",
+            "not reported",
+            "not given",
+            "not provided",
+            "unknown",
+            "cannot tell"
+          ]
+        ],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "untested-user-group",
+      "category": "evidence-boundaries",
+      "question": "Paper note: 'The tool was tested only with librarians. No students took part.' What evidence is missing before recommending it to students?",
+      "referenceAnswer": "Evidence from testing the tool with students.",
+      "criteria": {
+        "requiredConcepts": [
+          ["students", "student"],
+          [
+            "testing",
+            "test",
+            "tested",
+            "study",
+            "studies",
+            "evaluation",
+            "evidence"
+          ]
+        ],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "missing-comparison-group",
+      "category": "evidence-limitations",
+      "question": "Paper note: 'Everyone used the new search tool. Nobody used the old tool.' What comparison is missing?",
+      "referenceAnswer": "A comparison with the old tool.",
+      "criteria": {
+        "requiredConcepts": [["old tool", "previous tool", "original tool"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "extract-search-keywords",
+      "category": "research-search",
+      "question": "Turn this research topic into two search keywords: 'How librarians use summaries.' Use the people and the reading aid named in the topic.",
+      "referenceAnswer": "Librarians; summaries.",
+      "criteria": {
+        "requiredConcepts": [
+          ["librarians", "librarian"],
+          ["summaries", "summary"]
+        ],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "narrow-search-topic",
+      "category": "research-search",
+      "question": "My current search is 'search tools.' My paper notes focus on librarians. Which word should I add to focus the search on that group?",
+      "referenceAnswer": "Librarians.",
+      "criteria": {
+        "requiredConcepts": [["librarians", "librarian"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "citation-title-year",
+      "category": "citation-metadata",
+      "question": "Use only this supplied record: 'Title: Useful Summaries. Author: Maya Chen. Year: 2020.' Give the title and year for my reference note.",
+      "referenceAnswer": "Useful Summaries (2020).",
+      "criteria": {
+        "requiredConcepts": [["Useful Summaries"], ["2020"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "citation-author-year",
+      "category": "citation-metadata",
+      "question": "Use only this supplied record: 'Title: Finding Papers. Author: Alex Rivera. Year: 2024.' Give the author and year for my reference note.",
+      "referenceAnswer": "Alex Rivera, 2024.",
+      "criteria": {
+        "requiredConcepts": [["Alex Rivera"], ["2024"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "count-supporting-studies",
+      "category": "evidence-counts",
+      "question": "Paper A reports faster reading. Paper B reports no change. Paper C reports faster reading. How many papers report faster reading?",
+      "referenceAnswer": "Two papers.",
+      "criteria": {
+        "requiredConcepts": [["two", "2"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "total-study-participants",
+      "category": "evidence-counts",
+      "question": "Two separate studies used different participants: Paper A had 10 students and Paper B had 15 students. How many students took part in total?",
+      "referenceAnswer": "25 students.",
+      "criteria": {
+        "requiredConcepts": [["25", "twenty five"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "compare-reading-time",
+      "category": "evidence-comparison",
+      "question": "Paper note: 'Reading took 30 minutes without summaries and 20 minutes with summaries.' How much time did summaries save?",
+      "referenceAnswer": "10 minutes.",
+      "criteria": {
+        "requiredConcepts": [["10 minutes", "ten minutes"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "choose-note-section",
+      "category": "research-organization",
+      "question": "My research note has sections called Method, Finding, and Limitation. Where should I put 'Only five students took part'?",
+      "referenceAnswer": "Limitation.",
+      "criteria": {
+        "requiredConcepts": [["limitation", "limitations"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "label-reading-status",
+      "category": "research-organization",
+      "question": "My reading list uses 'To read' and 'Read.' I saved Paper A but have not opened it. Which label should I give it?",
+      "referenceAnswer": "To read.",
+      "criteria": {
+        "requiredConcepts": [["to read"]],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "draft-project-description",
+      "category": "research-organization",
+      "question": "Draft one short project description from this brief: 'Compare search tools used by librarians.'",
+      "referenceAnswer": "Compare the search tools librarians use.",
+      "criteria": {
+        "requiredConcepts": [
+          ["compare", "comparison", "comparing"],
+          ["search tools", "search tool"],
+          ["librarians", "librarian"]
+        ],
+        "forbiddenPhrases": []
+      }
+    },
+    {
+      "id": "draft-follow-up-task",
+      "category": "research-organization",
+      "question": "Draft one task for my research notes. Paper note: 'The abstract is available, but the full paper has not been read.' What should I do next?",
+      "referenceAnswer": "Read the full paper.",
+      "criteria": {
+        "requiredConcepts": [
+          ["read", "review", "reading", "reviewing"],
+          ["full paper", "full text", "complete paper"]
+        ],
+        "forbiddenPhrases": []
+      }
+    }
+  ]
+}

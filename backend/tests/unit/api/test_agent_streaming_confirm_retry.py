@@ -25,6 +25,10 @@ def _reset_compiled_graph_cache():
             "src.api.agent.streaming.claim_awaiting_run_for_confirmation",
             new=AsyncMock(return_value=True),
         ),
+        patch(
+            "src.api.agent.streaming._resolve_thread",
+            new=AsyncMock(return_value=(SimpleNamespace(id="editable-thread"), None)),
+        ),
     ):
         yield
     mod._COMPILED_GRAPH = None

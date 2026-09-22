@@ -98,8 +98,9 @@ export const useChatStore = create<ChatStore>()(
             workspace.name
           );
 
-          // Set current workspace (this will trigger loadConversations)
-          get().setCurrentWorkspace(workspace.id);
+          // Set current workspace and wait for its conversation load so
+          // bootstrap callers do not have to issue the same read again.
+          await get().setCurrentWorkspace(workspace.id);
 
           // Reset retry counter on successful initialization
           set((s) => {

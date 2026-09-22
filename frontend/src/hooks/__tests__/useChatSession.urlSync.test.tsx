@@ -1,17 +1,22 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { APIErrorClass } from '@/types/api';
+
 const navigationMocks = vi.hoisted(() => ({
   push: vi.fn(),
+  replace: vi.fn(),
   searchParams: {
     get: vi.fn((key: string) => (key === 'thread' ? 'thread-A' : null)),
   },
 }));
 
+const toastMocks = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+
 const workspaceMocks = vi.hoisted(() => ({
   getOrCreateDefaultWorkspace: vi.fn(),
   getOrCreateDefaultConversation: vi.fn(),
-  listThreads: vi.fn(),
+  listWorkspaceThreads: vi.fn(),
   listConversations: vi.fn(),
   getThread: vi.fn(),
 }));
@@ -21,6 +26,7 @@ const chatStoreMocks = vi.hoisted(() => {
     currentThreadId: null as string | null,
     messages: {},
     addMessageToStore: vi.fn(),
+    loadMessages: vi.fn().mockResolvedValue(undefined),
     loadOlderMessages: vi.fn(),
     loadingThreadId: null as string | null,
     messagePagination: {},
@@ -41,7 +47,10 @@ const chatStoreMocks = vi.hoisted(() => {
 });
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: navigationMocks.push, replace: vi.fn() }),
+  useRouter: () => ({
+    push: navigationMocks.push,
+    replace: navigationMocks.replace,
+  }),
   useSearchParams: () => navigationMocks.searchParams,
 }));
 
@@ -58,12 +67,16 @@ vi.mock('@/services/workspaceService', () => ({
 }));
 
 vi.mock('react-hot-toast', () => ({
-  default: { error: vi.fn(), success: vi.fn() },
+  default: toastMocks,
 }));
 
 import { useChatSession } from '@/hooks/chat/useChatSession';
 
 describe('useChatSession URL synchronization', () => {
+  // Mutation check (2026-09-12): guard
+  // `src/hooks/chat/useChatSession.ts:389-395`. Removing failure-path
+  // selection ownership navigates away after a newer sidebar selection:
+  // pnpm --dir frontend exec vitest run src/hooks/__tests__/useChatSession.urlSync.test.tsx -t "does not clear a newer selection" --reporter=dot
   beforeEach(() => {
     vi.clearAllMocks();
     navigationMocks.searchParams.get.mockImplementation((key: string) =>
@@ -84,7 +97,7 @@ describe('useChatSession URL synchronization', () => {
       id: 'conv-1',
       title: 'New Chat',
     });
-    workspaceMocks.listThreads.mockResolvedValue({
+    workspaceMocks.listWorkspaceThreads.mockResolvedValue({
       threads: [],
       total: 0,
       page: 1,
@@ -95,7 +108,17 @@ describe('useChatSession URL synchronization', () => {
   });
 
   it('does not replay the initial URL thread while a sidebar selection is navigating', async () => {
-    workspaceMocks.getThread.mockReturnValue(new Promise(() => undefined));
+    workspaceMocks.getThread.mockResolvedValue({
+      id: 'thread-A',
+      conversation_id: 'conv-1',
+      title: 'A',
+      status: 'active',
+      last_message_at: '2026-09-12T12:00:00Z',
+      message_count: 1,
+      token_count: 1,
+      created_at: '2026-09-12T11:00:00Z',
+      updated_at: '2026-09-12T12:00:00Z',
+    });
     const { result, rerender } = renderHook(() => useChatSession());
 
     await waitFor(() => expect(result.current.isInitializing).toBe(false));
@@ -267,5 +290,76 @@ describe('useChatSession URL synchronization', () => {
       includeMessages: false,
     });
     expect(result.current.messages).toEqual([]);
+  });
+
+  it('does not clear a newer selection when an old URL lookup fails', async () => {
+    navigationMocks.searchParams.get.mockReturnValue(null);
+    let rejectThread!: (reason: unknown) => void;
+    workspaceMocks.getThread.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectThread = reject;
+      })
+    );
+    const { result, rerender } = renderHook(() => useChatSession());
+
+    await waitFor(() => expect(result.current.isInitializing).toBe(false));
+    act(() => {
+      result.current.setConversations([
+        {
+          id: 'thread-B',
+          title: 'B',
+          messages: [],
+        } as never,
+      ]);
+      chatStoreMocks.state.setCurrentThread('thread-C');
+      rerender();
+    });
+
+    navigationMocks.searchParams.get.mockImplementation((key: string) =>
+      key === 'thread' ? 'thread-A' : null
+    );
+    rerender();
+    await waitFor(() => expect(workspaceMocks.getThread).toHaveBeenCalled());
+
+    act(() => {
+      chatStoreMocks.state.setCurrentThread('thread-B');
+      rerender();
+    });
+    await act(async () => {
+      rejectThread(
+        new APIErrorClass({
+          message: 'Thread not found',
+          status_code: 404,
+          type: 'http_error',
+        })
+      );
+      await Promise.resolve();
+    });
+
+    expect(chatStoreMocks.state.currentThreadId).toBe('thread-B');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
+  });
+
+  it('keeps a deep-link URL when its detail lookup has a transient failure', async () => {
+    navigationMocks.searchParams.get.mockReturnValue(null);
+    const { result, rerender } = renderHook(() => useChatSession());
+
+    await waitFor(() => expect(result.current.isInitializing).toBe(false));
+    act(() => {
+      chatStoreMocks.state.setCurrentThread('thread-B');
+      rerender();
+    });
+    workspaceMocks.getThread.mockRejectedValue(
+      new Error('network unavailable')
+    );
+
+    navigationMocks.searchParams.get.mockImplementation((key: string) =>
+      key === 'thread' ? 'thread-A' : null
+    );
+    rerender();
+
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalled());
+    expect(chatStoreMocks.state.currentThreadId).toBe('thread-B');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
   });
 });

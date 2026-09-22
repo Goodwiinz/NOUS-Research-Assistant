@@ -188,6 +188,7 @@ LEAF_TXN: Dict[str, Dict[str, FrozenSet[str]]] = {
         # summary enqueue moved to enqueue_after_commit (not a txn method).
         "create_thread": frozenset({"flush", "refresh"}),
         "list_threads": frozenset(),
+        "list_workspace_threads": frozenset(),
         "update_thread": frozenset({"flush", "refresh"}),
         "delete_thread": frozenset({"flush"}),
     },

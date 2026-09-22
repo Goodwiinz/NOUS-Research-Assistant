@@ -15,12 +15,13 @@ import inspect
 import logging
 import re
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import Field
 from typing_extensions import Annotated
 
+from src.services.agent.tool_helpers import _reject_invalid_arxiv_ids
 from src.services.agent.tool_registry import (
     AgentIntent,
     AgentSubgraph,
@@ -314,11 +315,18 @@ async def ingest_arxiv_papers(
     if over_cap:
         return over_cap
 
+    invalid = _reject_invalid_arxiv_ids(paper_ids)
+    if invalid:
+        return invalid
+
     async with _tool_context(config) as (db, current_user, page_ctx):
         user_id = str(current_user.id) if current_user else ""
         resolved_project_id = _resolve_project_id(project_id, page_ctx)
         return await _tool_ingest_arxiv(
-            {"paper_ids": list(paper_ids or []), "project_id": resolved_project_id},
+            {
+                "paper_ids": [str(p).strip() for p in (paper_ids or [])],
+                "project_id": resolved_project_id,
+            },
             user_id,
             db,
             current_user,
@@ -357,6 +365,8 @@ async def do_kb_retrieve(
     query: str,
     top_k: int = 8,
     config: RunnableConfig = None,  # type: ignore[assignment]
+    *,
+    document_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Semantic retrieval over the organization's DigitalOcean Knowledge Base.
 
@@ -378,6 +388,10 @@ async def do_kb_retrieve(
         }
         if project_id:
             args["project_id"] = project_id
+        if document_ids is not None:
+            # Presence is meaningful: an explicit empty list is invalid scoped
+            # intent and must reach the dispatcher instead of broadening.
+            args["document_ids"] = document_ids
         return await _tool_do_kb_retrieve(args, db, current_user)
 
 
@@ -757,6 +771,36 @@ async def create_draft(
 
 
 @tool
+async def revise_draft(
+    instructions: str,
+    project_id: Optional[str] = None,
+    base_version: Optional[int] = None,
+    mode: Literal["revise", "citations_only"] = "revise",
+    config: RunnableConfig = None,  # type: ignore[assignment]
+) -> Dict[str, Any]:
+    """Revise a saved draft version using its server-loaded durable content."""
+    config = config or {}
+    from src.services.agent.tools_impl import _tool_revise_draft
+
+    async with _tool_context(config) as (db, current_user, page_ctx):
+        resolved_pid = _resolve_project_id(project_id, page_ctx)
+        if not resolved_pid:
+            return _missing_project_error("revise_draft")
+        if base_version is not None and base_version < 1:
+            return {"error": "base_version must be a positive integer"}
+        return await _tool_revise_draft(
+            {
+                "project_id": resolved_pid,
+                "instructions": instructions,
+                "base_version": base_version,
+                "mode": mode,
+            },
+            db,
+            current_user,
+        )
+
+
+@tool
 async def export_bibliography(
     document_ids: List[str],
     format: str = "bibtex",
@@ -937,9 +981,9 @@ async def forget_memory(
     from src.services.agent.tools_impl import _tool_forget_memory
 
     # Memory is keyed by the scalar user_id — no session or ORM user needed.
-    user_id, _org_id, page_ctx = _get_ids(config)
+    user_id, org_id, page_ctx = _get_ids(config)
     return await _tool_forget_memory(
-        query=query, user_id=user_id, page_context=page_ctx
+        query=query, user_id=user_id, organization_id=org_id, page_context=page_ctx
     )
 
 
@@ -1147,7 +1191,7 @@ TOOL_REGISTRY = ToolRegistry(
             tool=get_current_draft,
             intents=frozenset({AgentIntent.WRITING}),
             subgraphs=frozenset({AgentSubgraph.WRITING}),
-            subgraph_positions=((AgentSubgraph.WRITING, 13),),
+            subgraph_positions=((AgentSubgraph.WRITING, 14),),
             policy_tags=frozenset(),
             exposed_in_all_tools=False,
         ),
@@ -1217,6 +1261,20 @@ TOOL_REGISTRY = ToolRegistry(
             intents=frozenset({AgentIntent.WRITING}),
             subgraphs=frozenset({AgentSubgraph.WRITING}),
             subgraph_positions=((AgentSubgraph.WRITING, 0),),
+            policy_tags=frozenset(
+                {
+                    ToolPolicyTag.DESTRUCTIVE,
+                    ToolPolicyTag.SLOW,
+                    ToolPolicyTag.NO_OUTER_RETRY,
+                }
+            ),
+        ),
+        ToolDescriptor(
+            name="revise_draft",
+            tool=revise_draft,
+            intents=frozenset({AgentIntent.WRITING}),
+            subgraphs=frozenset({AgentSubgraph.WRITING}),
+            subgraph_positions=((AgentSubgraph.WRITING, 13),),
             policy_tags=frozenset(
                 {
                     ToolPolicyTag.DESTRUCTIVE,
@@ -1309,10 +1367,13 @@ TOOL_REGISTRY = ToolRegistry(
             tool=forget_memory,
             intents=frozenset({AgentIntent.GENERAL}),
             subgraphs=frozenset(),
+            # Audit R7-L9: CONTEXT_FREE dropped — that fast path in
+            # execute_tool skips resolve_tool_user entirely, so a destructive
+            # delete ran for a user nobody had checked was active, undeleted
+            # and in the asserted org. No tool may be CONTEXT_FREE+DESTRUCTIVE.
             policy_tags=frozenset(
                 {
                     ToolPolicyTag.DESTRUCTIVE,
-                    ToolPolicyTag.CONTEXT_FREE,
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),

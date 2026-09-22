@@ -17,6 +17,7 @@ from .agent_outbox import AgentOutbox
 from .agent_run import AgentRun
 from .agent_run_event import AgentRunEvent
 from .agent_runtime_snapshot import AgentRuntimeSnapshot
+from .agent_tool_receipt import AgentToolReceipt
 from .analytics_event import AnalyticsEvent, EventSeverity, EventType
 
 # Audit models
@@ -140,6 +141,7 @@ __all__ = [
     "AgentOutbox",
     "AgentRun",
     "AgentRunEvent",
+    "AgentToolReceipt",
     "AgentRuntimeSnapshot",
     "BaseModel",
     # User models

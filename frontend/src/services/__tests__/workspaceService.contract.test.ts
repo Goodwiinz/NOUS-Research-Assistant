@@ -178,6 +178,40 @@ describe('workspaceService contract (characterization)', () => {
   });
 
   describe('thread', () => {
+    it('listWorkspaceThreads: GETs the globally paginated workspace thread page', async () => {
+      const response = {
+        threads: [
+          {
+            id: 'thread-1',
+            conversation_id: 'conv-historical',
+            status: 'active',
+            last_message_at: '2026-09-12T12:00:00Z',
+            message_count: 2,
+            token_count: 10,
+            created_at: '2026-09-12T11:00:00Z',
+            updated_at: '2026-09-12T12:00:00Z',
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 50,
+        has_more: false,
+      };
+      vi.mocked(api.get).mockResolvedValue(response);
+
+      const result = await workspaceService.listWorkspaceThreads('ws-1', {
+        page: 1,
+        limit: 50,
+        statusFilter: 'active',
+      });
+
+      expect(api.get).toHaveBeenCalledWith(
+        '/api/v2/workspaces/ws-1/threads?page=1&limit=50&status_filter=active'
+      );
+      expect(result).toEqual(response);
+      expect(result.threads[0].conversation_id).toBe('conv-historical');
+    });
+
     it('listThreads: returns the qualified chat ThreadListResponse shape as-is', async () => {
       const response = {
         threads: [

@@ -20,6 +20,10 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_thread_access import editable_thread_getter
+
+THREAD_ID = "11111111-1111-4111-8111-111111111625"
+
 
 class _FakeGraph:
     """Configurable resume: optionally yield events before raising."""
@@ -61,7 +65,7 @@ async def _run_confirm(graph: _FakeGraph) -> "tuple[list, AsyncMock]":
     import src.api.agent.streaming as streaming_mod
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-789", confirmed=True, model="")
+    body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="")
     current_user = Mock(id="user-1", organization_id="org-1")
     active_run = SimpleNamespace(
         job_id="run-abc-123", user_message_id=None, client_message_id=None
@@ -91,6 +95,18 @@ async def _run_confirm(graph: _FakeGraph) -> "tuple[list, AsyncMock]":
         patch(
             "src.api.agent.streaming.get_active_run_for_thread",
             new=AsyncMock(return_value=active_run),
+        ),
+        patch(
+            "src.api.agent.streaming.claim_awaiting_run_for_confirmation",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
+            "src.services.threads.workspace_access.get_thread",
+            new=editable_thread_getter(),
         ),
         patch.object(streaming_mod, "_finalize_run_id", new=finalize_mock),
         patch(

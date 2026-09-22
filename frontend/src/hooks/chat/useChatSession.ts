@@ -11,12 +11,10 @@ import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView'
 import { getSelectedThreadUrl } from '@/components/chat/shared/chatNavigation';
 import { ChatConversation } from '@/hooks/chat/chatTypes';
 import { upsertConversationFromThread } from '@/components/chat/shared/threadConversationState';
-import {
-  clearWorkspaceServiceCache,
-  workspaceService,
-} from '@/services/workspaceService';
+import { workspaceService } from '@/services/workspaceService';
 import { useChatStore } from '@/store/chat-store';
 import { useAuthStore } from '@/stores/authStore';
+import { getLoginPathWithRedirect } from '@/utils/authRedirect';
 import {
   ChatMessage as DBChatMessage,
   Conversation as DBConversation,
@@ -28,12 +26,28 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const THREADS_PAGE_SIZE = 50;
 
-// Shared by every listThreads call site (cold load, warm start, "show older")
+function getErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const candidate = error as {
+    error?: { status_code?: unknown };
+    response?: { status?: unknown };
+    status_code?: unknown;
+  };
+  const status =
+    candidate.error?.status_code ??
+    candidate.response?.status ??
+    candidate.status_code;
+  return typeof status === 'number' ? status : undefined;
+}
+
+function isUnavailableThreadError(error: unknown): boolean {
+  const status = getErrorStatus(error);
+  return status === 403 || status === 404;
+}
+
+// Shared by every workspace-thread call site (cold load, warm start, "show older")
 // so the sidebar's ChatConversation shape can't drift between them.
-function threadToConversation(
-  thread: Thread,
-  conversationId: string
-): ChatConversation {
+function threadToConversation(thread: Thread): ChatConversation {
   return {
     id: thread.id,
     title: thread.title || 'New Chat',
@@ -41,7 +55,7 @@ function threadToConversation(
     createdAt: new Date(thread.created_at).getTime(),
     updatedAt: new Date(thread.updated_at).getTime(),
     threadId: thread.id,
-    conversationId,
+    conversationId: thread.conversation_id,
     previewText: thread.last_message_preview || thread.summary || undefined,
     messageCount: thread.message_count,
   };
@@ -57,6 +71,15 @@ function indexThreads(threads: Thread[]): void {
   for (const thread of threads) registerThread(thread);
 }
 
+export interface ChatAuthRecoveryRoute {
+  isReady: boolean;
+  threadId: string | null;
+  /** True only while the initial URL/workspace selection is settling. */
+  isInitializing?: boolean;
+  /** Keeps an explicit ?new=1 intent distinct from a bare /chat URL. */
+  isNewChatIntent?: boolean;
+}
+
 export interface UseChatSessionReturn {
   // State
   conversations: ChatConversation[];
@@ -68,6 +91,9 @@ export interface UseChatSessionReturn {
   isInitializing: boolean;
   initError: string | null;
   isLoadingMessages: boolean;
+  /** Draft recovery may read session storage only after the explicit URL
+   * intent and the selected thread converge on a successful initialization. */
+  authRecoveryRoute: ChatAuthRecoveryRoute;
 
   // Refs
   isHydratedRef: React.MutableRefObject<boolean>;
@@ -100,7 +126,7 @@ export interface UseChatSessionReturn {
   // Helpers
   mapDbMessageToUiMessage: (dbMsg: DBChatMessage) => ChatPageMessage;
   loadThreadsFromDb: (
-    conversationId: string,
+    workspaceId: string,
     isRetry?: boolean
   ) => Promise<{ ok: boolean; threadCount: number }>;
 }
@@ -120,17 +146,17 @@ export function useChatSession(): UseChatSessionReturn {
 
   // Database state
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [dbConversation, setDbConversation] = useState<DBConversation | null>(
-    null
-  );
+  const dbConversation: DBConversation | null = null;
   const [isInitializing, setIsInitializing] = useState(true);
   const [initError, setInitError] = useState<string | null>(null);
 
-  // Sidebar thread pagination (CX8): which conversation + page the currently
+  // Sidebar thread pagination (CX8): which workspace + page the currently
   // loaded thread list reflects, so loadMoreThreads knows what to fetch next.
   const [hasMoreThreads, setHasMoreThreads] = useState(false);
-  const threadsListConvIdRef = useRef<string | null>(null);
+  const threadsListWorkspaceIdRef = useRef<string | null>(null);
   const threadsPageRef = useRef(1);
+  const threadsRequestGenerationRef = useRef(0);
+  const firstPageThreadsRef = useRef<Thread[]>([]);
 
   // ---- Refs ----
   // URL synchronization reads the latest list without subscribing its effect
@@ -139,14 +165,16 @@ export function useChatSession(): UseChatSessionReturn {
   const messagesRef = useRef(messages);
   const localMessagesThreadIdRef = useRef<string | null>(null);
   const isHydratedRef = useRef(false);
-  // Serializes the init effect. Auth-session churn (repeated getUser refreshes)
-  // can re-fire the effect while a first init is still awaiting workspace/
-  // conversation creation; without this, two concurrent
-  // getOrCreateDefaultWorkspace calls both see an empty list and each POST a
-  // new workspace. The duplicate-create re-renders the chat surface mid-mount,
-  // which drops the user's first Send (the click lands on a remounting
-  // composer). Bail if an init is already in flight.
-  const initInFlightRef = useRef(false);
+  // Every auth lifecycle owns a generation. Awaited work checks this before
+  // publishing so logout/unmount cannot leak an old workspace into a later
+  // session, while a re-login can start immediately instead of waiting on the
+  // old request. Workspace service itself deduplicates same-session creates.
+  const initGenerationRef = useRef(0);
+  // When initialization replaces a stale initial ?thread= target, Next may
+  // commit the local state update before its router.replace updates search
+  // params. Suppress only that exact obsolete value so the URL effect cannot
+  // replay the failed lookup in between those commits.
+  const unavailableInitialUrlThreadRef = useRef<string | null>(null);
 
   // ---- Auth ----
   const { isAuthenticated } = useAuthStore();
@@ -223,6 +251,29 @@ export function useChatSession(): UseChatSessionReturn {
   // Depend on the primitive value, not the search-params object: local state
   // renders may change object identity before router.push updates ?thread=.
   const threadFromUrl = searchParams.get('thread');
+  const hasNewChatIntent = searchParams.get('new') === '1';
+  const authRecoveryRoute = useMemo<ChatAuthRecoveryRoute>(() => {
+    const routeThreadId = hasNewChatIntent ? null : threadFromUrl;
+    return {
+      threadId: routeThreadId,
+      isInitializing,
+      isNewChatIntent: hasNewChatIntent,
+      isReady: Boolean(
+        isAuthenticated &&
+        !isInitializing &&
+        initError === null &&
+        routeThreadId &&
+        activeThreadId === routeThreadId
+      ),
+    };
+  }, [
+    activeThreadId,
+    hasNewChatIntent,
+    initError,
+    isAuthenticated,
+    isInitializing,
+    threadFromUrl,
+  ]);
   const router = useRouter();
   // Read the router through a ref in callbacks/effects: depending on the
   // router object itself re-runs the init chain whenever its identity
@@ -262,11 +313,15 @@ export function useChatSession(): UseChatSessionReturn {
   useEffect(() => {
     if (!isAuthenticated && !isInitializing) {
       const timer = setTimeout(() => {
-        router.push('/login');
+        router.push(
+          getLoginPathWithRedirect(
+            threadFromUrl ? getSelectedThreadUrl(threadFromUrl) : '/chat'
+          )
+        );
       }, 1500); // Short delay to show the "Redirecting..." state
       return () => clearTimeout(timer);
     }
-  }, [isAuthenticated, isInitializing, router]);
+  }, [isAuthenticated, isInitializing, router, threadFromUrl]);
 
   // Thread-scoped load-failure signal. The toast fires only when the failed
   // thread is the one on screen, and — unlike the old loading-flag transition
@@ -319,6 +374,11 @@ export function useChatSession(): UseChatSessionReturn {
       return;
     }
 
+    if (unavailableInitialUrlThreadRef.current) {
+      if (unavailableInitialUrlThreadRef.current === threadFromUrl) return;
+      unavailableInitialUrlThreadRef.current = null;
+    }
+
     if (threadFromUrl) {
       console.log('[Chat] Thread switch requested:', threadFromUrl);
       const targetConv = conversationsRef.current.find(
@@ -364,15 +424,37 @@ export function useChatSession(): UseChatSessionReturn {
           );
           setCurrentThread(thread.id);
         } catch (error: unknown) {
-          if (!cancelled) {
-            console.error('[Chat] Failed to fetch requested thread:', error);
-            // Deleted thread, revoked access, or a transient failure: leaving
-            // ?thread=<dead-id> in the URL would re-trigger this effect on
-            // every render and show whatever thread was previously active
-            // with no explanation. Say what happened and drop the dead param.
-            toast.error('Could not open that conversation. Please try again.');
-            routerRef.current.replace('/chat');
+          // A sidebar selection may supersede this request before either its
+          // success or failure settles. Neither result owns navigation then.
+          if (
+            cancelled ||
+            useChatStore.getState().currentThreadId !==
+              activeThreadAtRequestStart
+          ) {
+            return;
           }
+
+          console.error('[Chat] Failed to fetch requested thread:', error);
+          if (isUnavailableThreadError(error)) {
+            const currentThreadId = useChatStore.getState().currentThreadId;
+            const fallbackConversation =
+              conversationsRef.current.find(
+                (conversation) => conversation.id === currentThreadId
+              ) ?? conversationsRef.current[0];
+            const fallbackThreadId = fallbackConversation?.id ?? null;
+            setCurrentThread(fallbackThreadId);
+            toast.error('That conversation is no longer available.');
+            routerRef.current.replace(
+              fallbackThreadId
+                ? getSelectedThreadUrl(fallbackThreadId)
+                : '/chat'
+            );
+            return;
+          }
+
+          // A transient/server failure is retryable. Keep the requested URL
+          // intact instead of silently turning it into a different session.
+          toast.error('Could not open that conversation. Please try again.');
         }
       })();
 
@@ -385,33 +467,62 @@ export function useChatSession(): UseChatSessionReturn {
   // Load threads and messages from database
   const loadThreadsFromDb = useCallback(
     async (
-      conversationId: string,
+      workspaceId: string,
       _isRetry = false
     ): Promise<{ ok: boolean; threadCount: number }> => {
+      const requestGeneration = threadsRequestGenerationRef.current + 1;
+      const selectionAtRequestStart = useChatStore.getState().currentThreadId;
+      const conversationIdsAtRequestStart = new Set(
+        conversationsRef.current.map((conversation) => conversation.id)
+      );
+      threadsRequestGenerationRef.current = requestGeneration;
+      threadsListWorkspaceIdRef.current = workspaceId;
       try {
         console.log(
-          '[Chat] Loading threads from database for conversation:',
-          conversationId
+          '[Chat] Loading threads from database for workspace:',
+          workspaceId
         );
-        const threadResponse = await workspaceService.listThreads(
-          conversationId,
+        const threadResponse = await workspaceService.listWorkspaceThreads(
+          workspaceId,
           { page: 1, limit: THREADS_PAGE_SIZE }
         );
 
+        // Mutation-verified by useChatSession.workspaceThreads.test.tsx:
+        // removing this identity gate lets a late page from the prior
+        // workspace replace the active workspace's sidebar.
+        if (
+          threadsListWorkspaceIdRef.current !== workspaceId ||
+          threadsRequestGenerationRef.current !== requestGeneration
+        ) {
+          return { ok: false, threadCount: 0 };
+        }
+
         indexThreads(threadResponse.threads);
+        firstPageThreadsRef.current = threadResponse.threads;
 
         // CX8: record what this list reflects so "show older threads" knows
-        // which conversation + page to fetch next.
-        threadsListConvIdRef.current = conversationId;
+        // which workspace + page to fetch next.
         threadsPageRef.current = 1;
         setHasMoreThreads(threadResponse.has_more);
 
         // Map threads without loading messages (lazy-loaded on selection)
-        const uiConversations: ChatConversation[] = threadResponse.threads.map(
-          (thread) => threadToConversation(thread, conversationId)
-        );
+        const uiConversations: ChatConversation[] =
+          threadResponse.threads.map(threadToConversation);
 
-        setConversations(uiConversations);
+        setConversations((previous) => {
+          const serverIds = new Set(
+            uiConversations.map((conversation) => conversation.id)
+          );
+          // A first send is allowed while this page is in flight. Preserve
+          // rows inserted after the request began so a late server snapshot
+          // cannot make the just-created active thread disappear.
+          const createdWhilePending = previous.filter(
+            (conversation) =>
+              !conversationIdsAtRequestStart.has(conversation.id) &&
+              !serverIds.has(conversation.id)
+          );
+          return [...createdWhilePending, ...uiConversations];
+        });
         console.log(
           '[Chat] Loaded',
           uiConversations.length,
@@ -424,7 +535,14 @@ export function useChatSession(): UseChatSessionReturn {
         const threadFromUrl = searchParamsRef.current.get('thread');
         const isNewChat = searchParamsRef.current.get('new') === '1';
 
-        if (isNewChat && !threadFromUrl) {
+        const selectionIsStillOwned =
+          useChatStore.getState().currentThreadId === selectionAtRequestStart;
+
+        if (!selectionIsStillOwned) {
+          console.log(
+            '[Chat] Thread-page selection ignored after newer selection'
+          );
+        } else if (isNewChat && !threadFromUrl) {
           setCurrentThread(null);
           console.log('[Chat] New chat requested; not auto-selecting a thread');
         } else if (threadFromUrl) {
@@ -460,52 +578,65 @@ export function useChatSession(): UseChatSessionReturn {
         }
         return { ok: true, threadCount: uiConversations.length };
       } catch (error: unknown) {
-        console.error('[Chat] Failed to load threads from database:', error);
-
-        // Handle 404 - conversation not found (stale data)
-        const err = error as {
-          response?: { status?: number };
-          status_code?: number;
-        };
-        if (err?.response?.status === 404 || err?.status_code === 404) {
-          console.warn(
-            '[Chat] Conversation not found (404) - clearing stale data'
-          );
-          // Clear the service's own warm cache too (WS_CACHE_KEY etc.), not
-          // just our warm-start ids — otherwise the next bootstrap re-fetches
-          // the dead workspace from the stale cached object.
-          clearWorkspaceServiceCache();
-          return { ok: false, threadCount: 0 }; // Signal to caller to retry with fresh data
+        if (
+          threadsListWorkspaceIdRef.current !== workspaceId ||
+          threadsRequestGenerationRef.current !== requestGeneration
+        ) {
+          return { ok: false, threadCount: 0 };
         }
-
+        console.error('[Chat] Failed to load threads from database:', error);
         throw error;
       }
     },
     [setCurrentThread]
   );
 
-  // CX8: fetch the next page of threads for whichever conversation the
+  // CX8: fetch the next page of threads for whichever workspace the
   // sidebar list currently reflects, and append (never replace) — a stable
   // callback so it can be passed straight into ChatSidebar (React.memo, #1083).
   const loadMoreThreads = useCallback(async () => {
-    const conversationId = threadsListConvIdRef.current;
-    if (!conversationId) return;
+    const workspaceId = threadsListWorkspaceIdRef.current;
+    if (!workspaceId) return;
 
     const nextPage = threadsPageRef.current + 1;
+    const requestGeneration = threadsRequestGenerationRef.current;
     try {
-      const response = await workspaceService.listThreads(conversationId, {
-        page: nextPage,
-        limit: THREADS_PAGE_SIZE,
-      });
+      const response = await workspaceService.listWorkspaceThreads(
+        workspaceId,
+        {
+          page: nextPage,
+          limit: THREADS_PAGE_SIZE,
+        }
+      );
+
+      if (
+        threadsListWorkspaceIdRef.current !== workspaceId ||
+        threadsRequestGenerationRef.current !== requestGeneration
+      ) {
+        return;
+      }
 
       indexThreads(response.threads);
 
       setConversations((prev) => {
-        const existingIds = new Set(prev.map((c) => c.id));
-        const appended = response.threads
-          .filter((thread) => !existingIds.has(thread.id))
-          .map((thread) => threadToConversation(thread, conversationId));
-        return [...prev, ...appended];
+        const incoming = new Map(
+          response.threads.map((thread) => [thread.id, thread] as const)
+        );
+        const updated = prev.map((conversation) => {
+          const replacement = incoming.get(conversation.id);
+          if (!replacement) return conversation;
+          incoming.delete(conversation.id);
+          return threadToConversation(replacement);
+        });
+        // Mutation-verified by useChatSession.workspaceThreads.test.tsx:
+        // filtering/upserting by ID prevents offset-page overlap from
+        // duplicating a thread after its activity order changes.
+        return [
+          ...updated,
+          ...response.threads
+            .filter((thread) => incoming.has(thread.id))
+            .map(threadToConversation),
+        ];
       });
 
       threadsPageRef.current = nextPage;
@@ -518,19 +649,24 @@ export function useChatSession(): UseChatSessionReturn {
 
   // Initialize workspace and conversation from database
   useEffect(() => {
+    const initGeneration = initGenerationRef.current + 1;
+    initGenerationRef.current = initGeneration;
+    const ownsInitialization = (): boolean =>
+      initGenerationRef.current === initGeneration;
+
     // Watchdog: a hung request (socket open, no response) leaves init awaiting
     // forever and the UI stuck on "Initializing…". Surface a recoverable error
     // if init has not settled in time. Cleared once init resolves or unmounts.
     let settled = false;
     const watchdog = setTimeout(() => {
-      if (settled) return;
+      if (settled || !ownsInitialization()) return;
       setInitError(
         'Connecting is taking longer than expected. Check your connection, then retry.'
       );
       setIsInitializing(false);
     }, 15000);
 
-    const initializeFromDb = async () => {
+    const initializeFromDb = async (): Promise<void> => {
       // Initialization may overlap a first send or sidebar selection. Only the
       // selection that existed when this run began may be restored from warm
       // data; a newer synchronous store selection owns the UI.
@@ -547,18 +683,6 @@ export function useChatSession(): UseChatSessionReturn {
         return;
       }
 
-      // A prior init for this mount is still awaiting workspace/conversation
-      // creation. Re-entering now would issue a second getOrCreateDefaultWorkspace
-      // against the same empty list and duplicate-create. Let the in-flight run
-      // finish and own the session.
-      if (initInFlightRef.current) {
-        console.log('[Chat] Init already in flight, skipping duplicate run');
-        settled = true;
-        clearTimeout(watchdog);
-        return;
-      }
-      initInFlightRef.current = true;
-
       setIsInitializing(true);
       setInitError(null);
       // The watchdog (above) may set a provisional "taking too long" error at
@@ -568,16 +692,12 @@ export function useChatSession(): UseChatSessionReturn {
       let didFail = false;
       console.log('[Chat] Initializing from database...');
 
-      // Warm-start: read IDs cached on prior visits and fire sidebar + message
-      // fetches in parallel with workspace validation. On repeat page loads this
-      // collapses 4 sequential calls into 2 parallel ones.
+      // Warm-start: the persisted selection may accelerate transcript restore,
+      // but it never scopes the sidebar. The sidebar always comes from the
+      // active workspace's globally ordered thread page.
       // Explicit "new chat" intent (?new=1) suppresses warm-start restore so
       // the page lands on a blank composer instead of the last thread.
       const isNewChat = searchParamsRef.current.get('new') === '1';
-      const persistedConvId =
-        typeof window !== 'undefined'
-          ? localStorage.getItem('default-conversation-id')
-          : null;
       const requestedThreadId = searchParamsRef.current.get('thread');
       const restoreThreadId = isNewChat
         ? null
@@ -586,165 +706,104 @@ export function useChatSession(): UseChatSessionReturn {
       const wsPromise = workspaceService.getOrCreateDefaultWorkspace();
 
       try {
-        let ws: Workspace;
+        const ws: Workspace = await wsPromise;
+        if (!ownsInitialization()) return;
+        setWorkspace(ws);
 
-        if (persistedConvId && restoreThreadId) {
-          const warmDataPromise = Promise.all([
-            workspaceService.listThreads(persistedConvId, {
-              page: 1,
-              limit: THREADS_PAGE_SIZE,
-            }),
-            useChatStore.getState().loadMessages(restoreThreadId),
-          ]).catch(() => null);
+        console.log('[Chat] Workspace:', ws.name);
 
-          const [resolvedWs, warmData] = await Promise.all([
-            wsPromise,
-            warmDataPromise,
-          ]);
-          ws = resolvedWs;
-          setWorkspace(ws);
+        const threadPagePromise = loadThreadsFromDb(ws.id);
+        const messagePagePromise = restoreThreadId
+          ? useChatStore.getState().loadMessages(restoreThreadId)
+          : Promise.resolve();
+        const [loadResult] = await Promise.all([
+          threadPagePromise,
+          messagePagePromise,
+        ]);
+        if (!ownsInitialization() || !loadResult.ok) return;
 
-          if (warmData) {
-            // dbConversation is only needed for NEW-thread creation (post user
-            // action), so fetch it OFF the paint path. Start this regardless of
-            // whether warm transcript data still owns selection.
-            void workspaceService
-              .getOrCreateDefaultConversation(ws.id)
-              .then(setDbConversation)
-              .catch((e) =>
-                console.warn('[Chat] default conversation fetch failed', e)
-              );
-
-            if (
-              useChatStore.getState().currentThreadId !==
-              selectionAtInitializationStart
-            ) {
-              isHydratedRef.current = true;
-              setInitError(null);
-              console.log(
-                '[Chat] Warm-start data ignored after newer thread selection'
-              );
-              return;
-            }
-
-            const [threadListResponse] = warmData;
-            let restoreThread = threadListResponse.threads.find(
-              (thread) => thread.id === restoreThreadId
+        if (restoreThreadId) {
+          if (
+            useChatStore.getState().currentThreadId !==
+            selectionAtInitializationStart
+          ) {
+            isHydratedRef.current = true;
+            setInitError(null);
+            console.log(
+              '[Chat] Warm-start data ignored after newer thread selection'
             );
-            if (!restoreThread) {
+            return;
+          }
+
+          let restoreThread = firstPageThreadsRef.current.find(
+            (thread) => thread.id === restoreThreadId
+          );
+          if (!restoreThread) {
+            try {
               restoreThread = await workspaceService.getThread(
                 restoreThreadId,
                 { includeMessages: false }
               );
-            }
+            } catch (error: unknown) {
+              if (!ownsInitialization()) return;
 
-            // A deep-link metadata lookup can overlap a first send or sidebar
-            // selection just like the parallel list/page requests above.
-            if (
-              useChatStore.getState().currentThreadId !==
-              selectionAtInitializationStart
-            ) {
+              // A late failure from the old restore target cannot turn a
+              // newer first send/sidebar selection into a global init error.
+              if (
+                useChatStore.getState().currentThreadId !==
+                selectionAtInitializationStart
+              ) {
+                if (requestedThreadId && isUnavailableThreadError(error)) {
+                  unavailableInitialUrlThreadRef.current = requestedThreadId;
+                }
+                isHydratedRef.current = true;
+                setInitError(null);
+                return;
+              }
+              if (!isUnavailableThreadError(error)) throw error;
+
+              const fallbackThreadId =
+                firstPageThreadsRef.current[0]?.id ?? null;
+              setCurrentThread(fallbackThreadId);
+              if (requestedThreadId) {
+                unavailableInitialUrlThreadRef.current = requestedThreadId;
+                toast.error('That conversation is no longer available.');
+              }
+              routerRef.current.replace(
+                fallbackThreadId
+                  ? getSelectedThreadUrl(fallbackThreadId)
+                  : '/chat'
+              );
               isHydratedRef.current = true;
               setInitError(null);
-              console.log(
-                '[Chat] Warm-start metadata ignored after newer thread selection'
-              );
               return;
             }
+          }
 
-            indexThreads([...threadListResponse.threads, restoreThread]);
+          if (!ownsInitialization()) return;
 
-            let uiConversations: ChatConversation[] =
-              threadListResponse.threads.map((thread) =>
-                threadToConversation(thread, persistedConvId)
-              );
-            if (
-              !threadListResponse.threads.some(
-                (thread) => thread.id === restoreThreadId
-              )
-            ) {
-              uiConversations = upsertConversationFromThread(
-                uiConversations,
-                restoreThread,
-                []
-              );
-            }
-            // CX8: warm-start also seeds the first page of the thread list.
-            threadsListConvIdRef.current = persistedConvId;
-            threadsPageRef.current = 1;
-            setHasMoreThreads(threadListResponse.has_more);
-            setConversations(uiConversations);
-            setMessages([]);
-            // The bounded page and pagination record are already cached, so
-            // this selection does not issue another message request.
-            setCurrentThread(restoreThreadId);
-            // The restore target came from persisted store state, not the
-            // URL — sync the address bar so Back/share behave (cold-start
-            // auto-select does the same in loadThreadsFromDb).
-            if (!requestedThreadId) {
-              routerRef.current.replace(getSelectedThreadUrl(restoreThreadId));
-            }
+          if (
+            useChatStore.getState().currentThreadId !==
+            selectionAtInitializationStart
+          ) {
             isHydratedRef.current = true;
             setInitError(null);
-
-            console.log('[Chat] Warm-start initialization complete');
+            console.log(
+              '[Chat] Warm-start metadata ignored after newer thread selection'
+            );
             return;
           }
-          // Warm data fetch failed (stale IDs) — fall through to cold init
-        } else {
-          ws = await wsPromise;
-          setWorkspace(ws);
-        }
 
-        console.log('[Chat] Workspace:', ws.name);
-
-        // Cold init: full sequential chain
-        const conv = await workspaceService.getOrCreateDefaultConversation(
-          ws.id
-        );
-        setDbConversation(conv);
-        console.log('[Chat] DB Conversation:', conv.title);
-
-        const loadResult = await loadThreadsFromDb(conv.id);
-
-        if (!loadResult.ok) {
-          console.log('[Chat] Retrying with fresh conversation...');
-          const freshConv = await workspaceService.createConversation({
-            workspace_id: ws.id,
-            title: 'New Chat',
-            description: 'A new conversation',
-          });
-          setDbConversation(freshConv);
-          console.log('[Chat] Created fresh conversation:', freshConv.title);
-          await loadThreadsFromDb(freshConv.id);
-        } else if (loadResult.threadCount === 0) {
-          // The most-recently-active conversation has no threads. Older
-          // conversations in this workspace may still hold the user's threads.
-          try {
-            const allConversations = await workspaceService.listConversations(
-              ws.id,
-              { limit: 50 }
-            );
-            const candidate = allConversations.conversations.find(
-              (c) => c.id !== conv.id && (c.thread_count ?? 0) > 0
-            );
-            if (candidate) {
-              console.log(
-                '[Chat] Default conversation empty; switching to:',
-                candidate.title,
-                `(${candidate.thread_count} threads)`
-              );
-              setDbConversation(candidate);
-              if (typeof window !== 'undefined') {
-                localStorage.setItem('default-conversation-id', candidate.id);
-              }
-              await loadThreadsFromDb(candidate.id);
-            }
-          } catch (fallbackError) {
-            console.warn(
-              '[Chat] Empty-default fallback failed:',
-              fallbackError
-            );
+          indexThreads([restoreThread]);
+          setConversations((prev) =>
+            prev.some((conversation) => conversation.id === restoreThreadId)
+              ? prev
+              : upsertConversationFromThread(prev, restoreThread, [])
+          );
+          setMessages([]);
+          setCurrentThread(restoreThreadId);
+          if (!requestedThreadId) {
+            routerRef.current.replace(getSelectedThreadUrl(restoreThreadId));
           }
         }
 
@@ -752,61 +811,26 @@ export function useChatSession(): UseChatSessionReturn {
         setInitError(null);
         console.log('[Chat] Database initialization complete');
       } catch (error: unknown) {
+        if (!ownsInitialization()) return;
         console.error('[Chat] Failed to initialize from database:', error);
-
-        const err = error as { response?: { status?: number } };
-        if (err?.response?.status === 404) {
-          console.warn('[Chat] Stale data detected, clearing and retrying...');
-          // Clear the service's own warm cache too (WS_CACHE_KEY etc.), not
-          // just our warm-start ids — otherwise the next bootstrap re-fetches
-          // the dead workspace from the stale cached object.
-          clearWorkspaceServiceCache();
-          try {
-            const ws = await workspaceService.getOrCreateDefaultWorkspace();
-            setWorkspace(ws);
-            const freshConv = await workspaceService.createConversation({
-              workspace_id: ws.id,
-              title: 'New Chat',
-              description: 'A new conversation',
-            });
-            setDbConversation(freshConv);
-            setConversations([]);
-            setMessages([]);
-            console.log('[Chat] Created fresh workspace and conversation');
-            isHydratedRef.current = true;
-            setInitError(null);
-            setIsInitializing(false);
-            return;
-          } catch (retryError) {
-            console.error('[Chat] Retry failed:', retryError);
-            didFail = true;
-            setInitError(
-              'Failed to create new chat session. Please refresh the page.'
-            );
-            setIsInitializing(false);
-            return;
-          }
-        }
-
         didFail = true;
         setInitError(
           error instanceof Error ? error.message : 'Failed to load chat data'
         );
       } finally {
-        // Release the in-flight latch so a genuine re-init (e.g. real auth
-        // change) can run once this one has fully settled.
-        initInFlightRef.current = false;
-        // Init settled (success or handled error): stand down the watchdog so a
-        // slow-but-successful load doesn't flip to the timeout error.
-        if (!settled) {
-          settled = true;
-          clearTimeout(watchdog);
-          setIsInitializing(false);
-        }
-        // Clear the provisional watchdog error if init ultimately succeeded —
-        // the 15s timeout may have fired before a slow load completed.
-        if (!didFail) {
-          setInitError(null);
+        if (ownsInitialization()) {
+          // Init settled (success or handled error): stand down the watchdog
+          // so a slow-but-successful load doesn't flip to the timeout error.
+          if (!settled) {
+            settled = true;
+            clearTimeout(watchdog);
+            setIsInitializing(false);
+          }
+          // Clear the provisional watchdog error if init ultimately succeeded
+          // — the 15s timeout may have fired before a slow load completed.
+          if (!didFail) {
+            setInitError(null);
+          }
         }
       }
     };
@@ -816,6 +840,12 @@ export function useChatSession(): UseChatSessionReturn {
     return () => {
       settled = true;
       clearTimeout(watchdog);
+      if (initGenerationRef.current === initGeneration) {
+        initGenerationRef.current += 1;
+      }
+      // Invalidate page responses independently of how far initialization got.
+      threadsRequestGenerationRef.current += 1;
+      threadsListWorkspaceIdRef.current = null;
     };
   }, [isAuthenticated, loadThreadsFromDb, setCurrentThread]);
 
@@ -924,6 +954,7 @@ export function useChatSession(): UseChatSessionReturn {
     isInitializing,
     initError,
     isLoadingMessages: isThreadLoadPending,
+    authRecoveryRoute,
 
     // Refs
     isHydratedRef,

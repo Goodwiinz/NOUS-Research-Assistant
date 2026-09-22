@@ -150,6 +150,7 @@ async def test_unverified_thread_id_never_becomes_the_checkpoint_key() -> None:
 
     # Graph state carries no thread identity either.
     assert graph.initial_state["thread_id"] == ""
+    assert graph.initial_state["thread_persistence"] == "ephemeral"
 
     # And the victim's resumable-stream pointer is never hijacked.
     assert VICTIM_THREAD_ID not in started_streams
@@ -166,4 +167,5 @@ async def test_owned_thread_id_still_reaches_the_graph_config() -> None:
     assert body.thread_id == VICTIM_THREAD_ID
     assert graph.config["configurable"]["thread_id"] == VICTIM_THREAD_ID
     assert graph.initial_state["thread_id"] == VICTIM_THREAD_ID
+    assert graph.initial_state["thread_persistence"] == "durable"
     assert VICTIM_THREAD_ID in started_streams

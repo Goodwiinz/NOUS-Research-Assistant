@@ -9,9 +9,12 @@ and the ``do_kb_retrieve`` tool — and the Neo4j entity graph
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from src.services.agent.classifier import (
+    ClassificationResult,
     classify_intent_keywords,
     classify_intent_with_fallback,
 )
@@ -36,15 +39,28 @@ from src.services.agent.classifier import (
         ),
         ("Find relationships in our knowledge base.", "knowledge_graph"),
         ("Search our docs and explain the retrieval policy.", "research"),
+        ("Don't use Python. Export a bibliography from our knowledge base.", "writing"),
+        (
+            "Extract the entities mentioned across our knowledge base.",
+            "knowledge_graph",
+        ),
+        ("Explain the phrase 'extract entities'; don't run tools.", "general"),
     ],
 )
 async def test_kb_actions_preserve_explicit_action_intent(
-    query: str, expected_intent: str
+    query: str, expected_intent: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Policy test: a semantic verdict must not be pre-empted by phrase matches.
+    semantic = AsyncMock(
+        return_value=ClassificationResult(
+            intent=expected_intent, confidence=0.95, reasoning="fixture", source="llm"
+        )
+    )
+    monkeypatch.setattr("src.services.agent.classifier.classify_intent_llm", semantic)
     result = await classify_intent_with_fallback(query, page_context={})
+    semantic.assert_awaited_once()
     assert result.intent == expected_intent
-    assert result.source == "action_override"
-    assert result.confidence == 1.0
+    assert result.source == "llm"
 
 
 @pytest.mark.unit
@@ -56,6 +72,60 @@ def test_kb_query_classified_research() -> None:
     assert result.intent == "research"
     assert result.source == "keyword"
     assert result.confidence > 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kb_query_rejects_semantic_graph_confusion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = AsyncMock(
+        return_value=ClassificationResult(
+            intent="knowledge_graph",
+            confidence=0.95,
+            reasoning="misread knowledge base as entity graph",
+            source="llm",
+        )
+    )
+    monkeypatch.setattr("src.services.agent.classifier.classify_intent_llm", semantic)
+
+    result = await classify_intent_with_fallback(
+        "What does our knowledge base say about transformer attention?",
+        page_context={},
+    )
+
+    assert result.intent == "research"
+    assert result.source == "keyword"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Search the entity graph, not the knowledge base.",
+        "Search the entity graph instead of the knowledge base.",
+        "Ignore the knowledge base and search the entity graph.",
+        'Search the entity graph for the term "knowledge base".',
+    ],
+)
+async def test_non_action_kb_phrase_preserves_semantic_graph_intent(
+    monkeypatch: pytest.MonkeyPatch, query: str
+) -> None:
+    semantic = AsyncMock(
+        return_value=ClassificationResult(
+            intent="knowledge_graph",
+            confidence=0.95,
+            reasoning="explicit entity graph request",
+            source="llm",
+        )
+    )
+    monkeypatch.setattr("src.services.agent.classifier.classify_intent_llm", semantic)
+
+    result = await classify_intent_with_fallback(query, page_context={})
+
+    assert result.intent == "knowledge_graph"
+    assert result.source == "llm"
 
 
 @pytest.mark.unit

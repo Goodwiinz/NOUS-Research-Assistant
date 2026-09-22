@@ -49,6 +49,18 @@ jobs:
           # Full history: the changed-file ratchet diffs against the PR base
           # (or push `before`) via merge-base, which a shallow clone breaks.
           fetch-depth: 0
+      - name: Reject stale release proposals
+        env:
+          RELEASE_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if [[ "$RELEASE_BRANCH" =~ ^codex/release-dev-([0-9a-f]{40})$ ]]; then
+            SOURCE_SHA="${BASH_REMATCH[1]}"
+            git fetch origin develop
+            if [ "$(git rev-parse origin/develop)" != "$SOURCE_SHA" ]; then
+              echo "::error::Release proposal is stale; use the newer source release"
+              exit 1
+            fi
+          fi
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
@@ -58,7 +70,7 @@ jobs:
       # divergent from the live lane). Direct pip install is faster (no buildx,
       # no remote layer cache) and keeps the linters in sync with the repo.
       - name: Install lint tools (current pins)
-        run: pip install ruff==0.15.15 black==26.5.1 isort==5.13.2 mypy==1.7.1
+        run: pip install ruff==0.15.15 black==26.5.1 isort==5.13.2 mypy==1.7.1 types-redis==4.6.0.20241004
       - name: Run Ruff (blocking)
         run: ruff check backend/src --output-format=github
       - name: Directory docs lint (blocking — carried from the fast lane)
@@ -681,6 +693,11 @@ jobs:
         run: pnpm test:coverage
         env:
           CI: true
+      - name: Check Ink terminal
+        run: |
+          pnpm --dir ../terminal type-check
+          pnpm --dir ../terminal test
+          python3 ../terminal/tests/migration-smoke.py
       # Blocking ratchet: global coverage may never fall below the floors
       # committed in frontend/quality-baseline.json ("coverage" key).
       # Raising or lowering a floor is an intentional, reviewed JSON edit.

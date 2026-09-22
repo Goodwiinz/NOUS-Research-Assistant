@@ -65,39 +65,37 @@ export function CitationLink({
       disabled={!citation}
       aria-label={
         citation
-          ? `Citation ${citationNumber}: ${citation.title}${
+          ? `Source ${citationNumber}: ${citation.title}${
               !canNavigate ? ' (external reference)' : ''
             }`
-          : `Citation ${citationNumber}`
+          : `Source ${citationNumber}`
       }
       className={cn(
-        // A dense synthesis paragraph can carry ten of these. The marker
-        // therefore rests as a quiet ink wash and only commits to full
-        // contrast once it is the one being read — a filled chip per
-        // reference speckles the manuscript column.
-        'inline-grid place-items-center align-middle mx-0.5 translate-y-[-2px]',
-        'h-4 min-w-4 px-1 rounded-[5px]',
-        'font-nous-mono text-[10px] font-medium tabular-nums leading-none',
-        'transition-colors duration-150',
+        // A footnote marker, not a chip: the numeral rides the baseline of the
+        // serif column so a dense synthesis paragraph carrying ten of them
+        // still reads as prose. The row of sources under the reply is where
+        // provenance is actually inspected.
+        'align-baseline leading-none',
         'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40',
-        // Resting text sits at 60% rather than the upstream 45%: at this size
-        // 45% measures 3.1:1 (light) / 3.8:1 (dark) against the 6% chip, under
-        // the 4.5:1 AA floor, and hover cannot rescue it on touch. 60% is the
-        // lowest step that clears the floor in both themes (5.0 / 5.8).
         citation
-          ? isActive
-            ? 'bg-foreground text-background cursor-pointer'
-            : canNavigate
-              ? 'bg-foreground/[0.06] text-foreground/60 hover:text-foreground/90 cursor-pointer'
-              : 'border border-(--nous-border-1) text-(--nous-fg-3) cursor-default'
-          : // Unresolved markers still carry a number the reader has to match
-            // against the prose, so they stay readable and are set apart by a
-            // fainter chip rather than by dimmer text.
-            'bg-foreground/[0.03] text-foreground/60 cursor-not-allowed',
+          ? canNavigate
+            ? 'cursor-pointer'
+            : 'cursor-default'
+          : 'cursor-not-allowed',
         className
       )}
     >
-      {citationNumber}
+      <sup
+        className={cn(
+          'ml-px align-super text-[10px] font-semibold leading-none',
+          citation && isActive
+            ? 'text-(--nous-fg-1) underline'
+            : 'text-(--nous-sol-safe) dark:text-(--nous-helios)',
+          !citation && 'text-(--nous-fg-3)'
+        )}
+      >
+        {citationNumber}
+      </sup>
     </button>
   );
 
@@ -107,12 +105,12 @@ export function CitationLink({
 
   const getScoreBadgeClass = (score: number) => {
     if (score >= 0.8)
-      return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30';
+      return 'bg-(--nous-terra)/15 text-(--nous-terra) border-(--nous-terra)/30';
     if (score >= 0.6)
-      return 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30';
+      return 'bg-(--nous-corona)/15 text-(--nous-corona) border-(--nous-corona)/30';
     if (score >= 0.4)
-      return 'bg-orange-500/15 text-orange-700 dark:text-orange-400 border-orange-500/30';
-    return 'bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30';
+      return 'bg-(--nous-sol)/15 text-(--nous-fg-accent-safe) border-(--nous-sol)/30';
+    return 'bg-(--nous-mars)/15 text-(--nous-mars) border-(--nous-mars)/30';
   };
 
   const previewContent = citation.content

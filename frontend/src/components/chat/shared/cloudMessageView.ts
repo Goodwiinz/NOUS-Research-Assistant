@@ -10,24 +10,8 @@ import type { PlanStep } from '@/types/agent-chat';
 import type { AgentProgressStep } from '@/services/agentStreamEvents';
 import { toolLabel } from '@/components/context-rail/toolLabels';
 
-/** A single agent tool execution captured during a streaming turn. */
-export interface ActivityStep {
-  /** Invocation identity when the producer supplies one. */
-  id?: string;
-  tool: string;
-  label: string;
-  status: 'running' | 'done' | 'error' | 'cancelled';
-  durationMs?: number;
-  /** Compact one-line summary of the tool's arguments (e.g. the query). */
-  argsSummary?: string;
-  /** Structured (already backend-redacted) tool arguments, for declarative
-   * per-tool renderers that want fields rather than the one-line summary. */
-  args?: Record<string, unknown>;
-  /** Compact one-line summary of the result, or the error text on failure. */
-  resultSummary?: string;
-  /** Structured, backend-redacted result for registered per-tool renderers. */
-  result?: unknown;
-}
+import type { ActivityStep } from '@nous/chat-runtime/types';
+export type { ActivityStep } from '@nous/chat-runtime/types';
 
 const SUMMARY_MAX = 140;
 
@@ -128,6 +112,9 @@ export interface ChatPageMessage {
    * for legacy rows — edit-and-resend needs the unambiguous value because the
    * backend looks the superseded turn up BY client_message_id. */
   clientMessageId?: string;
+  /** Transient edit/regenerate ownership marker. The server's canonical rows
+   * remain untouched while this replacement is in flight. */
+  replacesClientMessageId?: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
@@ -140,6 +127,8 @@ export interface ChatPageMessage {
   plan?: PlanStep[];
   /** Planner's top-level rationale for `plan`. */
   planReasoning?: string;
+  /** Bounded provider-authored reasoning summary for this turn. */
+  reasoningSummary?: string;
   /** Display-safe progress persisted with this assistant turn. */
   progressSteps?: AgentProgressStep[];
   /** Transient marker on the in-flight assistant turn path: the
@@ -208,6 +197,9 @@ export function mapDbMessageToChatPageMessage(
     toolExecutions: mapDbToolExecutions(dbMsg.tool_executions),
     ...(dbMsg.plan && dbMsg.plan.length > 0 ? { plan: dbMsg.plan } : {}),
     ...(dbMsg.plan_reasoning ? { planReasoning: dbMsg.plan_reasoning } : {}),
+    ...(dbMsg.reasoning_summary
+      ? { reasoningSummary: dbMsg.reasoning_summary }
+      : {}),
     ...(dbMsg.progress_steps && dbMsg.progress_steps.length > 0
       ? { progressSteps: dbMsg.progress_steps }
       : {}),
@@ -316,6 +308,12 @@ function mergeLocalProvenance(
       ...((message.planReasoning ?? local.planReasoning)
         ? { planReasoning: message.planReasoning ?? local.planReasoning }
         : {}),
+      ...((message.reasoningSummary ?? local.reasoningSummary)
+        ? {
+            reasoningSummary:
+              message.reasoningSummary ?? local.reasoningSummary,
+          }
+        : {}),
       ...(mergedToolExecutions?.length
         ? { toolExecutions: mergedToolExecutions }
         : {}),
@@ -333,22 +331,50 @@ export function selectDisplayedMessages({
     mapStoreMessagesToChatMessages(storeMessages),
     localMessages
   );
+  const replacement = [...localMessages]
+    .reverse()
+    .find(
+      (message) =>
+        message.source === 'optimistic' &&
+        message.role === 'user' &&
+        !!message.replacesClientMessageId
+    );
+  const replacementTargetIndex = replacement?.replacesClientMessageId
+    ? canonical.findIndex(
+        (message) =>
+          message.runtimeId === replacement.replacesClientMessageId ||
+          message.clientMessageId === replacement.replacesClientMessageId ||
+          message.id === replacement.replacesClientMessageId
+      )
+    : -1;
+  // An edit/regenerate owns the old turn's suffix until the server refresh
+  // reconciles the replacement. This keeps the canonical page immutable while
+  // preventing the old answer and following turns from appearing beside the
+  // replacement. Failure paths remove the transient marker and expose the
+  // untouched canonical suffix again.
+  const displayedCanonical =
+    replacementTargetIndex >= 0
+      ? canonical.slice(0, replacementTargetIndex)
+      : canonical;
   const canonicalRuntimeIds = new Set(
-    canonical.map((message) => message.runtimeId)
+    displayedCanonical.map((message) => message.runtimeId)
   );
 
   // A known-empty fresh page is authoritative. During initial/stale loads,
   // however, the local projection is the only renderable transcript and must
   // not disappear while the request is in flight.
-  if (canonical.length === 0 && messageFreshness !== 'fresh') {
+  if (displayedCanonical.length === 0 && messageFreshness !== 'fresh') {
     return localMessages;
   }
 
   const overlays = localMessages.filter((message) => {
     if (canonicalRuntimeIds.has(message.runtimeId)) return false;
     if (message.source === 'local-only') return true;
-    return message.source === 'optimistic' && messageFreshness !== 'fresh';
+    return (
+      message.source === 'optimistic' &&
+      (messageFreshness !== 'fresh' || !!message.replacesClientMessageId)
+    );
   });
 
-  return [...canonical, ...overlays];
+  return [...displayedCanonical, ...overlays];
 }

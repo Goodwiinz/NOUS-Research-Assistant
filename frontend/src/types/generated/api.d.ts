@@ -197,7 +197,12 @@ export interface paths {
         put?: never;
         /**
          * Cancel Stream Confirmation
-         * @description Durably abandon a caller-owned graph parked on HITL confirmation.
+         * @description Request durable cancellation of a caller-owned stream run.
+         *
+         *     An omitted body preserves the parked-confirmation endpoint contract. A
+         *     body identifies a normal running turn; its producer must observe the
+         *     ``stopping`` marker and acknowledge cancellation before the response can
+         *     become terminal.
          */
         post: operations["cancel_stream_confirmation_api_v1_agent_stream_cancel__thread_id__post"];
         delete?: never;
@@ -8149,6 +8154,26 @@ export interface paths {
         patch: operations["update_member_role_api_v2_workspaces__workspace_id__members__user_id__patch"];
         trace?: never;
     };
+    "/api/v2/workspaces/{workspace_id}/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Workspace Threads
+         * @description List threads across every live conversation in a workspace.
+         */
+        get: operations["list_workspace_threads_api_v2_workspaces__workspace_id__threads_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v2/ws/broadcast": {
         parameters: {
             query?: never;
@@ -9304,6 +9329,8 @@ export interface components {
             attachment_ids?: string[] | null;
             /** Citations */
             citations?: components["schemas"]["src__schemas__chat__CitationCreate"][] | null;
+            /** Client Message Id */
+            client_message_id?: string | null;
             /** Content */
             content: string;
             /** Latency Ms */
@@ -9383,6 +9410,8 @@ export interface components {
             progress_steps?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Reasoning Summary */
+            reasoning_summary?: string | null;
             /** @default user */
             role: components["schemas"]["MessageRole-Output"];
             /** Stopped */
@@ -11415,6 +11444,8 @@ export interface components {
             }[] | null;
             /** Plan Reasoning */
             plan_reasoning?: string | null;
+            /** Reasoning Summary */
+            reasoning_summary?: string | null;
             /** Role */
             role: string;
             /** Token Usage */
@@ -11701,6 +11732,11 @@ export interface components {
              * @default unknown
              */
             type: string;
+            /**
+             * Workspace Id
+             * @description Active chat workspace for durable thread creation
+             */
+            workspace_id?: string | null;
         };
         /**
          * PaginatedEntitiesResponse
@@ -13578,6 +13614,14 @@ export interface components {
          * @enum {string}
          */
         StepType: "search" | "screen" | "extract" | "synthesize" | "verify" | "export";
+        /** StreamCancelRequest */
+        StreamCancelRequest: {
+            /**
+             * Expected Run Id
+             * @description The active run the caller intends to stop
+             */
+            expected_run_id?: string | null;
+        };
         /** StreamConfirmRequest */
         StreamConfirmRequest: {
             /** Confirmed */
@@ -14779,6 +14823,8 @@ export interface components {
             snippet?: string | null;
             /** Snippet Preview */
             snippet_preview?: string | null;
+            /** Source Position */
+            source_position?: number | null;
         };
         /**
          * MessageRole
@@ -15392,7 +15438,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StreamCancelRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {
@@ -15410,7 +15460,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPErrorResponse"];
                 };
             };
-            /** @description Run is not awaiting confirmation */
+            /** @description Run is no longer the expected active run */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -20469,6 +20519,15 @@ export interface operations {
                     "application/json": components["schemas"]["ExportError"];
                 };
             };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
         };
     };
     list_export_formats_api_v1_export_formats_get: {
@@ -20589,6 +20648,15 @@ export interface operations {
                     "application/json": components["schemas"]["ExportError"];
                 };
             };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
         };
     };
     export_thread_stream_api_v1_export_thread__thread_id__stream_post: {
@@ -20612,6 +20680,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Thread not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -20619,6 +20696,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Export failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
+                };
+            };
+            /** @description PDF renderer unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportError"];
                 };
             };
         };
@@ -29029,6 +29124,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceMemberResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workspace_threads_api_v2_workspaces__workspace_id__threads_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by status: active, resolved, archived */
+                status_filter?: string | null;
+                page?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["src__schemas__chat__ThreadListResponse"];
                 };
             };
             /** @description Validation Error */

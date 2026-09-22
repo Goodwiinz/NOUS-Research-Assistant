@@ -1,21 +1,36 @@
 # CI and release workflows
 
-GitHub Actions owns CI, image construction, and the dev release. The
-original exact-SHA dev release was removed in #1379 because it never finished
-bootstrapping (see "Removed: the original automatic dev release" below); the
-current `release-dev.yml` is its deliberately simplified reintroduction: on a
-green Test Pipeline run on `develop` it builds the tested SHA via
-`docker-build.yml` and commits the `values-dev.yaml` digest/tag bump straight
-to `develop` with `[skip ci]` — the pattern the old
-`chore(gitops): update dev images` commits used. Argo CD's `nous-dev` app
-tracks `develop`, so that bump commit is the deployment.
+A successful Test Pipeline on `develop` starts `release-dev.yml`, which builds
+that exact source SHA and opens a digest-pinned GitOps pull request using the
+built-in `GITHUB_TOKEN`. No GitHub App private key or personal token is needed.
+The workflow dispatches Test Pipeline, Secret Scan, and Helm Validate at the
+proposal branch because token-created PR events require workflow approval.
+Merge the proposal after those checks pass; after the AWS Argo CD apps switch
+to `develop`, they deploy the selected image.
+Deployment-only commits are skipped to prevent a release loop.
+The proposed file is `values-aws.yaml`; `values-dev.yaml` is frozen for DO
+rollback. The AWS Argo CD apps still track `migration/aws` until their
+separately approved switch to `develop`, so merging a proposal alone does not
+deploy EKS before that switch.
+
+Repository setup: enable **Actions > General > Workflow permissions > Allow
+GitHub Actions to create and approve pull requests**. Keep default workflow
+permissions read-only. Only the promotion job requests contents, pull-request,
+and workflow-dispatch write permissions; it never approves or merges a PR,
+changes branch protection, or pushes to `develop`.
+
+Keep **Require branches to be up to date before merging** enabled on
+`develop`. The required Lint Backend job checks each generated release
+branch against the current `develop` SHA. Together these reject a proposal
+if source advances during CI or before merge; updating the old branch does
+not make its old image eligible again.
 
 ## Workflow responsibilities
 
 | Workflow | Trigger | Responsibility |
 | --- | --- | --- |
 | `test-pipeline.yml` | Push and pull request | Run all required checks and publish the exact `Release Gate` result. |
-| `release-dev.yml` | Completed successful Test Pipeline run on `develop` | Build the tested SHA and commit the `values-dev.yaml` digest/tag bump to `develop`. |
+| `release-dev.yml` | Completed successful Test Pipeline run on `develop` | Build the tested SHA and open a checked `values-aws.yaml` promotion PR. |
 | `docker-build.yml` | Reusable call or manual dispatch | Check out an explicit full SHA, assert `HEAD`, push the full-SHA trace tag, and return its digest. Called by `release-dev.yml`. |
 | `gitops-image-update.yml` | Manual dispatch only | Retained legacy production image update; it has no dev role. |
 | `deploy.yml` | Manual dispatch only | Retained legacy staging/production Helm path; it has no dev role and requires an explicit image tag. |

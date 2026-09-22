@@ -13,6 +13,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.models.user import User
+from tests.utils.agent_thread_access import editable_thread_getter
+
+
+@pytest.fixture(autouse=True)
+def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "src.services.threads.workspace_access.get_thread",
+        editable_thread_getter(),
+    )
+
+
 from src.services.agent.agent_submission_service import AcceptedSubmission
 from src.services.agent.runtime_snapshot import empty_runtime_snapshot
 from tests.utils.agent_stream import make_stream_request

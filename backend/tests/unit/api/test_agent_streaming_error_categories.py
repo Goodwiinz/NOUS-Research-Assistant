@@ -145,6 +145,10 @@ async def _run_confirm(graph: Any) -> list[str]:
             "src.api.agent.streaming._finalize_run_id",
             new=AsyncMock(return_value=True),
         ),
+        patch(
+            "src.api.agent.streaming._resolve_thread",
+            new=AsyncMock(return_value=(SimpleNamespace(id="editable-thread"), None)),
+        ),
     ):
         return [
             frame

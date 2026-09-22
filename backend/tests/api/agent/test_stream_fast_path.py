@@ -698,6 +698,105 @@ async def test_fast_path_disconnect_terminalizes_before_resistant_pull_cleanup(
     assert finalized["payload"]["assistant_message_id"] == "partial-row-id"
 
 
+async def test_fast_path_durable_stop_terminalizes_without_transport_disconnect(
+    monkeypatch,
+):
+    """A durable Stop closes Luna and records user_requested independently of SSE disconnect."""
+    user = SimpleNamespace(id=uuid4(), organization_id=uuid4())
+    thread = SimpleNamespace(id=uuid4(), conversation_id=uuid4())
+
+    from src.api.agent import streaming as streaming_mod
+    from src.api.agent.execute import AgentExecuteRequest, AgentMessage
+    from src.core.config import get_settings
+    from src.services.agent import agent_execution_service as jobs_mod
+    from src.services.agent import llm_factory
+    from src.services.agent.run_event_types import RunEventType
+    from src.shared.enums import JobStatus
+
+    body = AgentExecuteRequest(
+        messages=[
+            AgentMessage(
+                role="user",
+                content="Explain why rainbows form",
+                client_message_id=uuid4(),
+            )
+        ],
+        page_context={"type": "chat"},
+        use_rag=False,
+        thread_id=str(thread.id),
+    )
+    request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
+    model = _TokenThenBlockedLuna()
+    settings = get_settings()
+    monkeypatch.setattr(settings, "AGENT_FAST_PATH_ENABLED", True)
+    monkeypatch.setattr(settings, "AGENT_FAST_PATH_MAX_INPUT_CHARS", 8_000)
+    monkeypatch.setattr(llm_factory, "build_fast_path_llm", lambda: model)
+
+    acceptance = streaming_mod.AcceptedSubmission(
+        run_id=str(uuid4()),
+        thread_id=str(thread.id),
+        user_message_id=str(uuid4()),
+        outbox_id=str(uuid4()),
+        idempotency_key="durable-stop",
+    )
+    persist_assistant = AsyncMock(return_value="partial-row-id")
+    finalize = AsyncMock(return_value=True)
+    stop_requested = AsyncMock(side_effect=[False, False, False, False, True])
+    fake_session = SimpleNamespace(close=AsyncMock())
+
+    with (
+        patch.object(streaming_mod, "AsyncSessionLocal", return_value=fake_session),
+        patch.object(streaming_mod, "_accept_eligible", return_value=True),
+        patch.object(
+            streaming_mod,
+            "_resolve_thread",
+            new=AsyncMock(return_value=(thread, str(thread.conversation_id))),
+        ),
+        patch.object(
+            streaming_mod, "accept_submission", new=AsyncMock(return_value=acceptance)
+        ),
+        patch.object(
+            streaming_mod,
+            "mark_submission_dispatched",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(streaming_mod, "is_run_cancellation_requested", stop_requested),
+        patch.object(
+            jobs_mod,
+            "_persist_assistant_message_safe",
+            new=persist_assistant,
+        ),
+        patch.object(streaming_mod, "_finalize_run", finalize),
+        patch.object(
+            streaming_mod._stream_buffer,
+            "start_stream",
+            new=AsyncMock(return_value="stream-id"),
+        ),
+        patch.object(streaming_mod._stream_buffer, "append", new=AsyncMock()),
+        patch.object(
+            streaming_mod._stream_buffer,
+            "finish_stream",
+            new=AsyncMock(),
+        ),
+    ):
+        events = [
+            event
+            async for event in streaming_mod.stream_event_generator(body, request, user)
+        ]
+
+    assert model.closed.is_set()
+    assert any("event: token" in event for event in events)
+    assert not any("event: done" in event for event in events)
+    assert not any("event: error" in event for event in events)
+    persist_assistant.assert_awaited_once()
+    assert persist_assistant.await_args.kwargs["content"] == "partial"
+    assert persist_assistant.await_args.kwargs["stopped"] is True
+    finalize.assert_awaited_once()
+    assert finalize.await_args.kwargs["status"] is JobStatus.CANCELLED
+    assert finalize.await_args.kwargs["event_type"] is RunEventType.RUN_CANCELLED
+    assert finalize.await_args.kwargs["payload"]["reason"] == "user_requested"
+
+
 class _CancelDuringEmitLuna:
     """Second chunk's emit is where the cancel lands (see emit patch below)."""
 

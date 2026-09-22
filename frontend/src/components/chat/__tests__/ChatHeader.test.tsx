@@ -20,11 +20,32 @@ vi.mock('react-hot-toast', () => ({
   default: { error: (...args: unknown[]) => toastErrorMock(...args) },
 }));
 
+const listProcessingJobsMock = vi.fn();
+vi.mock('@/services/entityService', () => ({
+  entityService: {
+    listProcessingJobs: (...args: unknown[]) => listProcessingJobsMock(...args),
+  },
+}));
+
 import { ChatHeader } from '../ChatHeader';
 
 describe('ChatHeader', () => {
+  it('keeps history accessible until the desktop sidebar is docked', () => {
+    render(<ChatHeader onMobileSidebarToggle={() => undefined} />);
+    expect(
+      screen.getByRole('button', { name: 'Toggle chat history' })
+    ).toHaveClass('xl:hidden', 'h-11', 'w-11');
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
+    listProcessingJobsMock.mockReset();
+    listProcessingJobsMock.mockResolvedValue({
+      jobs: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    });
   });
 
   afterEach(() => {
@@ -82,10 +103,55 @@ describe('ChatHeader', () => {
     expect(screen.getByLabelText('Export chat')).toBeInTheDocument();
   });
 
-  describe('export wiring', () => {
-    const messages = [
-      { role: 'user', content: 'hi', timestamp: 1 },
+  it('keeps every header action in the keyboard order with a long title', async () => {
+    vi.useRealTimers();
+    listProcessingJobsMock.mockResolvedValue({
+      jobs: [
+        {
+          id: 'job-1',
+          job_type: 'arxiv_ingest',
+          status: 'running',
+          progress_percentage: 40,
+          created_at: '2026-09-13T12:00:00.000Z',
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    const user = userEvent.setup();
+    const onMobileSidebarToggle = vi.fn();
+    const onCopyAll = vi.fn();
+    const chatTitle =
+      'A deliberately long conversation title about evidence synthesis and retrieval quality';
+
+    render(
+      <ChatHeader
+        chatTitle={chatTitle}
+        messages={[{ role: 'user', content: 'hi', timestamp: 1 }]}
+        onMobileSidebarToggle={onMobileSidebarToggle}
+        onCopyAll={onCopyAll}
+      />
+    );
+
+    const actions = [
+      screen.getByRole('button', { name: 'Toggle chat history' }),
+      await screen.findByRole('button', {
+        name: 'Background jobs: 1 running',
+      }),
+      screen.getByRole('button', { name: 'Copy all messages' }),
+      screen.getByRole('button', { name: 'Export chat' }),
     ];
+
+    for (const action of actions) {
+      await user.tab();
+      expect(action).toHaveFocus();
+    }
+    expect(screen.getByTitle(chatTitle)).toBeInTheDocument();
+  });
+
+  describe('export wiring', () => {
+    const messages = [{ role: 'user', content: 'hi', timestamp: 1 }];
 
     beforeEach(() => {
       // userEvent awaits internal timers; the file-level fake timers hang it.
@@ -93,12 +159,27 @@ describe('ChatHeader', () => {
       exportThreadMock.mockResolvedValue(undefined);
       vi.useRealTimers();
       // downloadFile (the no-thread local fallback) touches URL.createObjectURL.
-      (
-        URL as unknown as { createObjectURL: () => string }
-      ).createObjectURL = () => 'blob:mock';
-      (
-        URL as unknown as { revokeObjectURL: () => void }
-      ).revokeObjectURL = () => {};
+      (URL as unknown as { createObjectURL: () => string }).createObjectURL =
+        () => 'blob:mock';
+      (URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL =
+        () => {};
+    });
+
+    it('exposes menu semantics and restores focus on Escape', async () => {
+      const user = userEvent.setup();
+      render(<ChatHeader messages={messages} threadId="thread-123" />);
+
+      const trigger = screen.getByLabelText('Export chat');
+      expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+
+      await user.click(trigger);
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+      expect(trigger).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getAllByRole('menuitem')).toHaveLength(3);
+
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
     });
 
     it('uses the backend export (with citations+metadata) when a thread is persisted', async () => {
@@ -109,11 +190,10 @@ describe('ChatHeader', () => {
       await user.click(screen.getByText('Export as Markdown'));
 
       expect(exportThreadMock).toHaveBeenCalledTimes(1);
-      expect(exportThreadMock).toHaveBeenCalledWith(
-        'thread-123',
-        'markdown',
-        { includeCitations: true, includeMetadata: true }
-      );
+      expect(exportThreadMock).toHaveBeenCalledWith('thread-123', 'markdown', {
+        includeCitations: true,
+        includeMetadata: true,
+      });
     });
 
     it('does not call the backend export for a brand-new chat (no thread)', async () => {

@@ -1,0 +1,264 @@
+"""Message presenters preserve persisted identity and terminal state.
+
+The response schema gives both fields nullable defaults, so omitting either
+constructor keyword silently turns a real persisted value into ``None``.  The
+tests below exercise the ORM -> presenter -> JSON boundary with literal UUIDs;
+removing either keyword from ``_message_to_response`` must fail here.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from uuid import UUID
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.threads import threads as legacy_threads
+from src.api.threads.workspace_routes.presenters import (
+    _message_to_response,
+    _thread_to_detail_response,
+)
+from src.models.chat_message import ChatMessage, MessageRole
+from src.models.citation import Citation
+from src.models.message_attachment import MessageAttachment
+from src.models.thread import Thread
+from src.models.user import User
+
+pytestmark = pytest.mark.unit
+
+DATABASE_USER_ID = UUID("10000000-0000-0000-0000-000000000001")
+DATABASE_ASSISTANT_ID = UUID("20000000-0000-0000-0000-000000000002")
+CLIENT_USER_ID = UUID("30000000-0000-0000-0000-000000000003")
+CLIENT_ASSISTANT_ID = UUID("40000000-0000-0000-0000-000000000004")
+THREAD_ID = UUID("50000000-0000-0000-0000-000000000005")
+USER_ID = UUID("60000000-0000-0000-0000-000000000006")
+CREATED_AT = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+
+
+def _message(
+    *,
+    database_id: UUID,
+    role: MessageRole,
+    client_message_id: UUID | None,
+    stopped: bool | None,
+) -> ChatMessage:
+    return ChatMessage(
+        id=database_id,
+        thread_id=THREAD_ID,
+        user_id=USER_ID if role is MessageRole.USER else None,
+        role=role,
+        content=f"{role.value} content",
+        token_count=7,
+        latency_ms=1250,
+        client_message_id=client_message_id,
+        stopped=stopped,
+        created_at=CREATED_AT,
+        updated_at=CREATED_AT,
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "database_id", "client_id", "stopped", "expected_client_json"),
+    [
+        (
+            MessageRole.USER,
+            DATABASE_USER_ID,
+            CLIENT_USER_ID,
+            True,
+            "30000000-0000-0000-0000-000000000003",
+        ),
+        (
+            MessageRole.ASSISTANT,
+            DATABASE_ASSISTANT_ID,
+            CLIENT_ASSISTANT_ID,
+            False,
+            "40000000-0000-0000-0000-000000000004",
+        ),
+    ],
+)
+def test_message_response_preserves_distinct_client_identity_and_stopped_state(
+    role: MessageRole,
+    database_id: UUID,
+    client_id: UUID,
+    stopped: bool,
+    expected_client_json: str,
+) -> None:
+    """Dropping either presenter keyword must lose a literal persisted value.
+
+    Mutation proof: disable presenters.py:209 or presenters.py:216, then run
+    ``pytest -q backend/tests/unit/api/test_message_presenter_identity.py
+    -k preserves_distinct`` from the repository root.
+    """
+    message = _message(
+        database_id=database_id,
+        role=role,
+        client_message_id=client_id,
+        stopped=stopped,
+    )
+
+    response = _message_to_response(message)
+
+    assert message.id != message.client_message_id
+    assert response.client_message_id == message.client_message_id
+    assert response.stopped == message.stopped
+    payload = response.model_dump(mode="json")
+    assert payload["id"] == str(database_id)
+    assert payload["client_message_id"] == expected_client_json
+    assert payload["stopped"] is stopped
+
+
+def test_message_response_preserves_legacy_null_identity_and_stopped_state() -> None:
+    """Legacy nullable values remain JSON null instead of becoming strings."""
+    message = _message(
+        database_id=DATABASE_ASSISTANT_ID,
+        role=MessageRole.ASSISTANT,
+        client_message_id=None,
+        stopped=None,
+    )
+
+    response = _message_to_response(message)
+
+    assert response.client_message_id is None
+    assert response.stopped is None
+    payload = response.model_dump(mode="json")
+    assert payload["client_message_id"] is None
+    assert payload["stopped"] is None
+
+
+def test_deprecated_thread_list_route_preserves_message_identity_in_json() -> None:
+    """The /api/v2/threads list route cannot drop runtime identity or state.
+
+    Mutation proof: disable threads.py:1069 or threads.py:1076, then run ``pytest -q
+    backend/tests/unit/api/test_message_presenter_identity.py -k
+    deprecated_thread_list_route`` from the repository root.
+    """
+    message = _message(
+        database_id=DATABASE_ASSISTANT_ID,
+        role=MessageRole.ASSISTANT,
+        client_message_id=CLIENT_ASSISTANT_ID,
+        stopped=True,
+    )
+    service = SimpleNamespace(
+        list_messages=AsyncMock(return_value=([message], 1)),
+    )
+    current_user = User(id=USER_ID)
+    db = AsyncSession()
+
+    try:
+        with patch.object(legacy_threads, "get_chat_service", return_value=service):
+            response = asyncio.run(
+                legacy_threads.list_messages(
+                    thread_id=THREAD_ID,
+                    limit=100,
+                    offset=0,
+                    before_id=None,
+                    since=None,
+                    order=None,
+                    current_user=current_user,
+                    db=db,
+                )
+            )
+    finally:
+        asyncio.run(db.close())
+
+    payload = response.model_dump(mode="json")
+    assert payload["total"] == 1
+    assert payload["has_more"] is False
+    assert len(payload["messages"]) == 1
+    assert (
+        payload["messages"][0]["client_message_id"]
+        == "40000000-0000-0000-0000-000000000004"
+    )
+    assert payload["messages"][0]["stopped"] is True
+
+
+def test_thread_detail_uses_message_presenter_without_losing_rich_provenance() -> None:
+    """Thread-detail nesting keeps identity, state, and existing provenance."""
+    message = ChatMessage(
+        id=DATABASE_ASSISTANT_ID,
+        thread_id=THREAD_ID,
+        user_id=None,
+        role=MessageRole.ASSISTANT,
+        content="assistant content",
+        token_count=7,
+        latency_ms=1250,
+        client_message_id=CLIENT_ASSISTANT_ID,
+        stopped=True,
+        tool_executions=[
+            {
+                "id": "tool-1",
+                "tool_name": "search_documents",
+                "args": {"query": "identity"},
+                "status": "completed",
+            }
+        ],
+        plan=[
+            {
+                "step": 1,
+                "description": "Search documents",
+                "tool": "search_documents",
+                "args_hint": {},
+                "depends_on": [],
+            }
+        ],
+        plan_reasoning="Search before answering.",
+        reasoning_summary="I compared the retrieved evidence.",
+        token_usage={"input_tokens": 11, "output_tokens": 7},
+        progress_steps=[{"phase": "writing", "detail": "Drafting"}],
+        citations=[
+            Citation(
+                id=UUID("70000000-0000-0000-0000-000000000007"),
+                external_reference_id="arXiv:2609.00001",
+                source_position=1,
+                snippet="Identity provenance.",
+                document_title="Stable Message Identity",
+                document_type="paper",
+                created_at=CREATED_AT,
+                updated_at=CREATED_AT,
+            )
+        ],
+        attachments=[
+            MessageAttachment(
+                id=UUID("90000000-0000-0000-0000-000000000009"),
+                document_id=UUID("a0000000-0000-0000-0000-00000000000a"),
+                display_name="identity-notes.pdf",
+                thumbnail_url=None,
+                created_at=CREATED_AT,
+                updated_at=CREATED_AT,
+            )
+        ],
+        is_deleted=False,
+        superseded_by_message_id=None,
+        created_at=CREATED_AT,
+        updated_at=CREATED_AT,
+    )
+    thread = Thread(
+        id=THREAD_ID,
+        conversation_id=UUID("80000000-0000-0000-0000-000000000008"),
+        title="Identity thread",
+        summary=None,
+        status=None,
+        last_message_at=CREATED_AT,
+        message_count=1,
+        token_count=7,
+        created_by_id=USER_ID,
+        created_at=CREATED_AT,
+        updated_at=CREATED_AT,
+        source_project_id=None,
+        messages=[message],
+    )
+
+    nested = _thread_to_detail_response(thread).messages[0]
+
+    assert nested.client_message_id == CLIENT_ASSISTANT_ID
+    assert nested.stopped is True
+    assert nested.plan_reasoning == "Search before answering."
+    assert nested.reasoning_summary == "I compared the retrieved evidence."
+    assert nested.token_usage == {"input_tokens": 11, "output_tokens": 7}
+    assert nested.progress_steps == [{"phase": "writing", "detail": "Drafting"}]
+    assert nested.citations[0].document_title == "Stable Message Identity"
+    assert nested.attachments[0].display_name == "identity-notes.pdf"

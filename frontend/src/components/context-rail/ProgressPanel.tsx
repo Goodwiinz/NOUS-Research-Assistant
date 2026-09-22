@@ -50,10 +50,7 @@ export function ProgressPanel({ threadId }: ProgressPanelProps) {
   const doneCount = rows.filter((r) => r.done).length;
 
   return (
-    <CollapsibleCard
-      title="Progress"
-      badge={`${doneCount} of ${rows.length}`}
-    >
+    <CollapsibleCard title="Progress" badge={`${doneCount} of ${rows.length}`}>
       <ul className="space-y-3">
         {rows.map((row) => (
           <li key={row.id} className="flex items-start gap-3">
@@ -61,9 +58,8 @@ export function ProgressPanel({ threadId }: ProgressPanelProps) {
               className={cn(
                 'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition-colors',
                 row.done && 'bg-(--nous-sol)',
-                row.active &&
-                  'border-2 border-(--nous-sol) animate-pulse',
-                row.error && 'bg-(--error-red)',
+                row.active && 'border-2 border-(--nous-sol) animate-pulse',
+                row.error && 'bg-(--nous-mars)',
                 !row.done &&
                   !row.active &&
                   !row.error &&
@@ -87,16 +83,26 @@ export function ProgressPanel({ threadId }: ProgressPanelProps) {
                 </span>
               )}
             </span>
+            <span className="sr-only">
+              {row.error
+                ? 'Failed'
+                : row.active
+                  ? 'In progress'
+                  : row.done
+                    ? 'Done'
+                    : 'Pending'}
+            </span>
             <span
               className={cn(
                 'text-[14px] leading-snug',
-                row.done && 'line-through'
+                row.done && 'line-through',
+                row.active && 'font-medium'
               )}
               style={{
                 color: row.done
                   ? 'var(--nous-fg-3)'
                   : row.error
-                    ? 'var(--error-red)'
+                    ? 'var(--nous-mars)'
                     : 'var(--nous-fg-1)',
               }}
             >

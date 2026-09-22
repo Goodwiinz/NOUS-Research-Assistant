@@ -2,261 +2,179 @@
 
 <img src="brand/nous-logo.svg" alt="NOUS" width="180" />
 
-# NOUS — Multimodal Intelligence Platform
+# NOUS — AI Research Workspace
 
-**From scattered papers to grounded insights — an AI research assistant that reads, reasons, and writes with citations you can trust.**
+**Search your documents, inspect the sources, and organize research through an agent with human approval.**
 
-[![Live Demo](https://img.shields.io/badge/Live_Showcase-goodwiins.github.io%2Fnous-D4A039?style=for-the-badge)](https://goodwiins.github.io/nous/)
-[![GitHub](https://img.shields.io/badge/GitHub-goodwiins%2Frag-0A0A0E?style=for-the-badge&logo=github)](https://github.com/goodwiins/rag)
-[![Next.js](https://img.shields.io/badge/Next.js-16.2-000000?style=for-the-badge&logo=nextdotjs)](https://nextjs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-Agent_System-1C3C3C?style=for-the-badge)](https://langchain-ai.github.io/langgraph/)
+[Showcase & screenshots](https://goodwiins.github.io/nous/) · [Source code](https://github.com/Goodwiinz/rag) · [Terminal client](https://github.com/Goodwiinz/nous-cli) · [Evaluation evidence](evals/README.md)
 
 </div>
 
----
+## What NOUS does
 
-## Hackathon Submission — AI Software Track
+NOUS brings document search, cited answers, research projects, and agent actions into one workspace. It is built for working through a collection of papers or internal documents: find relevant material, inspect the supporting sources, and save useful documents and notes to a project.
 
-| Deliverable   | Link                                                                   |
-| ------------- | ---------------------------------------------------------------------- |
-| Showcase Site | [goodwiins.github.io/nous](https://goodwiins.github.io/nous/)          |
-| Source Code   | [github.com/goodwiins/rag](https://github.com/goodwiins/rag)           |
-| Demo Video    | [`docs/paper/`](docs/paper/) _(see repo for the latest cut)_           |
-| Pitch Deck    | [`brand/NOUS-Product-Overview.docx`](brand/NOUS-Product-Overview.docx) |
+The web application combines a Next.js / TypeScript frontend with a FastAPI / LangGraph backend. A separate [TypeScript CLI](https://github.com/Goodwiinz/nous-cli) connects to the same backend for streamed conversations and tool approvals.
 
----
+Built by **Abdel El Bikha ([@goodwiins](https://github.com/goodwiins))** under [Goodwiinz](https://github.com/Goodwiinz), spanning the frontend, backend, agent orchestration, and evaluation work.
 
-## The Problem
+**Status:** actively developed. Feature availability depends on deployment configuration. The showcase is a product overview; recorded evaluations below describe specific source revisions and controlled environments, not a blanket guarantee of current production behavior.
 
-Researchers, analysts, and knowledge workers drown in unstructured information — PDFs, images, audio, citations scattered across tools. Traditional search returns keywords; LLM chatbots hallucinate without sources; note-taking apps don't reason.
+## Core workflow
 
-**NOUS is a single, grounded workspace that ingests any modality, retrieves across a hybrid index, and generates literature reviews, drafts, and answers with inline citations — backed by a human-in-the-loop agent you can trust.**
+| Capability | User experience | Implementation |
+| --- | --- | --- |
+| Document Q&A | Ask a question and inspect citations and source documents. | Search services, answer rendering, and an interactive citation panel. |
+| Agent actions | Ask the agent to create a project, attach documents, or save notes; approve gated actions before execution. | LangGraph tool orchestration, interrupts, and persisted project state. |
+| Research workspace | Organize documents and notes; access bibliography and draft tools in one project. | Project APIs, document management, and frontend state reconciliation. |
+| Streaming conversations | Follow the response and tool activity as a run progresses. | Server-sent events, thread state, and PostgreSQL checkpoints. |
+| Terminal access | Use the shared agent backend from a CLI. | Browser-based authentication flow, streamed events, and confirmation handling in [nous-cli](https://github.com/Goodwiinz/nous-cli). |
 
-### Who it's for
+Additional implementations include arXiv ingestion, knowledge-graph exploration, memory, multimodal processing, and writing workflows. Their presence in the repository does not establish end-to-end reliability; see [evaluation status](#evaluation-evidence).
 
-- **Academic researchers** drafting literature reviews across hundreds of papers
-- **R&D teams** synthesizing internal docs, patents, and competitive intel
-- **Analysts** who need audit-ready answers with traceable sources
+## Demo walkthrough
 
-### Value delivered
+Use a configured instance with two or three indexed documents and a signed-in account.
 
-- Hours saved per literature review (arXiv → draft → LaTeX export)
-- Every claim linked to a source chunk — no un-grounded generation
-- Destructive actions gated behind `interrupt()` so the agent never goes rogue
+1. **Inspect the collection.** Open the documents you will use so the audience can see the available evidence.
+2. **Ask a grounded question.** For example: “What retrieval methods do these documents describe? Cite the supporting sources.”
+3. **Check the answer.** Open a citation and inspect the source document. Explain what supports the answer and what the documents do not establish.
+4. **Approve an action.** Ask the agent to create a research project, then attach a selected document. Show the confirmation before execution.
+5. **Verify the saved result.** Open the project and refresh it to demonstrate persisted state.
+6. **Show the engineering evidence.** Open a recorded evaluation and explain which tool actions, database effects, or answer claims it checks.
 
----
-
-## Highlights
-
-<table>
-<tr>
-<td width="50%">
-
-### Agent System — LangGraph with HITL
-
-Intent-routed StateGraph with specialized subgraphs (research · writing · data · general), 12 tools, SSE streaming, and `interrupt()` gates on every destructive tool. Checkpointed in Postgres so threads survive restarts.
-
-</td>
-<td width="50%">
-
-### Hybrid Retrieval
-
-Vector (DO Knowledge Base) + keyword (Postgres FTS) + graph (Neo4j) fused and reranked (Cohere). Cross-modal: a query hits text chunks, image regions, audio segments, and citation edges in one call.
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-### Citation Pipeline
-
-Hybrid extraction from arXiv API, Semantic Scholar, CrossRef, and PDF parsers. Interactive Cytoscape.js citation graph backed by Neo4j. BibTeX/APA/IEEE/MLA export with incomplete-metadata warnings.
-
-</td>
-<td width="50%">
-
-### Multi-Agent Literature Reviews
-
-Drafts generated by a writing subgraph: theme extraction → per-theme synthesis → inline citation injection → LaTeX + `.bib` export. Versioned so you can iterate.
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-### Multimodal Ingest
-
-PDF + OCR, image object/scene detection, Whisper speech-to-text with speaker diarization, video frame+audio extraction. One pipeline, one index.
-
-</td>
-<td width="50%">
-
-### Local AI (WebLLM)
-
-In-browser inference with Llama, Phi, Gemma, Qwen for offline or privacy-sensitive workflows. No data leaves the client.
-
-</td>
-</tr>
-</table>
-
----
-
-## AI & Algorithmic Design
-
-Why the stack looks this way:
-
-- **LangGraph over a single prompt chain** — branching intents (research vs. writing vs. data) demand explicit state and retries. A StateGraph makes tool loops debuggable, checkpointable, and resumable mid-interrupt.
-- **Hybrid retrieval over pure vector** — academic queries mix named entities, exact phrases, and semantic similarity. Fusing vector + BM25 + graph traversal then reranking with Cohere beats any single retriever on grounded-answer evals.
-- **Human-in-the-loop by design** — ingests, draft creation, and note writes call `interrupt()`. The client sees the pending action, surfaces it to the user, and resumes via `Command(resume=...)`. No silent side effects.
-- **Subgraph specialization** — the research subgraph gets arXiv + search tools (not drafting); the writing subgraph gets drafts + bibliography. Smaller tool sets = fewer hallucinated tool calls.
-- **Eval-gated quality** — DeepEval thresholds in CI: >70% answer relevancy, >90% faithfulness, <10% hallucination. Regressions block merges.
-
-See [`docs/architecture/`](docs/architecture/) for diagrams and [`backend/src/services/agent/graph.py`](backend/src/services/agent/graph.py) for the graph definition.
-
----
+The CLI is an optional second view of the shared backend. Rehearse the workflow against the actual deployment before presenting; the steps above are a suggested demonstration, not a fresh live test report.
 
 ## Screenshots
 
-|                Dashboard                |                  Chat                  |                Research                |
-| :-------------------------------------: | :------------------------------------: | :------------------------------------: |
-| ![](brand/screenshots/01-dashboard.png) |   ![](brand/screenshots/02-chat.png)   | ![](brand/screenshots/08-research.png) |
-|            **Hybrid Search**            |            **Entity Graph**            |            **arXiv Ingest**            |
-|  ![](brand/screenshots/03-search.png)   | ![](brand/screenshots/06-entities.png) |  ![](brand/screenshots/07-arxiv.png)   |
+| 1. Compose a question | 2. Watch the answer stream |
+| --- | --- |
+| ![Compose an evidence-review question in NOUS](brand/screenshots/live-chat-01-compose.png) | ![NOUS streams its progress and answer](brand/screenshots/live-chat-02-streaming.png) |
 
-Full gallery at [goodwiins.github.io/nous](https://goodwiins.github.io/nous/).
+| 3. Review the structured answer | 4. Continue with a follow-up |
+| --- | --- |
+| ![Review a completed NOUS answer](brand/screenshots/live-chat-03-answer.png) | ![Ask a follow-up in the same NOUS conversation](brand/screenshots/live-chat-04-follow-up.png) |
 
----
+Captured from the live [NOUS deployment](https://goodwiinz.tech/) using a fictional study record with workspace sources disabled, so no private source or message content is included.
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    Web["Next.js web app"] --> API["FastAPI"]
+    CLI["TypeScript CLI"] --> API
+    API --> Agent["LangGraph agent"]
+    Agent --> Approval["Human approval"]
+    Approval --> Agent
+    Agent --> Services["Search and research services"]
+    API --> Services
+    Agent --> PG["PostgreSQL: state and checkpoints"]
+    Services --> PG
+    Services --> Graph["Neo4j: entities and relationships"]
+    Services --> Storage["Object storage: documents"]
+    Services --> Providers["Configured AI and retrieval providers"]
+    API --> Redis["Redis: cache and task broker"]
 ```
-┌─────────────────┐     ┌──────────────────────────────────────────┐     ┌────────────────┐
-│  Next.js 16     │────▶│  FastAPI · LangGraph StateGraph          │────▶│  Postgres      │
-│  React 18       │ SSE │  ┌──────────────────────────────────┐    │     │  Neo4j         │
-│  Zustand + RQ   │◀────│  │ rag → intent → memory → route →  │    │     │  Redis         │
-│  shadcn/ui      │     │  │ [research|writing|data|general]  │    │     │  MinIO         │
-└─────────────────┘     │  │ → tools → memory_save → END      │    │     └────────────────┘
-                        │  └──────────────────────────────────┘    │     └────────────────┘
-                        │  interrupt() ── HITL ── Command(resume)  │
-                        └──────────────────────────────────────────┘
-```
 
-- **Frontend**: Next.js 16 · React 18 · TS strict · Tailwind · shadcn/ui · Zustand · TanStack Query v5 · Cytoscape.js
-- **Backend**: FastAPI · LangGraph · Celery · Whisper · spaCy · sentence-transformers · Cohere rerank
-- **Data**: Postgres (metadata + checkpoints + FTS) · Neo4j (KG + citations) · Redis (cache + broker) · MinIO (blobs)
-- **Infra**: Docker Compose · Kubernetes + Helm · Terraform · GitHub Actions CI
-- **Observability**: Prometheus · LangSmith · structlog
+| Layer | Technologies and responsibilities |
+| --- | --- |
+| Web | Next.js, React, TypeScript, Tailwind, Zustand, TanStack Query; chat, documents, projects, and citations. |
+| API and agents | FastAPI, Pydantic, LangGraph; request validation, tool routing, approvals, streaming, and checkpoints. |
+| Retrieval | PostgreSQL full-text search, optional DigitalOcean Knowledge Base integration, graph services, and configurable reranking. |
+| Data and processing | PostgreSQL, Neo4j, Redis, Celery, and configurable object storage. |
+| Operations | Docker Compose, Kubernetes / Helm, Terraform, GitHub Actions, structured logs, and tracing integrations. |
 
----
+**Retrieval configuration matters.** The [operational notes](docs/engineering/gotchas.md) document the migration away from Qdrant and a development deployment using PostgreSQL full-text retrieval with DigitalOcean KB disabled. Vector retrieval and reranking should be described according to the enabled configuration, rather than assumed to run on every query.
 
-## Quick Start
+### Engineering decisions
+
+- **Explicit agent state:** LangGraph represents tool loops and approval boundaries, with PostgreSQL checkpoints for conversation execution state.
+- **Visible side effects:** gated tools surface pending actions to the user. Evaluations inspect persisted effects as well as the agent's response.
+- **Traceable answers:** citations let users inspect source material; their presence alone does not prove a claim is supported.
+- **Clear frontend ownership:** the [frontend standards](docs/engineering/frontend.md) define chat state, request-backed caches, and reconciliation after agent mutations.
+- **Enforced boundaries:** [architecture guards](docs/engineering/README.md) check router/service separation, identity requirements, and frontend dependency boundaries.
+
+## Evaluation evidence
+
+The [agent evaluation suite](evals/README.md) runs pinned production code against isolated infrastructure and controlled service doubles. Deterministic checks examine tool trajectories and persisted state; selected tasks also use an isolated semantic judge. Infrastructure failures are tracked separately.
+
+The following are **historical recorded results**, not current-head scores or live-service availability measurements.
+
+| Capability | Recorded result | Evidence |
+| --- | --- | --- |
+| Knowledge-base retrieval | **5/5 trials passed**; marked gated in the evaluation documentation. | [August 8 baseline](evals/baselines/agent-flow-2026-08-08-writing-kb.json) |
+| Multi-step project management | **1/1 recorded trial passed**, including three approvals and project/document/note operations. | [Project-management baseline](evals/baselines/agent-flow-2026-08-07-tools.json) |
+| Writing and document comparison | **0/5 trials passed**; semantic checks found unsupported claims and contradictions. Not gated. | [Failure analysis](evals/baselines/agent-flow-2026-08-08-writing-kb.json) |
+| arXiv, code execution, and external connectors | Baseline placeholders await their first recorded runs. | [Baseline status](evals/baselines/agent-flow-2026-08-08-arxiv-code-connectors.json) |
+| Knowledge graph and memory | Baseline placeholders await their first recorded runs. | [Baseline status](evals/baselines/agent-flow-2026-08-08-kg-memory.json) |
+
+The [August 4 baseline](evals/baselines/agent-flow-2026-08-04.json) also records retrieval-safety and cancellation-persistence failures. Consult the [baseline notes](evals/AGENT_FLOW_BASELINE.md) for subsequent fixes and historical context; a code fix and a fresh passing evaluation are distinct evidence.
+
+Small controlled samples establish behavior only within their tested conditions. Re-run the relevant tasks after source changes. Configured quality thresholds are targets, not measured success rates.
+
+## Development setup
+
+This is a multi-service application. Backend and integration features need a configured database, initialized schema, authentication, storage, and the relevant model/retrieval credentials.
+
+### Frontend
+
+Use **Node 24** and **pnpm 10.18.2**, as pinned in [package.json](package.json).
 
 ```bash
-# 1. Clone and configure
-git clone https://github.com/goodwiins/rag.git nous
+git clone --branch develop https://github.com/Goodwiinz/rag.git nous
 cd nous
-cp .env.example .env.local     # add OPENAI_API_KEY / ANTHROPIC_API_KEY
-
-# 2. Spin up services (Postgres, Neo4j, Redis, MinIO, backend)
-docker-compose -f docker-compose.development.yml up -d
-
-# 3. Install workspace deps and start the frontend
-pnpm install
+corepack enable
+pnpm install --frozen-lockfile
+cp frontend/.env.example frontend/.env.local
+# Configure the frontend environment for your backend.
 pnpm dev
-
-# 4. Open:  http://localhost:3000   (API docs at :8000/docs)
 ```
 
-**Prerequisites:** Node 24+, pnpm 10.18+ (via corepack), Python 3.11+, Docker 24+, 16 GB RAM, OpenAI or Anthropic key.
+The frontend starts at `http://localhost:3000`. A running frontend alone does not provide document search or agent execution.
 
-**Dev users:** `admin@multimodal-rag.com / admin123` · `demo@multimodal-rag.com / demo123`
+### Backend and supporting services
 
----
+Review these configuration sources before starting the backend:
 
-## Engineering Practices
+- [Backend environment example](backend/.env.example)
+- [Shared environment example](config/environments/.env.example)
+- [Development Compose configuration](docker-compose.development.yml)
+- [Database documentation](docs/database/)
+- [Operational notes](docs/engineering/gotchas.md)
 
-| Area          | What we do                                                                 |
-| ------------- | -------------------------------------------------------------------------- |
-| Types         | TS strict mode · Python mypy strict · Pydantic v2 everywhere               |
-| Testing       | Jest · RTL · Playwright E2E · pytest (unit/integration/e2e/perf markers)   |
-| AI evals      | DeepEval in CI — faithfulness, relevancy, hallucination thresholds         |
-| Lint/format   | Prettier · ESLint · Black 88 · isort                                       |
-| Validation    | `pnpm validate` = lint + type-check + test                                 |
-| CI/CD         | GitHub Actions · Docker Bake · Helm deploys                                |
-| Security      | JWT auth · RBAC · encrypted fields · SQL injection guards · CORS allowlist |
-| Observability | Prometheus metrics · LangSmith traces · structured logs                    |
+The development Compose file does **not** start PostgreSQL: its database service is commented out and its default database URL points to an externally managed local database. Configure a reachable database and initialize the schema first. The pinned evaluation environment also records a fresh Alembic upgrade limitation; do not assume its test schema bootstrap is a production migration procedure.
 
----
+After preparing the environment, this starts the selected application services using an explicit environment file:
 
-## API Overview
-
-| Endpoint                            | Purpose                                   |
-| ----------------------------------- | ----------------------------------------- |
-| `POST /api/v1/auth/login`           | JWT authentication                        |
-| `POST /api/v1/documents/upload`     | Multimodal ingest (PDF/image/audio/video) |
-| `POST /api/v1/search/`              | Hybrid search (vector + keyword + graph)  |
-| `POST /api/v1/agent/execute`        | Async agent execution (returns job_id)    |
-| `POST /api/v1/agent/stream`         | SSE streaming (token, tool, rag_context)  |
-| `POST /api/v1/agent/confirm/{id}`   | Resume HITL interrupt                     |
-| `POST /api/v1/arxiv/import`         | Import arXiv papers into the KB           |
-| `POST /api/v1/citations/export`     | Export bibliography (BibTeX/APA/IEEE/MLA) |
-| `POST /api/v1/projects/{id}/drafts` | Generate versioned literature review      |
-| `GET  /health`                      | System health                             |
-
-Interactive docs at `http://localhost:8000/docs` when running.
-
----
-
-## Quality Metrics
-
-| Metric               | Threshold | Checked via   |
-| -------------------- | --------- | ------------- |
-| Answer Relevancy     | > 70%     | DeepEval (CI) |
-| Faithfulness         | > 90%     | DeepEval (CI) |
-| Contextual Relevancy | > 70%     | DeepEval (CI) |
-| Hallucination Rate   | < 10%     | DeepEval (CI) |
-| Latency (p95)        | < 2000ms  | Prometheus    |
-
----
-
-## Project Structure
-
-```
-.
-├── backend/          FastAPI app — api/, services/ (agent, research, search), models/, core/
-├── frontend/         Next.js 16 — app/, src/ (components, hooks, store, services, types)
-├── brand/            Logos, guidelines, screenshots, landing page
-├── docs/             Architecture, deployment, security, testing, observability
-├── infrastructure/   Terraform + K8s manifests
-├── specs/            Feature specs
-├── evals/            DeepEval suites
-└── docker-compose.*  Dev / prod / CI stacks
+```bash
+docker compose --env-file .env.local -f docker-compose.development.yml up -d backend redis neo4j minio celery-worker
 ```
 
----
+Prepare the root `.env.local` from the configuration references above; Compose does not automatically load that filename without `--env-file`. Configure any additional provider variables required by the chosen features. Backend API documentation is available at `http://localhost:8000/docs` once startup succeeds.
 
-## Documentation
+These instructions describe the repository configuration; a clean installation has not been revalidated as part of this README update.
 
-| Area                                 | Description                              |
-| ------------------------------------ | ---------------------------------------- |
-| [Architecture](docs/architecture/)   | System design, LangGraph flow, data flow |
-| [Database](docs/database/)           | Schema, Neo4j, migrations        |
-| [Deployment](docs/deployment/)       | Docker, K8s, Helm, runbooks              |
-| [Security](docs/security/)           | Auth, RBAC, encryption, audit            |
-| [Testing](docs/testing/)             | Unit, integration, E2E, eval reports     |
-| [Observability](docs/observability/) | Prometheus, LangSmith, tracing           |
-| [API](docs/api/)                     | OpenAPI specs, endpoint reference        |
-| [Engineering standards](docs/engineering/) | Enforced router/service boundaries, quality ratchets, API-contract pipeline |
+## Development checks
 
----
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend type-check
+pnpm --dir frontend test
+```
 
-## Team & Credits
+See [engineering standards](docs/engineering/README.md) for the distinction between advisory checks and blocking quality ratchets, [testing standards](docs/engineering/testing.md) for backend and regression-test guidance, and [evals/README.md](evals/README.md) for the agent harness and its infrastructure requirements.
 
-Built by **Abdel ([@goodwiins](https://github.com/goodwiins))** — NOUS (Greek: νοῦς, _mind_) is a solo-developed multimodal intelligence platform.
+## Explore the code
 
-Brand system and landing assets in [`brand/`](brand/). Philosophy and design principles at [brand/philosophy.html](brand/philosophy.html).
+| Location | Contents |
+| --- | --- |
+| [backend/](backend/) | FastAPI application, agent graph, search, research services, models, and tests. |
+| [frontend/](frontend/) | Next.js routes, UI components, chat state, and API clients. |
+| [evals/](evals/) | Agent tasks, verifiers, baseline results, and evaluation methodology. |
+| [docs/engineering/](docs/engineering/) | Current engineering contracts and operational notes. |
+| [docs/architecture/](docs/architecture/) | Architecture reports and design background. |
+| [docs/deployment/](docs/deployment/) | Deployment configurations and runbooks. |
+| [brand/](brand/) | Product identity, screenshots, and presentation assets. |
+| [Goodwiinz/nous-cli](https://github.com/Goodwiinz/nous-cli) | Separate terminal client for the shared backend. |
 
-## License
-
-MIT — see [LICENSE](LICENSE).
+Some older documents describe earlier implementations. Check their dates and compare operational claims with current code and configuration.

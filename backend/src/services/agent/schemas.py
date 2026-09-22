@@ -51,6 +51,10 @@ class AgentMessage(BaseModel):
 
 class PageContextRequest(BaseModel):
     type: str = Field(default="unknown", description="Page context type")
+    workspace_id: Optional[UUID] = Field(
+        default=None,
+        description="Active chat workspace for durable thread creation",
+    )
     project_id: Optional[str] = Field(
         default=None, description="Project ID if on project page"
     )
@@ -153,6 +157,9 @@ class RetrievedContextResponse(BaseModel):
     # (synthetic 1.0 - 0.05*rank), or "cohere" (reranked). None on the
     # legacy hybrid path, which reports raw relevance only.
     score_source: Optional[str] = None
+    chunk_id: Optional[str] = None
+    chunk_index: Optional[int] = None
+    page_number: Optional[int] = None
 
 
 class ToolExecutionResponse(BaseModel):

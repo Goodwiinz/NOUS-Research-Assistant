@@ -48,6 +48,8 @@ describe('streaming reasoning panel and elapsed time', () => {
       streamingContent: '',
       streamingSteps: [],
       streamingProgress: [],
+      streamingPlan: [],
+      streamingPlanReasoning: '',
       streamingReasoning: '',
       streamingCitations: [],
       isRetrievingRag: false,
@@ -130,6 +132,18 @@ describe('streaming reasoning panel and elapsed time', () => {
     );
   });
 
+  it('shows planner rationale even when the planner emitted no steps', () => {
+    useChatStore.setState({
+      streamingPlanReasoning: 'The request needs a direct evidence check.',
+    });
+    renderStreamingTurn();
+
+    expect(screen.getByText('Planner rationale')).toBeInTheDocument();
+    expect(
+      screen.getByText('The request needs a direct evidence check.')
+    ).toBeInTheDocument();
+  });
+
   it('keeps message timing visible after answer tokens arrive', () => {
     useChatStore.setState({ streamingElapsedMs: 47_000 });
     useChatStore.setState({ streamingContent: 'Drafting the answer' });
@@ -161,7 +175,9 @@ describe('streaming reasoning panel and elapsed time', () => {
     expect(retrieval).toHaveTextContent('1 passage above threshold');
     expect(retrieval).toHaveTextContent('Attention Is All You Need');
     expect(retrieval).toHaveTextContent('0.91');
-    expect(retrieval?.querySelector('[style]')).toHaveStyle({ width: '91%' });
+    expect(retrieval?.querySelector('[style]')).toHaveStyle({
+      transform: 'scaleX(0.91)',
+    });
   });
 
   it('only displays retrieval scores that are finite numbers', () => {

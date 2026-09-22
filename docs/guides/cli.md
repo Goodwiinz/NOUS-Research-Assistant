@@ -1,6 +1,8 @@
 # NOUS CLI — Using with `dev-api.gen-text.app`
 
-A terminal REPL for the NOUS agent. It talks to a NOUS backend over HTTPS — auth via browser-based device flow, then streams agent responses (tokens + tool events + HITL confirmations) straight into your terminal.
+An Ink terminal chat client for the NOUS agent. It talks to a NOUS backend over HTTPS — auth via browser-based device flow, then streams agent responses (tokens + tool events + HITL confirmations) straight into your terminal.
+
+Interactive `./nous` now launches Ink. See [the terminal guide](../../terminal/README.md) for native menus, keyboard controls, attachments, branches, and migrated commands. Login and one-shot queries continue to use the shared CLI services.
 
 This guide targets the hosted dev API at **`https://dev-api.gen-text.app/`**.
 
@@ -8,8 +10,8 @@ This guide targets the hosted dev API at **`https://dev-api.gen-text.app/`**.
 
 ## Prerequisites
 
-- Node 18.17+
-- `pnpm` (or `npm` — the wrapper uses `pnpm --prefix frontend cli`)
+- Node 24
+- `pnpm@10.18.2`
 - A NOUS account authorized on `dev-api.gen-text.app`
 
 ---
@@ -20,7 +22,7 @@ This guide targets the hosted dev API at **`https://dev-api.gen-text.app/`**.
 # 1. Clone and install frontend deps
 git clone https://github.com/goodwiins/rag.git nous
 cd nous
-pnpm --prefix frontend install
+pnpm install --frozen-lockfile
 
 # 2. Point the CLI at the dev API
 export NOUS_API_URL="https://dev-api.gen-text.app/api/v1"
@@ -124,7 +126,7 @@ project: Diffusion Survey  ·  thread: 8a1b2c3d
 > ingest the latest 5 papers on classifier-free guidance
 ✓ arxiv_search
 ⏸  ingest_papers (paused — awaiting confirmation)
-  Ingest 5 papers into "Diffusion Survey"? [y/N] y
+  Ingest 5 papers into "Diffusion Survey"? [yes/no] yes
 ✓ ingest_papers
 
 > draft a literature-review section on classifier-free guidance
@@ -137,7 +139,7 @@ project: Diffusion Survey  ·  thread: 8a1b2c3d
 
 ## Human-in-the-loop confirmations
 
-Destructive tools (document ingest, draft creation, note writes) pause via LangGraph `interrupt()`. The CLI surfaces them inline as `⏸ <tool> (paused — awaiting confirmation)` and prompts for `y/N`. Approve → `Command(resume=True)` is sent and the agent continues. Reject → the tool call is discarded and the agent gets control back.
+Destructive tools (document ingest, draft creation, note writes) pause via LangGraph `interrupt()`. The CLI surfaces them inline as `⏸ <tool> (paused — awaiting confirmation)` and requires an explicit `yes` or `no` followed by Enter. Approve → `Command(resume=True)` is sent and the agent continues. Reject → the tool call is discarded and the agent gets control back.
 
 ---
 
@@ -189,4 +191,4 @@ Should return `{"status":"ok"}` (or similar).
 | `/cli-auth/start`               | POST   | Start device-flow session     |
 | `/cli-auth/status/{session_id}` | GET    | Poll for approval             |
 | `/agent/stream`                 | POST   | SSE stream of agent execution |
-| `/agent/confirm/{job_id}`       | POST   | Resume a HITL interrupt       |
+| `/agent/stream/confirm`       | POST   | Resume a HITL interrupt       |

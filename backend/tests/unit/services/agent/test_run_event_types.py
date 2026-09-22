@@ -280,3 +280,23 @@ def test_cancelled_payload_assistant_message_id_is_optional() -> None:
 def test_unknown_type_payload_is_rejected_by_validate() -> None:
     with pytest.raises(ValueError):
         validate_payload("not.a.type", {})
+
+
+def test_assistant_delta_text_is_redacted_before_persistence() -> None:
+    """R7-L6: model output echoes user content and these rows are durable."""
+    payload = validate_payload(
+        RunEventType.ASSISTANT_DELTA,
+        {"text": "mail me at alice@example.com about 123-45-6789"},
+    )
+
+    assert "alice@example.com" not in payload["text"]
+    assert "123-45-6789" not in payload["text"]
+    assert "<email>" in payload["text"]
+
+
+def test_assistant_delta_still_caps_after_redaction() -> None:
+    payload = validate_payload(
+        RunEventType.ASSISTANT_DELTA, {"text": "x" * (MAX_DELTA_TEXT_CHARS + 500)}
+    )
+
+    assert len(payload["text"]) == MAX_DELTA_TEXT_CHARS

@@ -11,7 +11,7 @@ only an owned project may scope the read; anything else drops to org-wide.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -87,3 +87,54 @@ async def test_db_error_is_unverifiable_not_a_negative():
     # org-wide read at the caller, widening exposure during an outage
     # instead of narrowing it. Callers must branch on None separately.
     assert await _user_owns_project(session, pid, user_id) is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_membership_grants_project_scope_in_sql():
+    """B8-T1: access is owner OR WorkspaceMember, matching user_can_access_workspace."""
+    pid = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    session = _session_returning(uuid.uuid4())
+
+    await _user_owns_project(session, pid, user_id)
+
+    stmt = session.execute.await_args.args[0]
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "workspace_members" in sql
+    assert "EXISTS" in sql.upper()
+    assert "workspaces.owner_id" in sql
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_hybrid_fallback_scope_uses_the_same_predicate():
+    """The hybrid fallback must not return [] for a non-owner member (B8-T1)."""
+    from contextlib import asynccontextmanager
+
+    from src.services.agent import _nodes_rag
+    from src.services.agent import tool_session as tool_session_module
+
+    session = MagicMock()
+    scalars = MagicMock()
+    scalars.all.return_value = []
+    result = MagicMock()
+    result.scalars.return_value = scalars
+    session.execute = AsyncMock(return_value=result)
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield session
+
+    with patch.object(tool_session_module, "tool_session", _fake_session):
+        assert (
+            await _nodes_rag._legacy_hybrid_search_fallback(
+                "q", str(uuid.uuid4()), project_id=str(uuid.uuid4())
+            )
+            == []
+        )
+
+    stmt = session.execute.await_args.args[0]
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "workspace_members" in sql
+    assert "EXISTS" in sql.upper()

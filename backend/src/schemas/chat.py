@@ -315,6 +315,10 @@ class ChatMessageCreate(ChatMessageBase):
     citations: Optional[List[CitationCreate]] = None  # Citations from RAG retrieval
     latency_ms: Optional[int] = None  # Client-measured response time (ms)
     stopped: Optional[bool] = None  # User stopped this response mid-stream
+    # Idempotency key for user turns (audit B8-I2). UUID, matching the
+    # chat_messages.client_message_id GUID column and the partial unique index
+    # (thread_id, client_message_id) the agent path already upserts against.
+    client_message_id: Optional[UUID] = None
 
 
 class ChatMessageUpdate(BaseModel):
@@ -332,6 +336,7 @@ class CitationResponse(BaseModel):
     external_reference_id: Optional[str] = (
         None  # For non-database references (e.g., arXiv IDs)
     )
+    source_position: Optional[int] = None
     chunk_index: Optional[int] = None
     chunk_id: Optional[str] = None
     snippet: Optional[str] = None
@@ -397,6 +402,9 @@ class ChatMessageResponse(ChatMessageBase, TimestampMixin):
     plan: Optional[List[dict]] = None
     # Planner's top-level rationale for `plan`. Null for legacy/non-agent rows.
     plan_reasoning: Optional[str] = None
+    # Bounded provider-authored reasoning summary. Null for legacy/non-agent
+    # rows and when the provider emitted no public summary.
+    reasoning_summary: Optional[str] = None
     token_usage: Optional[dict] = None
     # Display-safe server-authored progress: [{phase, detail}].
     progress_steps: Optional[List[dict]] = None

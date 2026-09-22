@@ -2,14 +2,22 @@
 
 import React from 'react';
 import { Bot, X } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 import { useAgentChatStore } from '@/store/agentChatStore';
 
 export function AgentFAB() {
+  const pathname = usePathname();
   const uiMode = useAgentChatStore((s) => s.uiMode);
   const toggle = useAgentChatStore((s) => s.toggle);
   const hasUnread = useAgentChatStore((s) => s.hasUnread);
 
   const isOpen = uiMode !== 'closed';
+  const isChatRoute = pathname === '/chat' || pathname === '/chat/';
+
+  // /chat already owns its composer. Keep the global panel's close control if
+  // it was opened elsewhere, but do not cover Chat's Send button with another
+  // launcher once the panel closes.
+  if (isChatRoute && !isOpen) return null;
 
   return (
     <button

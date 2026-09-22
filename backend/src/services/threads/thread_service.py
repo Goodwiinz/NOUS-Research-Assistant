@@ -52,6 +52,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.chat_message import ChatMessage, MessageRole
+from src.models.conversation import Conversation
 from src.models.thread import Thread, ThreadStatus
 from src.schemas.chat import ThreadCreate, ThreadUpdate
 from src.services.threads import workspace_access
@@ -205,6 +206,65 @@ async def list_threads(
         )
         threads = list((await db.execute(stmt)).scalars().all())
 
+    return threads, total, previews
+
+
+async def list_workspace_threads(
+    db: AsyncSession,
+    workspace_id: UUID,
+    user_id: UUID,
+    *,
+    status_filter: Optional[ThreadStatus] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> Optional[Tuple[List[Thread], int, Dict[UUID, Optional[str]]]]:
+    """List one globally paginated thread feed for an accessible workspace."""
+    workspace = await workspace_access.get_workspace(
+        db,
+        workspace_id,
+        user_id,
+        load_conversations=False,
+        load_collections=False,
+    )
+    if workspace is None:
+        return None
+
+    conditions = [
+        Conversation.workspace_id == workspace_id,
+        Conversation.is_deleted == False,  # noqa: E712
+        Thread.is_deleted == False,  # noqa: E712
+    ]
+    if status_filter is not None:
+        conditions.append(Thread.status == status_filter)
+
+    total = (
+        await db.execute(
+            select(func.count(Thread.id))
+            .join(Conversation, Thread.conversation_id == Conversation.id)
+            .where(*conditions)
+        )
+    ).scalar() or 0
+
+    preview_expr = last_message_preview_expression()
+    rows = (
+        await db.execute(
+            select(Thread, preview_expr)
+            .join(Conversation, Thread.conversation_id == Conversation.id)
+            .where(*conditions)
+            .order_by(Thread.last_message_at.desc(), Thread.id.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    threads = [row[0] for row in rows]
+    previews = {row[0].id: row[1] for row in rows}
+    logger.info(
+        "workspace_threads_listed",
+        workspace_id=str(workspace_id),
+        offset=offset,
+        limit=limit,
+        result_count=len(threads),
+    )
     return threads, total, previews
 
 

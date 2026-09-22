@@ -4,7 +4,7 @@ import { act, renderHook } from '@testing-library/react';
 const workspaceMocks = vi.hoisted(() => ({
   getOrCreateDefaultWorkspace: vi.fn(),
   getOrCreateDefaultConversation: vi.fn(),
-  listThreads: vi.fn(),
+  listWorkspaceThreads: vi.fn(),
   listConversations: vi.fn(),
   getThread: vi.fn(),
 }));
@@ -21,6 +21,7 @@ const chatStoreMocks = vi.hoisted(() => {
     messagePagination: {},
     isLoadingMessages: false,
     setCurrentThread: vi.fn(),
+    registerThread: vi.fn(),
   };
   state.setCurrentThread.mockImplementation((threadId: string | null) => {
     state.currentThreadId = threadId;
@@ -37,7 +38,7 @@ const chatStoreMocks = vi.hoisted(() => {
 });
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -59,12 +60,20 @@ describe('useChatSession watchdog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     chatStoreMocks.state.currentThreadId = null;
+    chatStoreMocks.state.setCurrentThread.mockImplementation(
+      (threadId: string | null) => {
+        chatStoreMocks.state.currentThreadId = threadId;
+      }
+    );
     localStorage.clear();
     workspaceMocks.getOrCreateDefaultConversation.mockResolvedValue({
       id: 'conv-1',
       title: 'New Chat',
     });
-    workspaceMocks.listThreads.mockResolvedValue({ threads: [] });
+    workspaceMocks.listWorkspaceThreads.mockResolvedValue({
+      threads: [],
+      has_more: false,
+    });
     workspaceMocks.listConversations.mockResolvedValue({ conversations: [] });
     chatStoreMocks.state.loadMessages.mockResolvedValue(undefined);
   });
@@ -107,7 +116,7 @@ describe('useChatSession watchdog', () => {
       id: 'workspace-1',
       name: 'Workspace',
     });
-    workspaceMocks.listThreads.mockResolvedValue({
+    workspaceMocks.listWorkspaceThreads.mockResolvedValue({
       threads: [
         {
           id: 'thread-old',
@@ -176,5 +185,10 @@ describe('useChatSession watchdog', () => {
     ]);
     expect(chatStoreMocks.state.currentThreadId).toBe('thread-new');
     expect(workspaceMocks.getThread).not.toHaveBeenCalled();
+    expect(chatStoreMocks.state.registerThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'thread-old' })
+    );
+    expect(result.current.isInitializing).toBe(false);
+    expect(result.current.initError).toBeNull();
   });
 });

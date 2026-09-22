@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import {
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
   type RenderResult,
 } from '@testing-library/react';
 
@@ -19,6 +21,10 @@ import {
 
 const noop = vi.fn();
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 function Thrower({
   shouldThrow,
   message,
@@ -30,6 +36,36 @@ function Thrower({
 }): React.ReactElement {
   if (shouldThrow) throw new Error(message);
   return <>{children}</>;
+}
+
+function captureAnimationFrames(): {
+  run: (id: number) => void;
+  runEvenIfCancelled: (id: number) => void;
+} {
+  let nextId = 1;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  const allCallbacks = new Map<number, FrameRequestCallback>();
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    const id = nextId;
+    nextId += 1;
+    callbacks.set(id, callback);
+    allCallbacks.set(id, callback);
+    return id;
+  });
+  vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+    callbacks.delete(id);
+  });
+
+  return {
+    run(id: number) {
+      const callback = callbacks.get(id);
+      callbacks.delete(id);
+      callback?.(0);
+    },
+    runEvenIfCancelled(id: number) {
+      allCallbacks.get(id)?.(0);
+    },
+  };
 }
 
 function renderMessages(
@@ -145,7 +181,7 @@ describe('AuiMessage', () => {
       return node;
     });
     expect(actionBar).toBeTruthy();
-    expect(actionBar).toHaveAttribute('data-aui-autohide', 'always');
+    expect(actionBar).toHaveAttribute('data-aui-autohide', 'not-last');
     expect(
       screen.getByRole('button', { name: /copy assistant message/i })
     ).toBeInTheDocument();
@@ -183,9 +219,15 @@ describe('AuiAssistantMessage committed-path chrome (ChatBubble parity)', () => 
   }
 
   it('keeps the rating outside the autohiding bar but on the same row', () => {
-    renderByIndex([
-      { id: 'a1', role: 'assistant', content: 'A', timestamp: 2 },
-    ]);
+    // Index 0 of two: `autohide="not-last"` keeps the last message's bar
+    // mounted, so an older turn is the one that exercises autohiding.
+    renderByIndex(
+      [
+        { id: 'a1', role: 'assistant', content: 'A', timestamp: 2 },
+        { id: 'u1', role: 'user', content: 'B', timestamp: 3 },
+      ],
+      { index: 0 }
+    );
 
     // ActionBarPrimitive.Root unmounts when the message is not hovered, so a
     // rating rendered inside it would vanish — taking any half-typed feedback
@@ -299,7 +341,7 @@ describe('AuiAssistantMessage committed-path chrome (ChatBubble parity)', () => 
     ).toBeNull();
   });
 
-  it('renders citation footer chips and forwards clicks', () => {
+  it('renders the numbered sources list and forwards clicks', () => {
     const onCitationClick = vi.fn();
     renderByIndex(
       [
@@ -320,11 +362,61 @@ describe('AuiAssistantMessage committed-path chrome (ChatBubble parity)', () => 
       { onCitationClick }
     );
 
-    const chip = screen.getByText('Attention Is All You Need');
-    expect(chip).toBeInTheDocument();
-    expect(screen.getByText('92%')).toBeInTheDocument();
-    fireEvent.click(chip.closest('button') as HTMLButtonElement);
+    const row = screen.getByText('Attention Is All You Need');
+    expect(row).toBeInTheDocument();
+    // Relevance percentages moved to the retrieval diagnostics view.
+    expect(screen.queryByText('92%')).toBeNull();
+    fireEvent.click(row.closest('button') as HTMLButtonElement);
     expect(onCitationClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves raw Doc positions before applying document-grouped display numbers', () => {
+    renderByIndex([
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'First [Doc 1], second [Doc 2], same paper [Doc 3].',
+        timestamp: 2,
+        citations: [
+          {
+            documentId: 'doc-a',
+            title: 'Paper A',
+            score: 0.9,
+            chunkId: 'a-1',
+            chunkIndex: 1,
+            pageNumber: 4,
+          },
+          {
+            documentId: 'doc-b',
+            title: 'Paper B',
+            score: 0.8,
+            chunkId: 'b-1',
+            chunkIndex: 1,
+            pageNumber: 8,
+          },
+          {
+            documentId: 'doc-a',
+            title: 'Paper A',
+            score: 0.7,
+            chunkId: 'a-2',
+            chunkIndex: 2,
+            pageNumber: 5,
+          },
+        ],
+      },
+    ]);
+
+    // Raw Doc 1 and Doc 3 both resolve against the canonical three-item
+    // array, then share Paper A's reader-facing numeral.
+    expect(
+      screen.getAllByRole('button', { name: 'Source 1: Paper A' })
+    ).toHaveLength(2);
+    expect(
+      screen.getByRole('button', { name: 'Source 2: Paper B' })
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('list')).getAllByRole('listitem')
+    ).toHaveLength(2);
   });
 
   it('renders the committed execution plan', () => {
@@ -372,9 +464,79 @@ describe('AuiAssistantMessage committed-path chrome (ChatBubble parity)', () => 
     expect(screen.getByText('Request accepted')).toBeInTheDocument();
     expect(screen.getByText('Drafting the response')).toBeInTheDocument();
   });
+
+  it('opens a persisted provider reasoning summary so it is visible after completion', () => {
+    renderByIndex([
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Prepared answer.',
+        timestamp: 2,
+        reasoningSummary: 'I compared the strongest retrieved sources.',
+      },
+    ]);
+
+    const trigger = screen.getByRole('button', {
+      name: /reasoning summary/i,
+    });
+    expect(trigger).toHaveAttribute('data-state', 'open');
+    expect(
+      screen.getByText('I compared the strongest retrieved sources.')
+    ).toBeInTheDocument();
+  });
 });
 
 describe('AuiMessageByIndex runtime-sync race', () => {
+  // Mutation proof: removing AuiMessageByIndex's runtimeMessageId mismatch
+  // guard must fail this test on the stale Approval needed dialog.
+  // From frontend: vitest run src/components/chat/aui/__tests__/AuiMessage.test.tsx -t 'stale approval'
+  it('does not render a stale approval in a completed answer slot before runtime sync', async () => {
+    const approval = makeChatPageMessage({
+      runtimeId: 'approval:thread-1',
+      source: 'local-only',
+      role: 'assistant',
+      content: '',
+      pendingApproval: {
+        id: 'gate-1',
+        tools: [{ name: 'create_project', args: { name: 'Research' } }],
+      },
+    });
+    const answer = makeChatPageMessage({
+      runtimeId: 'answer-1',
+      role: 'assistant',
+      content: 'Project created.',
+    });
+    const renderFrame = (
+      runtimeMessages: (typeof approval)[],
+      row = answer
+    ): React.ReactElement => (
+      <ChatRuntimeProvider
+        messages={runtimeMessages}
+        isRunning={false}
+        onSend={noop}
+        onCancel={noop}
+      >
+        <AuiMessageByIndex index={0} message={row} />
+      </ChatRuntimeProvider>
+    );
+
+    // The list has the answer, but the post-commit runtime still has the gate
+    // at the same in-bounds index. Never mount that gate in the answer row.
+    const { rerender } = render(renderFrame([approval], approval));
+    await screen.findByRole('alertdialog', { name: 'Approval needed' });
+    rerender(renderFrame([approval]));
+    expect(
+      screen.queryByRole('alertdialog', { name: 'Approval needed' })
+    ).not.toBeInTheDocument();
+    rerender(renderFrame([answer]));
+    await waitFor(() =>
+      expect(screen.getByText('Project created.')).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByRole('alertdialog', { name: 'Approval needed' })
+    ).not.toBeInTheDocument();
+  });
+
   it('hands an optimistic row to its canonical replacement without a duplicate bubble', async () => {
     const optimistic = makeChatPageMessage({
       runtimeId: 'runtime-answer',
@@ -765,6 +927,166 @@ describe('MessageByIndexBoundary', () => {
       </MessageByIndexBoundary>
     );
     expect(screen.getByText('recovered')).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  it('re-attempts one transient out-of-bounds render after commit without a key change', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    let shouldThrow = true;
+    const MutableThrower = (): React.ReactElement => {
+      if (shouldThrow) {
+        throw new Error('useClientLookup: Index 0 out of bounds (length: 0)');
+      }
+      return <>recovered after adapter sync</>;
+    };
+    render(
+      <MessageByIndexBoundary resetKey="stable">
+        <MutableThrower />
+      </MessageByIndexBoundary>
+    );
+
+    expect(screen.queryByText('recovered after adapter sync')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    shouldThrow = false;
+    act(() => frames.run(1));
+
+    expect(screen.getByText('recovered after adapter sync')).toBeVisible();
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+    spy.mockRestore();
+  });
+
+  it('bounds a persistent out-of-bounds error to one retry and a null fallback', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    render(
+      <MessageByIndexBoundary resetKey="persistent">
+        <Thrower
+          shouldThrow
+          message="useClientLookup: Index 0 out of bounds (length: 0)"
+        >
+          never visible
+        </Thrower>
+      </MessageByIndexBoundary>
+    );
+
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+    act(() => frames.run(1));
+
+    expect(screen.queryByText('never visible')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+    spy.mockRestore();
+  });
+
+  it('cancels a pending retry when it unmounts', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    captureAnimationFrames();
+    const view = render(
+      <MessageByIndexBoundary resetKey="unmounting">
+        <Thrower
+          shouldThrow
+          message="useClientLookup: Index 0 out of bounds (length: 0)"
+        />
+      </MessageByIndexBoundary>
+    );
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    view.unmount();
+
+    expect(window.cancelAnimationFrame).toHaveBeenCalledWith(1);
+    spy.mockRestore();
+  });
+
+  it('cancels and rejects a stale retry after the reset key changes', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    const Stable = vi.fn((): React.ReactElement => <>new message</>);
+    const view = render(
+      <MessageByIndexBoundary resetKey="old">
+        <Thrower
+          shouldThrow
+          message="useClientLookup: Index 0 out of bounds (length: 0)"
+        />
+      </MessageByIndexBoundary>
+    );
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <MessageByIndexBoundary resetKey="new">
+        <Stable />
+      </MessageByIndexBoundary>
+    );
+    expect(screen.getByText('new message')).toBeVisible();
+    expect(window.cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(Stable).toHaveBeenCalledOnce();
+
+    act(() => frames.runEvenIfCancelled(1));
+
+    expect(Stable).toHaveBeenCalledOnce();
+    expect(screen.getByText('new message')).toBeVisible();
+    spy.mockRestore();
+  });
+
+  it('cancels an old OOB frame and gives a replacement OOB key one distinct retry', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const frames = captureAnimationFrames();
+    let replacementShouldThrow = true;
+    const Replacement = (): React.ReactElement => {
+      if (replacementShouldThrow) {
+        throw new Error('useClientLookup: Index 0 out of bounds (length: 0)');
+      }
+      return <>replacement recovered</>;
+    };
+    const SwitchingBoundary = (): React.ReactElement => {
+      const [resetKey, setResetKey] = React.useState<'old' | 'new'>('old');
+      const [, forceReplacementRender] = React.useState(0);
+      return (
+        <>
+          <button onClick={() => setResetKey('new')}>switch OOB key</button>
+          <button onClick={() => forceReplacementRender((value) => value + 1)}>
+            rerender replacement
+          </button>
+          <MessageByIndexBoundary resetKey={resetKey}>
+            {resetKey === 'old' ? (
+              <Thrower
+                shouldThrow
+                message="useClientLookup: Index 0 out of bounds (length: 0)"
+              />
+            ) : (
+              <Replacement />
+            )}
+          </MessageByIndexBoundary>
+        </>
+      );
+    };
+    render(<SwitchingBoundary />);
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: 'switch OOB key' }));
+
+    expect(window.cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    // Even if the browser had already queued the cancelled old callback, it
+    // must not consume the replacement key's single retry budget.
+    act(() => frames.runEvenIfCancelled(1));
+    expect(screen.queryByText('replacement recovered')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    replacementShouldThrow = false;
+    act(() => frames.run(2));
+    expect(screen.getByText('replacement recovered')).toBeVisible();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    // The replacement key already spent its one retry. A later persistent
+    // OOB for that same key returns to the bounded null fallback.
+    replacementShouldThrow = true;
+    fireEvent.click(
+      screen.getByRole('button', { name: 'rerender replacement' })
+    );
+    expect(screen.queryByText('replacement recovered')).toBeNull();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2);
     spy.mockRestore();
   });
 });

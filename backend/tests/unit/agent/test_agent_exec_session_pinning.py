@@ -29,7 +29,17 @@ from uuid import uuid4
 
 import pytest
 
+from tests.utils.agent_thread_access import editable_thread_getter
+
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "src.services.threads.workspace_access.get_thread",
+        editable_thread_getter(),
+    )
 
 
 def _make_mock_user(user_id: str = "user-pinning-test") -> Mock:
@@ -129,8 +139,9 @@ async def test_resume_agent_graph_commits_before_ainvoke() -> None:
     db.commit = AsyncMock(side_effect=lambda: events.append("commit"))
 
     # awaiting_confirmation seed, same shape as job_store expects on resume.
-    # No thread_id anywhere in the payload: keeps the terminal PG projection
-    # branch (which needs a live Postgres) unreached for this unit test.
+    # thread_id is required: the resume refuses to run without one (R7-L13 —
+    # it used to fall back to thread_id=job_id and skip every guard). The
+    # terminal PG projection branch stays unreached via the get_run patch.
     _set_job(
         job_id,
         {
@@ -138,6 +149,7 @@ async def test_resume_agent_graph_commits_before_ainvoke() -> None:
             "tool_executions": [],
             "user_id": str(user.id),
             "request": {
+                "thread_id": str(uuid4()),
                 "messages": [{"role": "user", "content": "ingest paper"}],
                 "page_context": {"type": "unknown"},
                 "model": "model-router",

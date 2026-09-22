@@ -68,13 +68,32 @@ def test_explicit_langsmith_hide_io_false_opts_back_in(
     assert "LANGSMITH_HIDE_INPUTS" not in os.environ
 
 
-def test_dev_keeps_io_visible_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dev_hides_io_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R7-M6/M8: ``dev`` is a live deployment serving real users, not a laptop."""
     _configure_env(monkeypatch, deploy_env="development")
+
+    configure_langsmith()
+
+    assert os.environ["LANGCHAIN_HIDE_INPUTS"] == "true"
+    assert os.environ["LANGSMITH_HIDE_OUTPUTS"] == "true"
+
+
+def test_local_keeps_io_visible_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _configure_env(monkeypatch, deploy_env="local")
 
     configure_langsmith()
 
     assert "LANGCHAIN_HIDE_INPUTS" not in os.environ
     assert "LANGSMITH_HIDE_INPUTS" not in os.environ
+
+
+def test_unset_environment_hides_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail closed: a deployment that forgot DEPLOY_ENV must not leak I/O."""
+    _configure_env(monkeypatch, deploy_env="")
+
+    configure_langsmith()
+
+    assert os.environ["LANGCHAIN_HIDE_INPUTS"] == "true"
 
 
 def test_non_dev_hides_io_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

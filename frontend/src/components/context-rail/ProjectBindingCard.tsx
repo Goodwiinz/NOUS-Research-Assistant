@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { ArrowRight, FolderOpen, GitBranch, Unlink } from 'lucide-react';
 import { ProjectPickerPopover } from './ProjectPickerPopover';
+import { railCardTitle } from './CollapsibleCard';
 
 interface ProjectBindingCardProps {
   projectId?: string;
@@ -32,26 +33,13 @@ export function ProjectBindingCard({
       className={
         'relative overflow-hidden border bg-(--nous-bg-2) dark:bg-(--nous-obsidian) rounded-lg ' +
         (isBound
-          ? 'border-[rgba(212,160,57,0.25)] dark:border-[rgba(232,184,74,0.3)]'
+          ? 'border-[rgba(var(--nous-sol-rgb),0.25)] dark:border-[rgba(var(--nous-helios-rgb),0.3)]'
           : 'border-(--nous-border-1) dark:border-(--nous-shade)')
       }
     >
-      {isBound && (
-        <span
-          aria-hidden
-          className="absolute left-0 top-0 bottom-0 w-[2px] bg-(--nous-sol) dark:bg-(--nous-helios)"
-        />
-      )}
-
       <div className="px-3.5 py-3">
         <div className="flex items-center justify-between mb-2">
-          <span
-            className="text-[9px] uppercase text-(--nous-fg-3)"
-            style={{
-              fontFamily: 'var(--nous-font-mono)',
-              letterSpacing: '0.22em',
-            }}
-          >
+          <span className={railCardTitle}>
             {isBound ? 'Bound to project' : 'Detached chat'}
           </span>
           {threadLabel && (
@@ -72,7 +60,7 @@ export function ProjectBindingCard({
             className={
               'mt-[2px] grid place-items-center h-7 w-7 shrink-0 rounded-md ' +
               (isBound
-                ? 'bg-(--nous-aurum) dark:bg-(--nous-ember) text-(--nous-sol-safe) dark:text-(--nous-helios) border border-[rgba(212,160,57,0.25)]'
+                ? 'bg-(--nous-aurum) dark:bg-(--nous-ember) text-(--nous-sol-safe) dark:text-(--nous-helios) border border-[rgba(var(--nous-sol-rgb),0.25)]'
                 : 'bg-(--nous-bg-1) dark:bg-(--nous-nyx) text-(--nous-fg-3) border border-(--nous-border-1) dark:border-(--nous-shade)')
             }
           >

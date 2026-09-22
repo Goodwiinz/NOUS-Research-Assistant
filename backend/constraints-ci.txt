@@ -2,5 +2,5 @@
 # openai-whisper's build backend imports pkg_resources, which is not
 # available in newer setuptools releases.
 setuptools<81
-qdrant-client==1.18.0
+qdrant-client==1.19.0
 numpy<2

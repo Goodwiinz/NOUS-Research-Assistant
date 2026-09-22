@@ -28,6 +28,7 @@ export interface CitationPanelBodyProps {
 }
 
 type SortBy = 'relevance' | 'title';
+const SOURCE_PREVIEW_LENGTH = 320;
 
 interface SourceGroup {
   key: string;
@@ -216,32 +217,9 @@ function SourceGroupRow({
             className="overflow-hidden"
           >
             <div className="space-y-3 pb-3 pl-8 pr-3">
-              {group.chunks.map((chunk, i) =>
-                chunk.content ? (
-                  <figure
-                    key={i}
-                    className={cn(
-                      paper,
-                      'space-y-1.5 rounded-(--nous-radius-md) px-3 py-2.5'
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <Quote
-                        className="h-3 w-3 shrink-0"
-                        style={{ color: 'var(--nous-fg-3)' }}
-                        aria-hidden
-                      />
-                      <Relevance score={chunk.score} />
-                    </div>
-                    <blockquote
-                      className="font-nous-body text-[13px] leading-relaxed"
-                      style={{ color: 'var(--nous-fg-2)' }}
-                    >
-                      {chunk.content}
-                    </blockquote>
-                  </figure>
-                ) : null
-              )}
+              {group.chunks.map((chunk, i) => (
+                <SourcePassage key={chunk.chunkId ?? i} chunk={chunk} />
+              ))}
 
               <div className="flex flex-wrap items-center gap-2 pt-0.5">
                 {group.documentId && onOpen && (
@@ -292,6 +270,59 @@ function SourceGroupRow({
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function SourcePassage({ chunk }: { chunk: Citation }): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const content = chunk.content ?? '';
+  const isLong = content.length > SOURCE_PREVIEW_LENGTH;
+  const displayContent =
+    isLong && !expanded
+      ? `${content.slice(0, SOURCE_PREVIEW_LENGTH).trimEnd()}…`
+      : content;
+
+  return (
+    <figure
+      className={cn(
+        paper,
+        'space-y-1.5 rounded-(--nous-radius-md) px-3 py-2.5'
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 font-nous-mono text-[10px] uppercase tracking-wider text-(--nous-fg-3)">
+          <Quote className="h-3 w-3 shrink-0" aria-hidden />
+          Source preview
+        </span>
+        <Relevance score={chunk.score} />
+      </div>
+      {content ? (
+        <blockquote
+          data-testid="citation-source-text"
+          className="whitespace-pre-wrap wrap-break-word font-nous-body text-[13px] leading-relaxed"
+          style={{ color: 'var(--nous-fg-2)' }}
+        >
+          {displayContent}
+        </blockquote>
+      ) : (
+        <p
+          role="status"
+          className="font-nous-body text-[13px] leading-relaxed text-(--nous-fg-3)"
+        >
+          Source text unavailable.
+        </p>
+      )}
+      {isLong && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="min-h-11 rounded-md px-2 text-left font-nous-mono text-[10px] text-(--nous-fg-accent-safe) underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)"
+        >
+          {expanded ? 'Show less' : 'Show full source text'}
+        </button>
+      )}
+    </figure>
   );
 }
 
@@ -360,7 +391,7 @@ export function CitationPanelBody({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className={cn(
-              'h-9 pl-9 font-nous-mono text-sm',
+              'h-9 pl-9 text-sm',
               'bg-(--nous-bg-2) border-(--nous-border-1)',
               'text-(--nous-fg-1) placeholder:text-(--nous-fg-3)',
               'focus:border-(--nous-sol)/30 focus:ring-(--nous-sol)/10'
@@ -368,7 +399,7 @@ export function CitationPanelBody({
           />
         </div>
         <div className="flex items-center justify-between">
-          <span className="font-nous-mono text-[10px] text-(--nous-fg-3)">
+          <span className="text-[10px] text-(--nous-fg-3)">
             {groups.length} {groups.length === 1 ? 'document' : 'documents'}
           </span>
           <button
@@ -376,8 +407,8 @@ export function CitationPanelBody({
             onClick={() =>
               setSortBy((s) => (s === 'relevance' ? 'title' : 'relevance'))
             }
-            aria-label={`Sorted ${sortBy === 'relevance' ? 'by relevance' : 'by title'} — switch to sort ${sortBy === 'relevance' ? 'by title' : 'by relevance'}`}
-            className="rounded-md px-2 py-1 font-nous-mono text-[10px] text-(--nous-fg-3) transition-colors hover:bg-(--nous-aurum) hover:text-(--nous-fg-1) dark:hover:bg-(--nous-ember)"
+            aria-label={`Sorted ${sortBy === 'relevance' ? 'by relevance' : 'by title'}. Switch to sort ${sortBy === 'relevance' ? 'by title' : 'by relevance'}`}
+            className="rounded-md px-2 py-1 text-[10px] text-(--nous-fg-3) transition-colors hover:bg-(--nous-aurum) hover:text-(--nous-fg-1) dark:hover:bg-(--nous-ember)"
           >
             {sortBy === 'relevance' ? 'By relevance' : 'By title'}
           </button>
@@ -425,13 +456,13 @@ export function CitationPanelBody({
         {diagnosticsTraceId ? (
           <a
             href={`/diagnostics?trace=${encodeURIComponent(diagnosticsTraceId)}`}
-            className="flex items-center justify-center gap-1.5 font-nous-mono text-[10px] uppercase tracking-widest text-(--nous-fg-3) transition-colors hover:text-(--nous-fg-accent-safe)"
+            className="flex items-center justify-center gap-1.5 text-[11px] text-(--nous-fg-3) transition-colors hover:text-(--nous-fg-accent-safe)"
           >
             <Activity className="h-3 w-3" />
             View retrieval trace
           </a>
         ) : (
-          <p className="text-center font-nous-mono text-[9px] uppercase tracking-widest text-(--nous-fg-3)">
+          <p className="text-center text-[11px] text-(--nous-fg-3)">
             Grounded in your sources
           </p>
         )}

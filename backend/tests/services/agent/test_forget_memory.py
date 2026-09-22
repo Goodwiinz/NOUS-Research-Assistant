@@ -183,3 +183,36 @@ def test_forget_memory_tool_registered():
     assert any(
         t.name == "forget_memory" for t in ALL_TOOLS
     ), "forget_memory must be registered in ALL_TOOLS so subgraphs can bind it"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_search_failure_propagates_instead_of_reporting_zero_deletions():
+    """B8-S1: a failed store search is not "nothing matched"."""
+    store = MagicMock()
+    store.asearch = AsyncMock(side_effect=RuntimeError("store down"))
+    store.adelete = AsyncMock(return_value=None)
+
+    with pytest.raises(RuntimeError):
+        await delete_memory_by_query(store, user_id="u1", query="papers", limit=3)
+
+    store.adelete.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_reports_a_search_failure_as_an_error_not_completed():
+    from src.services.agent import tools_impl
+
+    store = MagicMock()
+    store.asearch = AsyncMock(side_effect=RuntimeError("store down"))
+
+    with patch(
+        "src.services.agent.memory.get_memory_store", AsyncMock(return_value=store)
+    ):
+        out = await tools_impl._tool_forget_memory(query="papers", user_id="u1")
+
+    # A HITL-approved destructive action that never ran must not come back
+    # as {"status": "completed", "deleted": 0}.
+    assert "error" in out
+    assert out.get("status") != "completed"

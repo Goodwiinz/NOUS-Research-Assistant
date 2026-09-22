@@ -8,7 +8,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ArrowDown } from 'lucide-react';
 import { InlineAgentSummary } from '@/components/chat/shared/InlineAgentSummary';
 import { ChatBubble } from '@/components/chat/shared/ChatBubble';
@@ -77,6 +77,7 @@ export const ChatMessageList = React.memo(function ChatMessageList({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const prefersReducedMotion = useReducedMotion();
   const scrollRafRef = useRef<number | null>(null);
   const scheduledScrollThreadIdRef = useRef<string | null>(null);
   const positionedThreadIdRef = useRef<string | null>(null);
@@ -240,9 +241,11 @@ export const ChatMessageList = React.memo(function ChatMessageList({
   }, [messages.length, onLoadOlder, hasMore, isLoadingOlder]);
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+    });
     setShowScrollButton(false);
-  }, []);
+  }, [prefersReducedMotion]);
 
   const lastIndex = messages.length - 1;
   const isVirtualized = messages.length > MESSAGE_VIRTUALIZATION_THRESHOLD;
@@ -429,7 +432,8 @@ export const ChatMessageList = React.memo(function ChatMessageList({
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.9 }}
               onClick={scrollToBottom}
-              className="flex items-center justify-center w-9 h-9 sm:w-auto sm:h-auto sm:gap-2 sm:px-4 sm:py-2 rounded-full bg-(--nous-sol) text-(--nous-erebus) text-xs font-semibold shadow-md hover:shadow-lg transition-all pointer-events-auto"
+              aria-label="Scroll to newest messages"
+              className="flex items-center justify-center min-w-11 min-h-11 sm:w-auto sm:h-auto sm:gap-2 sm:px-4 sm:py-2 rounded-full bg-(--nous-sol) text-(--nous-erebus) text-xs font-semibold shadow-md hover:shadow-lg transition-all pointer-events-auto"
               style={{ fontFamily: 'var(--nous-font-ui)' }}
             >
               <ArrowDown className="w-4 h-4" />

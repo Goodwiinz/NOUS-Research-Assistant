@@ -266,7 +266,7 @@ class AnalyticsService {
     );
   }
 
-  public trackChatMessage(messageType: 'user' | 'assistant', chatType: 'llm' | 'tambo', tokens?: number) {
+  public trackChatMessage(messageType: 'user' | 'assistant', chatType: 'llm', tokens?: number) {
     this.trackEvent(
       'chat',
       'message',

@@ -264,7 +264,13 @@ async def test_row_write_failure_falls_back_in_process(session_factory):
 
 @pytest.mark.asyncio
 class TestExecuteEndpointRouting:
-    async def _call_execute(self, backend: str, dispatch_outcome=None, request=None):
+    async def _call_execute(
+        self,
+        backend: str,
+        dispatch_outcome=None,
+        request=None,
+        resolved_thread=None,
+    ):
         from src.api.agent.execute import execute_agent
 
         user = _user()
@@ -275,12 +281,14 @@ class TestExecuteEndpointRouting:
         db = MagicMock()
         db.get = AsyncMock(return_value=None)
         db.commit = AsyncMock()
+        resolve_thread = AsyncMock(return_value=resolved_thread or (None, ""))
         with (
             patch(
                 "src.api.agent.execute._resolve_dispatch_backend",
                 return_value=backend,
             ),
             patch("src.api.agent.execute._celery_dispatch", celery_dispatch),
+            patch("src.api.agent.execute._resolve_thread", new=resolve_thread),
             patch("src.api.agent.execute._set_job") as set_job_mock,
             patch(
                 "src.api.agent.execute._agent_rate_limiter.check_rate_limit",
@@ -340,10 +348,6 @@ class TestExecuteEndpointRouting:
         thread_id = str(uuid.uuid4())
         with (
             patch(
-                "src.api.agent.execute._resolve_thread",
-                new=AsyncMock(return_value=(SimpleNamespace(id=thread_id), "")),
-            ),
-            patch(
                 "src.services.agent.agent_run_service.upsert_run",
                 new=AsyncMock(side_effect=ActiveRunConflict("active")),
             ),
@@ -352,6 +356,7 @@ class TestExecuteEndpointRouting:
             await self._call_execute(
                 "background",
                 request=_request(uuid.uuid4(), thread_id=thread_id),
+                resolved_thread=(SimpleNamespace(id=thread_id), ""),
             )
         assert exc_info.value.status_code == 409
 
@@ -366,6 +371,10 @@ class TestExecuteEndpointRouting:
             patch(
                 "src.api.agent.execute._resolve_dispatch_backend",
                 return_value="background",
+            ),
+            patch(
+                "src.api.agent.execute._resolve_thread",
+                new=AsyncMock(return_value=(None, "")),
             ),
             patch(
                 "src.api.agent.execute._agent_rate_limiter.check_rate_limit",

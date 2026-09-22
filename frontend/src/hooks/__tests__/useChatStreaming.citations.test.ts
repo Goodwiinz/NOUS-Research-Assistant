@@ -9,12 +9,20 @@ describe('toCitationCreate', () => {
         title: 'Attention Is All You Need',
         content: 'The dominant sequence transduction models...',
         score: 0.92,
+        source_position: 4,
+        chunk_id: 'chunk-4',
+        chunk_index: 7,
+        page_number: 12,
       })
     ).toEqual({
       document_id: 'doc-1',
       document_title: 'Attention Is All You Need',
       snippet: 'The dominant sequence transduction models...',
       score: 0.92,
+      source_position: 4,
+      chunk_id: 'chunk-4',
+      chunk_index: 7,
+      page_number: 12,
     });
   });
 

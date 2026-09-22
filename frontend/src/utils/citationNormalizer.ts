@@ -70,5 +70,10 @@ export function normalizeCitation(
     score: (c.score as number) ?? 0,
     content: snippet,
     source: (c.source as string) || (c.document_type as string),
+    sourcePosition:
+      (c.sourcePosition as number) ?? (c.source_position as number),
+    chunkId: (c.chunkId as string) || (c.chunk_id as string) || undefined,
+    chunkIndex: (c.chunkIndex as number) ?? (c.chunk_index as number),
+    pageNumber: (c.pageNumber as number) ?? (c.page_number as number),
   };
 }

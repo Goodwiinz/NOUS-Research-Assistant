@@ -4,7 +4,7 @@ import { ChatSurface } from '@/components/chat/ChatSurface';
 import { getSelectedThreadUrl } from '@/components/chat/shared/chatNavigation';
 import { Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { Suspense, useCallback, useState } from 'react';
+import { Suspense, useCallback } from 'react';
 import { useChatSession } from '@/hooks/chat/useChatSession';
 import { useChatStreaming } from '@/hooks/chat/useChatStreaming';
 import { useChatThreadActions } from '@/hooks/chat/useChatThreadActions';
@@ -12,6 +12,7 @@ import { useSlashCommands } from '@/hooks/chat/useSlashCommands';
 import { useCitationPanel } from '@/hooks/chat/useCitationPanel';
 import { useChatDrawer } from '@/hooks/chat/useChatDrawer';
 import { useChatComposerActions } from '@/hooks/chat/useChatComposerActions';
+import { useChatRag } from '@/components/chat/ChatRagContext';
 
 // ============================================
 // MAIN PAGE COMPONENT — composition root. Every hook below owns its own
@@ -23,7 +24,7 @@ import { useChatComposerActions } from '@/hooks/chat/useChatComposerActions';
 
 function ChatPageContent() {
   const session = useChatSession();
-  const [enableRAG, setEnableRAG] = useState(true);
+  const { ragEnabled, setRagEnabled } = useChatRag();
 
   const streaming = useChatStreaming({
     messages: session.messages,
@@ -32,7 +33,9 @@ function ChatPageContent() {
     conversations: session.conversations,
     setConversations: session.setConversations,
     dbConversation: session.dbConversation,
-    enableRAG,
+    workspace: session.workspace,
+    enableRAG: ragEnabled,
+    authRecoveryRoute: session.authRecoveryRoute,
   });
 
   const threadActions = useChatThreadActions({
@@ -42,7 +45,7 @@ function ChatPageContent() {
     setCurrentThread: session.setCurrentThread,
   });
 
-  const drawer = useChatDrawer();
+  const drawer = useChatDrawer(streaming.chatInputRef);
 
   const citationPanel = useCitationPanel();
 
@@ -99,8 +102,8 @@ function ChatPageContent() {
       citationPanel={citationPanel}
       composerActions={composerActions}
       slashCommands={slashCommands}
-      enableRAG={enableRAG}
-      setEnableRAG={setEnableRAG}
+      enableRAG={ragEnabled}
+      setEnableRAG={setRagEnabled}
       onSelectThread={handleSelectThread}
     />
   );

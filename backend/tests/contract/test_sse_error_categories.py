@@ -21,11 +21,15 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 from typing import AbstractSet, List, Optional, Set, Tuple
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from src.shared.enums import AgentErrorCategory
+from tests.utils.agent_stream import frames_of_type, sse_data
+from tests.utils.agent_thread_access import editable_thread
 
 # backend/tests/contract/<this file> -> parents[2] == backend/
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -230,18 +234,110 @@ def test_the_ast_guard_actually_catches_a_violation() -> None:
     assert sneaky_count == 1 and len(sneaky_offenders) == 1
 
 
+class _ConfirmDenialGraph:
+    def __init__(self, snapshot: object) -> None:
+        self.snapshot = snapshot
+
+    async def aget_state(self, _config: object) -> object:
+        return self.snapshot
+
+
+async def _confirm_denial_payload(
+    snapshot: object,
+    *,
+    accessible: bool,
+) -> tuple[dict[str, object], AsyncMock]:
+    from src.api.agent.streaming import stream_confirm_event_generator
+
+    thread_id = "11111111-1111-4111-8111-111111111612"
+    db = AsyncMock()
+    graph = _ConfirmDenialGraph(snapshot)
+    access_result = editable_thread(thread_id) if accessible else None
+    get_thread = AsyncMock(return_value=access_result)
+
+    with (
+        patch("src.api.agent.streaming.AsyncSessionLocal", return_value=db),
+        patch(
+            "src.services.threads.workspace_access.get_thread",
+            new=get_thread,
+        ),
+        patch(
+            "src.services.agent.observability.configure_langsmith",
+            return_value=None,
+        ),
+        patch(
+            "src.services.agent.checkpointer.get_checkpointer",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch(
+            "src.services.agent.checkpointer.reset_checkpointer",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.services.agent.memory.get_memory_store",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
+    ):
+        frames = [
+            frame
+            async for frame in stream_confirm_event_generator(
+                SimpleNamespace(thread_id=thread_id, confirmed=True, model=""),
+                SimpleNamespace(is_disconnected=AsyncMock(return_value=False)),
+                Mock(id="user-1", organization_id="org-1"),
+            )
+        ]
+
+    errors = frames_of_type(frames, "error")
+    assert len(errors) == 1
+    payload: dict[str, object] = sse_data(errors[0])
+    return payload, get_thread
+
+
 @pytest.mark.unit
-def test_confirm_not_found_branches_cannot_oracle_thread_existence() -> None:
-    """Anti-enumeration: /stream/confirm's not-found and ownership-mismatch
-    branches must build their frame from the SAME two module constants, so the
-    payloads are byte-identical and neither leaks whether the thread exists."""
-    source = _STREAMING_PY.read_text()
-    assert source.count("_CONFIRM_NOT_FOUND_MESSAGE") == 3, (
-        "expected one definition + exactly two uses of _CONFIRM_NOT_FOUND_MESSAGE "
-        "(not-found and ownership-mismatch branches)"
+@pytest.mark.asyncio
+async def test_confirm_denials_cannot_oracle_thread_existence() -> None:
+    """Access denial, missing checkpoint, and foreign checkpoint are identical."""
+    owned_durable = SimpleNamespace(
+        values={"user_id": "user-1", "thread_persistence": "durable"},
+        tasks=(),
+        config={"configurable": {"checkpoint_id": "ckpt-owned"}},
     )
-    assert source.count("_CONFIRM_NOT_FOUND_CATEGORY") == 3
-    assert '"Thread not found"' in source
+    missing = SimpleNamespace(values={}, tasks=(), config={})
+    foreign = SimpleNamespace(
+        values={"user_id": "someone-else", "thread_persistence": "durable"},
+        tasks=(),
+        config={"configurable": {"checkpoint_id": "ckpt-foreign"}},
+    )
+
+    denied_payload, denied_access = await _confirm_denial_payload(
+        owned_durable,
+        accessible=False,
+    )
+    missing_payload, missing_access = await _confirm_denial_payload(
+        missing,
+        accessible=True,
+    )
+    foreign_payload, foreign_access = await _confirm_denial_payload(
+        foreign,
+        accessible=True,
+    )
+
+    denied_access.assert_awaited_once()
+    missing_access.assert_not_awaited()
+    foreign_access.assert_not_awaited()
+
+    envelope_keys = {"event_id", "occurred_at", "trace_id"}
+
+    def observable(payload: dict[str, object]) -> dict[str, object]:
+        return {
+            key: value for key, value in payload.items() if key not in envelope_keys
+        }
+
+    assert observable(denied_payload) == observable(missing_payload)
+    assert observable(missing_payload) == observable(foreign_payload)
+    assert missing_payload["error"] == "Thread not found"
+    assert missing_payload["category"] == AgentErrorCategory.INVALID_REQUEST.value
 
 
 def test_guard_catches_an_aliased_event_variable() -> None:

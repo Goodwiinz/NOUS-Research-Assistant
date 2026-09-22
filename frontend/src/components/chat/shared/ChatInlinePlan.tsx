@@ -50,7 +50,10 @@ export const ChatInlinePlan = React.memo(function ChatInlinePlan({
    * committed default (collapsed), so streamed-in steps are visible. */
   streaming?: boolean;
 }): React.JSX.Element {
-  const [isExpanded, setIsExpanded] = useState(streaming);
+  // A persisted rationale is user-visible provenance, so reveal it when the
+  // turn commits. Ordinary plans remain collapsed to keep the transcript
+  // compact; the live stream is expanded so progress can be followed.
+  const [isExpanded, setIsExpanded] = useState(streaming || Boolean(reasoning));
 
   const tasks = useMemo(
     () => mapPlanToTasks(plan, toToolExecutions(toolExecutions ?? [])),
@@ -59,7 +62,7 @@ export const ChatInlinePlan = React.memo(function ChatInlinePlan({
   const doneCount = tasks.filter((t) => t.status === 'completed').length;
   const steps = useMemo<ReasoningStep[]>(
     () => [
-      ...(reasoning ? [{ title: 'Approach', body: reasoning }] : []),
+      ...(reasoning ? [{ title: 'Planner rationale', body: reasoning }] : []),
       ...tasks.map((task) => ({
         title: task.title,
         body: task.description || task.tools?.[0]?.replace(/_/g, ' ') || '',
@@ -84,7 +87,13 @@ export const ChatInlinePlan = React.memo(function ChatInlinePlan({
       streaming={streaming}
       open={isExpanded}
       onOpenChange={setIsExpanded}
-      restingLabel={`Execution plan · ${doneCount}/${tasks.length}`}
+      restingLabel={
+        reasoning && tasks.length === 0
+          ? 'Planner rationale'
+          : reasoning
+            ? `Reasoning · Execution plan · ${doneCount}/${tasks.length}`
+            : `Execution plan · ${doneCount}/${tasks.length}`
+      }
       className="my-2 max-w-none"
     />
   );

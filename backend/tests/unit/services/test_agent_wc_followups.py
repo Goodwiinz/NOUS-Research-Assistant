@@ -32,6 +32,16 @@ from src.services.agent.agent_execution_service import (
     _resume_agent_graph,
     _set_job,
 )
+from tests.utils.agent_thread_access import editable_thread_getter
+
+
+@pytest.fixture(autouse=True)
+def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "src.services.threads.workspace_access.get_thread",
+        editable_thread_getter(),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -154,6 +164,13 @@ async def test_resume_short_circuits_when_interrupt_already_consumed():
             "status": "running",
             "user_id": str(user.id),
             "tool_executions": [],
+            # The resume needs a thread_id: without one it refuses outright
+            # (R7-L13) instead of falling back to thread_id=job_id.
+            "request": {
+                "thread_id": str(uuid4()),
+                "messages": [{"role": "user", "content": "hi"}],
+                "page_context": {"type": "unknown"},
+            },
         },
     )
 
@@ -190,6 +207,13 @@ async def test_resume_proceeds_when_interrupt_present():
             "status": "running",
             "user_id": str(user.id),
             "tool_executions": [],
+            # The resume needs a thread_id: without one it refuses outright
+            # (R7-L13) instead of falling back to thread_id=job_id.
+            "request": {
+                "thread_id": str(uuid4()),
+                "messages": [{"role": "user", "content": "hi"}],
+                "page_context": {"type": "unknown"},
+            },
         },
     )
 
@@ -225,6 +249,13 @@ async def test_resume_rejects_ownerless_checkpoint():
             "status": "running",
             "user_id": str(user.id),
             "tool_executions": [],
+            # The resume needs a thread_id: without one it refuses outright
+            # (R7-L13) instead of falling back to thread_id=job_id.
+            "request": {
+                "thread_id": str(uuid4()),
+                "messages": [{"role": "user", "content": "hi"}],
+                "page_context": {"type": "unknown"},
+            },
         },
     )
 
@@ -376,3 +407,87 @@ def test_confirm_falls_back_to_redis_after_l1_eviction(confirm_client):
     assert redis_job["status"] == "awaiting_confirmation"
     mock_set_job.assert_awaited_once()
     assert mock_set_job.await_args.args[1]["status"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# R7-L13 review follow-up: "no thread_id" is not always "expired"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_job_id_when_payload_has_no_thread_id():
+    """A workspace-less user's run is checkpointed under ``thread_id=job_id``.
+
+    ``_resolve_thread`` returns None for them, so ``_run_agent_graph`` writes
+    the checkpoint under the job id. The payload is present and simply carries
+    no thread_id — the resume must follow the run there instead of declaring
+    the confirmation expired.
+    """
+    user = _make_mock_user()
+    job_id = str(uuid4())
+    _set_job(
+        job_id,
+        {
+            "status": "running",
+            "user_id": str(user.id),
+            "tool_executions": [],
+            "request": {
+                "messages": [{"role": "user", "content": "hi"}],
+                "page_context": {"type": "unknown"},
+            },
+        },
+    )
+
+    graph = _make_graph(
+        {"user_id": str(user.id), "pending_confirmation": {}},
+        tasks=(_interrupt_task(),),
+    )
+
+    with (
+        patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
+        patch(
+            "src.services.agent.checkpointer.get_checkpointer",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.services.agent.agent_execution_service.AsyncSessionLocal",
+            return_value=_async_session_cm(),
+        ),
+    ):
+        await _resume_agent_graph(job_id, confirmed=True, current_user=user)
+
+    graph.ainvoke.assert_awaited_once()
+    read_config = graph.aget_state.await_args.args[0]
+    assert read_config["configurable"]["thread_id"] == job_id
+
+
+@pytest.mark.asyncio
+async def test_resume_fails_expired_when_job_payload_is_gone():
+    """No job record at all → the request (and its thread_id) is unrecoverable."""
+    user = _make_mock_user()
+    job_id = str(uuid4())  # never _set_job'd
+
+    graph = _make_graph(
+        {"user_id": str(user.id), "pending_confirmation": {}},
+        tasks=(_interrupt_task(),),
+    )
+
+    with (
+        patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
+        patch(
+            "src.services.agent.checkpointer.get_checkpointer",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.services.agent.agent_execution_service.AsyncSessionLocal",
+            return_value=_async_session_cm(),
+        ),
+    ):
+        await _resume_agent_graph(job_id, confirmed=True, current_user=user)
+
+    graph.aget_state.assert_not_awaited()
+    graph.ainvoke.assert_not_called()
+    job = _get_job(job_id)
+    assert job is not None
+    assert job["status"] == "failed"
+    assert "expired" in (job.get("error") or "").lower()

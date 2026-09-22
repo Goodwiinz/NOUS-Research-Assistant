@@ -124,7 +124,7 @@ describe('useChatStreaming failed thread creation', () => {
     expect(streamMessageMock).not.toHaveBeenCalled();
   });
 
-  it('resolves the default conversation before first send when warm-start has not set it yet', async () => {
+  it('uses the active workspace to resolve a parent before first send', async () => {
     const { workspaceService } = await import('@/services/workspaceService');
     vi.mocked(
       workspaceService.getOrCreateDefaultWorkspace
@@ -134,6 +134,7 @@ describe('useChatStreaming failed thread creation', () => {
     ).mockResolvedValueOnce({ id: 'conv-1' } as never);
     vi.mocked(workspaceService.createThread).mockResolvedValueOnce({
       id: 'thread-new',
+      conversation_id: 'conv-canonical',
       title: 'My first message',
     } as never);
     streamMessageMock.mockImplementation(
@@ -155,6 +156,7 @@ describe('useChatStreaming failed thread creation', () => {
       displayedMessages: [],
       activeConversationId: null,
       dbConversation: null,
+      workspace: { id: 'ws-1', name: 'Workspace' } as never,
     });
     useChatStore.setState({ currentThreadId: null });
 
@@ -164,7 +166,7 @@ describe('useChatStreaming failed thread creation', () => {
       await result.current.handleSubmit('my first message');
     });
 
-    expect(workspaceService.getOrCreateDefaultWorkspace).toHaveBeenCalledOnce();
+    expect(workspaceService.getOrCreateDefaultWorkspace).not.toHaveBeenCalled();
     expect(
       workspaceService.getOrCreateDefaultConversation
     ).toHaveBeenCalledWith('ws-1');
@@ -172,10 +174,20 @@ describe('useChatStreaming failed thread creation', () => {
       expect.objectContaining({ conversation_id: 'conv-1' })
     );
     expect(streamMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({ thread_id: 'thread-new' }),
+      expect.objectContaining({
+        thread_id: 'thread-new',
+        page_context: expect.objectContaining({ workspace_id: 'ws-1' }),
+      }),
       expect.anything(),
       expect.anything()
     );
+    const upsert = params.setConversations.mock.calls[0][0] as (
+      current: unknown[]
+    ) => Array<{ id: string; conversationId: string }>;
+    expect(upsert([])[0]).toMatchObject({
+      id: 'thread-new',
+      conversationId: 'conv-canonical',
+    });
     expect(useChatStore.getState().currentThreadId).toBe('thread-new');
   });
 });

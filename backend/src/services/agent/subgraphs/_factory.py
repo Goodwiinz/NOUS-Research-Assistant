@@ -42,6 +42,7 @@ from src.services.agent.graph import _TOOL_PLACEHOLDER_CONTENT, _sanitize_messag
 from src.services.agent.observability import track_node_execution
 from src.services.agent.planner import make_planner_node
 from src.services.agent.reflection import make_reflection_gate
+from src.services.agent.retrieval_provenance import render_retrieval_prompt
 from src.services.agent.state import AgentState
 from src.services.agent.tool_registry import ToolPolicyTag, ToolRegistry
 from src.services.agent.tools import TOOL_REGISTRY
@@ -310,8 +311,28 @@ def make_specialist_subgraph(
             "only. State that the execution limit stopped the remaining work "
             "and identify the last completed or verified result."
         )
+        retrieval_prompt = render_retrieval_prompt(
+            state.get("retrieved_contexts", []), sanitized
+        )
+        from src.services.agent._nodes_llm import _attachment_status_part
+
+        attachment_status_prompt = _attachment_status_part(
+            state.get("attachment_status", [])
+        )
+        attachment_status_suffix = (
+            f"\n\n{attachment_status_prompt}" if attachment_status_prompt else ""
+        )
         full = [
-            SystemMessage(content=base_prompt + addendum + limit_contract)
+            SystemMessage(
+                content=(
+                    base_prompt
+                    + attachment_status_suffix
+                    + "\n\n"
+                    + retrieval_prompt
+                    + addendum
+                    + limit_contract
+                )
+            )
         ] + sanitized
 
         # No bind_tools — force a pure text response.

@@ -80,12 +80,18 @@ class RunStoppingPayload(_Payload):
 
 
 class AssistantDeltaPayload(_Payload):
+    """Redact before capping — same discipline as ToolCompletedPayload below.
+
+    R7-L6: model output is echoed user content (an email the user pasted comes
+    straight back out), and these rows are durable + replayed on resume.
+    """
+
     text: str
 
     @field_validator("text")
     @classmethod
     def _cap_text(cls, value: str) -> str:
-        return value[:MAX_DELTA_TEXT_CHARS]
+        return redact_pii(value)[:MAX_DELTA_TEXT_CHARS]
 
 
 class RetrievalContextItem(_Payload):

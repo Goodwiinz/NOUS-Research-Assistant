@@ -178,6 +178,12 @@ def _retry_after_seconds(headers: Any, *, default: float, cap: float = 15.0) -> 
 # timeout — the same trade test_deep_queue_proceeds_now rejects for the API
 # path. Three at a time removes the burst while a 10-paper batch still fits.
 _MAX_CONCURRENT_PDF_DOWNLOADS = 3
+
+# Audit R7-L11: the download was an uncapped response.read() against a URL
+# built from a model-supplied id, with redirects followed — one bad id could
+# pull an arbitrary-size body into memory. Real arXiv PDFs are well under this.
+_MAX_PDF_BYTES = 50 * 1024 * 1024
+
 _pdf_semaphore: Optional[asyncio.Semaphore] = None
 _pdf_semaphore_loop: Any = None
 
@@ -697,14 +703,31 @@ class ArXivIngestionService:
                 ):
                     response.raise_for_status()
 
-                    # Save to file
-                    content = await response.read()
+                    # Bounded streaming read. A single .read(n) on a streamed
+                    # response returns only what has arrived so far, so the
+                    # cache used to get a truncated PDF; drain the stream and
+                    # bail the moment the running total passes the cap.
+                    chunks: List[bytes] = []
+                    downloaded = 0
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        downloaded += len(chunk)
+                        if downloaded > _MAX_PDF_BYTES:
+                            raise IngestionError(
+                                f"PDF for {paper_id} exceeds "
+                                f"{_MAX_PDF_BYTES} bytes; refusing to buffer it."
+                            )
+                        chunks.append(chunk)
+                    content = b"".join(chunks)
+
                     async with aiofiles.open(pdf_path, "wb") as f:
                         await f.write(content)
 
                     logger.info(f"Downloaded PDF: {paper_id}")
                     return content
 
+            except IngestionError:
+                # Oversized/malformed is not transient — don't burn retries.
+                raise
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} failed for {paper_id}: {e}")
                 if attempt == self.MAX_RETRIES - 1:
@@ -790,7 +813,7 @@ class ArXivIngestionService:
         for i in range(0, len(papers), batch_size):
             batch = papers[i : i + batch_size]
             logger.info(
-                f"Processing batch {i//batch_size + 1}/{(len(papers)-1)//batch_size + 1}"
+                f"Processing batch {i // batch_size + 1}/{(len(papers) - 1) // batch_size + 1}"
             )
 
             # Create tasks for batch
@@ -1016,9 +1039,9 @@ class ArXivIngestionService:
                 """
 
                 user_content = f"""
-                Title: {paper['title']}
-                Abstract: {paper['abstract']}
-                Categories: {', '.join(paper['categories'])}
+                Title: {paper["title"]}
+                Abstract: {paper["abstract"]}
+                Categories: {", ".join(paper["categories"])}
                 
                 Generate {num_questions} questions for this paper.
                 """
@@ -1043,7 +1066,7 @@ class ArXivIngestionService:
 
                 for i, q in enumerate(llm_questions):
                     question = {
-                        "id": f"{paper['id']}_q_{i+1}",
+                        "id": f"{paper['id']}_q_{i + 1}",
                         "question": q["question"],
                         "difficulty": q["difficulty"],
                         "expected_answer_type": q["expected_answer_type"],
@@ -1105,7 +1128,7 @@ class ArXivIngestionService:
 
         for i, template in enumerate(selected_templates):
             question = {
-                "id": f"{paper['id']}_q_{i+1}",
+                "id": f"{paper['id']}_q_{i + 1}",
                 "question": template["question"],
                 "difficulty": template["difficulty"],
                 "expected_answer_type": template["expected_answer_type"],

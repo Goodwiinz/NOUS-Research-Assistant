@@ -27,6 +27,7 @@ import type {
   ApiWorkspaceMember,
   ApiWorkspaceMemberCreate,
   ApiWorkspaceMemberUpdate,
+  ApiWorkspaceThreadList,
   ApiWorkspaceUpdate,
 } from '@/types/api/workspace-contract';
 // View-model-aware shapes: these narrow/relax the generated contract (JSONB
@@ -191,6 +192,22 @@ export const workspaceService = {
   // ============================================================================
   // Thread Operations
   // ============================================================================
+
+  async listWorkspaceThreads(
+    workspaceId: string,
+    options: { page?: number; limit?: number; statusFilter?: string } = {}
+  ): Promise<ApiWorkspaceThreadList> {
+    const params = new URLSearchParams();
+    if (options.page) params.append('page', options.page.toString());
+    if (options.limit) params.append('limit', options.limit.toString());
+    if (options.statusFilter) {
+      params.append('status_filter', options.statusFilter);
+    }
+
+    const queryString = params.toString();
+    const url = `${API_PREFIX}/workspaces/${workspaceId}/threads${queryString ? `?${queryString}` : ''}`;
+    return api.get<ApiWorkspaceThreadList>(url);
+  },
 
   async listThreads(
     conversationId: string,

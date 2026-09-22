@@ -1,5 +1,5 @@
-import { test, expect } from '../fixtures/enhanced-test-data.fixture';
-import { DocumentProcessor } from '../utils/document-processor';
+import { test, expect } from '../../fixtures/enhanced-test-data.fixture';
+import { DocumentProcessor } from '../../utils/document-processor';
 
 /**
  * Comprehensive Performance Testing Under Load

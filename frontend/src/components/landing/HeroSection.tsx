@@ -1,19 +1,30 @@
 'use client';
 
-import { InteractiveKnowledgeGraph } from '@/components/InteractiveKnowledgeGraph';
-import { motion } from 'framer-motion';
-import { ArrowRight, FileCheck, Gauge, ShieldCheck } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import Link from 'next/link';
 
-const EASE_OUT = [0.16, 1, 0.3, 1] as const;
+const UI = { fontFamily: 'var(--nous-font-ui)' } as const;
+const SERIF = { fontFamily: 'var(--nous-font-body)' } as const;
 
-// Honest, specific capabilities that each map to a real feature below.
-// No unsubstantiated compliance/uptime badges.
-const PROOF = [
-  { icon: FileCheck, text: 'Cites every source' },
-  { icon: ShieldCheck, text: 'Runs in your browser' },
-  { icon: Gauge, text: '12ms median search' },
+// Marginalia: the two numbered notes back the <sup> marks in the lead
+// paragraph, the third is an unnumbered aside.
+const MARGIN_NOTES = [
+  {
+    mark: '1',
+    text: 'Inline citations resolve to the retrieved passage, page and document, not to a search result.',
+  },
+  {
+    mark: '2',
+    text: 'Retrieval is hybrid: vector, BM25 and knowledge-graph traversal. 12ms median across millions of documents.',
+  },
+  {
+    mark: '',
+    text: 'Inference can run in the browser with WebLLM. Your corpus stays on your infrastructure.',
+  },
 ] as const;
+
+const FOOTNOTE_MARK =
+  'font-semibold text-[0.6em] text-(--nous-sol-safe) ml-0.5';
 
 interface HeroSectionProps {
   isAuthenticated: boolean;
@@ -22,167 +33,133 @@ interface HeroSectionProps {
 export function HeroSection({ isAuthenticated }: HeroSectionProps) {
   return (
     <>
-      <nav className="fixed top-0 inset-x-0 z-50 h-16 border-b border-(--nous-shade) bg-(--nous-nyx)/85 backdrop-blur-md">
+      <nav
+        className="h-14 lg:h-16 border-b border-(--nous-enceladus)"
+        style={UI}
+      >
         <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between">
           <Link href="/" className="flex flex-col leading-none">
-            <span
-              className="text-(--nous-ivory) text-base font-bold tracking-[0.18em]"
-              style={{ fontFamily: 'var(--nous-font-heading)' }}
-            >
+            <span className="text-[15px] lg:text-base font-bold tracking-[0.18em] text-(--nous-erebus)">
               NOUS
             </span>
-            <span
-              className="text-[11px] text-(--nous-parchment) tracking-[0.12em] mt-1"
-              style={{ fontFamily: 'var(--nous-font-ui)' }}
-            >
+            <span className="hidden sm:block text-[11px] tracking-[0.12em] text-(--nous-titan) mt-1">
               Multimodal Intelligence
             </span>
           </Link>
 
-          <div className="flex items-center gap-6">
-            <div
-              className="hidden md:flex items-center gap-7 text-sm text-(--nous-parchment)"
-              style={{ fontFamily: 'var(--nous-font-ui)' }}
+          <div className="flex items-center gap-4 sm:gap-7 text-sm">
+            <a
+              href="#what"
+              className="hidden sm:inline-flex text-(--nous-titan) hover:text-(--nous-erebus) transition-colors rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
             >
-              <a
-                href="#features"
-                className="hover:text-(--nous-ivory) transition-colors rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
-              >
-                Features
-              </a>
-            </div>
+              What it does
+            </a>
             {isAuthenticated ? (
               <Link
                 href="/dashboard"
-                className="inline-flex items-center gap-2 h-9 px-4 rounded-(--nous-radius-md) text-sm font-semibold bg-(--nous-sol) text-(--nous-erebus) transition-colors hover:bg-(--nous-helios) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-nyx)"
-                style={{ fontFamily: 'var(--nous-font-ui)' }}
+                className="inline-flex items-center h-9 px-4 rounded-(--nous-radius-md) font-semibold bg-(--nous-erebus) text-(--nous-selene) transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
               >
                 Open dashboard
               </Link>
             ) : (
-              <div
-                className="flex items-center gap-2"
-                style={{ fontFamily: 'var(--nous-font-ui)' }}
-              >
+              <>
                 <Link
                   href="/login"
-                  className="h-9 px-3 inline-flex items-center text-sm text-(--nous-parchment) hover:text-(--nous-ivory) transition-colors rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
+                  className="text-(--nous-titan) hover:text-(--nous-erebus) transition-colors rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
                 >
                   Sign in
                 </Link>
                 <Link
                   href="/register"
-                  className="inline-flex items-center gap-2 h-9 px-4 rounded-(--nous-radius-md) text-sm font-semibold bg-(--nous-sol) text-(--nous-erebus) transition-colors hover:bg-(--nous-helios) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-nyx)"
+                  className="inline-flex items-center h-9 px-4 rounded-(--nous-radius-md) font-semibold bg-(--nous-erebus) text-(--nous-selene) transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
                 >
                   Get started
                 </Link>
-              </div>
+              </>
             )}
           </div>
         </div>
       </nav>
 
-      <section className="relative min-h-[88vh] flex items-center overflow-hidden px-6 pt-28 pb-20 md:pt-32">
-        {/* The live knowledge graph IS the hero: full-bleed, interactive. */}
-        <div className="absolute inset-0">
-          <InteractiveKnowledgeGraph nodeCount={30} />
-        </div>
-        {/* Legibility mask: keeps the text column dark, lets the graph
-            breathe toward the right and edges. */}
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 pointer-events-none bg-[radial-gradient(125%_125%_at_18%_42%,var(--nous-nyx)_32%,transparent_78%)]"
-        />
-        <div
-          aria-hidden="true"
-          className="absolute inset-x-0 bottom-0 h-32 pointer-events-none bg-[linear-gradient(to_top,var(--nous-nyx),transparent)]"
-        />
-
-        <div className="relative z-10 w-full max-w-7xl mx-auto pointer-events-none">
-          <motion.div
-            initial={{ opacity: 0, y: 18 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: EASE_OUT }}
-            className="max-w-2xl"
-          >
-            <p
-              className="text-xs font-semibold tracking-[0.16em] uppercase text-(--nous-sol) mb-8"
-              style={{ fontFamily: 'var(--nous-font-ui)' }}
-            >
-              Multimodal Intelligence Platform
-            </p>
+      <section className="px-6 py-16 lg:pt-32 lg:pb-28">
+        {/* CSS entrance, not framer-motion: an `initial={{ opacity: 0 }}` on
+            the SSR markup leaves the hero invisible until hydration, which on
+            a slow load is seconds of blank page and a late LCP. */}
+        <div className="max-w-7xl mx-auto grid lg:grid-cols-[8fr_3fr] lg:gap-24 animate-in fade-in-0 slide-in-from-bottom-4 duration-500 motion-reduce:animate-none">
+          <div>
+            <div
+              aria-hidden="true"
+              className="w-10 lg:w-14 h-[3px] bg-(--nous-sol) mb-7 lg:mb-10"
+            />
 
             <h1
-              className="text-(--nous-ivory) mb-8"
-              style={{ fontFamily: 'var(--nous-font-heading)' }}
+              className="text-5xl lg:text-[96px] font-normal tracking-[-0.02em] leading-none text-(--nous-erebus) text-pretty mb-6 lg:mb-9"
+              style={SERIF}
             >
-              <span className="block text-7xl sm:text-8xl md:text-[10rem] font-bold text-(--nous-sol) leading-[0.9] tracking-tight">
-                νοῦς
-              </span>
-              <span className="block text-3xl md:text-5xl font-bold tracking-tight leading-[1.05] mt-5 max-w-[18ch]">
-                Knowledge that answers back.
-              </span>
+              Knowledge that{' '}
+              <em className="italic text-(--nous-sol-safe)">answers back.</em>
             </h1>
 
             <p
-              className="text-lg text-(--nous-parchment) leading-relaxed max-w-[56ch] mb-10"
-              style={{ fontFamily: 'var(--nous-font-body)' }}
+              className="text-lg lg:text-[22px] leading-[1.6] text-(--nous-titan) max-w-[52ch] mb-8 lg:mb-11"
+              style={SERIF}
             >
-              Semantic search, knowledge graph extraction, and AI research
-              workflows over your documents, papers, and data. One system that
-              reads everything and cites its sources.
+              A research instrument for people who read for a living. NOUS
+              retrieves across your papers and documents, reasons over a
+              knowledge graph, and footnotes every claim
+              <sup className={FOOTNOTE_MARK} style={UI}>
+                1
+              </sup>{' '}
+              so you can check its work
+              <sup className={FOOTNOTE_MARK} style={UI}>
+                2
+              </sup>{' '}
+              before you build on it.
             </p>
 
             <div
-              className="flex flex-wrap gap-3 pointer-events-auto"
-              style={{ fontFamily: 'var(--nous-font-ui)' }}
+              className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-6 text-sm"
+              style={UI}
             >
-              {isAuthenticated ? (
-                <Link
-                  href="/dashboard"
-                  className="group inline-flex items-center gap-2 h-12 px-6 rounded-(--nous-radius-md) text-sm font-semibold bg-(--nous-sol) text-(--nous-erebus) transition-colors hover:bg-(--nous-helios) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-nyx)"
-                >
-                  Open dashboard
-                  <ArrowRight
-                    className="w-4 h-4 transition-transform group-hover:translate-x-0.5"
-                    aria-hidden="true"
-                  />
-                </Link>
-              ) : (
-                <Link
-                  href="/register"
-                  className="group inline-flex items-center gap-2 h-12 px-6 rounded-(--nous-radius-md) text-sm font-semibold bg-(--nous-sol) text-(--nous-erebus) transition-colors hover:bg-(--nous-helios) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-nyx)"
-                >
-                  Get started
-                  <ArrowRight
-                    className="w-4 h-4 transition-transform group-hover:translate-x-0.5"
-                    aria-hidden="true"
-                  />
-                </Link>
-              )}
-              <a
-                href="#features"
-                className="inline-flex items-center gap-2 h-12 px-6 rounded-(--nous-radius-md) text-sm font-semibold border border-(--nous-dusk) text-(--nous-ivory) transition-colors hover:border-(--nous-parchment) hover:bg-(--nous-obsidian)/60 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
+              <Link
+                href={isAuthenticated ? '/dashboard' : '/register'}
+                className="group inline-flex w-full sm:w-auto items-center justify-center gap-2 h-12 px-7 rounded-(--nous-radius-md) font-semibold bg-(--nous-erebus) text-(--nous-selene) transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
               >
-                Explore the platform
+                {isAuthenticated ? 'Open dashboard' : 'Get started'}
+                <ArrowRight
+                  className="w-4 h-4 transition-transform group-hover:translate-x-0.5"
+                  aria-hidden="true"
+                />
+              </Link>
+              <a
+                href="#what"
+                className="inline-flex items-center min-h-11 sm:min-h-0 font-medium text-(--nous-sol-safe) border-b border-(--nous-sol) pb-0.5 hover:text-(--nous-erebus) transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
+              >
+                Read how it works
               </a>
             </div>
+          </div>
 
-            <ul
-              className="mt-14 pt-7 border-t border-(--nous-shade) flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-(--nous-parchment)"
-              style={{ fontFamily: 'var(--nous-font-ui)' }}
-            >
-              {PROOF.map(({ icon: Icon, text }) => (
-                <li key={text} className="flex items-center gap-2">
-                  <Icon
-                    className="w-4 h-4 text-(--nous-sol)"
-                    aria-hidden="true"
-                  />
-                  {text}
-                </li>
-              ))}
-            </ul>
-          </motion.div>
+          {/* Marginalia. A right-hand column at lg, a ruled block under the
+              CTAs on narrow screens — same DOM order either way. */}
+          <aside
+            className="mt-10 pt-6 border-t border-(--nous-enceladus) flex flex-col gap-4 text-[13px] leading-[1.55] text-(--nous-titan) lg:mt-0 lg:pt-11 lg:gap-7 lg:border-t-0 lg:border-l lg:border-(--nous-enceladus) lg:pl-7"
+            style={UI}
+          >
+            {MARGIN_NOTES.map((note) => (
+              <div
+                key={note.text}
+                className={`grid grid-cols-[16px_1fr] gap-2 ${
+                  note.mark ? '' : 'text-(--nous-fg-3)'
+                }`}
+              >
+                <span className="font-semibold text-(--nous-sol-safe)">
+                  {note.mark}
+                </span>
+                <span>{note.text}</span>
+              </div>
+            ))}
+          </aside>
         </div>
       </section>
     </>

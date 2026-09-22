@@ -209,3 +209,48 @@ def test_write_iteration_message_serialization_caps_length(ledger_dir: Path):
     ai = next(m for m in msgs if m["role"] == "ai")
     assert len(user["content"]) <= 2000
     assert len(ai["content"]) <= 4000
+
+
+@pytest.mark.unit
+def test_ledger_redacts_pii_before_writing(ledger_dir: Path):
+    """R7-L4: these are plain files on a shared volume that outlive the run."""
+    from src.services.agent.iteration_ledger import write_iteration
+
+    state = _state_with_one_turn()
+    state["messages"] = [
+        HumanMessage(content="email alice@example.com, ssn 123-45-6789"),
+        AIMessage(content="I mailed alice@example.com"),
+        ToolMessage(content='{"to":"alice@example.com"}', tool_call_id="call_1"),
+    ]
+    state["tool_executions"] = [
+        {
+            "id": "call_1",
+            "tool_name": "send",
+            "args": {"to": "alice@example.com"},
+            "status": "completed",
+        }
+    ]
+
+    path = write_iteration("thread-pii", state)
+    assert path is not None
+    raw = path.read_text()
+
+    assert "alice@example.com" not in raw
+    assert "123-45-6789" not in raw
+    assert "<email>" in raw
+    # The record is still useful: structure and non-PII fields survive.
+    record = json.loads(raw)
+    assert record["state_snapshot"]["tool_executions"][0]["tool_name"] == "send"
+
+
+@pytest.mark.unit
+def test_config_initial_query_is_redacted(ledger_dir: Path):
+    from src.services.agent.iteration_ledger import write_iteration
+
+    state = _state_with_one_turn()
+    state["messages"] = [HumanMessage(content="I am at bob@example.com")]
+
+    write_iteration("thread-cfg", state)
+
+    config = json.loads((ledger_dir / "thread-cfg" / "config.json").read_text())
+    assert "bob@example.com" not in config["initial_query"]

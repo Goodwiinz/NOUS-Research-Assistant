@@ -1,3 +1,4 @@
+import type { RuntimeAttachment } from '@nous/chat-runtime/types';
 /**
  * TypeScript types for NOUS thread-centric chat system
  * Based on backend/src/schemas/chat.py
@@ -141,6 +142,8 @@ export interface Citation {
   id: string;
   document_id?: string; // Optional: may not have a database UUID
   external_reference_id?: string; // For non-database references (e.g., arXiv IDs)
+  /** Stable one-based index used by persisted `[Doc N]` markers. */
+  source_position?: number;
   chunk_index?: number;
   chunk_id?: string;
   snippet?: string;
@@ -152,20 +155,13 @@ export interface Citation {
   document_type?: string;
 }
 
-export interface MessageAttachment {
-  id: string;
-  document_id: string;
-  display_name?: string;
-  thumbnail_url?: string;
-  document_title?: string;
-  document_type?: string;
-  mime_type?: string;
-}
+export type MessageAttachment = RuntimeAttachment;
 
 // Citation input for creating messages with RAG sources
 export interface CitationCreate {
   document_id?: string; // Optional: may not have a database UUID
   external_reference_id?: string; // For non-database references (e.g., arXiv IDs)
+  source_position?: number;
   chunk_index?: number;
   chunk_id?: string;
   snippet?: string;
@@ -208,6 +204,7 @@ export type ChatMessage = Omit<
   | 'citations'
   | 'attachments'
   | 'plan'
+  | 'reasoning_summary'
   | 'tool_executions'
   | 'token_usage'
   | 'progress_steps'
@@ -223,6 +220,8 @@ export type ChatMessage = Omit<
   /** Planner's top-level rationale for `plan` (chat_messages.plan_reasoning).
    * Absent for legacy rows, user rows, and turns without a plan. */
   plan_reasoning?: string;
+  /** Bounded provider-authored reasoning summary for an assistant turn. */
+  reasoning_summary?: string;
   /** Aggregated per-turn LLM token usage (chat_messages.token_usage JSONB).
    * Absent when the turn reported no usage. */
   token_usage?: { input_tokens: number; output_tokens: number };

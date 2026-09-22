@@ -1,6 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 // ChatInput resolves through the barrel (not its own module path) — the
@@ -219,6 +225,17 @@ export function ChatSurface({
   // KNOW that up front instead of closing on a save nothing will act on.
   const canSubmitEdit = isSessionInteractive && !isBusy;
 
+  const handleStarterSelect = useCallback(
+    (prompt: string): void => {
+      // A starter is an editable prompt, not an implicit send. Keep anything
+      // already typed and put focus back in the composer so the user can edit
+      // before deciding what to send.
+      setInput((current) => (current ? current : prompt));
+      chatInputRef.current?.focus();
+    },
+    [chatInputRef, setInput]
+  );
+
   // F2 (chat-bug-hunt 2026-08-23): the runtime key encodes THREAD IDENTITY
   // ONLY. It used to also encode a hydration phase (`new:empty` →
   // `new:hydrated`), so the first optimistic message landing on a brand-new
@@ -282,7 +299,7 @@ export function ChatSurface({
       {/* Mobile sidebar backdrop + drawer */}
       <AnimatePresence>
         {mobileSidebarOpen && (
-          <div className="fixed inset-0 z-50 md:hidden">
+          <div className="fixed inset-0 z-50 xl:hidden">
             <motion.div
               className="absolute inset-0 bg-(--nous-erebus)/50"
               initial={{ opacity: 0 }}
@@ -325,7 +342,7 @@ export function ChatSurface({
       </AnimatePresence>
 
       {/* Desktop sidebar */}
-      <div className="hidden md:block h-full shrink-0">
+      <div className="hidden xl:block h-full shrink-0">
         <ChatSidebar
           conversations={conversations}
           activeId={activeThreadId}
@@ -384,7 +401,7 @@ export function ChatSurface({
             isLoading={isLoading}
             storeStreamingContent={storeStreamingContent}
             storeIsRetrievingRag={storeIsRetrievingRag}
-            onPromptSelect={setInput}
+            onPromptSelect={handleStarterSelect}
             onRegenerate={(index) => {
               if (isSessionInteractive) handleRegenerate(index);
             }}

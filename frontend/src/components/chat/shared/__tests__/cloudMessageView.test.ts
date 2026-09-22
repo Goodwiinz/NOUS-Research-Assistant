@@ -86,6 +86,7 @@ describe('cloudMessageView', () => {
           },
         ],
         plan_reasoning: 'Search first, then answer from the results.',
+        reasoning_summary: 'I compared the strongest retrieved sources.',
         token_usage: { input_tokens: 1200, output_tokens: 340 },
         progress_steps: [
           { phase: 'accepted', detail: 'Request accepted' },
@@ -98,6 +99,9 @@ describe('cloudMessageView', () => {
     expect(msg.plan?.[0].tool).toBe('search_documents');
     expect(msg.planReasoning).toBe(
       'Search first, then answer from the results.'
+    );
+    expect(msg.reasoningSummary).toBe(
+      'I compared the strongest retrieved sources.'
     );
     expect(msg.metadata?.tokenUsage).toEqual({ input: 1200, output: 340 });
     expect(msg.progressSteps).toEqual([
@@ -119,6 +123,7 @@ describe('cloudMessageView', () => {
 
     expect(msg.plan).toBeUndefined();
     expect(msg.planReasoning).toBeUndefined();
+    expect(msg.reasoningSummary).toBeUndefined();
     expect(msg.metadata).toBeUndefined();
   });
 
@@ -581,6 +586,95 @@ describe('selectDisplayedMessages runtime-id overlays', () => {
     timestamp: number,
     source: 'canonical' | 'optimistic' | 'local-only' = 'optimistic'
   ) => ({ runtimeId, source, role, content, timestamp });
+
+  it('hides the canonical replaced suffix while an edit is in flight', () => {
+    const displayed = selectDisplayedMessages({
+      localMessages: [
+        {
+          ...local('runtime-replacement', 'user', 'Edited question', 5),
+          replacesClientMessageId: 'runtime-old-user',
+        },
+      ],
+      storeMessages: [
+        db('before-user', 'runtime-before-user', 'Earlier question', 0),
+        db('before-assistant', 'runtime-before-assistant', 'Earlier answer', 1),
+        db('old-user', 'runtime-old-user', 'Original question', 2),
+        db('old-assistant', 'runtime-old-assistant', 'Original answer', 3),
+        db('old-follow-up', 'runtime-old-follow-up', 'Follow-up question', 4),
+        db(
+          'old-follow-up-answer',
+          'runtime-old-follow-up-answer',
+          'Follow-up answer',
+          5
+        ),
+      ],
+      messageFreshness: 'stale',
+    });
+
+    expect(displayed.map((message) => message.runtimeId)).toEqual([
+      'runtime-before-user',
+      'runtime-before-assistant',
+      'runtime-replacement',
+    ]);
+  });
+
+  it('restores the suffix on replacement failure and reconciles success once', () => {
+    const oldStore = [
+      db('before-user', 'runtime-before-user', 'Earlier question', 0),
+      db('before-assistant', 'runtime-before-assistant', 'Earlier answer', 1),
+      db('old-user', 'runtime-old-user', 'Original question', 2),
+      db('old-assistant', 'runtime-old-assistant', 'Original answer', 3),
+    ];
+    const replacement = {
+      ...local('runtime-replacement', 'user', 'Edited question', 5),
+      replacesClientMessageId: 'runtime-old-user',
+    };
+
+    const failed = selectDisplayedMessages({
+      localMessages: [
+        {
+          runtimeId: 'replacement-error',
+          source: 'local-only',
+          role: 'assistant',
+          content: '',
+          timestamp: 6,
+          error: { message: 'Replacement failed', category: 'stream-error' },
+        },
+      ],
+      storeMessages: oldStore,
+      messageFreshness: 'stale',
+    });
+    expect(failed.map((message) => message.runtimeId)).toEqual([
+      'runtime-before-user',
+      'runtime-before-assistant',
+      'runtime-old-user',
+      'runtime-old-assistant',
+      'replacement-error',
+    ]);
+
+    const reconciled = selectDisplayedMessages({
+      localMessages: [
+        {
+          ...replacement,
+          replacesClientMessageId: 'runtime-old-user',
+        },
+        local('runtime-new-assistant', 'assistant', 'Edited answer', 6),
+      ],
+      storeMessages: [
+        oldStore[0],
+        oldStore[1],
+        db('new-user', 'runtime-replacement', 'Edited question', 2),
+        db('new-assistant', 'runtime-new-assistant', 'Edited answer', 3),
+      ],
+      messageFreshness: 'fresh',
+    });
+    expect(reconciled.map((message) => message.runtimeId)).toEqual([
+      'runtime-before-user',
+      'runtime-before-assistant',
+      'runtime-replacement',
+      'runtime-new-assistant',
+    ]);
+  });
 
   it('retains an optimistic tail when a stale canonical page has equal length but divergent ids', () => {
     const displayed = selectDisplayedMessages({

@@ -40,6 +40,8 @@ pytestmark = pytest.mark.unit
 
 ORG_A = uuid.UUID("11111111-1111-1111-1111-111111111111")
 ORG_B = uuid.UUID("22222222-2222-2222-2222-222222222222")
+USER_A = uuid.UUID("33333333-3333-3333-3333-333333333333")
+USER_B = uuid.UUID("44444444-4444-4444-4444-444444444444")
 
 
 # ---------------------------------------------------------------------------
@@ -87,13 +89,18 @@ def _index(name: str) -> Index:
     return cast(Index, matches[0])
 
 
-async def _make_run(db: AsyncSession, *, organization_id: uuid.UUID | None) -> str:
+async def _make_run(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID | None,
+    user_id: uuid.UUID = USER_A,
+) -> str:
     job_id = str(uuid.uuid4())
     db.add(
         AgentRun(
             job_id=job_id,
             status="running",
-            user_id=uuid.uuid4(),
+            user_id=user_id,
             organization_id=organization_id,
         )
     )
@@ -199,7 +206,7 @@ async def test_run_event_store_concurrency(db: AsyncSession) -> None:
     assert flaky.insert_attempts == 2
     assert retried.seq == 7
 
-    stored = await read_events(db, run_id, organization_id=ORG_A)
+    stored = await read_events(db, run_id, organization_id=ORG_A, user_id=USER_A)
     assert [e.seq for e in stored] == [1, 2, 3, 4, 5, 6, 7]
 
 
@@ -249,7 +256,7 @@ async def test_append_does_not_commit(db: AsyncSession) -> None:
         organization_id=ORG_A,
     )
     await db.rollback()
-    assert await read_events(db, run_id, organization_id=ORG_A) == []
+    assert await read_events(db, run_id, organization_id=ORG_A, user_id=USER_A) == []
 
 
 # ---------------------------------------------------------------------------
@@ -271,16 +278,18 @@ async def test_run_event_org_scope_null_safe(db: AsyncSession) -> None:
         )
     await db.commit()
 
-    orgless = await read_events(db, run_id, organization_id=None)
+    orgless = await read_events(db, run_id, organization_id=None, user_id=USER_A)
     assert [e.organization_id for e in orgless] == [None]
 
-    scoped = await read_events(db, run_id, organization_id=ORG_A)
+    scoped = await read_events(db, run_id, organization_id=ORG_A, user_id=USER_A)
     assert [e.organization_id for e in scoped] == [ORG_A]
 
     # Compile-level proof: the org-less predicate is IS NULL, and the literal
     # string "None" appears nowhere in the emitted SQL.
     recorder = _RecordingSession(db)
-    await read_events(cast(AsyncSession, recorder), run_id, organization_id=None)
+    await read_events(
+        cast(AsyncSession, recorder), run_id, organization_id=None, user_id=USER_A
+    )
     sql = recorder.compiled(Select)
     assert "agent_run_events.organization_id IS NULL" in sql
     assert "'None'" not in sql
@@ -289,7 +298,10 @@ async def test_run_event_org_scope_null_safe(db: AsyncSession) -> None:
     # A garbage org id degrades to IS NULL (fail-closed), never to a string.
     recorder = _RecordingSession(db)
     await read_events(
-        cast(AsyncSession, recorder), run_id, organization_id="not-a-uuid"
+        cast(AsyncSession, recorder),
+        run_id,
+        organization_id="not-a-uuid",
+        user_id=USER_A,
     )
     assert "agent_run_events.organization_id IS NULL" in recorder.compiled(Select)
 
@@ -404,7 +416,9 @@ async def test_append_after_terminal_event_is_refused(
             payload={},
             organization_id=ORG_A,
         )
-    assert len(await read_events(db, run_id, organization_id=ORG_A)) == 1
+    assert (
+        len(await read_events(db, run_id, organization_id=ORG_A, user_id=USER_A)) == 1
+    )
 
 
 async def test_one_terminal_event_per_run_is_a_database_invariant(
@@ -499,3 +513,21 @@ async def test_payload_is_validated_and_redacted_before_persistence(
             payload={"unexpected": "field"},
             organization_id=ORG_A,
         )
+
+
+async def test_read_events_is_scoped_to_the_owning_user(db: AsyncSession) -> None:
+    """R7-L7: org scope alone let any colleague replay another user's prompts."""
+    run_id = await _make_run(db, organization_id=ORG_A, user_id=USER_A)
+    await append_event(
+        db,
+        run_id=run_id,
+        event_type=RunEventType.ASSISTANT_DELTA,
+        payload={"text": "private"},
+        organization_id=ORG_A,
+    )
+    await db.commit()
+
+    assert (
+        len(await read_events(db, run_id, organization_id=ORG_A, user_id=USER_A)) == 1
+    )
+    assert await read_events(db, run_id, organization_id=ORG_A, user_id=USER_B) == []

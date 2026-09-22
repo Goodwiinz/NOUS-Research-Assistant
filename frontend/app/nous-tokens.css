@@ -41,6 +41,7 @@
   --nous-helios-rgb: 232, 184, 74;
   --nous-erebus-rgb: 10, 10, 14;
   --nous-mars-rgb: 239, 68, 68;
+  --nous-nyx-rgb: 20, 18, 16;
 
   /* Semantic fg/bg */
   --nous-fg-1: var(--nous-erebus);
@@ -71,9 +72,15 @@
   --nous-ember: rgba(212, 160, 57, 0.1);
 
   /* Type */
-  --nous-font-heading: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --nous-font-body: 'Source Serif 4', Georgia, 'Times New Roman', serif;
-  --nous-font-ui: 'Inter', -apple-system, sans-serif;
+  /* next/font hashes the family name, so the literal 'Inter' never matched the
+     face layout.tsx already loads. Point at its variable instead. */
+  --nous-font-heading:
+    var(--font-inter), 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  /* next/font hashes the family name, so the literal 'Source Serif 4' never
+     matched the face layout.tsx already loads — point at its variable. */
+  --nous-font-body:
+    var(--font-serif), 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --nous-font-ui: var(--font-inter), 'Inter', -apple-system, sans-serif;
   --nous-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
 
   /* Radii */

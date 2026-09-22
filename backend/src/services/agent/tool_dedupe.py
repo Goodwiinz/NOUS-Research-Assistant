@@ -197,9 +197,8 @@ def find_repeated_failures(
 
     A tool_call is circuit-broken when its ``(name, args)`` dedupe key has
     already FAILED ``threshold`` or more times within the current turn.
-    One retry of a failed call is allowed (transients recover); beyond
-    that the caller should short-circuit with a stop-retrying message
-    instead of executing again.
+    One retry is allowed unless execution already exhausted the tool's
+    retry budget. In that case re-planning must not restart internal retries.
     """
     if not tool_calls:
         return {}
@@ -213,7 +212,7 @@ def find_repeated_failures(
         for te in tool_executions
         if te.get("status") == "failed" and te.get("id") in in_turn_ids
     ]
-    if len(failed) < threshold:
+    if not failed:
         return {}
     if len(failed) > _CACHE_LOOKUP_BUDGET:
         failed = failed[-_CACHE_LOOKUP_BUDGET:]
@@ -223,6 +222,8 @@ def find_repeated_failures(
     for te in failed:
         key = dedupe_key(te.get("tool_name", ""), te.get("args") or {})
         counts[key] = counts.get(key, 0) + 1
+        if te.get("retry_exhausted"):
+            counts[key] = max(counts[key], threshold)
         last_by_key[key] = te
 
     capped: dict[str, dict] = {}
@@ -246,11 +247,21 @@ def build_failure_capped_tool_message(
     keeps re-planning the exact same call until the tool-loop cap kills
     the turn.
     """
-    prior_error = prior_failure.get("error") or "unknown error"
+    result = prior_failure.get("result")
+    prior_error = (
+        prior_failure.get("error")
+        or (result.get("error") if isinstance(result, dict) else None)
+        or "unknown error"
+    )
+    failure_summary = (
+        "exhausted its retry budget"
+        if prior_failure.get("retry_exhausted")
+        else f"failed {attempts} times"
+    )
     content = json.dumps(
         {
             "error": (
-                f"{tc.get('name', 'tool')} failed {attempts} times with these "
+                f"{tc.get('name', 'tool')} {failure_summary} with these "
                 f"exact arguments (last error: {prior_error}). Do NOT retry "
                 "with the same arguments this turn — change the arguments, "
                 "use a different tool, or answer with the information you "

@@ -70,6 +70,42 @@ async def test_oversized_rag_context_bounded_on_wire_and_buffer(
     )
 
 
+async def test_rag_context_keeps_all_twenty_sources_under_utf8_byte_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitter, buffered = await _emitter_capturing_buffer(monkeypatch)
+    contexts = [
+        {
+            "document_id": f"00000000-0000-0000-0000-{index:012d}",
+            "chunk_id": f"chunk-{index}-" + "a" * 80,
+            "title": "論文" * 500,
+            "content": (f"來源 {index} " + "🧪" * 3000),
+            "score": 0.8,
+            "page_number": index,
+            "tool_call_id": "must-not-leak",
+        }
+        for index in range(20)
+    ]
+
+    frame = await emitter.emit(AgentStreamEvent.RAG_CONTEXT, {"contexts": contexts})
+
+    assert len(frame.encode("utf-8")) <= MAX_PAYLOAD_BYTES + _ENVELOPE_SLACK_BYTES
+    assert buffered == [frame]
+    public_contexts = _frame_data(frame)["contexts"]
+    assert len(public_contexts) == 20
+    assert [context["source_position"] for context in public_contexts] == list(
+        range(1, 21)
+    )
+    assert [context["document_id"] for context in public_contexts] == [
+        context["document_id"] for context in contexts
+    ]
+    assert [context["chunk_id"] for context in public_contexts] == [
+        context["chunk_id"] for context in contexts
+    ]
+    assert [context["page_number"] for context in public_contexts] == list(range(20))
+    assert all("tool_call_id" not in context for context in public_contexts)
+
+
 async def test_oversized_plan_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     emitter, _ = await _emitter_capturing_buffer(monkeypatch)
 
@@ -120,7 +156,7 @@ async def test_normal_sized_payload_passes_through_untouched() -> None:
     frame = await emitter.emit(AgentStreamEvent.RAG_CONTEXT, payload, buffer=False)
 
     data = _frame_data(frame)
-    assert data["contexts"] == payload["contexts"]
+    assert data["contexts"] == [{**payload["contexts"][0], "source_position": 1}]
     assert "payload_truncated" not in data
 
 

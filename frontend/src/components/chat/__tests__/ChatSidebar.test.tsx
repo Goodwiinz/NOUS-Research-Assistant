@@ -1,6 +1,33 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import {
+  fireEvent,
+  render as testingRender,
+  screen,
+  waitFor,
+} from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactElement, ReactNode } from 'react';
+import { threadSearchService } from '@/services/threadSearchService';
+import type { ThreadSearchResponse } from '@/types/thread-search';
+import type { Workspace } from '@/types/workspace';
 import { ChatSidebar } from '../ChatSidebar';
+
+vi.mock('@/services/threadSearchService', () => ({
+  threadSearchService: { searchThreads: vi.fn() },
+}));
+
+const mockedSearchThreads = vi.mocked(threadSearchService.searchThreads);
+
+function render(ui: ReactElement): ReturnType<typeof testingRender> {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return testingRender(ui, {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 const mockConversations = [
   {
@@ -50,6 +77,31 @@ describe('ChatSidebar', () => {
     expect(screen.getByText('Gamma Query')).toBeInTheDocument();
   });
 
+  it('shows source and turn counts when the thread carries a citation count', () => {
+    render(
+      <ChatSidebar
+        {...defaultProps}
+        conversations={[
+          {
+            id: 'conv-cited',
+            title: 'Cited Thread',
+            messages: [],
+            threadId: 'thread-cited',
+            updatedAt: Date.now(),
+            messageCount: 4,
+            citationCount: 3,
+          },
+        ]}
+      />
+    );
+    expect(screen.getByText('3 sources · 4 turns')).toBeInTheDocument();
+  });
+
+  it('keeps the preview snippet for threads without a citation count', () => {
+    render(<ChatSidebar {...defaultProps} />);
+    expect(screen.getByText('Hello world')).toBeInTheDocument();
+  });
+
   it('shows correct count badge', () => {
     render(<ChatSidebar {...defaultProps} />);
     expect(screen.getByText('3')).toBeInTheDocument();
@@ -75,6 +127,92 @@ describe('ChatSidebar', () => {
     expect(screen.getByText('Alpha Chat')).toBeInTheDocument();
     expect(screen.queryByText('Beta Discussion')).not.toBeInTheDocument();
     expect(screen.queryByText('Gamma Query')).not.toBeInTheDocument();
+  });
+
+  it('trims surrounding whitespace before matching a thread search', () => {
+    render(<ChatSidebar {...defaultProps} />);
+    const searchInput = screen.getByPlaceholderText('Search threads...');
+    fireEvent.change(searchInput, { target: { value: '  Alpha Chat  ' } });
+
+    expect(screen.getByText('Alpha Chat')).toBeInTheDocument();
+    expect(screen.queryByText('Beta Discussion')).not.toBeInTheDocument();
+  });
+
+  it('renders an older server hit, selects it, and restores the normal list on clear', async () => {
+    mockedSearchThreads.mockResolvedValueOnce({
+      query: 'older retrieval',
+      search_id: 'search-1',
+      results: [
+        {
+          thread_id: 'thread-older',
+          title: 'Older retrieval thread',
+          summary: 'A persisted summary from an older page',
+          status: 'active',
+          conversation_id: 'conversation-1',
+          relevance_score: 1,
+          message_count: 3,
+          last_message_at: '2026-09-20T12:00:00Z',
+          created_at: '2026-09-20T11:00:00Z',
+          matching_message_count: 1,
+        },
+      ],
+      total_results: 1,
+      returned_results: 1,
+      search_time_ms: 1,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    } satisfies ThreadSearchResponse);
+    const onSelect = vi.fn();
+
+    render(
+      <ChatSidebar
+        {...defaultProps}
+        onSelect={onSelect}
+        currentWorkspace={{ id: 'workspace-1', name: 'Workspace' } as Workspace}
+      />
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search threads...'), {
+      target: { value: 'older retrieval' },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText('Older retrieval thread')).toBeInTheDocument()
+    );
+    expect(
+      screen.getByText('A persisted summary from an older page')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Older retrieval thread'));
+    expect(onSelect).toHaveBeenCalledWith('thread-older');
+
+    fireEvent.change(screen.getByPlaceholderText('Search threads...'), {
+      target: { value: '' },
+    });
+    expect(screen.getByText('Alpha Chat')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Older retrieval thread')
+    ).not.toBeInTheDocument();
+    expect(mockedSearchThreads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: { workspace_id: 'workspace-1' },
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+  });
+
+  it('does not offer normal-list pagination while a search is active', () => {
+    const { rerender } = render(
+      <ChatSidebar {...defaultProps} hasMoreThreads />
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search threads...'), {
+      target: { value: 'older retrieval' },
+    });
+
+    rerender(<ChatSidebar {...defaultProps} hasMoreThreads />);
+    expect(screen.getByDisplayValue('older retrieval')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Show older threads' })
+    ).not.toBeInTheDocument();
   });
 
   it('shows "No messages yet" for empty conversations', () => {
@@ -202,7 +340,7 @@ describe('ChatSidebar', () => {
     expect(onDelete).toHaveBeenCalledWith('conv-1');
   });
 
-  const clickSelectModeToggle = () => {
+  const clickSelectModeToggle = (): void => {
     const toggle = screen
       .getAllByRole('button')
       .find((button) => button.className.includes('ml-auto'));

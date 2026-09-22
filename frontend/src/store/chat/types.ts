@@ -106,6 +106,8 @@ export interface ChatState {
    * transcript render the plan WHILE the turn streams instead of only after
    * commit. Mirrors the committed message's `plan` field shape exactly. */
   streamingPlan: PlanStep[];
+  /** Planner-authored rationale for the current live plan. */
+  streamingPlanReasoning: string;
   /** Display-safe server progress accumulated for the current turn. */
   streamingProgress: AgentProgressStep[];
   /** Bounded provider-authored reasoning summary for the live turn. */
@@ -130,8 +132,8 @@ export interface ChatState {
 
 export interface ChatActions {
   // Selection actions
-  setCurrentWorkspace: (workspaceId: string | null) => void;
-  setCurrentConversation: (conversationId: string | null) => void;
+  setCurrentWorkspace: (workspaceId: string | null) => Promise<void>;
+  setCurrentConversation: (conversationId: string | null) => Promise<void>;
   setCurrentThread: (threadId: string | null) => void;
   setThreadProjectBinding: (
     threadId: string,

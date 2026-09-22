@@ -177,8 +177,11 @@ class TestLLMClassifier:
             )
 
         # System message should mention the page context
-        system_content = captured_messages[0].content
-        assert "project" in system_content.lower()
+        import json
+
+        state = json.loads(captured_messages[1].content)
+        assert state["page"]["type"] == "project"
+        assert state["page"]["project_selected"] is True
 
     async def test_llm_classification_includes_previous_turn(self):
         """Previous turn context should be passed to the LLM."""
@@ -329,7 +332,7 @@ class TestFallbackClassifier:
         assert result.confidence == 0.5
 
     async def test_shortcut_does_not_fire_with_prior_tool(self):
-        """Retry phrases (short, zero keywords) must still reach the LLM when prior_tool exists."""
+        """Non-retry short queries still reach semantics when prior_tool exists."""
         from src.services.agent.classifier import (
             ClassificationResult,
             classify_intent_with_fallback,
@@ -348,7 +351,7 @@ class TestFallbackClassifier:
             return_value=llm_result,
         ) as mock_llm:
             result = await classify_intent_with_fallback(
-                "try again",
+                "continue",
                 {"type": "unknown"},
                 prior_tool={"name": "ingest_arxiv_papers", "args": {}, "result": ""},
             )
@@ -469,24 +472,28 @@ class TestFallbackClassifier:
         assert result.source == "llm"
         assert result.confidence == 0.60
 
-    async def test_project_creation_action_override_skips_llm(self):
-        """Project creation should route to research before LLM classification."""
+    async def test_project_creation_uses_semantic_route(self):
+        """Project creation wording must be interpreted in context."""
         from src.services.agent._nodes_classify import route_by_intent
-        from src.services.agent.classifier import classify_intent_with_fallback
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
         from src.services.agent.subgraphs.research_agent import RESEARCH_TOOL_NAMES_LIST
 
         with patch(
             "src.services.agent.classifier.classify_intent_llm",
             new_callable=AsyncMock,
+            return_value=ClassificationResult("research", 0.9, "project", "llm"),
         ) as mock_llm:
             result = await classify_intent_with_fallback(
                 "create a project named Security Review", {"type": "unknown"}
             )
 
-        mock_llm.assert_not_called()
+        mock_llm.assert_awaited_once()
         assert result.intent == "research"
-        assert result.source == "action_override"
-        assert result.confidence == 1.0
+        assert result.source == "llm"
+        assert result.confidence == 0.9
         assert route_by_intent({"intent": result.intent}) == "research_subgraph"
         assert "create_project" in RESEARCH_TOOL_NAMES_LIST
 
@@ -505,36 +512,44 @@ class TestFallbackClassifier:
             ),
         ],
     )
-    async def test_explicit_tool_requests_skip_llm(
+    async def test_explicit_tool_requests_use_semantic_route(
         self, query: str, expected_intent: str
     ):
         """Explicit tool requests must route to the intent that exposes them."""
-        from src.services.agent.classifier import classify_intent_with_fallback
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
 
         with patch(
             "src.services.agent.classifier.classify_intent_llm",
             new_callable=AsyncMock,
+            return_value=ClassificationResult(expected_intent, 0.9, "tool", "llm"),
         ) as mock_llm:
             result = await classify_intent_with_fallback(query, {"type": "unknown"})
 
-        mock_llm.assert_not_called()
+        mock_llm.assert_awaited_once()
         assert result.intent == expected_intent
-        assert result.source == "action_override"
+        assert result.source == "llm"
 
     async def test_project_creation_override_uses_whole_phrase_matching(self):
         """Words containing an override phrase must not be routed as project creation."""
-        from src.services.agent.classifier import classify_intent_with_fallback
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
 
         with patch(
             "src.services.agent.classifier.classify_intent_llm",
             new_callable=AsyncMock,
+            return_value=ClassificationResult("general", 0.9, "chart", "llm"),
         ) as mock_llm:
             result = await classify_intent_with_fallback(
                 "recreate a projection chart", {"type": "unknown"}
             )
 
-        mock_llm.assert_not_called()  # The short-query shortcut may apply.
-        assert result.source == "shortcut"
+        mock_llm.assert_awaited_once()
+        assert result.source == "llm"
 
     async def test_low_confidence_llm_still_loses_to_keyword_evidence(self):
         """The new guard must not swallow the original threshold behaviour."""
@@ -728,33 +743,23 @@ class TestFallbackClassifier:
 class TestPriorToolContext:
     """Tests for the prior_tool parameter that helps classify retry phrases."""
 
-    def test_format_prior_tool_returns_none_when_missing(self):
-        from src.services.agent.classifier import _format_prior_tool
+    def test_routing_state_minimizes_prior_tool_payload(self):
+        from src.services.agent.classifier import build_routing_state
 
-        assert _format_prior_tool(None) == "None"
-        assert _format_prior_tool({}) == "None"
-
-    def test_format_prior_tool_includes_name_args_result(self):
-        from src.services.agent.classifier import _format_prior_tool
-
-        text = _format_prior_tool(
-            {
+        state = build_routing_state(
+            "try again",
+            {},
+            prior_tool={
                 "name": "ingest_arxiv_papers",
-                "args": {"arxiv_id": "2310.11522"},
-                "result": '{"status": "skipped"}',
-            }
+                "args": {"api_key": "do-not-send", "arxiv_id": "2310.11522"},
+                "result": '{"status": "skipped", "document": "private-body"}',
+            },
         )
-        assert "ingest_arxiv_papers" in text
-        assert "2310.11522" in text
-        assert "skipped" in text
-
-    def test_format_prior_tool_truncates_large_payloads(self):
-        from src.services.agent.classifier import _format_prior_tool
-
-        big_result = "x" * 1000
-        text = _format_prior_tool({"name": "t", "args": {}, "result": big_result})
-        # 200-char truncation per field; full block stays under ~600 chars
-        assert len(text) < 600
+        assert state["prior_tools"] == [
+            {"name": "ingest_arxiv_papers", "status": "skipped"}
+        ]
+        assert "do-not-send" not in str(state)
+        assert "private-body" not in str(state)
 
     async def test_keyword_classifier_unchanged_for_retry_phrase(self):
         """Sanity: 'try again' still has 0.0 keyword confidence (forces LLM escalation)."""
@@ -763,6 +768,119 @@ class TestPriorToolContext:
         result = classify_intent_keywords("try again")
         assert result.confidence == 0.0
         assert result.source == "keyword"
+
+    async def test_retry_inherits_intent_without_semantic_confidence_floor(self):
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
+
+        with patch(
+            "src.services.agent.classifier.classify_intent_llm",
+            new_callable=AsyncMock,
+            return_value=ClassificationResult(
+                "research", 0.52, "retry of prior search", "llm"
+            ),
+        ) as semantic:
+            result = await classify_intent_with_fallback(
+                "try again",
+                {"type": "unknown"},
+                prior_tool={
+                    "calls": [
+                        {
+                            "name": "search_arxiv",
+                            "result": "error: rate limited",
+                            "status": "error",
+                        }
+                    ]
+                },
+            )
+
+        assert result.intent == "research"
+        assert result.source == "shortcut"
+        semantic.assert_not_awaited()
+
+    async def test_retry_inherits_intent_when_semantic_provider_fails(self):
+        from src.services.agent.classifier import classify_intent_with_fallback
+
+        with patch(
+            "src.services.agent.classifier.classify_intent_llm",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("provider down"),
+        ) as semantic:
+            result = await classify_intent_with_fallback(
+                "try again",
+                {},
+                prior_tool={
+                    "calls": [
+                        {
+                            "name": "export_bibliography",
+                            "result": "error",
+                            "status": "error",
+                        }
+                    ]
+                },
+            )
+
+        assert result.intent == "writing"
+        assert result.source == "shortcut"
+        semantic.assert_not_awaited()
+
+    async def test_retry_keeps_semantic_result_for_mixed_intent_batch(self):
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
+
+        with patch(
+            "src.services.agent.classifier.classify_intent_llm",
+            new_callable=AsyncMock,
+            return_value=ClassificationResult(
+                "writing", 0.95, "retry the failed export", "llm"
+            ),
+        ) as semantic:
+            result = await classify_intent_with_fallback(
+                "try again",
+                {},
+                prior_tool={
+                    "calls": [
+                        {
+                            "name": "export_bibliography",
+                            "result": "error",
+                            "status": "error",
+                        },
+                        {
+                            "name": "search_arxiv",
+                            "result": "ok",
+                            "status": "success",
+                        },
+                    ]
+                },
+            )
+
+        assert result.intent == "writing"
+        assert result.source == "llm"
+        semantic.assert_awaited_once()
+
+    def test_prior_tool_does_not_cross_an_intervening_user_turn(self):
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from src.services.agent._nodes_classify import _extract_prior_tool
+
+        messages = [
+            HumanMessage(content="Search arxiv"),
+            AIMessage(
+                content="",
+                tool_calls=[{"id": "call_1", "name": "search_arxiv", "args": {}}],
+            ),
+            ToolMessage(content="ok", tool_call_id="call_1"),
+            AIMessage(content="Done"),
+            HumanMessage(content="Tell me a joke"),
+            AIMessage(content="A model walks into a bar."),
+            HumanMessage(content="again"),
+        ]
+
+        assert _extract_prior_tool(messages) is None
 
     async def test_llm_classifier_includes_prior_tool_in_prompt(self):
         """When prior_tool is supplied, the LLM system message should describe it."""
@@ -795,12 +913,13 @@ class TestPriorToolContext:
                 },
             )
 
-        system_content = captured[0].content
-        assert "ingest_arxiv_papers" in system_content
-        assert "2310.11522" in system_content
+        state_content = captured[1].content
+        assert "ingest_arxiv_papers" in state_content
+        assert "skipped" in state_content
+        assert "2310.11522" not in state_content
 
     async def test_fallback_propagates_prior_tool_to_llm(self):
-        """When keyword confidence is low, prior_tool should reach the LLM call."""
+        """Ambiguous non-retry context should reach the LLM call."""
         from src.services.agent.classifier import (
             ClassificationResult,
             classify_intent_with_fallback,
@@ -819,7 +938,7 @@ class TestPriorToolContext:
             return_value=llm_result,
         ) as mock_llm:
             await classify_intent_with_fallback(
-                "try again",
+                "continue",
                 {"type": "unknown"},
                 previous_turn="The ingest was skipped.",
                 prior_tool={
@@ -839,21 +958,24 @@ class TestPriorToolContext:
         assert passed_prior is not None
         assert passed_prior["name"] == "ingest_arxiv_papers"
 
-    async def test_fallback_omits_prior_tool_when_keyword_confident(self):
-        """High-confidence keyword match short-circuits before reaching the LLM."""
-        from src.services.agent.classifier import classify_intent_with_fallback
+    async def test_keyword_confidence_does_not_omit_context(self):
+        """Even strong lexical hits need semantic interpretation."""
+        from src.services.agent.classifier import (
+            ClassificationResult,
+            classify_intent_with_fallback,
+        )
 
         with patch(
             "src.services.agent.classifier.classify_intent_llm",
             new_callable=AsyncMock,
+            return_value=ClassificationResult("research", 0.9, "search", "llm"),
         ) as mock_llm:
             result = await classify_intent_with_fallback(
                 "search for arxiv papers on attention",
                 {"type": "unknown"},
                 prior_tool={"name": "ingest_arxiv_papers", "args": {}, "result": ""},
             )
-
-        # LLM should not be called at all when keyword confidence >= 0.7
-        mock_llm.assert_not_called()
-        assert result.source == "keyword"
+        mock_llm.assert_awaited_once()
+        assert mock_llm.call_args.args[3]["name"] == "ingest_arxiv_papers"
+        assert result.source == "llm"
         assert result.intent == "research"

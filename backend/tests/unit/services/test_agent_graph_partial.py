@@ -103,6 +103,12 @@ def _assert_shared_rules_present(system_text: str) -> None:
     # Document coreference rule (9d5709f — resolves "it"/"that paper" to a UUID)
     assert "Reusing document IDs from conversation history" in system_text
     assert "Do not ask the user for the document_id" in system_text
+    # Named-source evidence must carry only UUIDs selected by title lookup;
+    # broad semantic substitutes must never be presented as that source.
+    assert "Named local source retrieval" in system_text
+    assert "document_ids" in system_text
+    assert "never substitute broad retrieval" in system_text
+    assert "title-search metadata as evidence" in system_text
     # Always-reply rule (b96bd89 — prevents silent blank after tool success)
     assert "Always reply after a tool call" in system_text
     assert "do not return empty content" in system_text
@@ -110,6 +116,10 @@ def _assert_shared_rules_present(system_text: str) -> None:
     # instead of calling list_projects, 5 dev runs out of 5)
     assert "Resolving a save target" in system_text
     assert "list_projects FIRST" in system_text
+    # Missing citation fields must stay unknown on every specialist route.
+    assert "Incomplete citations and unknown metadata" in system_text
+    assert "Missing metadata is not evidence that a work is unpublished" in system_text
+    assert "[incomplete reference; metadata unverified]" in system_text
 
 
 # ---------------------------------------------------------------------------

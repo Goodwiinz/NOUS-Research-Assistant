@@ -1,0 +1,236 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1000" viewBox="0 0 720 1000">
+  <rect width="720" height="1000" fill="#1e1b17"/>
+
+  <!-- The room opens toward a single, high window. -->
+  <path d="M0 0H720V140L533 258H291L0 85Z" fill="#28241e"/>
+  <path d="M97 0H647L520 241H303Z" fill="#332e26"/>
+  <path d="M251 0H556L505 201H331Z" fill="#3d372e"/>
+  <path d="M294 208H539V568H284Z" fill="#8a8070"/>
+  <path d="M314 241H520V565H303Z" fill="#c8bfa8"/>
+  <path d="M302 548H528L720 1000H0Z" fill="#28241e"/>
+  <path d="M337 541H503L657 819L323 772Z" fill="#3d372e"/>
+  <path d="M359 538H483L557 667L353 657Z" fill="#d4a039"/>
+  <path d="M379 538H467L486 591L367 594Z" fill="#e8b84a"/>
+
+  <!-- Flat ceiling ribs and spare floor seams establish perspective. -->
+  <g fill="none" stroke="#1e1b17" stroke-width="8">
+    <path d="M86 0L302 247M657 0L520 247"/>
+    <path d="M0 48L299 235M720 74L525 245"/>
+  </g>
+  <g fill="none" stroke="#8a8070" stroke-width="2">
+    <path d="M257 0L330 205M559 0L505 205"/>
+  </g>
+  <g fill="none" stroke="#332e26" stroke-width="2">
+    <path d="M365 568L181 1000M405 568L390 1000M454 568L644 1000"/>
+    <path d="M304 700L584 710M276 766L624 781"/>
+  </g>
+
+  <!-- Deep arch, cream daylight, and a narrow amber reveal. -->
+  <path d="M322 481V222C322 95 517 95 517 222V481Z" fill="#332e26"/>
+  <path d="M334 468V220C334 110 506 110 506 220V468Z" fill="#d4a039"/>
+  <path d="M344 455V221C344 123 494 123 494 221V455Z" fill="#f5d680"/>
+  <path d="M355 443V222C355 140 484 140 484 222V443Z" fill="#fdf6e3"/>
+  <path d="M413 148H423V452H413Z" fill="#8a8070"/>
+  <path d="M350 269H490V279H350ZM350 365H490V374H350Z" fill="#8a8070"/>
+  <path d="M423 152H426V443H423ZM355 279H484V282H355ZM355 374H484V377H355Z" fill="#f5d680"/>
+  <path d="M324 456H514L525 478H313Z" fill="#f5d680"/>
+  <path d="M313 478H525V488H313Z" fill="#d4a039"/>
+  <path d="M326 489H510V502H326Z" fill="#3d372e"/>
+
+  <!-- Left stacks: the near end is almost black. -->
+  <path d="M0 77L302 237V555L0 713Z" fill="#141210"/>
+  <path d="M19 117L285 249V547L19 675Z" fill="#1e1b17"/>
+  <path d="M183 201L285 250V548L183 597Z" fill="#28241e"/>
+  <path d="M251 235L285 251V546L251 563Z" fill="#332e26"/>
+
+  <!-- Upper book row. -->
+  <g transform="matrix(1 .48 0 1 0 135)">
+    <rect x="8" y="0" width="14" height="111" fill="#28241e"/>
+    <rect x="25" y="6" width="9" height="105" fill="#3d372e"/>
+    <rect x="37" y="1" width="17" height="110" fill="#332e26"/>
+    <rect x="58" y="12" width="8" height="99" fill="#8a8070"/>
+    <rect x="70" y="4" width="13" height="107" fill="#28241e"/>
+    <rect x="87" y="7" width="10" height="104" fill="#d4a039"/>
+    <rect x="100" y="0" width="16" height="111" fill="#332e26"/>
+    <rect x="120" y="9" width="8" height="102" fill="#3d372e"/>
+    <rect x="132" y="4" width="13" height="107" fill="#28241e"/>
+    <rect x="149" y="11" width="10" height="100" fill="#8a8070"/>
+    <rect x="164" y="8" width="8" height="103" fill="#332e26"/>
+    <rect x="176" y="0" width="12" height="111" fill="#3d372e"/>
+    <rect x="192" y="7" width="7" height="104" fill="#d4a039"/>
+    <rect x="203" y="11" width="11" height="100" fill="#332e26"/>
+    <rect x="218" y="4" width="7" height="107" fill="#8a8070"/>
+    <rect x="229" y="10" width="9" height="101" fill="#28241e"/>
+    <rect x="242" y="5" width="7" height="106" fill="#d4a039"/>
+    <rect x="253" y="9" width="8" height="102" fill="#3d372e"/>
+    <rect x="265" y="2" width="6" height="109" fill="#e8b84a"/>
+    <rect x="275" y="8" width="7" height="103" fill="#8a8070"/>
+  </g>
+  <path d="M0 245L296 383V392L0 262Z" fill="#3d372e"/>
+  <path d="M176 328L296 383V386L176 334Z" fill="#d4a039"/>
+
+  <!-- Middle books sit on a shallower, converging shelf. -->
+  <g transform="matrix(1 .12 0 1 0 302)">
+    <rect x="6" y="0" width="18" height="126" fill="#28241e"/>
+    <rect x="28" y="9" width="11" height="117" fill="#332e26"/>
+    <rect x="43" y="3" width="9" height="123" fill="#3d372e"/>
+    <rect x="56" y="13" width="16" height="113" fill="#28241e"/>
+    <rect x="76" y="5" width="10" height="121" fill="#8a8070"/>
+    <rect x="90" y="15" width="12" height="111" fill="#332e26"/>
+    <rect x="106" y="9" width="8" height="117" fill="#d4a039"/>
+    <rect x="118" y="17" width="15" height="109" fill="#28241e"/>
+    <rect x="137" y="22" width="10" height="104" fill="#3d372e"/>
+    <rect x="151" y="20" width="8" height="106" fill="#332e26"/>
+    <rect x="163" y="26" width="12" height="100" fill="#8a8070"/>
+    <rect x="179" y="32" width="8" height="94" fill="#3d372e"/>
+    <rect x="191" y="35" width="8" height="91" fill="#e8b84a"/>
+    <rect x="203" y="39" width="10" height="87" fill="#332e26"/>
+    <rect x="217" y="44" width="7" height="82" fill="#d4a039"/>
+    <rect x="228" y="48" width="9" height="78" fill="#3d372e"/>
+    <rect x="241" y="53" width="7" height="73" fill="#8a8070"/>
+    <rect x="252" y="57" width="8" height="69" fill="#332e26"/>
+    <rect x="264" y="61" width="6" height="65" fill="#d4a039"/>
+    <rect x="274" y="65" width="8" height="61" fill="#3d372e"/>
+  </g>
+  <path d="M0 429L295 461V474L0 448Z" fill="#332e26"/>
+  <path d="M177 449L295 461V464L177 454Z" fill="#d4a039"/>
+
+  <!-- The lowest shelf recedes upward into the room. -->
+  <g transform="matrix(1 -.22 0 1 0 486)">
+    <rect x="10" y="0" width="19" height="118" fill="#28241e"/>
+    <rect x="34" y="8" width="12" height="110" fill="#332e26"/>
+    <rect x="51" y="3" width="15" height="115" fill="#28241e"/>
+    <rect x="72" y="12" width="9" height="106" fill="#3d372e"/>
+    <rect x="85" y="9" width="16" height="109" fill="#28241e"/>
+    <rect x="107" y="15" width="11" height="103" fill="#332e26"/>
+    <rect x="123" y="19" width="13" height="99" fill="#28241e"/>
+    <rect x="141" y="23" width="8" height="95" fill="#3d372e"/>
+    <rect x="153" y="25" width="13" height="93" fill="#332e26"/>
+    <rect x="171" y="28" width="9" height="90" fill="#8a8070"/>
+    <rect x="185" y="32" width="8" height="86" fill="#28241e"/>
+    <rect x="197" y="35" width="10" height="83" fill="#3d372e"/>
+    <rect x="211" y="39" width="7" height="79" fill="#d4a039"/>
+    <rect x="222" y="40" width="11" height="78" fill="#332e26"/>
+    <rect x="237" y="43" width="8" height="75" fill="#8a8070"/>
+    <rect x="249" y="46" width="7" height="72" fill="#3d372e"/>
+    <rect x="260" y="49" width="8" height="69" fill="#e8b84a"/>
+    <rect x="272" y="53" width="9" height="65" fill="#332e26"/>
+  </g>
+  <path d="M0 604L295 539V555L0 627Z" fill="#28241e"/>
+  <path d="M209 557L295 539V543L209 564Z" fill="#d4a039"/>
+  <path d="M0 77L17 86V681L0 713ZM157 159L175 169V613L157 623ZM282 229L302 238V557L282 567Z" fill="#1e1b17"/>
+  <path d="M297 241L302 238V557L297 560Z" fill="#d4a039"/>
+
+  <!-- Right stacks catch more of the window light. -->
+  <path d="M527 238L720 106V734L527 561Z" fill="#141210"/>
+  <path d="M540 250L720 137V685L540 550Z" fill="#28241e"/>
+  <path d="M540 250L599 212V591L540 550Z" fill="#3d372e"/>
+  <g transform="matrix(1 -.57 0 1 539 262)">
+    <rect x="5" y="6" width="7" height="102" fill="#e8b84a"/>
+    <rect x="16" y="2" width="6" height="106" fill="#8a8070"/>
+    <rect x="26" y="9" width="10" height="99" fill="#332e26"/>
+    <rect x="40" y="3" width="7" height="105" fill="#d4a039"/>
+    <rect x="51" y="10" width="10" height="98" fill="#8a8070"/>
+    <rect x="65" y="4" width="9" height="104" fill="#332e26"/>
+    <rect x="78" y="0" width="12" height="108" fill="#3d372e"/>
+    <rect x="94" y="8" width="8" height="100" fill="#d4a039"/>
+    <rect x="106" y="5" width="14" height="103" fill="#332e26"/>
+    <rect x="124" y="10" width="10" height="98" fill="#8a8070"/>
+    <rect x="138" y="0" width="15" height="108" fill="#3d372e"/>
+    <rect x="157" y="6" width="9" height="102" fill="#332e26"/>
+    <rect x="170" y="2" width="15" height="106" fill="#28241e"/>
+  </g>
+  <path d="M529 375L720 263V278L529 386Z" fill="#8a8070"/>
+  <path d="M529 375L720 263V267L529 379Z" fill="#d4a039"/>
+  <g transform="matrix(1 -.14 0 1 539 386)">
+    <rect x="5" y="7" width="6" height="70" fill="#d4a039"/>
+    <rect x="15" y="2" width="8" height="75" fill="#332e26"/>
+    <rect x="27" y="0" width="8" height="77" fill="#8a8070"/>
+    <rect x="39" y="-3" width="6" height="80" fill="#e8b84a"/>
+    <rect x="49" y="-6" width="10" height="83" fill="#332e26"/>
+    <rect x="63" y="-13" width="9" height="90" fill="#3d372e"/>
+    <rect x="76" y="-16" width="12" height="93" fill="#8a8070"/>
+    <rect x="92" y="-20" width="7" height="97" fill="#d4a039"/>
+    <rect x="103" y="-26" width="12" height="103" fill="#332e26"/>
+    <rect x="119" y="-30" width="10" height="107" fill="#3d372e"/>
+    <rect x="133" y="-35" width="13" height="112" fill="#332e26"/>
+    <rect x="150" y="-43" width="10" height="120" fill="#8a8070"/>
+    <rect x="164" y="-45" width="17" height="122" fill="#3d372e"/>
+  </g>
+  <path d="M529 465L720 435V452L529 476Z" fill="#8a8070"/>
+  <path d="M529 465L720 435V439L529 469Z" fill="#d4a039"/>
+  <g transform="matrix(1 .49 0 1 539 479)">
+    <rect x="5" y="0" width="7" height="72" fill="#8a8070"/>
+    <rect x="16" y="-4" width="6" height="76" fill="#e8b84a"/>
+    <rect x="26" y="-9" width="9" height="81" fill="#332e26"/>
+    <rect x="39" y="-14" width="7" height="86" fill="#d4a039"/>
+    <rect x="50" y="-20" width="10" height="92" fill="#3d372e"/>
+    <rect x="64" y="-28" width="8" height="100" fill="#8a8070"/>
+    <rect x="76" y="-32" width="12" height="104" fill="#332e26"/>
+    <rect x="92" y="-40" width="9" height="112" fill="#d4a039"/>
+    <rect x="105" y="-48" width="13" height="120" fill="#3d372e"/>
+    <rect x="122" y="-52" width="9" height="124" fill="#332e26"/>
+    <rect x="135" y="-57" width="14" height="129" fill="#28241e"/>
+    <rect x="153" y="-66" width="10" height="138" fill="#3d372e"/>
+    <rect x="167" y="-72" width="16" height="144" fill="#332e26"/>
+  </g>
+  <path d="M529 551L720 639V659L529 562Z" fill="#3d372e"/>
+  <path d="M529 551L720 639V644L529 555Z" fill="#d4a039"/>
+  <path d="M527 238L540 230V572L527 562ZM603 187L618 177V645L603 633ZM705 116L720 106V734L705 720Z" fill="#1e1b17"/>
+  <path d="M540 239L543 237V568L540 567ZM618 185L622 182V642L618 638Z" fill="#d4a039"/>
+
+  <!-- Short, deliberate hatch marks on the lit reveal. -->
+  <g fill="none" stroke="#d4a039" stroke-width="2">
+    <path d="M306 291L316 282M306 305L316 296M306 319L316 310M306 333L316 324"/>
+    <path d="M510 510L520 500M510 522L520 512M510 534L520 524"/>
+  </g>
+
+  <!-- One long table enters from the foreground right. -->
+  <path d="M507 554L553 554L720 797V1000H589Z" fill="#141210"/>
+  <path d="M500 552L551 552L720 785V919L581 827Z" fill="#8a8070"/>
+  <path d="M500 552L551 552L720 785V900L583 813Z" fill="#3d372e"/>
+  <path d="M500 552L505 552L590 810L720 893V904L581 819Z" fill="#d4a039"/>
+  <path d="M505 554L509 554L593 801L590 810Z" fill="#e8b84a"/>
+  <path d="M583 823L602 836L625 1000H603Z" fill="#28241e"/>
+  <path d="M551 553L555 559L720 794V804Z" fill="#332e26"/>
+
+  <!-- A distant open book and a small, loose stack of papers. -->
+  <path d="M516 579L531 576L544 590L528 590Z" fill="#c8bfa8"/>
+  <path d="M528 590L544 590L550 588L535 574L531 576Z" fill="#f5f0e8"/>
+  <path d="M530 577L543 589" fill="none" stroke="#8a8070" stroke-width="1"/>
+  <path d="M561 655L590 647L620 681L587 691Z" fill="#141210"/>
+  <path d="M560 650L588 643L615 674L585 684Z" fill="#c8bfa8"/>
+  <path d="M566 644L590 647L612 670L585 673Z" fill="#f5f0e8"/>
+  <g fill="none" stroke="#8a8070" stroke-width="1.5">
+    <path d="M578 652L591 654M582 657L598 659M586 662L600 663"/>
+  </g>
+
+  <!-- The foreground book is broad and plainly drawn. -->
+  <path d="M600 746L627 729L671 741L686 773L654 790L616 781Z" fill="#141210"/>
+  <path d="M597 739L624 723L649 742L666 735L686 766L655 781L615 772Z" fill="#d4a039"/>
+  <path d="M599 735L624 720L649 739L655 776L616 768Z" fill="#c8bfa8"/>
+  <path d="M649 739L665 731L683 762L655 776Z" fill="#f5f0e8"/>
+  <path d="M649 739L655 776" fill="none" stroke="#8a8070" stroke-width="2"/>
+  <g fill="none" stroke="#8a8070" stroke-width="1.5">
+    <path d="M612 738L634 744M615 744L637 750M618 750L640 756M621 756L642 762"/>
+    <path d="M657 744L665 741M659 750L669 746M661 756L672 752"/>
+  </g>
+
+  <!-- Researcher, seen entirely from behind; relaxed arms, no face. -->
+  <path d="M416 716L447 716L499 861L431 883L389 849Z" fill="#1e1b17"/>
+  <path d="M408 676L435 680L430 800L428 827L406 827L404 799Z" fill="#141210"/>
+  <path d="M436 681L459 677L460 800L467 821L446 827L439 802Z" fill="#141210"/>
+  <path d="M406 815L428 815L428 831L398 834Q391 830 398 823Z" fill="#1e1b17"/>
+  <path d="M447 815L464 812L477 825Q480 831 471 832L445 832Z" fill="#1e1b17"/>
+  <path d="M416 429L416 450L402 456Q386 460 383 481L372 575L376 616Q379 623 385 619L390 593L397 539L395 640L389 707Q425 721 474 708L466 641L463 538L475 592L478 615Q482 624 488 618L490 596L481 486Q479 464 458 457L447 452L447 430Z" fill="#1e1b17"/>
+  <path d="M405 392Q406 372 425 367Q447 362 457 380Q463 391 457 417L450 434Q438 447 420 437L408 424Z" fill="#1e1b17"/>
+  <path d="M444 369Q457 374 459 387L458 404L454 387Z" fill="#332e26"/>
+  <path d="M447 452L459 457Q478 464 480 483L483 527L476 520L470 483Q467 471 452 467Z" fill="#332e26"/>
+  <path d="M472 554L477 575L481 609L478 614L475 592Z" fill="#332e26"/>
+  <path d="M460 609L465 649L471 702L464 704Z" fill="#28241e"/>
+  <path d="M413 447Q429 456 447 449L450 457Q430 465 411 454Z" fill="#141210"/>
+
+  <!-- Unbroken foreground shadow reserves the lower-left for white copy. -->
+  <path d="M0 622L171 594L267 629L329 717L356 827L376 1000H0Z" fill="#1e1b17"/>
+  <path d="M0 708L136 694L243 722L303 799L332 1000H0Z" fill="#141210"/>
+</svg>

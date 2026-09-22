@@ -1,11 +1,10 @@
 'use client';
 
-import { ThemeToggle } from '@/components/ui/theme-toggle';
+import AuthScenePanel from '@/components/auth/AuthScenePanel';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import { downloadStoredNousCliAuth } from '@/services/nousCliAuth';
 import { getSafeAuthRedirect } from '@/utils/authRedirect';
-import { motion } from 'framer-motion';
 import { Lock, Mail } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
@@ -14,10 +13,6 @@ import React, { useEffect, useState } from 'react';
 
 const ArrowRight = dynamic(
   () => import('lucide-react').then((mod) => mod.ArrowRight),
-  { ssr: false }
-);
-const Database = dynamic(
-  () => import('lucide-react').then((mod) => mod.Database),
   { ssr: false }
 );
 const Eye = dynamic(() => import('lucide-react').then((mod) => mod.Eye), {
@@ -33,12 +28,25 @@ interface LoginFormData {
   downloadCliAuth: boolean;
 }
 
-const CAPABILITIES = [
-  'Semantic search across your sources',
-  'Multimodal document understanding',
-  'Knowledge graph synthesis',
-  'Private by default, yours to control',
-];
+const SCENE = {
+  src: '/landing/reading-room-login.svg',
+  headline: 'Turn your sources into answers you can trust.',
+  notes: [
+    'Every answer carries inline citations that resolve to the retrieved passage, page and document.',
+    'Retrieval is hybrid: vector, BM25 and knowledge-graph traversal.',
+  ],
+} as const;
+
+const SceneBody = (
+  <>
+    NOUS reads your documents the way a careful researcher would, and shows its
+    work
+    <sup className="ml-0.5 align-super text-[0.6em] font-semibold text-(--nous-helios)">
+      1
+    </sup>
+    . Sign in to pick up where you left off.
+  </>
+);
 
 function resolvePostLoginPath(rawNextPath: string | null): string {
   if (!rawNextPath || !rawNextPath.startsWith('/')) {
@@ -84,6 +92,12 @@ function LoginPageContent(): React.JSX.Element | null {
   const searchParams = useSearchParams();
   const nextPath = resolvePostLoginPath(searchParams.get('next'));
   const callbackError = describeAuthCallbackError(searchParams.get('error'));
+  const chatRecoveryMessage =
+    searchParams.get('reauth') === 'chat'
+      ? searchParams.get('draft') === 'saved'
+        ? "Please sign in again to continue. Sign in to the same account to return to this conversation. Your message text is saved in this tab and won't be sent until you press Send."
+        : 'Please sign in again to continue.'
+      : null;
   const [formData, setFormData] = useState<LoginFormData>({
     email: '',
     password: '',
@@ -95,6 +109,8 @@ function LoginPageContent(): React.JSX.Element | null {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    // Hydration guard: flip once after mount so the SSR skeleton is replaced.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
 
@@ -135,53 +151,36 @@ function LoginPageContent(): React.JSX.Element | null {
   };
 
   const inputClass =
-    'w-full rounded-(--nous-radius-md) border border-(--nous-border-1) bg-(--nous-bg-1) py-3 text-sm text-(--nous-fg-1) placeholder:text-(--nous-fg-3) outline-hidden transition-colors focus-visible:border-(--nous-sol) focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40';
+    'h-12 w-full rounded-(--nous-radius-md) border border-(--nous-enceladus) bg-(--nous-bg-2) text-sm text-(--nous-fg-1) placeholder:text-(--nous-fg-3) outline-hidden transition-colors focus-visible:border-(--nous-sol) focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40';
+  const labelClass = 'block text-sm font-medium text-(--nous-titan)';
 
-  const Brand = (
-    <div className="flex items-center gap-3">
-      <div className="flex h-10 w-10 items-center justify-center rounded-(--nous-radius-md) border border-(--nous-border-1) bg-(--nous-bg-2)">
-        <span
-          aria-hidden="true"
-          className="text-base font-semibold text-(--nous-sol)"
-        >
-          N
-        </span>
-      </div>
-      <span className="text-lg font-semibold tracking-[0.04em] text-(--nous-fg-1)">
-        NOUS
-      </span>
-    </div>
+  const Scene = (
+    <AuthScenePanel
+      src={SCENE.src}
+      headline={SCENE.headline}
+      body={SceneBody}
+      notes={[...SCENE.notes]}
+      wash="heavy"
+      proseTone="ivory"
+    />
   );
 
   // SSR-friendly skeleton to keep LCP stable while hydrating.
   if (!mounted) {
     return (
-      <div className="flex min-h-screen bg-(--nous-bg-1) text-(--nous-fg-1)">
-        <div className="hidden flex-col justify-center border-r border-(--nous-border-1) px-16 lg:flex lg:w-1/2 lg:px-24">
-          <div className="mb-12">{Brand}</div>
-          <h1 className="mb-6 max-w-md text-4xl font-semibold leading-tight tracking-tight text-(--nous-fg-1)">
-            Turn your sources into answers you can trust.
-          </h1>
-          <p
-            className="max-w-md text-base leading-relaxed text-(--nous-fg-2)"
-            style={{ fontFamily: 'var(--nous-font-body)' }}
-          >
-            NOUS reads your documents the way a careful researcher would, and
-            shows its work.
-          </p>
-        </div>
-        <div className="flex flex-1 items-center justify-center px-6 lg:px-8">
-          <div className="w-full max-w-md">
-            <div className="rounded-(--nous-radius-xl) border border-(--nous-border-1) bg-(--nous-bg-2) p-8">
-              <h2 className="mb-6 text-xl font-semibold text-(--nous-fg-1)">
-                Sign in
-              </h2>
-              <div className="space-y-5">
-                <div className="h-12 rounded-(--nous-radius-md) bg-(--nous-bg-1)" />
-                <div className="h-12 rounded-(--nous-radius-md) bg-(--nous-bg-1)" />
-                <div className="h-12 rounded-(--nous-radius-md) bg-(--nous-sol)/20" />
-              </div>
-            </div>
+      <div className="grid min-h-screen lg:grid-cols-2">
+        {Scene}
+        <div className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
+          <div className="w-full max-w-[440px] space-y-5">
+            <h2
+              className="text-[32px] font-normal tracking-[-0.02em] text-(--nous-erebus)"
+              style={{ fontFamily: 'var(--nous-font-body)' }}
+            >
+              Sign in
+            </h2>
+            <div className="h-12 rounded-(--nous-radius-md) bg-(--nous-bg-2)" />
+            <div className="h-12 rounded-(--nous-radius-md) bg-(--nous-bg-2)" />
+            <div className="h-12 rounded-(--nous-radius-md) bg-(--nous-erebus)/10" />
           </div>
         </div>
       </div>
@@ -189,212 +188,166 @@ function LoginPageContent(): React.JSX.Element | null {
   }
 
   return (
-    <div className="relative flex min-h-screen bg-(--nous-bg-1) text-(--nous-fg-1)">
-      <div className="absolute right-4 top-4 z-10 sm:right-6 sm:top-6">
-        <ThemeToggle />
-      </div>
-      {/* Left panel — editorial */}
-      <div className="hidden flex-col justify-center border-r border-(--nous-border-1) px-16 lg:flex lg:w-1/2 lg:px-24">
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-        >
-          <div className="mb-12">{Brand}</div>
-
-          <h1 className="mb-6 max-w-lg text-4xl font-semibold leading-tight tracking-tight text-(--nous-fg-1)">
-            Turn your sources into answers you can trust.
-          </h1>
-          <p
-            className="mb-10 max-w-md text-base leading-relaxed text-(--nous-fg-2)"
-            style={{ fontFamily: 'var(--nous-font-body)' }}
-          >
-            NOUS reads your documents the way a careful researcher would, and
-            shows its work. Sign in to pick up where you left off.
-          </p>
-
-          <ul className="space-y-3">
-            {CAPABILITIES.map((text, i) => (
-              <li key={i} className="flex items-center gap-3">
-                <span
-                  aria-hidden="true"
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-(--nous-radius-sm) border border-(--nous-border-1) bg-(--nous-bg-2)"
-                >
-                  <Database className="h-3.5 w-3.5 text-(--nous-sol)" />
-                </span>
-                <span className="text-sm text-(--nous-fg-2)">{text}</span>
-              </li>
-            ))}
-          </ul>
-        </motion.div>
-      </div>
+    <div className="grid min-h-screen lg:grid-cols-2">
+      {Scene}
 
       {/* Right panel — sign-in form */}
-      <div className="flex flex-1 items-center justify-center px-6 lg:px-8">
-        <div className="w-full max-w-md">
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-          >
-            {/* Mobile brand */}
-            <div className="mb-8 flex justify-center lg:hidden">{Brand}</div>
-
-            <div className="rounded-(--nous-radius-xl) border border-(--nous-border-1) bg-(--nous-bg-2) p-8 shadow-(--nous-shadow-xl)">
-              <div className="mb-6">
-                <h2 className="text-xl font-semibold text-(--nous-fg-1)">
-                  Sign in
-                </h2>
-                <p className="mt-1 text-sm text-(--nous-fg-3)">
-                  Welcome back to NOUS.
-                </p>
-              </div>
-
-              <form onSubmit={handleSubmit} className="space-y-5">
-                {error && (
-                  <div
-                    role="alert"
-                    className="rounded-(--nous-radius-md) border border-(--nous-mars)/40 bg-(--nous-mars)/10 p-3"
-                  >
-                    <p className="text-sm text-(--nous-mars)">{error}</p>
-                  </div>
-                )}
-
-                {/* Email */}
-                <div className="space-y-1.5">
-                  <label
-                    htmlFor="email"
-                    className="block text-sm font-medium text-(--nous-fg-2)"
-                  >
-                    Email
-                  </label>
-                  <div className="relative">
-                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
-                      <Mail
-                        aria-hidden="true"
-                        className="h-4 w-4 text-(--nous-fg-3)"
-                      />
-                    </div>
-                    <input
-                      id="email"
-                      data-testid="email-input"
-                      name="email"
-                      type="email"
-                      required
-                      value={formData.email}
-                      onChange={handleChange}
-                      className={cn(inputClass, 'pl-11 pr-4')}
-                      placeholder="you@example.com"
-                      autoComplete="email"
-                    />
-                  </div>
-                </div>
-
-                {/* Password */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label
-                      htmlFor="password"
-                      className="block text-sm font-medium text-(--nous-fg-2)"
-                    >
-                      Password
-                    </label>
-                    <Link
-                      href="/forgot-password"
-                      className="rounded-sm text-sm text-(--nous-sol) underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
-                    >
-                      Forgot password?
-                    </Link>
-                  </div>
-                  <div className="relative">
-                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
-                      <Lock
-                        aria-hidden="true"
-                        className="h-4 w-4 text-(--nous-fg-3)"
-                      />
-                    </div>
-                    <input
-                      id="password"
-                      data-testid="password-input"
-                      name="password"
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      value={formData.password}
-                      onChange={handleChange}
-                      className={cn(inputClass, 'pl-11 pr-12')}
-                      placeholder="Your password"
-                      autoComplete="current-password"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 flex items-center rounded-sm pr-3.5 text-(--nous-fg-3) transition-colors hover:text-(--nous-sol) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
-                      aria-label={
-                        showPassword ? 'Hide password' : 'Show password'
-                      }
-                    >
-                      {showPassword ? (
-                        <EyeOff aria-hidden="true" className="h-4 w-4" />
-                      ) : (
-                        <Eye aria-hidden="true" className="h-4 w-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* CLI auth export */}
-                <label
-                  htmlFor="downloadCliAuth"
-                  className="flex cursor-pointer items-start gap-3 rounded-(--nous-radius-md) border border-(--nous-border-1) bg-(--nous-bg-1) px-3.5 py-3"
-                >
-                  <input
-                    id="downloadCliAuth"
-                    name="downloadCliAuth"
-                    type="checkbox"
-                    checked={formData.downloadCliAuth}
-                    onChange={handleChange}
-                    className="mt-0.5 h-4 w-4 rounded border-(--nous-border-1) bg-(--nous-bg-1) accent-(--nous-sol) focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
-                  />
-                  <span className="text-sm leading-snug text-(--nous-fg-2)">
-                    Download NOUS CLI credentials after signing in
-                    <span className="mt-0.5 block text-xs text-(--nous-fg-3)">
-                      Optional
-                    </span>
-                  </span>
-                </label>
-
-                {/* Submit */}
-                <button
-                  type="submit"
-                  data-testid="login-button"
-                  disabled={isSubmitting}
-                  className="group flex w-full items-center justify-center gap-2 rounded-(--nous-radius-md) bg-(--nous-sol) py-3 text-sm font-semibold text-(--nous-erebus) transition-colors hover:bg-(--nous-helios) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol) focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-bg-2) disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {isSubmitting ? (
-                    <span>Signing in…</span>
-                  ) : (
-                    <>
-                      <span>Sign in</span>
-                      <ArrowRight
-                        aria-hidden="true"
-                        className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
-                      />
-                    </>
-                  )}
-                </button>
-              </form>
-
-              <div className="mt-6 border-t border-(--nous-border-1) pt-5 text-center text-sm text-(--nous-fg-3)">
-                New to NOUS?{' '}
-                <Link
-                  href="/register"
-                  className="rounded-sm font-medium text-(--nous-sol) underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
-                >
-                  Create an account
-                </Link>
-              </div>
+      <div className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
+        <div className="w-full max-w-[440px]">
+          <div className="flex flex-col gap-5">
+            <div>
+              <h2
+                className="mb-1.5 text-[32px] font-normal tracking-[-0.02em] text-(--nous-erebus)"
+                style={{ fontFamily: 'var(--nous-font-body)' }}
+              >
+                Sign in
+              </h2>
+              <p className="text-sm text-(--nous-fg-3)">
+                Welcome back to NOUS.
+              </p>
             </div>
-          </motion.div>
+
+            <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+              {chatRecoveryMessage ? (
+                <div className="rounded-(--nous-radius-md) border border-(--nous-sol)/30 bg-(--nous-sol)/10 p-3">
+                  <p className="text-sm text-(--nous-titan)">
+                    {chatRecoveryMessage}
+                  </p>
+                </div>
+              ) : null}
+
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-(--nous-radius-md) border border-(--nous-mars)/40 bg-(--nous-mars)/10 p-3"
+                >
+                  <p className="text-sm text-(--nous-mars)">{error}</p>
+                </div>
+              )}
+
+              {/* Email */}
+              <div className="space-y-1.5">
+                <label htmlFor="email" className={labelClass}>
+                  Email
+                </label>
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
+                    <Mail
+                      aria-hidden="true"
+                      className="h-4 w-4 text-(--nous-fg-3)"
+                    />
+                  </div>
+                  <input
+                    id="email"
+                    data-testid="email-input"
+                    name="email"
+                    type="email"
+                    required
+                    value={formData.email}
+                    onChange={handleChange}
+                    className={cn(inputClass, 'pl-11 pr-4')}
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                  />
+                </div>
+              </div>
+
+              {/* Password */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="password" className={labelClass}>
+                    Password
+                  </label>
+                  <Link
+                    href="/forgot-password"
+                    className="rounded-sm text-sm text-(--nous-sol-safe) underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
+                    <Lock
+                      aria-hidden="true"
+                      className="h-4 w-4 text-(--nous-fg-3)"
+                    />
+                  </div>
+                  <input
+                    id="password"
+                    data-testid="password-input"
+                    name="password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={formData.password}
+                    onChange={handleChange}
+                    className={cn(inputClass, 'pl-11 pr-12')}
+                    placeholder="Your password"
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-sm text-(--nous-fg-3) transition-colors hover:text-(--nous-sol-safe) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
+                    aria-label={
+                      showPassword ? 'Hide password' : 'Show password'
+                    }
+                  >
+                    {showPassword ? (
+                      <EyeOff aria-hidden="true" className="h-4 w-4" />
+                    ) : (
+                      <Eye aria-hidden="true" className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* CLI auth export */}
+              <label
+                htmlFor="downloadCliAuth"
+                className="flex min-h-11 cursor-pointer items-center gap-2.5 text-sm text-(--nous-titan)"
+              >
+                <input
+                  id="downloadCliAuth"
+                  name="downloadCliAuth"
+                  type="checkbox"
+                  checked={formData.downloadCliAuth}
+                  onChange={handleChange}
+                  className="h-[18px] w-[18px] rounded-(--nous-radius-sm) border-(--nous-border-2) bg-(--nous-bg-2) accent-(--nous-sol) focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
+                />
+                Also download a NOUS CLI credential
+              </label>
+
+              {/* Submit */}
+              <button
+                type="submit"
+                data-testid="login-button"
+                disabled={isSubmitting}
+                className="group flex h-12 w-full items-center justify-center gap-2 rounded-(--nous-radius-md) bg-(--nous-erebus) text-sm font-semibold text-(--nous-selene) transition-colors hover:bg-(--nous-titan) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-aurum) disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmitting ? (
+                  <span>Signing in…</span>
+                ) : (
+                  <>
+                    <span>Sign in</span>
+                    <ArrowRight
+                      aria-hidden="true"
+                      className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
+                    />
+                  </>
+                )}
+              </button>
+            </form>
+
+            <p className="mt-2 border-t border-(--nous-enceladus) pt-5 text-center text-sm text-(--nous-titan)">
+              New to NOUS?{' '}
+              <Link
+                href="/register"
+                className="rounded-sm font-medium text-(--nous-sol-safe) underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
+              >
+                Create an account
+              </Link>
+            </p>
+          </div>
         </div>
       </div>
     </div>

@@ -33,6 +33,10 @@ export interface UIMessage {
   citations?: Array<{
     documentId?: string; // Optional: may be undefined for external references
     externalReferenceId?: string; // For non-database references (e.g., arXiv IDs)
+    sourcePosition?: number;
+    chunkId?: string;
+    chunkIndex?: number;
+    pageNumber?: number;
     title: string;
     score: number;
     content?: string; // Snippet content for preview
@@ -192,7 +196,7 @@ function extractTitleFromSnippet(snippet?: string): string | null {
 /**
  * Map database message to UI message format
  */
-function mapDbMessageToUI(dbMsg: ChatMessage): UIMessage {
+export function mapDbMessageToUI(dbMsg: ChatMessage): UIMessage {
   return {
     id: dbMsg.id,
     role: dbMsg.role === MessageRole.USER ? 'user' : 'assistant',
@@ -218,6 +222,10 @@ function mapDbMessageToUI(dbMsg: ChatMessage): UIMessage {
       return {
         documentId: c.document_id || undefined, // May be undefined for external refs
         externalReferenceId: c.external_reference_id || undefined, // For arXiv IDs, etc.
+        sourcePosition: c.source_position,
+        chunkId: c.chunk_id,
+        chunkIndex: c.chunk_index,
+        pageNumber: c.page_number,
         title,
         score: c.score || 0,
         content: c.snippet || c.snippet_preview,
@@ -297,8 +305,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
     error,
     // Actions (stable refs)
     initializeDefaultWorkspace,
-    loadConversations,
-    loadThreads,
     loadMessages,
     createThread,
     createConversation,
@@ -326,8 +332,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
       isSendingMessage: s.isSendingMessage,
       error: s.error,
       initializeDefaultWorkspace: s.initializeDefaultWorkspace,
-      loadConversations: s.loadConversations,
-      loadThreads: s.loadThreads,
       loadMessages: s.loadMessages,
       createThread: s.createThread,
       createConversation: s.createConversation,
@@ -409,6 +413,12 @@ export function useChatPersistence(): UseChatPersistenceReturn {
       initializationRef.current.started = true;
 
       _initInFlight = (async () => {
+        // Keep the selection that existed when this shared initialization run
+        // began. A sidebar click can select a different thread while the
+        // conversation page is pending; that newer choice must survive the
+        // downstream reset performed by setCurrentConversation.
+        const threadSelectionAtInitializationStart =
+          useChatStore.getState().currentThreadId;
         debugLog('[useChatPersistence] Starting initialization...');
         let initialized = false;
         let initializationError: unknown;
@@ -438,7 +448,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           throw new Error('Workspace initialization returned no workspace');
         }
 
-        await loadConversations(state.currentWorkspaceId);
         if (useChatStore.getState().error === 'Failed to load conversations') {
           throw new Error('Failed to load conversations');
         }
@@ -463,7 +472,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
             '[useChatPersistence] Setting first conversation:',
             conversationId
           );
-          setCurrentConversation(conversationId);
         } else if (workspaceConversations.length === 0) {
           debugLog(
             '[useChatPersistence] No conversations, creating new one...'
@@ -484,7 +492,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           // lookup see it, exactly as a store-side create would have.
           registerConversation(newConv, state.currentWorkspaceId);
           conversationId = newConv.id;
-          setCurrentConversation(newConv.id);
         }
 
         if (!conversationId) {
@@ -493,29 +500,106 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           );
         }
 
+        const urlParamsAtInitialization =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search)
+            : null;
+        const isNewChatAtInitialization =
+          urlParamsAtInitialization?.get('new') === '1';
+        const requestedThreadIdAtInitialization =
+          urlParamsAtInitialization?.get('thread');
+        // The chat route restores an explicit deep link in parallel with this
+        // layout initializer. `setCurrentConversation` normally clears the
+        // downstream thread selection, so remember a URL-owned selection that
+        // landed while the conversation read was in flight and restore it
+        // after that reset completes.
+        const selectedThreadBeforeConversationLoad =
+          requestedThreadIdAtInitialization
+            ? useChatStore.getState().currentThreadId
+            : null;
+        const selectionChangedDuringInitialization =
+          selectedThreadBeforeConversationLoad !== null &&
+          selectedThreadBeforeConversationLoad !==
+            threadSelectionAtInitializationStart;
+
+        await setCurrentConversation(conversationId);
+
         debugLog(
-          '[useChatPersistence] Loading threads for conversation:',
+          '[useChatPersistence] Loaded threads for conversation:',
           conversationId
         );
-        await loadThreads(conversationId);
         if (useChatStore.getState().error === 'Failed to load threads') {
           throw new Error('Failed to load threads');
         }
 
         const threadsState = useChatStore.getState();
         const conversationThreads = threadsState.threads[conversationId] || [];
+        // A sidebar click or route change can land while the conversation's
+        // thread read is in flight. Re-read the URL and selection at the
+        // commit point so an old deep link cannot take ownership from that
+        // newer navigation, and so ?new=1 remains authoritative even when a
+        // stale thread query is still present beside it.
+        const liveUrlParams =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search)
+            : null;
+        const liveRequestedThreadId = liveUrlParams?.get('thread');
+        const liveIsNewChat = liveUrlParams?.get('new') === '1';
+        const selectedThreadAfterConversationLoad =
+          threadsState.currentThreadId;
+        const selectionStillOwned =
+          selectedThreadAfterConversationLoad === null ||
+          selectedThreadAfterConversationLoad ===
+            requestedThreadIdAtInitialization;
+        const newerSelectionBeforeConversationReset =
+          selectionChangedDuringInitialization &&
+          selectedThreadBeforeConversationLoad !==
+            requestedThreadIdAtInitialization
+            ? selectedThreadBeforeConversationLoad
+            : null;
+        const liveRouteStillOwnsSelection =
+          liveRequestedThreadId === requestedThreadIdAtInitialization ||
+          liveRequestedThreadId === newerSelectionBeforeConversationReset;
+        const shouldRestoreNewerSelection =
+          newerSelectionBeforeConversationReset !== null &&
+          !isNewChatAtInitialization &&
+          !liveIsNewChat &&
+          liveRouteStillOwnsSelection &&
+          selectedThreadAfterConversationLoad === null;
+        if (shouldRestoreNewerSelection) {
+          debugLog(
+            '[useChatPersistence] Restoring newer thread selection after conversation init:',
+            newerSelectionBeforeConversationReset
+          );
+          setCurrentThread(newerSelectionBeforeConversationReset);
+        } else if (
+          requestedThreadIdAtInitialization &&
+          !isNewChatAtInitialization &&
+          liveRequestedThreadId === requestedThreadIdAtInitialization &&
+          !liveIsNewChat &&
+          selectedThreadBeforeConversationLoad ===
+            requestedThreadIdAtInitialization &&
+          selectionStillOwned &&
+          selectedThreadAfterConversationLoad !==
+            requestedThreadIdAtInitialization
+        ) {
+          debugLog(
+            '[useChatPersistence] Restoring deep-linked thread after conversation init:',
+            requestedThreadIdAtInitialization
+          );
+          setCurrentThread(requestedThreadIdAtInitialization);
+        }
         // An explicit "new chat" (?new=1) must land on a blank composer.
         // useChatSession already honors this; without the same check here
         // this hook writes a stale thread id into the store, and the next
         // send appends to that previous thread instead of starting a new
         // one (and the URL never becomes ?thread=).
-        const isNewChat =
-          typeof window !== 'undefined' &&
-          new URLSearchParams(window.location.search).get('new') === '1';
+        const hasExplicitThreadIntent = Boolean(liveRequestedThreadId);
         if (
           conversationThreads.length > 0 &&
           !threadsState.currentThreadId &&
-          !isNewChat
+          !liveIsNewChat &&
+          !hasExplicitThreadIntent
         ) {
           const firstThread = conversationThreads[0];
           debugLog(
@@ -570,8 +654,6 @@ export function useChatPersistence(): UseChatPersistenceReturn {
   }, [
     isAuthenticated,
     initializeDefaultWorkspace,
-    loadConversations,
-    loadThreads,
     setCurrentConversation,
     setCurrentThread,
     registerConversation,

@@ -55,6 +55,7 @@ def test_writing_tool_surface_unchanged_for_core_tools() -> None:
     """Core writing tools must remain available — ingest is additive."""
     expected_core = {
         "create_draft",
+        "revise_draft",
         "create_project_note",
         "export_bibliography",
         "summarize_document",
@@ -66,6 +67,25 @@ def test_writing_tool_surface_unchanged_for_core_tools() -> None:
 def test_current_draft_lookup_is_read_only_and_available_to_writing() -> None:
     assert "get_current_draft" in WRITING_TOOL_NAMES_LIST
     assert "get_current_draft" not in WRITING_DESTRUCTIVE_TOOLS
+
+
+def test_revise_draft_is_available_and_destructive() -> None:
+    assert "revise_draft" in WRITING_TOOL_NAMES_LIST
+    assert "revise_draft" in WRITING_DESTRUCTIVE_TOOLS
+
+
+def test_revise_draft_schema_never_accepts_draft_content() -> None:
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    schema = TOOL_REGISTRY.descriptor(
+        "revise_draft"
+    ).tool.args_schema.model_json_schema()
+    assert set(schema["properties"]) == {
+        "instructions",
+        "project_id",
+        "base_version",
+        "mode",
+    }
 
 
 def test_project_crud_reachable_from_writing() -> None:

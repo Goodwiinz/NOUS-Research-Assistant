@@ -13,6 +13,7 @@ export interface WorkingFoldersResult {
     notes?: Error;
     drafts?: Error;
   };
+  refetch: () => void;
 }
 
 export function useProjectWorkingFolders(
@@ -95,6 +96,11 @@ export function useProjectWorkingFolders(
       documents: docsQ.error as Error | undefined,
       notes: notesQ.error as Error | undefined,
       drafts: draftsQ.error as Error | undefined,
+    },
+    refetch: () => {
+      void docsQ.refetch();
+      void notesQ.refetch();
+      void draftsQ.refetch();
     },
   };
 }

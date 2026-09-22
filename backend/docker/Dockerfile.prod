@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libgl1 \
     libmagic1 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libharfbuzz-subset0 \
+    fonts-dejavu-core \
     wget \
     procps \
     netcat-openbsd \
@@ -55,10 +59,8 @@ ARG TORCH_CPU_ONLY=false
 # Copy requirements files
 COPY backend/requirements.txt backend/requirements-minimal.txt ./
 
-# Upgrade pip and install dependencies
-# When TORCH_CPU_ONLY is set, strip torch/torchvision/torchaudio from
-# requirements.txt and install CPU-only variants separately. This prevents
-# pip from pulling ~5GB of NVIDIA CUDA packages that exhaust CI disk space.
+# Pin the CPU torch wheel before resolving the remaining requirements so a
+# transitive dependency cannot replace it with a CUDA build.
 RUN \
     pip install --upgrade pip wheel "setuptools<72" && \
     if [ "$TORCH_CPU_ONLY" = "true" ]; then \
@@ -71,12 +73,14 @@ RUN \
             nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cufft-cu12 nvidia-cufile-cu12 \
             nvidia-curand-cu12 nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-cusparselt-cu12 \
             nvidia-nccl-cu12 nvidia-nvjitlink-cu12 nvidia-nvshmem-cu12 nvidia-nvtx-cu12 \
-            triton cuda-bindings cuda-pathfinder 2>/dev/null || true); \
+            triton cuda-bindings cuda-pathfinder 2>/dev/null || true) && \
+        python -c 'import torch; assert torch.version.cuda is None, f"CPU build resolved CUDA torch: {torch.__version__} ({torch.version.cuda})"'; \
     else \
         pip install -r requirements.txt; \
     fi && \
     pip install "setuptools<72" && \
-    python -c "import pkg_resources"
+    python -c "import pkg_resources" && \
+    python -c 'from weasyprint import HTML; pdf = HTML(string="<h1>PDF smoke</h1>").write_pdf(); assert pdf.startswith(b"%PDF-")'
 
 # Stage 3: Build with minimal dependencies
 FROM base AS production
@@ -93,8 +97,13 @@ COPY backend/ .
 COPY backend/docker/start-production.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/start-production.sh
 
-# Download spaCy model using pip (more reliable than spacy download)
-RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+# Download the model version compatible with the pinned spaCy release.  Do
+# not let the model's installer re-resolve the already validated application
+# requirements.
+RUN pip install --no-cache-dir --no-deps \
+    https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl && \
+    pip check && \
+    python -c 'import cv2, spacy, torch; from weasyprint import HTML; assert spacy.__version__ == "3.8.16", spacy.__version__; nlp = spacy.load("en_core_web_sm"); assert nlp.meta.get("version") == "3.8.0", nlp.meta.get("version"); pdf = HTML(string="<h1>PDF smoke</h1>").write_pdf(); assert pdf.startswith(b"%PDF-"), pdf[:8]; print("validated torch=%s cuda=%s spacy=%s model=%s opencv=%s pdf_bytes=%d" % (torch.__version__, torch.version.cuda, spacy.__version__, nlp.meta["version"], cv2.__version__, len(pdf)))'
 
 # Create necessary directories
 RUN mkdir -p uploads logs models && \

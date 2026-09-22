@@ -4,6 +4,14 @@ import { cn } from '@/lib/utils';
 import { ChevronDown } from 'lucide-react';
 import { ReactNode, useState } from 'react';
 
+/**
+ * Shared rail card header type. Sentence case, UI font: DESIGN.md reserves
+ * mono for code and identifiers and calls repeated uppercase tracked kickers
+ * an anti-pattern. `ProjectBindingCard` imports this rather than re-declaring it.
+ */
+export const railCardTitle =
+  'text-xs font-semibold truncate text-(--nous-fg-2)';
+
 interface CollapsibleCardProps {
   title: string;
   icon?: ReactNode;
@@ -47,11 +55,10 @@ export function CollapsibleCard({
             </span>
           )}
           <span
-            className="text-[10px] font-bold uppercase truncate text-(--nous-fg-3) group-hover:text-(--nous-fg-2) transition-colors"
-            style={{
-              fontFamily: 'var(--nous-font-mono)',
-              letterSpacing: '0.18em',
-            }}
+            className={cn(
+              railCardTitle,
+              'group-hover:text-(--nous-fg-1) transition-colors'
+            )}
           >
             {title}
           </span>

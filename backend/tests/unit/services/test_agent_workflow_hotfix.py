@@ -30,7 +30,10 @@ class TestThreadOwnership:
 
     async def test_foreign_thread_id_is_not_resolved(self):
         from src.api.agent.execute import AgentExecuteRequest
-        from src.services.agent.agent_execution_service import _resolve_thread
+        from src.services.agent.agent_execution_service import (
+            AgentThreadResolutionError,
+            _resolve_thread,
+        )
 
         user = _make_user()
         foreign_thread_id = str(uuid4())
@@ -47,14 +50,18 @@ class TestThreadOwnership:
             thread_id=foreign_thread_id,
         )
 
-        # A thread id the user does not own resolves to None (ownership filter),
-        # so the confirm/resume path creates/commits nothing.
-        thread, conversation_id = await _resolve_thread(
-            db, user, request, create_if_missing=False
-        )
+        # The access funnel hides a foreign thread exactly like a missing one.
+        # Explicit IDs are authoritative, so the resolver must deny instead of
+        # silently degrading to an ephemeral checkpoint.
+        with (
+            patch(
+                "src.services.threads.workspace_access.get_thread",
+                new=AsyncMock(return_value=None),
+            ),
+            pytest.raises(AgentThreadResolutionError, match="Thread not found"),
+        ):
+            await _resolve_thread(db, user, request, create_if_missing=False)
 
-        assert thread is None
-        assert conversation_id == ""
         db.commit.assert_not_called()
 
 

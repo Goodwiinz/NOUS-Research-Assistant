@@ -29,6 +29,17 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_thread_access import editable_thread_getter
+
+
+@pytest.fixture(autouse=True)
+def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "src.services.threads.workspace_access.get_thread",
+        editable_thread_getter(),
+    )
+
+
 from tests.utils.agent_stream import frames_of_type, make_stream_request
 
 # ---------------------------------------------------------------------------
@@ -274,7 +285,9 @@ async def test_stream_confirm_event_generator_revising_true_when_major_fail_unde
 
     graph = _make_reflection_graph(passed=False, severity="major", reflection_count=1)
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-confirm-revise", confirmed=True)
+    body = SimpleNamespace(
+        thread_id="11111111-1111-4111-8111-111111111621", confirmed=True
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     patches = _collect_patches(graph)
@@ -316,7 +329,9 @@ async def test_stream_confirm_event_generator_revising_false_when_passed():
 
     graph = _make_reflection_graph(passed=True, severity="none", reflection_count=0)
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-confirm-pass", confirmed=True)
+    body = SimpleNamespace(
+        thread_id="11111111-1111-4111-8111-111111111622", confirmed=True
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     patches = _collect_patches(graph)

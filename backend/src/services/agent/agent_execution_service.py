@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 from src.services.agent import job_store as _job_store
 from src.services.agent._builders import RECURSION_LIMIT
+from src.services.agent._sanitize import sanitize_page_context
 from src.services.agent.agent_run_service import get_run
 from src.services.agent.job_store import _is_newer_or_equal
 from src.services.agent.job_store import _l1 as _jobs
@@ -58,6 +59,10 @@ from src.services.agent.job_store import (
     schedule_run_projection as _schedule_run_projection,
 )
 from src.services.agent.job_store import set_job as _set_job_async
+from src.services.agent.state import (
+    THREAD_PERSISTENCE_DURABLE,
+    THREAD_PERSISTENCE_EPHEMERAL,
+)
 from src.services.agent.trace_metadata import TraceSource, build_trace_metadata
 from src.shared.enums import JobStatus
 
@@ -272,19 +277,28 @@ def _get_schemas():
 def _page_context_to_dict(
     page_context: Any,
 ) -> Dict[str, Any]:
-    """Normalize page context so every execution path forwards the same shape."""
+    """Normalize page context so every execution path forwards the same shape.
+
+    This is also the single trust boundary for client-supplied page context
+    (R7-H1): every string leaf — including the unconstrained ``metadata``
+    dict — is sanitized here, once, so no downstream prompt renderer
+    (llm_node, planner, classifier) is ever handed raw newlines or forged
+    ``##`` headings.
+    """
     if hasattr(page_context, "model_dump"):
         raw = page_context.model_dump()
     else:
         raw = page_context or {}
 
-    return {
-        "type": raw.get("type", "unknown"),
-        "project_id": raw.get("project_id"),
-        "project_name": raw.get("project_name"),
-        "label": raw.get("label"),
-        "metadata": raw.get("metadata"),
-    }
+    return sanitize_page_context(
+        {
+            "type": raw.get("type", "unknown"),
+            "project_id": raw.get("project_id"),
+            "project_name": raw.get("project_name"),
+            "label": raw.get("label"),
+            "metadata": raw.get("metadata"),
+        }
+    )
 
 
 def _get_latest_user_content(messages: List[Any]) -> Optional[str]:
@@ -888,8 +902,14 @@ async def _resolve_and_bind_project(
     current_user: User,
     thread_obj: Any,
     page_context: Dict[str, Any],
-) -> None:
+) -> Optional[str]:
     """Fill ``page_context`` project fields and durably bind the agent thread.
+
+    Returns the *verified* project id (or ``None``). Callers that scope
+    anything to the project — project-memory recall in particular (R7-M2) —
+    must gate on this return value rather than re-reading
+    ``page_context["project_id"]``, so the ownership check can never be
+    silently decoupled from its consumers by a later refactor.
 
     The chat UI binds a project to its *workspace* thread, but agent runs
     execute on a separate auto-created agent thread, and the only other
@@ -910,7 +930,7 @@ async def _resolve_and_bind_project(
     best-effort: a failure there never blocks the turn.
     """
     if thread_obj is None and not page_context.get("project_id"):
-        return
+        return None
 
     from uuid import UUID as _UUID
 
@@ -983,7 +1003,7 @@ async def _resolve_and_bind_project(
                     )
 
     if project_id is None:
-        return
+        return None
 
     page_context["project_id"] = project_id
     if project_name and not page_context.get("project_name"):
@@ -1021,6 +1041,12 @@ async def _resolve_and_bind_project(
             except Exception:  # noqa: BLE001
                 pass
 
+    return project_id
+
+
+class AgentThreadResolutionError(LookupError):
+    """A requested durable thread or workspace cannot accept an agent write."""
+
 
 async def _resolve_thread(
     db: AsyncSession,
@@ -1028,20 +1054,7 @@ async def _resolve_thread(
     request: Any,  # AgentExecuteRequest
     create_if_missing: bool = True,
 ) -> tuple[Optional[Any], str]:
-    """Resolve or create the Thread + Conversation for this request.
-
-    Returns ``(thread, conversation_id)``. ``thread`` is ``None`` when no
-    workspace exists for the user (caller should treat this as "skip
-    persistence"). When a fresh thread/conversation is created it is
-    committed so the row has an ``id`` callers can reference.
-
-    ``create_if_missing=False`` skips the create-on-miss branch and returns
-    ``(None, "")`` when the thread cannot be found. Confirm/resume paths
-    must use this: their thread already exists (ownership was verified
-    against the checkpoint snapshot), so a lookup miss there is a transient
-    failure and creating a fresh "Agent Chat" thread would silently split
-    the conversation in two.
-    """
+    """Resolve an authoritative thread or create one in a deterministic parent."""
     from uuid import UUID
 
     from sqlalchemy import select
@@ -1050,78 +1063,106 @@ async def _resolve_thread(
     from src.models.conversation import Conversation
     from src.models.thread import Thread, ThreadStatus
     from src.models.workspace import Workspace
+    from src.services.threads import workspace_access
 
     AGENT_THREAD_MARKER = {"source": "agent"}
 
-    thread: Optional[Thread] = None
     if request.thread_id:
-        stmt = (
-            select(Thread)
-            .join(Conversation, Thread.conversation_id == Conversation.id)
-            .join(Workspace, Conversation.workspace_id == Workspace.id)
-            .options(selectinload(Thread.source_project))
-            .where(Thread.id == UUID(request.thread_id))
-            .where(Workspace.owner_id == current_user.id)
-            # Never resolve a soft-deleted thread (or one under a soft-deleted
-            # conversation/workspace): a stale tab / SSE retry would otherwise
-            # persist a new turn into a deleted thread. On the create-if-missing
-            # path a miss falls through to a fresh thread; on confirm/resume
-            # (create_if_missing=False) it returns (None, "") — never recreated.
-            .where(Thread.is_deleted == False)  # noqa: E712
-            .where(Conversation.is_deleted == False)  # noqa: E712
-            .where(Workspace.is_deleted == False)  # noqa: E712
+        requested_thread_id = UUID(str(request.thread_id))
+        thread = await workspace_access.get_thread(
+            db,
+            requested_thread_id,
+            current_user.id,
+            include_messages=False,
         )
-        result = await db.execute(stmt)
-        thread = result.scalar_one_or_none()
+        if thread is None or not thread.conversation.workspace.can_user_edit(
+            str(current_user.id)
+        ):
+            raise AgentThreadResolutionError("Thread not found")
+        return thread, str(thread.conversation_id)
 
-    if thread is None and not create_if_missing:
+    if not create_if_missing:
         return None, ""
 
-    if thread is None:
-        # Never create a new Conversation+Thread under a soft-deleted
-        # workspace: delete_workspace flags only its own row, so a live-owner
-        # pick must exclude it.
+    requested_workspace_id = getattr(
+        getattr(request, "page_context", None), "workspace_id", None
+    )
+    if requested_workspace_id is not None:
+        workspace = await workspace_access.get_workspace(
+            db,
+            UUID(str(requested_workspace_id)),
+            current_user.id,
+            load_conversations=False,
+            load_collections=False,
+        )
+        if workspace is None or not workspace.can_user_edit(str(current_user.id)):
+            raise AgentThreadResolutionError("Workspace not found")
+        workspace_id = workspace.id
+        lock_stmt = (
+            select(Workspace)
+            .options(selectinload(Workspace.members))
+            .where(
+                Workspace.id == workspace_id,
+                Workspace.is_deleted == False,  # noqa: E712
+            )
+            .with_for_update()
+        )
+        workspace = (await db.execute(lock_stmt)).scalar_one_or_none()
+        if workspace is None or not workspace.can_user_edit(str(current_user.id)):
+            raise AgentThreadResolutionError("Workspace not found")
+    else:
         ws_stmt = (
             select(Workspace)
+            .options(selectinload(Workspace.members))
             .where(
                 Workspace.owner_id == current_user.id,
                 Workspace.is_deleted == False,  # noqa: E712
             )
+            .order_by(Workspace.created_at.asc(), Workspace.id.asc())
             .limit(1)
+            .with_for_update()
         )
-        ws_result = await db.execute(ws_stmt)
-        workspace = ws_result.scalar_one_or_none()
+        workspace = (await db.execute(ws_stmt)).scalar_one_or_none()
 
-        if workspace:
-            conv = Conversation(
-                workspace_id=workspace.id,
-                title="Agent Chat",
-                created_by_id=current_user.id,
-            )
-            db.add(conv)
-            await db.flush()
+    if workspace is None:
+        return None, ""
 
-            first_msg = next(
-                (m.content for m in request.messages if m.role == "user"), ""
-            )
-            title = first_msg[:80] if first_msg else "Agent Chat"
+    conversation_stmt = (
+        select(Conversation)
+        .where(
+            Conversation.workspace_id == workspace.id,
+            Conversation.is_deleted == False,  # noqa: E712
+        )
+        .order_by(Conversation.created_at.asc(), Conversation.id.asc())
+        .limit(1)
+    )
+    conv = (await db.execute(conversation_stmt)).scalar_one_or_none()
+    if conv is None:
+        conv = Conversation(
+            id=_uuid.uuid4(),
+            workspace_id=workspace.id,
+            title="Agent Chat",
+            created_by_id=current_user.id,
+        )
+        db.add(conv)
+        await db.flush()
 
-            thread = Thread(
-                conversation_id=conv.id,
-                title=title,
-                status=ThreadStatus.ACTIVE,
-                created_by_id=current_user.id,
-                rag_document_scope=AGENT_THREAD_MARKER,
-                message_count=0,
-            )
-            db.add(thread)
-            await db.commit()
-            # Refresh so caller sees a usable id / conversation_id without
-            # an additional roundtrip in the same transaction.
-            await db.refresh(thread)
+    first_msg = next((m.content for m in request.messages if m.role == "user"), "")
+    title = first_msg[:80] if first_msg else "Agent Chat"
+    thread = Thread(
+        id=_uuid.uuid4(),
+        conversation_id=conv.id,
+        title=title,
+        status=ThreadStatus.ACTIVE,
+        created_by_id=current_user.id,
+        rag_document_scope=AGENT_THREAD_MARKER,
+        message_count=0,
+    )
+    db.add(thread)
+    await db.commit()
+    await db.refresh(thread)
 
-    conversation_id = str(thread.conversation_id) if thread is not None else ""
-    return thread, conversation_id
+    return thread, str(thread.conversation_id)
 
 
 async def resync_thread_checkpoint(
@@ -1311,12 +1352,12 @@ async def _tombstone_superseded_turns(
     """
     from uuid import UUID
 
-    from sqlalchemy import and_, or_, select, update
+    from sqlalchemy import and_, exists, or_, select, update
 
     from src.models.chat_message import ChatMessage, MessageRole
     from src.models.conversation import Conversation
     from src.models.thread import Thread
-    from src.models.workspace import Workspace
+    from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 
     try:
         tid = UUID(str(thread_id))
@@ -1328,22 +1369,37 @@ async def _tombstone_superseded_turns(
         )
         return 0
 
-    # Ownership: the thread must hang off a workspace this user owns. Callers
-    # resolve+verify the thread upstream (``_resolve_thread``); this is the
-    # same defense-in-depth join ``_chat_user_row_count`` uses, applied here
-    # because this statement WRITES.
-    owned_thread = (
+    # Defense in depth: mirror the actual write authorization accepted by
+    # ``_resolve_thread`` (owner or live owner/admin/editor membership), and
+    # re-check every soft-deletable ancestor. A public workspace grants read
+    # access, never edit access, and a stale upstream ORM object must not let a
+    # revoked member or deleted ancestor mutate message history.
+    editable_membership = exists().where(
+        WorkspaceMember.workspace_id == Workspace.id,
+        WorkspaceMember.user_id == current_user.id,
+        WorkspaceMember.is_deleted.is_(False),
+        WorkspaceMember.role.in_(
+            (WorkspaceRole.OWNER, WorkspaceRole.ADMIN, WorkspaceRole.EDITOR)
+        ),
+    )
+    editable_thread = (
         select(Thread.id)
         .join(Conversation, Thread.conversation_id == Conversation.id)
         .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(Thread.id == tid, Workspace.owner_id == current_user.id)
+        .where(
+            Thread.id == tid,
+            Thread.is_deleted.is_(False),
+            Conversation.is_deleted.is_(False),
+            Workspace.is_deleted.is_(False),
+            or_(Workspace.owner_id == current_user.id, editable_membership),
+        )
     ).scalar_subquery()
 
     target = (
         await db.execute(
             select(ChatMessage.id, ChatMessage.created_at).where(
                 ChatMessage.thread_id == tid,
-                ChatMessage.thread_id.in_(owned_thread),
+                ChatMessage.thread_id.in_(editable_thread),
                 ChatMessage.client_message_id == target_cmid,
                 ChatMessage.role == MessageRole.USER,
             )
@@ -1844,6 +1900,7 @@ async def _persist_assistant_message(
     client_message_id: Optional[str] = None,
     plan: Optional[list] = None,
     plan_reasoning: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
     token_usage: Optional[dict] = None,
     progress_steps: Optional[list] = None,
 ) -> Optional[str]:
@@ -1906,6 +1963,7 @@ async def _persist_assistant_message(
         client_message_id=client_message_id,
         plan=plan,
         plan_reasoning=plan_reasoning,
+        reasoning_summary=reasoning_summary,
         token_usage=token_usage,
         progress_steps=progress_steps,
     )
@@ -1949,7 +2007,7 @@ async def _persist_assistant_message(
         msg_id = msg.id
 
     if retrieved_contexts:
-        for ctx in retrieved_contexts:
+        for source_position, ctx in enumerate(retrieved_contexts, 1):
             doc_id = ctx.get("document_id")
             db.add(
                 CitationModel(
@@ -1958,6 +2016,10 @@ async def _persist_assistant_message(
                     external_reference_id=ctx.get("external_reference_id"),
                     document_title=ctx.get("title"),
                     snippet=ctx.get("content", "")[:2000],
+                    source_position=source_position,
+                    chunk_id=ctx.get("chunk_id"),
+                    chunk_index=ctx.get("chunk_index"),
+                    page_number=ctx.get("page_number"),
                     score=ctx.get("score"),
                     rerank_score=ctx.get("rerank_score"),
                 )
@@ -2001,6 +2063,7 @@ async def _persist_assistant_message_safe(
     client_message_id: Optional[str] = None,
     plan: Optional[list] = None,
     plan_reasoning: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
     token_usage: Optional[dict] = None,
     progress_steps: Optional[list] = None,
     required: bool = False,
@@ -2031,6 +2094,7 @@ async def _persist_assistant_message_safe(
                 client_message_id=client_message_id,
                 plan=plan,
                 plan_reasoning=plan_reasoning,
+                reasoning_summary=reasoning_summary,
                 token_usage=token_usage,
                 progress_steps=progress_steps,
             )
@@ -2057,6 +2121,56 @@ async def _persist_assistant_message_safe(
         if required:
             raise
         return None
+
+
+async def _mark_assistant_message_stopped_safe(
+    *,
+    thread_id: str,
+    message_id: str,
+) -> bool:
+    """Mark an already-written assistant row as the stopped partial.
+
+    A durable Stop can win in the small window after a producer writes the
+    answer row but before it commits ``run.completed``. Reusing the insert
+    helper would dedupe and leave ``stopped=false``; this focused projection
+    keeps the backend as the sole writer while preserving the row identity.
+    """
+    from uuid import UUID
+
+    from sqlalchemy import update
+
+    from src.models.chat_message import ChatMessage, MessageRole
+
+    try:
+        message_uuid = UUID(message_id)
+        thread_uuid = UUID(thread_id)
+    except (ValueError, AttributeError, TypeError):
+        # Unit doubles and degraded, threadless streams can carry opaque ids;
+        # there is no valid database row to project onto in that case.
+        return False
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                update(ChatMessage)
+                .where(
+                    ChatMessage.id == message_uuid,
+                    ChatMessage.thread_id == thread_uuid,
+                    ChatMessage.role == MessageRole.ASSISTANT,
+                )
+                .values(stopped=True)
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            return bool(result.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to mark assistant row stopped for thread %s: %s",
+            thread_id,
+            exc,
+            exc_info=exc,
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -2184,6 +2298,11 @@ async def _run_agent_graph(
                     await _persist_user_message_guarded(
                         db, current_user, request, tombstoned_out=tombstones
                     )
+            except AgentThreadResolutionError:
+                # An explicit thread/workspace is authoritative. Access loss
+                # between edge validation and worker dispatch must fail the
+                # run, never continue against an ephemeral checkpoint.
+                raise
             except Exception:
                 logger.warning(
                     "Failed to persist user turn before agent graph run",
@@ -2244,13 +2363,16 @@ async def _run_agent_graph(
                 )
 
             page_context = _page_context_to_dict(request.page_context)
-            await _resolve_and_bind_project(db, current_user, thread_obj, page_context)
+            _pm_project_id = await _resolve_and_bind_project(
+                db, current_user, thread_obj, page_context
+            )
 
             # Project-scoped memory: durable facts the user saved for this
             # project, recalled across every thread. Best-effort; never blocks
-            # a turn.
+            # a turn. Gated on the ownership-verified id returned above, and
+            # org-scoped (R7-M2) so a raw client-supplied project_id can never
+            # pull another tenant's memories into the prompt.
             project_memories: list = []
-            _pm_project_id = page_context.get("project_id")
             if _pm_project_id:
                 try:
                     from src.services.research.project_memory_service import (
@@ -2258,7 +2380,9 @@ async def _run_agent_graph(
                     )
 
                     project_memories = await load_project_memories(
-                        db, str(_pm_project_id)
+                        db,
+                        str(_pm_project_id),
+                        organization_id=getattr(current_user, "organization_id", None),
                     )
                 except Exception:
                     logger.warning("project memory load failed", exc_info=True)
@@ -2281,8 +2405,18 @@ async def _run_agent_graph(
                 "messages": messages,
                 "page_context": page_context,
                 "retrieved_contexts": [],
+                "attachment_ids": [
+                    str(document_id)
+                    for document_id in (getattr(request, "attachment_ids", None) or [])
+                ],
+                "attachment_status": [],
                 "tool_executions": [],
                 "thread_id": request.thread_id or "",
+                "thread_persistence": (
+                    THREAD_PERSISTENCE_DURABLE
+                    if resolved_thread_id is not None
+                    else THREAD_PERSISTENCE_EPHEMERAL
+                ),
                 "turn_index": 0,
                 "tool_loop_count": 0,
                 "error_count": 0,
@@ -2373,7 +2507,7 @@ async def _run_agent_graph(
                             "confirmation": confirmation_details,
                             "tool_executions": [],
                             **_actor_fields(current_user),
-                            "request": request.model_dump(),
+                            "request": request.model_dump(mode="json"),
                         },
                     )
                     return
@@ -2387,7 +2521,7 @@ async def _run_agent_graph(
                         "confirmation": confirmation_details,
                         "tool_executions": [],
                         **_actor_fields(current_user),
-                        "request": request.model_dump(),
+                        "request": request.model_dump(mode="json"),
                     },
                 )
                 return
@@ -2559,9 +2693,6 @@ async def _resume_agent_graph(
 
     async with AsyncSessionLocal() as db:
         try:
-            checkpointer = await get_checkpointer()
-            store = await get_memory_store()
-            graph = compile_agent_graph(checkpointer=checkpointer, store=store)
             # L1 first, then Redis: in Celery dispatch mode (or behind a
             # multi-replica API) the pod resuming the confirm may not be the
             # pod that dispatched, so the request payload only exists in
@@ -2572,11 +2703,58 @@ async def _resume_agent_graph(
             if job and job.get("request"):
                 original_request = AgentExecuteRequest(**job["request"])
 
-            resume_thread_id = (
-                original_request.thread_id
-                if original_request and original_request.thread_id
-                else job_id
-            )
+            resume_thread_id = original_request.thread_id if original_request else None
+            if not resume_thread_id and original_request is not None:
+                # Legitimate no-thread run: a user with no workspace gets
+                # ``_resolve_thread -> None``, so ``_run_agent_graph``
+                # checkpointed under ``thread_id=job_id``. The payload is
+                # present and simply carries no thread_id — resume where the
+                # run actually wrote, or such users could never confirm.
+                resume_thread_id = job_id
+            if not resume_thread_id:
+                # R7-L13: the job payload is gone, so job_id is NOT a thread
+                # id here. Using it read an empty checkpoint, which skipped the
+                # ownership and interrupt-consumed guards below and failed the
+                # run anyway. Fail loudly instead; /confirm refuses this case
+                # up front.
+                logger.warning(
+                    "Resume aborted for %s: no job payload (expired)", job_id
+                )
+                await _set_job_async(
+                    job_id,
+                    {
+                        "status": JobStatus.FAILED,
+                        "error": (
+                            "This confirmation has expired. "
+                            "Please start the request again."
+                        ),
+                        **_actor_fields(current_user),
+                    },
+                )
+                return
+
+            if original_request is not None and original_request.thread_id:
+                try:
+                    await _resolve_thread(
+                        db,
+                        current_user,
+                        original_request,
+                        create_if_missing=False,
+                    )
+                except (AgentThreadResolutionError, ValueError):
+                    await _set_job_async(
+                        job_id,
+                        {
+                            "status": JobStatus.FAILED,
+                            "error": "Thread not found",
+                            **_actor_fields(current_user),
+                        },
+                    )
+                    return
+
+            checkpointer = await get_checkpointer()
+            store = await get_memory_store()
+            graph = compile_agent_graph(checkpointer=checkpointer, store=store)
 
             config = {
                 "recursion_limit": RECURSION_LIMIT,
@@ -2735,7 +2913,9 @@ async def _resume_agent_graph(
                         "tool_executions": list(final_state.get("tool_executions", [])),
                         **_actor_fields(current_user),
                         "request": (
-                            original_request.model_dump() if original_request else None
+                            original_request.model_dump(mode="json")
+                            if original_request
+                            else None
                         ),
                     },
                 )
@@ -2884,7 +3064,9 @@ async def _resume_agent_graph(
                     "tool_executions": [],
                     **_actor_fields(current_user),
                     "request": (
-                        original_request.model_dump() if original_request else None
+                        original_request.model_dump(mode="json")
+                        if original_request
+                        else None
                     ),
                 },
             )

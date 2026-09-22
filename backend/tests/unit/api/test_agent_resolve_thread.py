@@ -1,138 +1,191 @@
-"""``create_if_missing`` behavior of ``_resolve_thread``.
-
-Confirm/resume paths pass ``create_if_missing=False`` because their thread
-already exists (ownership verified against the checkpoint snapshot) — a
-lookup miss there is transient and creating a fresh "Agent Chat" thread
-would silently split the conversation. These tests pin both the skip
-branch and the default create-on-miss behavior staying intact.
-"""
-
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
+from uuid import uuid4
 
 import pytest
+
+from src.services.threads import workspace_access
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 
-def _mock_user():
-    user = Mock()
-    user.id = "user-rt-1"
-    return user
+def _user():
+    return SimpleNamespace(id=uuid4())
 
 
-def _db_with_thread_lookup(thread=None, workspace=None):
-    """AsyncSession mock: first execute() resolves the thread lookup, the
-    second (if reached) resolves the workspace lookup."""
+def _request(*, thread_id=None, workspace_id=None):
+    return SimpleNamespace(
+        thread_id=str(thread_id) if thread_id else None,
+        page_context=SimpleNamespace(workspace_id=workspace_id),
+        messages=[SimpleNamespace(role="user", content="hello")],
+        model="",
+    )
+
+
+def _thread(*, editable: bool):
+    workspace = Mock()
+    workspace.can_user_edit.return_value = editable
+    conversation = SimpleNamespace(id=uuid4(), workspace=workspace)
+    return SimpleNamespace(
+        id=uuid4(), conversation_id=conversation.id, conversation=conversation
+    )
+
+
+async def test_explicit_missing_thread_raises_without_creating(monkeypatch):
+    from src.services.agent.agent_execution_service import (
+        AgentThreadResolutionError,
+        _resolve_thread,
+    )
+
     db = AsyncMock()
-    thread_result = MagicMock(scalar_one_or_none=Mock(return_value=thread))
-    workspace_result = MagicMock(scalar_one_or_none=Mock(return_value=workspace))
-    db.execute = AsyncMock(side_effect=[thread_result, workspace_result])
+    db.add = Mock()
+    monkeypatch.setattr(workspace_access, "get_thread", AsyncMock(return_value=None))
+    with pytest.raises(AgentThreadResolutionError, match="Thread not found"):
+        await _resolve_thread(db, _user(), _request(thread_id=uuid4()))
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+
+
+async def test_explicit_view_only_thread_is_not_writable(monkeypatch):
+    from src.services.agent.agent_execution_service import (
+        AgentThreadResolutionError,
+        _resolve_thread,
+    )
+
+    db = AsyncMock()
+    db.add = Mock()
+    monkeypatch.setattr(
+        workspace_access, "get_thread", AsyncMock(return_value=_thread(editable=False))
+    )
+    with pytest.raises(AgentThreadResolutionError, match="Thread not found"):
+        await _resolve_thread(db, _user(), _request(thread_id=uuid4()))
+    db.add.assert_not_called()
+
+
+async def test_explicit_editable_thread_resolves_through_access_funnel(monkeypatch):
+    from src.services.agent.agent_execution_service import _resolve_thread
+
+    db = AsyncMock()
+    expected = _thread(editable=True)
+    get_thread = AsyncMock(return_value=expected)
+    monkeypatch.setattr(workspace_access, "get_thread", get_thread)
+    user = _user()
+    actual, conversation_id = await _resolve_thread(
+        db, user, _request(thread_id=expected.id)
+    )
+    assert actual is expected
+    assert conversation_id == str(expected.conversation_id)
+    assert get_thread.await_args.kwargs == {"include_messages": False}
+
+
+async def test_explicit_inaccessible_workspace_never_falls_back(monkeypatch):
+    from src.services.agent.agent_execution_service import (
+        AgentThreadResolutionError,
+        _resolve_thread,
+    )
+
+    db = AsyncMock()
+    db.add = Mock()
+    get_workspace = AsyncMock(return_value=None)
+    monkeypatch.setattr(workspace_access, "get_workspace", get_workspace)
+    with pytest.raises(AgentThreadResolutionError, match="Workspace not found"):
+        await _resolve_thread(db, _user(), _request(workspace_id=uuid4()))
+    assert get_workspace.await_args.kwargs == {
+        "load_conversations": False,
+        "load_collections": False,
+    }
+    db.add.assert_not_called()
+
+
+async def test_explicit_workspace_is_locked_before_oldest_conversation_lookup(
+    monkeypatch,
+):
+    from src.services.agent.agent_execution_service import _resolve_thread
+
+    user = _user()
+    workspace = Mock(id=uuid4())
+    workspace.can_user_edit.return_value = True
+    monkeypatch.setattr(
+        workspace_access, "get_workspace", AsyncMock(return_value=workspace)
+    )
+    conversation = SimpleNamespace(id=uuid4())
+    locked_result = MagicMock(scalar_one_or_none=Mock(return_value=workspace))
+    conversation_result = MagicMock(scalar_one_or_none=Mock(return_value=conversation))
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[locked_result, conversation_result])
     db.add = Mock()
     db.flush = AsyncMock()
-    db.commit = AsyncMock()
     db.refresh = AsyncMock()
-    return db
+    thread, conversation_id = await _resolve_thread(
+        db, user, _request(workspace_id=workspace.id)
+    )
+    statements = [str(call.args[0]) for call in db.execute.await_args_list]
+    assert "FOR UPDATE" in statements[0]
+    assert "conversations.created_at ASC" in statements[1]
+    assert "conversations.id ASC" in statements[1]
+    assert thread is not None
+    assert conversation_id == str(conversation.id)
+    assert db.add.call_count == 1
 
 
-def _request(thread_id="11111111-1111-1111-1111-111111111111"):
-    request = Mock()
-    request.thread_id = thread_id
-    request.messages = []
-    request.model = ""
-    return request
+async def test_threadless_user_without_workspace_remains_ephemeral():
+    from src.services.agent.agent_execution_service import _resolve_thread
+
+    empty = MagicMock(scalar_one_or_none=Mock(return_value=None))
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=empty)
+    db.add = Mock()
+    assert await _resolve_thread(db, _user(), _request()) == (None, "")
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
 
 
-class TestResolveThreadCreateIfMissing:
-    async def test_miss_with_create_if_missing_false_returns_none(self):
-        from src.services.agent.agent_execution_service import _resolve_thread
+async def test_implicit_workspace_locks_oldest_owned_and_reuses_oldest_conversation():
+    from src.services.agent.agent_execution_service import _resolve_thread
 
-        db = _db_with_thread_lookup(thread=None)
-        thread, conversation_id = await _resolve_thread(
-            db, _mock_user(), _request(), create_if_missing=False
-        )
+    workspace = SimpleNamespace(id=uuid4())
+    conversation = SimpleNamespace(id=uuid4())
+    workspace_result = MagicMock(scalar_one_or_none=Mock(return_value=workspace))
+    conversation_result = MagicMock(scalar_one_or_none=Mock(return_value=conversation))
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[workspace_result, conversation_result])
+    db.add = Mock()
 
-        assert thread is None
-        assert conversation_id == ""
-        # Only the thread lookup ran — the workspace/create branch must not.
-        assert db.execute.await_count == 1
-        db.add.assert_not_called()
-        db.commit.assert_not_awaited()
+    thread, conversation_id = await _resolve_thread(db, _user(), _request())
 
-    async def test_miss_with_default_still_creates(self):
-        """The default path (initial turns) must keep creating on miss."""
-        from src.services.agent.agent_execution_service import _resolve_thread
-
-        workspace = Mock()
-        workspace.id = "ws-1"
-        db = _db_with_thread_lookup(thread=None, workspace=workspace)
-
-        thread, _ = await _resolve_thread(db, _mock_user(), _request())
-
-        assert thread is not None
-        assert db.add.call_count == 2  # Conversation + Thread
-        db.commit.assert_awaited_once()
+    statements = [str(call.args[0]) for call in db.execute.await_args_list]
+    assert "workspaces.owner_id" in statements[0]
+    assert "workspaces.created_at ASC" in statements[0]
+    assert "workspaces.id ASC" in statements[0]
+    assert "FOR UPDATE" in statements[0]
+    assert "conversations.created_at ASC" in statements[1]
+    assert "conversations.id ASC" in statements[1]
+    assert conversation_id == str(conversation.id)
+    assert thread is not None
+    # Reusing the existing container adds only the new thread.
+    assert db.add.call_count == 1
 
 
-class TestResolveThreadFiltersSoftDeleted:
-    """The thread lookup must never resolve a soft-deleted thread (or one under
-    a soft-deleted conversation/workspace) — a stale tab / SSE retry would
-    otherwise persist a new turn into a deleted thread."""
+async def test_implicit_workspace_without_conversation_creates_one_container_and_thread():
+    from src.models.conversation import Conversation
+    from src.models.thread import Thread
+    from src.services.agent.agent_execution_service import _resolve_thread
 
-    async def test_lookup_filters_out_soft_deleted_rows(self):
-        from src.services.agent.agent_execution_service import _resolve_thread
+    workspace = SimpleNamespace(id=uuid4())
+    workspace_result = MagicMock(scalar_one_or_none=Mock(return_value=workspace))
+    no_conversation = MagicMock(scalar_one_or_none=Mock(return_value=None))
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[workspace_result, no_conversation])
+    db.add = Mock()
 
-        captured = {}
+    thread, conversation_id = await _resolve_thread(db, _user(), _request())
 
-        def _capture(stmt, *a, **kw):
-            captured["stmt"] = str(
-                stmt.compile(compile_kwargs={"literal_binds": False})
-            )
-            return MagicMock(scalar_one_or_none=Mock(return_value=None))
-
-        db = AsyncMock()
-        db.execute = AsyncMock(side_effect=_capture)
-
-        thread, conversation_id = await _resolve_thread(
-            db, _mock_user(), _request(), create_if_missing=False
-        )
-
-        assert thread is None
-        assert conversation_id == ""
-        sql = captured["stmt"].lower()
-        # Thread, Conversation, and Workspace must each be filtered on is_deleted.
-        assert sql.count("is_deleted = false") >= 3, sql
-
-    async def test_create_if_missing_workspace_pick_excludes_soft_deleted(self):
-        """The create-on-miss workspace pick must exclude soft-deleted
-        workspaces, so a fresh Conversation+Thread is never parented under a
-        deleted workspace. With only a soft-deleted workspace present the pick
-        finds nothing → thread stays None → returns (None, "")."""
-        from src.services.agent.agent_execution_service import _resolve_thread
-
-        captured = []
-
-        def _capture(stmt, *a, **kw):
-            captured.append(str(stmt.compile(compile_kwargs={"literal_binds": False})))
-            # Thread lookup misses; workspace pick also misses (only a
-            # soft-deleted workspace exists, which the filter excludes).
-            return MagicMock(scalar_one_or_none=Mock(return_value=None))
-
-        db = AsyncMock()
-        db.execute = AsyncMock(side_effect=_capture)
-        db.add = Mock()
-        db.commit = AsyncMock()
-
-        thread, conversation_id = await _resolve_thread(
-            db, _mock_user(), _request(), create_if_missing=True
-        )
-
-        assert thread is None
-        assert conversation_id == ""
-        db.add.assert_not_called()  # no workspace → nothing created
-        db.commit.assert_not_awaited()
-        # Second execute() is the workspace pick; it must filter is_deleted.
-        assert len(captured) == 2, captured
-        ws_sql = captured[1].lower()
-        assert "is_deleted = false" in ws_sql, ws_sql
+    added = [call.args[0] for call in db.add.call_args_list]
+    assert len([item for item in added if isinstance(item, Conversation)]) == 1
+    assert len([item for item in added if isinstance(item, Thread)]) == 1
+    assert thread is added[-1]
+    assert conversation_id == str(added[0].id)
+    db.flush.assert_awaited_once()
+    db.commit.assert_awaited_once()

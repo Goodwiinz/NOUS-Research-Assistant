@@ -36,7 +36,10 @@ import { MessageTiming } from '@/components/elements/message-timing';
 import { ReasoningPanel } from '@/components/elements/reasoning-panel';
 import { RetrievalChunks } from '@/components/elements/retrieval-chunks';
 import { ChatInlinePlan } from '@/components/chat/shared/ChatInlinePlan';
-import { CitationChips } from '@/components/chat/shared/CitationChips';
+import {
+  CitationChips,
+  numberCitations,
+} from '@/components/chat/shared/CitationChips';
 import { formatStreamingElapsed } from '@/components/chat/shared/formatStreamingElapsed';
 import { InlineAgentSummary } from '@/components/chat/shared/InlineAgentSummary';
 import { MessageFeedback } from '@/components/chat/shared/MessageFeedback';
@@ -54,7 +57,7 @@ import { cn } from '@/lib/utils';
 import { useChatStore } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { normalizeCitation } from '@/utils/citationNormalizer';
-import { getReferencedCitations, type Citation } from '@/utils/citationParser';
+import { getVisibleCitations, type Citation } from '@/utils/citationParser';
 import { toToolCallParts } from './convertMessage';
 
 export type OnCitationClick = (
@@ -229,8 +232,8 @@ function MessageActions({
   return (
     <ActionBarPrimitive.Root
       data-slot="aui-message-actions"
-      data-aui-autohide="always"
-      autohide="always"
+      data-aui-autohide="not-last"
+      autohide="not-last"
       autohideFloat="single-branch"
       hideWhenRunning
       className={cn('nous-msg-actions', !assistant && 'justify-end')}
@@ -247,6 +250,7 @@ function MessageActions({
         <MessagePrimitive.If copied>
           <Check className="h-3.5 w-3.5 text-(--nous-terra)" />
         </MessagePrimitive.If>
+        <span>Copy</span>
       </ActionBarPrimitive.Copy>
       {!assistant && onEdit ? (
         <button
@@ -258,6 +262,7 @@ function MessageActions({
           title="Edit and resend"
         >
           <Pencil className="h-3.5 w-3.5" />
+          <span>Edit</span>
         </button>
       ) : null}
       {assistant && onRetry ? (
@@ -272,6 +277,7 @@ function MessageActions({
           }
         >
           <RotateCcw className="h-3.5 w-3.5" />
+          <span>Regenerate</span>
         </button>
       ) : assistant ? (
         <ActionBarPrimitive.Reload
@@ -280,6 +286,7 @@ function MessageActions({
           title="Regenerate response"
         >
           <RotateCcw className="h-3.5 w-3.5" />
+          <span>Regenerate</span>
         </ActionBarPrimitive.Reload>
       ) : null}
     </ActionBarPrimitive.Root>
@@ -385,7 +392,7 @@ export function AuiUserMessage({
               aria-label="Edit your message"
               rows={Math.min(8, Math.max(2, draft.split('\n').length))}
               autoFocus
-              className="w-full resize-none rounded-md border border-(--nous-border-1) bg-(--nous-bg-1) px-2 py-1 text-[14px] leading-relaxed text-(--nous-fg-1) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--nous-sol)"
+              className="w-full resize-none rounded-md border border-(--nous-border-1) bg-(--nous-bg-1) px-2 py-1 text-[14px] leading-relaxed text-(--nous-fg-1) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)"
             />
             {editDisabled ? (
               <p
@@ -475,6 +482,7 @@ function LiveMessageTiming({
  */
 function StreamingReasoningSection({ label }: { label: string }): ReactElement {
   const streamingPlan = useChatStore((s) => s.streamingPlan);
+  const streamingPlanReasoning = useChatStore((s) => s.streamingPlanReasoning);
   const streamingSteps = useChatStore((s) => s.streamingSteps);
   const progress = useChatStore((s) => s.streamingProgress);
   const reasoning = useChatStore((s) => s.streamingReasoning);
@@ -500,13 +508,14 @@ function StreamingReasoningSection({ label }: { label: string }): ReactElement {
         streaming
         open={open}
         onOpenChange={setOpen}
-        restingLabel={label}
+        restingLabel={reasoning ? 'Reasoning summary' : label}
         aria-live="off"
         className="mb-2 max-w-none"
       />
-      {streamingPlan.length > 0 ? (
+      {streamingPlan.length > 0 || streamingPlanReasoning ? (
         <ChatInlinePlan
           plan={streamingPlan}
+          reasoning={streamingPlanReasoning || undefined}
           toolExecutions={streamingSteps}
           streaming
         />
@@ -520,20 +529,33 @@ function CompletedProgressSection({
 }: {
   message: ChatPageMessage;
 }): ReactElement | null {
-  const [open, setOpen] = useState(false);
-  if (!message.progressSteps?.length) return null;
+  // Provider-authored summaries are the public reasoning surface. Keep them
+  // visible after the stream commits; ordinary lifecycle progress remains
+  // collapsed so existing transcripts stay compact.
+  const [open, setOpen] = useState(Boolean(message.reasoningSummary));
+  const steps = [
+    ...(message.progressSteps ?? []).map((step) => ({
+      title: step.detail,
+      body: 'Completed',
+    })),
+    ...(message.reasoningSummary
+      ? [{ title: 'Reasoning summary', body: message.reasoningSummary }]
+      : []),
+  ];
+  if (steps.length === 0) return null;
 
   return (
     <ReasoningPanel
-      steps={message.progressSteps.map((step) => ({
-        title: step.detail,
-        body: 'Completed',
-      }))}
-      visibleSteps={message.progressSteps.length}
+      steps={steps}
+      visibleSteps={steps.length}
       streaming={false}
       open={open}
       onOpenChange={setOpen}
-      restingLabel="How this answer was prepared"
+      restingLabel={
+        message.reasoningSummary
+          ? 'Reasoning summary'
+          : 'How this answer was prepared'
+      }
       className="mb-2 max-w-none"
     />
   );
@@ -633,17 +655,24 @@ function AuiStreamingBody(): ReactElement {
  * Short, honest helper line under an error message, keyed by the SERVER's
  * `category` (see `AgentErrorCategory` in services/agentStreamEvents.ts).
  *
- * The category was write-only until now — recorded on the bubble and never
- * read. Anything absent or unrecognised falls back to the existing behaviour
- * (render `message.content`, the raw failure text), so an unknown category from
- * a newer backend degrades quietly instead of blanking the line.
+ * Unknown or absent categories use a stable retryable message. Raw stream
+ * diagnostics are never rendered in the product surface.
  */
 const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
-  rate_limited: 'The service is busy — try again in a moment.',
+  rate_limited: 'The service is busy. Try again in a moment.',
   upstream_timeout: 'The model took too long. Retry usually works.',
   invalid_request: "This request can't be retried as-is.",
   conflict: 'A confirmation is already in progress.',
+  permission_denied: "You don't have permission to complete this action.",
+  model_error: 'The model could not complete this response. Please retry.',
+  tool_error: 'A tool failed while preparing this response. Please retry.',
+  checkpoint_unavailable:
+    'The saved response state is unavailable. Please retry.',
+  internal: 'The response could not be completed. Please retry.',
+  cancelled: 'The response was stopped.',
 };
+const DEFAULT_ERROR_HELP =
+  'The response could not be completed. Please try again.';
 
 /**
  * Categories where an identical retry cannot succeed: the request itself is
@@ -653,6 +682,7 @@ const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
 const NON_RETRYABLE_ERROR_CATEGORIES: ReadonlySet<string> = new Set([
   'invalid_request',
   'conflict',
+  'permission_denied',
 ]);
 
 export function AuiAssistantMessage({
@@ -676,16 +706,20 @@ export function AuiAssistantMessage({
     [message?.citations]
   );
 
-  const inlineCitations = useMemo(
-    () => getReferencedCitations(message?.content ?? '', allCitations),
-    [message?.content, allCitations]
-  );
-
   // Inline-referenced citations when available, else all attached ones —
   // footer chips + tool strip must render whenever the backend attached
   // sources, even if the AI didn't use [Doc N] markers.
-  const visibleCitations =
-    inlineCitations.length > 0 ? inlineCitations : allCitations;
+  const visibleCitations = useMemo(
+    () => getVisibleCitations(message?.content ?? '', allCitations),
+    [message?.content, allCitations]
+  );
+
+  // One numbering for the whole turn: the inline superscripts and the sources
+  // list below the reply must agree, so both read it off the same map.
+  const citationNumbers = useMemo(
+    () => numberCitations(visibleCitations).indexByKey,
+    [visibleCitations]
+  );
 
   const executionByToolCallId = message?.toolExecutions?.length
     ? new Map(
@@ -702,6 +736,7 @@ export function AuiAssistantMessage({
       <CitationRenderer
         content={message.content}
         citations={allCitations}
+        citationNumbers={citationNumbers}
         onCitationClick={(citation) => {
           if (onCitationClick) {
             onCitationClick(
@@ -736,7 +771,7 @@ export function AuiAssistantMessage({
   // ambiguous blank bubble. onRetry re-sends the prior user turn.
   if (message?.error) {
     const helperLine =
-      ERROR_CATEGORY_HELP[message.error.category ?? ''] ?? message.content;
+      ERROR_CATEGORY_HELP[message.error.category ?? ''] ?? DEFAULT_ERROR_HELP;
     const retryable = !NON_RETRYABLE_ERROR_CATEGORIES.has(
       message.error.category ?? ''
     );
@@ -753,7 +788,7 @@ export function AuiAssistantMessage({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-(--nous-mars)" />
             <div className="min-w-0">
               <p className="text-sm font-medium text-(--nous-fg-1)">
-                {message.error.message}
+                This response failed to generate. Please try again.
               </p>
               {helperLine ? (
                 <p className="mt-1 text-[12px] text-(--nous-fg-3)">
@@ -789,19 +824,20 @@ export function AuiAssistantMessage({
       <div className="min-w-0 flex-1 text-left">
         {message && <CompletedProgressSection message={message} />}
         {/* Execution plan — committed provenance for agent turns */}
-        {message?.plan && message.plan.length > 0 && (
+        {(message?.plan && message.plan.length > 0) ||
+        message?.planReasoning ? (
           <ChatInlinePlan
-            plan={message.plan}
+            plan={message.plan ?? []}
             reasoning={message.planReasoning}
             toolExecutions={message.toolExecutions}
           />
-        )}
+        ) : null}
         {/* Tool strip — tools/sources/time/tokens/stopped */}
         {message && (
           <ToolStrip {...getToolStripProps(message, visibleCitations.length)} />
         )}
         <MessageAttachments />
-        <div className="nous-chat-body space-y-2">
+        <div className="nous-chat-body max-w-[720px] space-y-2">
           <MessageParts
             assistant
             assistantText={assistantText}
@@ -854,16 +890,52 @@ export function AuiAssistantMessage({
  * that throws "useClientLookup: Index N out of bounds" from inside the child's
  * store update, out of the render-time guard's reach (prod crash on thread
  * switch). That frame is transient: render nothing for it and re-attempt once
- * the runtime settles (resetKey changes). Anything else is a real bug —
+ * the runtime's client lookup settles. Anything else is a real bug —
  * rethrow it to the app's error boundary rather than silently swallow.
  */
+function MessageByIndexRetry({
+  resetKey,
+  onRetry,
+}: {
+  resetKey: string;
+  onRetry: (resetKey: string) => void;
+}): null {
+  const [adapterSettled, setAdapterSettled] = useState(false);
+
+  useEffect(() => {
+    // useExternalStoreRuntime installs its latest adapter in a parent passive
+    // effect. The frame commits this sentinel after that adapter notification;
+    // the following passive effect retries against the settled client lookup.
+    let active = true;
+    const frame = window.requestAnimationFrame(() => {
+      if (active) setAdapterSettled(true);
+    });
+    return () => {
+      active = false;
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (adapterSettled) onRetry(resetKey);
+  }, [adapterSettled, onRetry, resetKey]);
+
+  return null;
+}
+
 export class MessageByIndexBoundary extends React.Component<
   { resetKey: string; children: ReactNode },
   { error: Error | null; lastResetKey: string }
 > {
+  private retriedResetKey: string | null = null;
+
   constructor(props: { resetKey: string; children: ReactNode }) {
     super(props);
     this.state = { error: null, lastResetKey: props.resetKey };
+  }
+
+  private static isTransientIndexError(error: Error): boolean {
+    return /out of bounds|useClientLookup/i.test(error.message);
   }
 
   static getDerivedStateFromError(error: Error): { error: Error } {
@@ -882,16 +954,38 @@ export class MessageByIndexBoundary extends React.Component<
     return null;
   }
 
+  private retryTransientError = (retryKey: string): void => {
+    if (this.props.resetKey !== retryKey || this.retriedResetKey === retryKey) {
+      return;
+    }
+    this.retriedResetKey = retryKey;
+    this.setState({ error: null });
+  };
+
+  componentDidUpdate(prevProps: { resetKey: string }): void {
+    if (prevProps.resetKey === this.props.resetKey) return;
+    if (this.retriedResetKey !== this.props.resetKey) {
+      this.retriedResetKey = null;
+    }
+  }
+
   render(): ReactNode {
     const { error } = this.state;
     if (error) {
       // Version-coupled: this matches @assistant-ui/react@0.14.29's transient
       // out-of-bounds message. If a version bump rewords it, the classifier
       // stops matching and the boundary rethrows (crash returns) — but the
-      // "shrinks under a mounted message" test in AuiMessage.test.tsx drives
-      // the REAL runtime OOB, so a wording change trips it red in CI. On a bump:
+      // direct boundary regression in AuiMessage.test.tsx drives the exact
+      // known OOB wording, so a wording change trips it red in CI. On a bump,
       // re-run that test and update this pattern if it fails.
-      if (/out of bounds|useClientLookup/i.test(error.message)) return null;
+      if (MessageByIndexBoundary.isTransientIndexError(error)) {
+        return this.retriedResetKey === this.props.resetKey ? null : (
+          <MessageByIndexRetry
+            resetKey={this.props.resetKey}
+            onRetry={this.retryTransientError}
+          />
+        );
+      }
       throw error;
     }
     return this.props.children;
@@ -974,6 +1068,7 @@ export function AuiMessageByIndex({
   // thread. MessageByIndex throws on out-of-bounds, so skip the stale
   // frame; the effect fires immediately after commit and re-renders us.
   const runtimeMessageCount = useThread((t) => t.messages.length);
+  const runtimeMessageId = useThread((t) => t.messages[index]?.id);
 
   // The components map is module-level (stable identity); only the row's DATA
   // changes, and it travels by context so a message refresh re-renders the
@@ -991,6 +1086,11 @@ export function AuiMessageByIndex({
   );
 
   if (index >= runtimeMessageCount) return null;
+  // Reconciliation can reorder rows without changing the runtime's length.
+  // Until its post-commit sync catches up, this index may still name an
+  // approval gate rather than the answer now occupying the list row. Never
+  // render another message's tools (or actionable approval) in this slot.
+  if (message && runtimeMessageId !== message.runtimeId) return null;
 
   // resetKey settles the boundary when the runtime re-syncs: count changes on
   // grow/shrink, and message id changes on thread switch even when counts match.

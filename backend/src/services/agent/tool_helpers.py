@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, Optional
 from uuid import UUID
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,38 @@ from src.models.user import User
 from src.models.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+# Audit R7-L11: paper ids are interpolated straight into
+# ``https://arxiv.org/pdf/{id}`` (redirects followed), so anything outside the
+# arXiv id grammar — new style ``2401.12345v2``, old style ``math.GT/0309136``
+# — is a fetch of somewhere else entirely. Validate before it gets there.
+# Lives here, not in tools.py: production dispatch reaches _tool_ingest_arxiv
+# via tools_impl.execute_tool and never touches the LangChain wrapper, so both
+# entry points import the check from this module.
+_ARXIV_PAPER_ID_RE = re.compile(
+    r"^(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-z\-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?)$"
+)
+
+
+def _reject_invalid_arxiv_ids(
+    paper_ids: Optional[Iterable[Any]],
+) -> Optional[Dict[str, Any]]:
+    """Return an error payload when any id is not a valid arXiv id (R7-L11)."""
+    bad = [
+        str(pid)
+        for pid in (paper_ids or [])
+        if not _ARXIV_PAPER_ID_RE.match(str(pid).strip())
+    ]
+    if bad:
+        listed = ", ".join(repr(b[:64]) for b in bad[:5])
+        return {
+            "error": (
+                f"Invalid arXiv paper id(s): {listed}. Expected forms like "
+                "'2401.12345', '2401.12345v2' or 'math.GT/0309136'."
+            )
+        }
+    return None
 
 
 def _escape_like(value: str) -> str:
@@ -144,23 +176,33 @@ async def _resolve_document_id(
         except Exception:
             logger.debug("arxiv_id resolution failed for %r", bare_id, exc_info=True)
 
-    # Try by title (case-insensitive)
+    # Try by title (case-insensitive).
+    #
+    # Audit R7-L8: this took the newest of any substring match, so "report"
+    # silently resolved to whichever "Q3 Report (draft)" happened to be newest
+    # and add_document_to_project / summarize_document / extract_entities then
+    # acted on the wrong document. Match on exact case-insensitive title
+    # equality instead: a substring query also returns "Annual Report" for
+    # "Report", and the "exactly one row" rule then rejected the unambiguous
+    # exact match. limit(2) is enough to spot a duplicate title — two rows is
+    # ambiguous, so it's a miss and callers handle that.
     if document_id:
         try:
+            wanted = document_id.strip().lower()
             stmt = (
                 select(Document)
                 .where(
-                    Document.title.ilike(f"%{_escape_like(document_id)}%"),
+                    func.lower(Document.title) == wanted,
                     Document.organization_id == current_user.organization_id,
                     Document.is_deleted == False,
                 )
                 .order_by(desc(Document.created_at))
-                .limit(1)
+                .limit(2)
             )
             result = await db.execute(stmt)
-            doc = result.scalar_one_or_none()
-            if doc:
-                return doc
+            docs = list(result.scalars().all())
+            if len(docs) == 1:
+                return docs[0]
         except Exception:
             pass
 

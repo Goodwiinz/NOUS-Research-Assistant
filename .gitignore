@@ -130,6 +130,8 @@ dist
 # Gatsby files
 .cache/
 public
+# ...but Next's static asset dir is source, not build output.
+!frontend/public
 
 # Vuepress build output
 .vuepress/dist

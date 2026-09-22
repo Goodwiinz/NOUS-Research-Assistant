@@ -15,8 +15,9 @@ export async function updateSession(
   request: NextRequest,
   requestHeaders?: Headers
 ) {
+  const forwardedHeaders = requestHeaders ?? request.headers;
   const nextInit = {
-    request: { headers: requestHeaders ?? request.headers },
+    request: { headers: forwardedHeaders },
   };
   let supabaseResponse = NextResponse.next(nextInit);
 
@@ -47,6 +48,17 @@ export async function updateSession(
         cookiesToSet.forEach(({ name, value }) =>
           request.cookies.set(name, value)
         );
+        // RequestCookies writes through to request.headers, but proxy.ts hands
+        // us a separate Headers clone so CSP and other request metadata reach
+        // the renderer. Keep that clone's Cookie header in lockstep too;
+        // otherwise this response gives the browser refreshed cookies while
+        // the current RSC render still authenticates with the stale token.
+        const refreshedCookieHeader = request.headers.get('cookie');
+        if (refreshedCookieHeader === null) {
+          forwardedHeaders.delete('cookie');
+        } else {
+          forwardedHeaders.set('cookie', refreshedCookieHeader);
+        }
         supabaseResponse = NextResponse.next(nextInit);
         cookiesToSet.forEach(({ name, value, options }) =>
           supabaseResponse.cookies.set(name, value, options)

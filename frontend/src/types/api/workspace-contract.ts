@@ -55,6 +55,10 @@ export type ApiThreadUpdate = components['schemas']['ThreadUpdate'];
 // the chat one, used by `workspaceService.listThreads`.
 export type ApiThreadList =
   components['schemas']['src__schemas__chat__ThreadListResponse'];
+/** The workspace-wide endpoint deliberately reuses the existing chat thread
+ * list response; this semantic alias keeps callers tied to that generated
+ * contract without suggesting that the rows share one conversation. */
+export type ApiWorkspaceThreadList = ApiThreadList;
 
 // ============================================================================
 // Chat message

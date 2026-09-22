@@ -29,14 +29,12 @@ export function MessageTiming({
     >
       {stats.map((stat) => (
         <span key={stat.label} className="flex items-baseline gap-1">
-          <span className={cn(mono, 'text-foreground/25')}>{stat.label}</span>
+          <span className="text-[11px] text-(--nous-fg-3)">{stat.label}</span>
           <span
             className={cn(
               mono,
               'tabular-nums',
-              streaming
-                ? 'text-blue-500 dark:text-blue-400'
-                : 'text-foreground/50'
+              streaming ? 'text-(--nous-fg-accent-safe)' : 'text-foreground/50'
             )}
           >
             {stat.value}

@@ -30,7 +30,9 @@ export interface UseChatDrawerReturn {
  * closes it, and Tab is trapped inside while it's open (role=dialog
  * aria-modal). Purely presentational coordination; no service calls.
  */
-export function useChatDrawer(): UseChatDrawerReturn {
+export function useChatDrawer(
+  desktopFocusRef?: React.RefObject<HTMLElement>
+): UseChatDrawerReturn {
   const [isOpen, setIsOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const drawerOpenerRef = useRef<HTMLElement | null>(null);
@@ -47,11 +49,23 @@ export function useChatDrawer(): UseChatDrawerReturn {
       const onKey = (e: KeyboardEvent): void => {
         if (e.key === 'Escape') setIsOpen(false);
       };
+      // Match ChatSurface/ChatHeader's xl breakpoint. A hidden modal must not
+      // retain open state and reappear when the viewport becomes narrow again.
+      const desktop = window.matchMedia('(min-width: 1280px)');
+      const onDesktop = (event: MediaQueryListEvent): void => {
+        if (!event.matches) return;
+        drawerOpenerRef.current = desktopFocusRef?.current ?? null;
+        setIsOpen(false);
+      };
+      desktop.addEventListener('change', onDesktop);
       window.addEventListener('keydown', onKey);
-      return () => window.removeEventListener('keydown', onKey);
+      return () => {
+        desktop.removeEventListener('change', onDesktop);
+        window.removeEventListener('keydown', onKey);
+      };
     }
     drawerOpenerRef.current?.focus?.();
-  }, [isOpen]);
+  }, [isOpen, desktopFocusRef]);
 
   // Trap Tab focus inside the open mobile drawer (role=dialog aria-modal) so
   // keyboard focus can't wander behind it. Wraps at the focusable boundaries.

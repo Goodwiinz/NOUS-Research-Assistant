@@ -10,7 +10,7 @@
 // api-client's baseURL already ends in /api/v1 (see API_CONFIG.BASE_URL) —
 // paths here are relative to it. Prefixing /api/v1 again yields
 // /api/v1/api/v1/export/... and a 404.
-import { api } from '@/services/api-client';
+import { api, type BinaryDownloadExpectation } from '@/services/api-client';
 
 export type ExportFormat = 'markdown' | 'pdf' | 'json' | 'html';
 
@@ -46,6 +46,27 @@ export interface BatchExportRequest {
   asZip?: boolean;
 }
 
+const EXPORT_CONTENT_TYPES: Record<ExportFormat, string> = {
+  markdown: 'text/markdown',
+  pdf: 'application/pdf',
+  json: 'application/json',
+  html: 'text/html',
+};
+
+function exportDownloadExpectation(
+  format: ExportFormat,
+  asZip = false
+): BinaryDownloadExpectation {
+  if (asZip) {
+    return { contentType: 'application/zip', signature: 'PK' };
+  }
+
+  return {
+    contentType: EXPORT_CONTENT_TYPES[format],
+    ...(format === 'pdf' ? { signature: '%PDF-' } : {}),
+  };
+}
+
 /**
  * Export a single thread and trigger download.
  */
@@ -62,13 +83,14 @@ export async function exportThread(
     include_feedback: String(options.includeFeedback ?? false),
   });
 
-  const filename = `thread_export.${format === 'markdown' ? 'md' : format}`;
   // The backend export endpoint is POST (format/options are Query params even
   // on POST). downloadPost sends an authenticated POST and saves the blob;
   // api.download would issue a GET and 405.
   await api.downloadPost(
     `/export/thread/${threadId}?${params.toString()}`,
-    filename
+    undefined,
+    undefined,
+    exportDownloadExpectation(format)
   );
 }
 
@@ -76,10 +98,11 @@ export async function exportThread(
  * Export multiple threads as a ZIP file.
  */
 export async function exportBatch(request: BatchExportRequest): Promise<void> {
-  const blob: Blob = await api.request('/export/batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const asZip = request.asZip ?? true;
+  await api.downloadPost(
+    '/export/batch',
+    undefined,
+    {
       thread_ids: request.threadIds,
       format: request.format,
       options: {
@@ -89,12 +112,10 @@ export async function exportBatch(request: BatchExportRequest): Promise<void> {
         include_metadata: request.options?.includeMetadata ?? true,
         include_feedback: request.options?.includeFeedback ?? false,
       },
-      as_zip: request.asZip ?? true,
-    }),
-  });
-
-  const filename = 'thread_export.zip';
-  downloadBlob(blob, filename);
+      as_zip: asZip,
+    },
+    exportDownloadExpectation(request.format, asZip)
+  );
 }
 
 /**
@@ -147,20 +168,6 @@ export async function previewExport(
     estimatedSizeBytes: data.estimated_size_bytes,
     exportable: data.exportable,
   };
-}
-
-/**
- * Helper function to download a blob as a file.
- */
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
 }
 
 /**

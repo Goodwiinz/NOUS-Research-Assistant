@@ -1,27 +1,22 @@
 'use client';
 
+import AuthScenePanel from '@/components/auth/AuthScenePanel';
+import PendingEmailConfirmation from '@/components/auth/PendingEmailConfirmation';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import { RegisterRequest } from '@/types';
-import { motion } from 'framer-motion';
 import {
   ArrowRight,
   Building2,
-  Database,
   Eye,
   EyeOff,
   Lock,
   Mail,
-  Shield,
-  Sparkles,
-  Terminal,
   User,
-  Zap,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import React, { useEffect, useState } from 'react';
-import PendingEmailConfirmation from '@/components/auth/PendingEmailConfirmation';
 
 interface RegisterFormData {
   email: string;
@@ -32,9 +27,25 @@ interface RegisterFormData {
   organization_name: string;
 }
 
-// Brand accent constants (Sol gold). Retained for reference.
-const _PHOSPHOR_GREEN = '#D4A039';
-const _AMBER = '#ffb700';
+const SCENE = {
+  src: '/landing/reading-room-register.svg',
+  headline: 'Make sense of everything you read.',
+  notes: [
+    'Inference can run in the browser with WebLLM. Your corpus stays on your infrastructure.',
+    'Role-based access is enforced inside the retrieval pipeline.',
+  ],
+} as const;
+
+const SceneBody = (
+  <>
+    Create an account to search, connect and synthesize your documents in one
+    place
+    <sup className="ml-0.5 align-super text-[0.6em] font-semibold text-(--nous-helios)">
+      1
+    </sup>
+    .
+  </>
+);
 
 export default function RegisterPage() {
   const {
@@ -62,6 +73,8 @@ export default function RegisterPage() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    // Hydration guard: flip once after mount so the SSR skeleton is replaced.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
 
@@ -123,23 +136,16 @@ export default function RegisterPage() {
     }));
   };
 
-  const features = [
-    { icon: Sparkles, text: 'Semantic search across your documents' },
-    { icon: Database, text: 'Ingest text, tables, and images together' },
-    { icon: Zap, text: 'Connected answers from a knowledge graph' },
-    { icon: Shield, text: 'Private by default, scoped to your team' },
-  ];
-
   const passwordStrength = () => {
     const password = formData.password;
     if (!password) return { level: 0, text: '', color: '' };
     if (password.length < 6)
-      return { level: 1, text: 'Weak', color: 'bg-destructive' };
+      return { level: 1, text: 'Weak', color: 'bg-(--nous-mars)' };
     if (password.length < 8)
-      return { level: 2, text: 'Fair', color: 'bg-amber-500' };
+      return { level: 2, text: 'Fair', color: 'bg-(--nous-corona)' };
     if (password.length < 12)
-      return { level: 3, text: 'Good', color: 'bg-primary' };
-    return { level: 4, text: 'Strong', color: 'bg-primary' };
+      return { level: 3, text: 'Good', color: 'bg-(--nous-sol)' };
+    return { level: 4, text: 'Strong', color: 'bg-(--nous-terra)' };
   };
 
   const strength = passwordStrength();
@@ -172,118 +178,58 @@ export default function RegisterPage() {
   }
 
   const inputClasses =
-    'w-full pl-11 pr-4 py-2.5 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground/70 outline-hidden transition-colors focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/40';
+    'h-12 w-full rounded-(--nous-radius-md) border border-(--nous-enceladus) bg-(--nous-bg-2) pl-11 pr-4 text-sm text-(--nous-fg-1) placeholder:text-(--nous-fg-3) outline-hidden transition-colors focus-visible:border-(--nous-sol) focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40';
+  const labelClasses = 'block text-sm font-medium text-(--nous-titan)';
+  const toggleClasses =
+    'absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-sm text-(--nous-fg-3) transition-colors hover:text-(--nous-sol-safe) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40';
 
   return (
-    <div className="min-h-screen flex bg-background text-foreground">
-      {/* Left panel — brand */}
-      <div className="hidden lg:flex lg:w-5/12 relative border-r border-border">
-        <div className="relative z-10 flex flex-col justify-center px-16 lg:px-20">
-          {/* Logo */}
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-            className="flex items-center gap-3 mb-14"
-          >
-            <div className="flex items-center justify-center w-12 h-12 rounded-xl border border-border bg-card">
-              <Terminal className="w-6 h-6 text-primary" aria-hidden="true" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-                NOUS
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Document intelligence
-              </p>
-            </div>
-          </motion.div>
-
-          {/* Hero */}
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
-          >
-            <h2 className="text-4xl font-semibold tracking-tight text-foreground leading-tight mb-5">
-              Make sense of everything you read.
-            </h2>
-            <p
-              className="text-base text-muted-foreground max-w-sm mb-12 leading-relaxed"
-              style={{ fontFamily: 'var(--nous-font-body)' }}
-            >
-              Create an account to search, connect, and synthesize your
-              documents in one place.
-            </p>
-          </motion.div>
-
-          {/* Features */}
-          <motion.ul
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.5, delay: 0.2 }}
-            className="space-y-4"
-          >
-            {features.map((feature, i) => (
-              <li key={i} className="flex items-center gap-3">
-                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-card border border-border">
-                  <feature.icon
-                    className="w-4 h-4 text-primary"
-                    aria-hidden="true"
-                  />
-                </div>
-                <span className="text-sm text-muted-foreground">
-                  {feature.text}
-                </span>
-              </li>
-            ))}
-          </motion.ul>
-        </div>
-      </div>
+    <div className="grid min-h-screen lg:grid-cols-2">
+      <AuthScenePanel
+        src={SCENE.src}
+        headline={SCENE.headline}
+        body={SceneBody}
+        notes={[...SCENE.notes]}
+        wash="light"
+        proseTone="parchment"
+      />
 
       {/* Right panel — form */}
-      <div className="flex-1 flex items-center justify-center px-6 lg:px-8 py-12 overflow-y-auto">
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
-          className="w-full max-w-lg"
-        >
-          <div className="rounded-2xl border border-border bg-card p-8 shadow-xs">
-            {/* Header */}
-            <div className="mb-8">
-              <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+      <div className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
+        <div className="w-full max-w-[440px]">
+          <div className="flex flex-col gap-5">
+            <div>
+              <h2
+                className="mb-1.5 text-[32px] font-normal tracking-[-0.02em] text-(--nous-erebus)"
+                style={{ fontFamily: 'var(--nous-font-body)' }}
+              >
                 Create your account
               </h2>
-              <p className="mt-1.5 text-sm text-muted-foreground">
+              <p className="text-sm text-(--nous-fg-3)">
                 Set up access for you and your team.
               </p>
             </div>
 
-            {/* Form */}
-            <form onSubmit={handleSubmit} className="space-y-5">
+            <form onSubmit={handleSubmit} className="flex flex-col gap-5">
               {error && (
                 <div
                   role="alert"
-                  className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5"
+                  className="rounded-(--nous-radius-md) border border-(--nous-mars)/40 bg-(--nous-mars)/10 p-3"
                 >
-                  <p className="text-sm text-destructive">{error}</p>
+                  <p className="text-sm text-(--nous-mars)">{error}</p>
                 </div>
               )}
 
               {/* Name fields */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label
-                    htmlFor="first_name"
-                    className="block text-sm font-medium text-foreground"
-                  >
+                  <label htmlFor="first_name" className={labelClasses}>
                     First name
                   </label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none">
+                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
                       <User
-                        className="w-4 h-4 text-muted-foreground"
+                        className="h-4 w-4 text-(--nous-fg-3)"
                         aria-hidden="true"
                       />
                     </div>
@@ -301,16 +247,13 @@ export default function RegisterPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label
-                    htmlFor="last_name"
-                    className="block text-sm font-medium text-foreground"
-                  >
+                  <label htmlFor="last_name" className={labelClasses}>
                     Last name
                   </label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none">
+                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
                       <User
-                        className="w-4 h-4 text-muted-foreground"
+                        className="h-4 w-4 text-(--nous-fg-3)"
                         aria-hidden="true"
                       />
                     </div>
@@ -330,16 +273,13 @@ export default function RegisterPage() {
 
               {/* Email */}
               <div className="space-y-1.5">
-                <label
-                  htmlFor="email"
-                  className="block text-sm font-medium text-foreground"
-                >
+                <label htmlFor="email" className={labelClasses}>
                   Email
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
                     <Mail
-                      className="w-4 h-4 text-muted-foreground"
+                      className="h-4 w-4 text-(--nous-fg-3)"
                       aria-hidden="true"
                     />
                   </div>
@@ -358,19 +298,16 @@ export default function RegisterPage() {
 
               {/* Organization */}
               <div className="space-y-1.5">
-                <label
-                  htmlFor="organization_name"
-                  className="block text-sm font-medium text-foreground"
-                >
+                <label htmlFor="organization_name" className={labelClasses}>
                   Organization{' '}
-                  <span className="font-normal text-muted-foreground">
+                  <span className="font-normal text-(--nous-fg-3)">
                     (optional)
                   </span>
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
                     <Building2
-                      className="w-4 h-4 text-muted-foreground"
+                      className="h-4 w-4 text-(--nous-fg-3)"
                       aria-hidden="true"
                     />
                   </div>
@@ -388,16 +325,13 @@ export default function RegisterPage() {
 
               {/* Password */}
               <div className="space-y-1.5">
-                <label
-                  htmlFor="password"
-                  className="block text-sm font-medium text-foreground"
-                >
+                <label htmlFor="password" className={labelClasses}>
                   Password
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
                     <Lock
-                      className="w-4 h-4 text-muted-foreground"
+                      className="h-4 w-4 text-(--nous-fg-3)"
                       aria-hidden="true"
                     />
                   </div>
@@ -418,19 +352,19 @@ export default function RegisterPage() {
                       showPassword ? 'Hide password' : 'Show password'
                     }
                     aria-pressed={showPassword}
-                    className="absolute inset-y-0 right-0 flex items-center pr-3.5 text-muted-foreground hover:text-foreground rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                    className={toggleClasses}
                   >
                     {showPassword ? (
-                      <EyeOff className="w-4 h-4" aria-hidden="true" />
+                      <EyeOff className="h-4 w-4" aria-hidden="true" />
                     ) : (
-                      <Eye className="w-4 h-4" aria-hidden="true" />
+                      <Eye className="h-4 w-4" aria-hidden="true" />
                     )}
                   </button>
                 </div>
                 {/* Strength */}
                 {formData.password && (
-                  <div className="flex items-center gap-2 mt-2">
-                    <div className="flex-1 flex gap-1" aria-hidden="true">
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="flex flex-1 gap-1" aria-hidden="true">
                       {[1, 2, 3, 4].map((level) => (
                         <div
                           key={level}
@@ -438,12 +372,12 @@ export default function RegisterPage() {
                             'h-1 flex-1 rounded-full transition-colors duration-300',
                             level <= strength.level
                               ? strength.color
-                              : 'bg-muted'
+                              : 'bg-(--nous-enceladus)'
                           )}
                         />
                       ))}
                     </div>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs text-(--nous-fg-3)">
                       {strength.text}
                     </span>
                   </div>
@@ -452,16 +386,13 @@ export default function RegisterPage() {
 
               {/* Confirm password */}
               <div className="space-y-1.5">
-                <label
-                  htmlFor="confirmPassword"
-                  className="block text-sm font-medium text-foreground"
-                >
+                <label htmlFor="confirmPassword" className={labelClasses}>
                   Confirm password
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
                     <Lock
-                      className="w-4 h-4 text-muted-foreground"
+                      className="h-4 w-4 text-(--nous-fg-3)"
                       aria-hidden="true"
                     />
                   </div>
@@ -488,12 +419,12 @@ export default function RegisterPage() {
                         : 'Show confirmation password'
                     }
                     aria-pressed={showConfirmPassword}
-                    className="absolute inset-y-0 right-0 flex items-center pr-3.5 text-muted-foreground hover:text-foreground rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                    className={toggleClasses}
                   >
                     {showConfirmPassword ? (
-                      <EyeOff className="w-4 h-4" aria-hidden="true" />
+                      <EyeOff className="h-4 w-4" aria-hidden="true" />
                     ) : (
-                      <Eye className="w-4 h-4" aria-hidden="true" />
+                      <Eye className="h-4 w-4" aria-hidden="true" />
                     )}
                   </button>
                 </div>
@@ -503,12 +434,7 @@ export default function RegisterPage() {
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className={cn(
-                  'group w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg text-sm font-medium',
-                  'bg-primary text-primary-foreground',
-                  'hover:bg-primary/90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card',
-                  'disabled:opacity-60 disabled:cursor-not-allowed transition-colors'
-                )}
+                className="group flex h-12 w-full items-center justify-center gap-2 rounded-(--nous-radius-md) bg-(--nous-erebus) text-sm font-semibold text-(--nous-selene) transition-colors hover:bg-(--nous-titan) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-aurum) disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSubmitting ? (
                   <span>Creating account…</span>
@@ -516,7 +442,7 @@ export default function RegisterPage() {
                   <>
                     <span>Create account</span>
                     <ArrowRight
-                      className="w-4 h-4 transition-transform group-hover:translate-x-0.5"
+                      className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
                       aria-hidden="true"
                     />
                   </>
@@ -524,20 +450,17 @@ export default function RegisterPage() {
               </button>
             </form>
 
-            {/* Login link */}
-            <div className="mt-6 pt-6 border-t border-border text-center">
-              <p className="text-sm text-muted-foreground">
-                Already have an account?{' '}
-                <Link
-                  href="/login"
-                  className="font-medium text-primary hover:underline rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  Sign in
-                </Link>
-              </p>
-            </div>
+            <p className="mt-2 border-t border-(--nous-enceladus) pt-5 text-center text-sm text-(--nous-titan)">
+              Already have an account?{' '}
+              <Link
+                href="/login"
+                className="rounded-sm font-medium text-(--nous-sol-safe) underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
+              >
+                Sign in
+              </Link>
+            </p>
           </div>
-        </motion.div>
+        </div>
       </div>
     </div>
   );

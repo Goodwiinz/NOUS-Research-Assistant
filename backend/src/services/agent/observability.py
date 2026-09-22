@@ -72,18 +72,27 @@ _DEPLOY_ENV_ALIASES = {
 }
 
 
+# Environments where LangSmith may carry full run I/O. Everything else — every
+# deployed environment, and an unset/unknown env — hides it (R7-M8: ``dev`` is
+# a LIVE deployment with real user prompts, it was never a laptop).
+_IO_VISIBLE_ENVS = frozenset({"local", "test", "testing", "ci"})
+
+
+def _raw_deploy_env() -> str:
+    return (
+        (os.environ.get("DEPLOY_ENV") or os.environ.get("ENVIRONMENT") or "")
+        .strip()
+        .lower()
+    )
+
+
 def _normalize_deploy_env() -> Optional[str]:
     """Resolve DEPLOY_ENV/ENVIRONMENT to a canonical ``dev|staging|prod`` suffix.
 
     Returns ``None`` for unknown/unset envs (local, test, CI) so trace project
     naming stays deliberate rather than guessing.
     """
-    raw = (
-        (os.environ.get("DEPLOY_ENV") or os.environ.get("ENVIRONMENT") or "")
-        .strip()
-        .lower()
-    )
-    return _DEPLOY_ENV_ALIASES.get(raw)
+    return _DEPLOY_ENV_ALIASES.get(_raw_deploy_env())
 
 
 def configure_langsmith():
@@ -97,7 +106,7 @@ def configure_langsmith():
     api_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
     if not api_key:
         logger.debug(
-            "LangSmith tracing disabled " "(no LANGSMITH_API_KEY / LANGCHAIN_API_KEY)"
+            "LangSmith tracing disabled (no LANGSMITH_API_KEY / LANGCHAIN_API_KEY)"
         )
         return
 
@@ -147,11 +156,13 @@ def configure_langsmith():
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGSMITH_TRACING", "true")
 
-    # PII guard: outside dev, do NOT upload run inputs/outputs (user prompts,
-    # RAG chunks, tool args) to LangSmith — tags, metadata, latency, and token
-    # usage still flow, so dashboards keep working. Override with
-    # LANGSMITH_HIDE_IO=false to opt back in. Dev keeps full I/O for debugging.
-    hide_io_default = "false" if norm_env == "dev" else "true"
+    # PII guard: do NOT upload run inputs/outputs (user prompts, RAG chunks,
+    # tool args) to LangSmith — tags, metadata, latency, and token usage still
+    # flow, so dashboards keep working. Only the explicit local/test allowlist
+    # keeps I/O visible by default; every deployed environment (dev included —
+    # it serves real users) and any unrecognised value hides it. Override with
+    # LANGSMITH_HIDE_IO=false to opt back in.
+    hide_io_default = "false" if _raw_deploy_env() in _IO_VISIBLE_ENVS else "true"
     hide_io = os.environ.get("LANGSMITH_HIDE_IO", hide_io_default).lower() == "true"
     if hide_io:
         # Force (not setdefault) — same discipline as LANGSMITH_PROJECT above:

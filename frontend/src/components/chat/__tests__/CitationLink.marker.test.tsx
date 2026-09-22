@@ -1,9 +1,11 @@
 /**
  * The inline citation marker's four states.
  *
- * The marker rests quiet and only reaches full contrast when it is the one
- * being read, so "is it visually distinguishable" is the thing worth pinning —
- * a regression here is silent, and a paragraph can carry ten of these.
+ * The marker is a footnote superscript now, so what is worth pinning is that
+ * the numeral is set as a superscript, that it is still distinguishable when
+ * it is the one being read, and that the non-navigable and unresolved states
+ * do not present as clickable. A regression here is silent, and a paragraph
+ * can carry ten of these.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -24,31 +26,39 @@ function citation(overrides: Partial<Citation> = {}): Citation {
   } as Citation;
 }
 
-const marker = (): HTMLElement => screen.getByRole('button', { name: /Citation 1/ });
+const marker = (): HTMLElement =>
+  screen.getByRole('button', { name: /Source 1/ });
 
 describe('CitationLink marker', () => {
-  it('rests as a low-contrast chip and inverts when active', () => {
-    const { rerender } = render(
+  it('sets the numeral as a superscript and marks the active one', () => {
+    const { rerender, container } = render(
       <CitationLink citationNumber={1} citation={citation()} />
     );
-    // 60% is the lowest step clearing 4.5:1 against the 6% chip in both
-    // themes; 45% (the upstream value) measures 3.1:1 in light.
-    expect(marker().className).toContain('text-foreground/60');
-    expect(marker().className).not.toContain('bg-foreground text-background');
+    const sup = (): HTMLElement =>
+      container.querySelector('sup') as HTMLElement;
+    expect(sup()).toBeTruthy();
+    expect(sup()).toHaveTextContent('1');
+    // Sol-safe on light, Helios on dark: both tokenised for AA at 10px.
+    expect(sup().className).toContain('text-(--nous-sol-safe)');
+    expect(sup().className).not.toContain('underline');
 
-    rerender(<CitationLink citationNumber={1} citation={citation()} isActive />);
-    expect(marker().className).toContain('bg-foreground');
-    expect(marker().className).toContain('text-background');
+    rerender(
+      <CitationLink citationNumber={1} citation={citation()} isActive />
+    );
+    expect(sup().className).toContain('underline');
   });
 
   it('marks an external reference as non-navigable', () => {
     render(
       <CitationLink
         citationNumber={1}
-        citation={citation({ documentId: undefined, externalReferenceId: '2301.00001' })}
+        citation={citation({
+          documentId: undefined,
+          externalReferenceId: '2301.00001',
+        })}
       />
     );
-    // Outlined rather than filled, and it does not present as clickable.
+    // It does not present as clickable.
     expect(marker().className).toContain('cursor-default');
     expect(marker()).toHaveAccessibleName(/external reference/i);
   });

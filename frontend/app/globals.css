@@ -204,6 +204,14 @@
     }
   }
 
+  /* A reading size once the column has room for it. The measure is capped at
+     720px on the reply block, so this buys legibility, not line length. */
+  @media (min-width: 1024px) {
+    .nous-chat-body {
+      font-size: 17px;
+    }
+  }
+
   .nous-chat-body p + p {
     margin-top: 0.75em;
   }
@@ -337,34 +345,17 @@
   /* Tool/source strip — compact chip strip above assistant content */
   .nous-tool-strip {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     margin-bottom: 10px;
-    padding: 7px 11px;
-    background: var(--nous-bg-2);
-    border: 1px solid var(--nous-border-1);
-    border-radius: var(--nous-radius-md);
+    padding: 4px 0;
     font-family: var(--nous-font-mono);
-    font-size: 10px;
-    color: var(--nous-fg-3);
+    font-size: 12px;
+    color: var(--nous-fg-2);
     letter-spacing: 0.04em;
     width: fit-content;
     max-width: 100%;
-    transition:
-      border-color 150ms,
-      box-shadow 150ms;
-  }
-  .nous-tool-strip:hover {
-    border-color: rgba(212, 160, 57, 0.3);
-    box-shadow: 0 1px 4px rgba(212, 160, 57, 0.06);
-  }
-  .dark .nous-tool-strip {
-    background: var(--nous-obsidian);
-    border-color: var(--nous-shade);
-  }
-  .dark .nous-tool-strip:hover {
-    border-color: rgba(232, 184, 74, 0.3);
-    box-shadow: 0 1px 6px rgba(232, 184, 74, 0.08);
   }
   .nous-tool-strip-icon {
     display: grid;
@@ -393,17 +384,12 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 7px;
-    background: var(--nous-bg-1);
-    border: 1px solid var(--nous-border-1);
-    border-radius: 3px;
+    padding: 2px 4px;
     color: var(--nous-fg-2);
-    font-size: 9px;
+    font-size: 12px;
     letter-spacing: 0.06em;
   }
   .dark .nous-tool-strip-chip {
-    background: var(--nous-nyx);
-    border-color: var(--nous-shade);
     color: var(--nous-parchment);
   }
   /* Streaming pill — gold dots with label */
@@ -449,30 +435,28 @@
   /* Message action row — hidden until hover, scholarly style */
   .nous-msg-actions {
     display: flex;
-    gap: 4px;
+    gap: 18px;
     margin-top: 10px;
-    opacity: 0;
-    transform: translateY(-2px);
-    transition:
-      opacity 200ms,
-      transform 200ms;
-  }
-  .group:hover .nous-msg-actions,
-  .nous-msg-actions:focus-within {
+    /* Always painted. The reveal-on-hover version hid copy and regenerate
+       behind a gesture that does not exist on touch, and the row is quiet
+       enough now to live there permanently. */
     opacity: 1;
-    transform: translateY(0);
   }
-  /* Ghost buttons: the row sits under every assistant turn, so an outlined
-     box per action stacked up as chrome. Weight arrives on hover instead. */
+  /* Quiet text-with-icon buttons: the row sits under every assistant turn, so
+     an outlined box per action stacked up as chrome. Weight arrives on hover. */
   .nous-msg-action {
-    width: 28px;
-    height: 28px;
-    display: grid;
-    place-items: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 8px;
     background: transparent;
     border: none;
     border-radius: 9999px;
     color: var(--nous-fg-3);
+    font-family: var(--nous-font-ui);
+    font-size: 12px;
     transition:
       background-color 150ms,
       color 150ms,
@@ -485,6 +469,13 @@
   }
   .nous-msg-action:active {
     scale: 0.96;
+  }
+  /* 44px minimum on touch, 28px kept on pointer devices. */
+  @media (pointer: coarse) {
+    .nous-msg-action {
+      min-width: 44px;
+      min-height: 44px;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     .nous-msg-action {
@@ -521,8 +512,8 @@
 
   /* User message — scholarly pill */
   .nous-bubble-user {
-    background: var(--nous-bg-2);
-    border: 1px solid var(--nous-border-1);
+    background: var(--nous-aurum);
+    border: 1px solid var(--nous-apollo);
     border-radius: 14px 14px 4px 14px;
     box-shadow: 0 1px 2px rgba(10, 10, 14, 0.03);
     font-family: var(--nous-font-ui);
@@ -536,7 +527,7 @@
     box-shadow: 0 2px 8px rgba(10, 10, 14, 0.06);
   }
   .dark .nous-bubble-user {
-    background: var(--nous-obsidian);
+    background: var(--nous-ember);
     border-color: var(--nous-shade);
   }
   .dark .nous-bubble-user:hover {
@@ -696,7 +687,7 @@
     --shadow-2xl: 0px 4px 8px -1px hsl(0 0% 0% / 0.25);
     --tracking-normal: 0em;
     --spacing: 0.25rem;
-    --font-sans: 'Inter', system-ui, sans-serif;
+    --font-sans: var(--font-inter), 'Inter', system-ui, sans-serif;
 
     /* WebLLM (preserved) */
     --webllm-primary: oklch(0.7686 0.1647 70.0804);

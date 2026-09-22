@@ -24,7 +24,8 @@ from datetime import datetime
 from typing import List, Literal, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import desc, func, or_, select, update
+from sqlalchemy import desc, func, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -684,16 +685,67 @@ class ChatService:
             data.content, data.role.value, estimate_only=True
         )
 
-        message = ChatMessage(
-            thread_id=data.thread_id,
-            user_id=user_id if data.role == MessageRole.USER else None,
-            role=data.role,
-            content=data.content,
-            token_count=message_token_count,
-            latency_ms=data.latency_ms,
-            stopped=bool(data.stopped),
-        )
-        self.db.add(message)
+        # Compared by value on purpose: `data.role` is the *schemas* MessageRole
+        # (a str enum) while `MessageRole` here is the *models* one (plain
+        # Enum), so `==` between them is always False.
+        is_user_turn = getattr(data.role, "value", data.role) == MessageRole.USER.value
+
+        if data.client_message_id is not None and is_user_turn:
+            # B8-I2: the client retries this POST blindly, so a
+            # 5xx/timeout-after-commit used to duplicate the row and re-bump
+            # the thread counters. Same ON CONFLICT upsert the agent path uses
+            # against the partial index uq_chat_messages_thread_client_msg_user
+            # — not a select-then-insert, which races two concurrent retries.
+            inserted_id = (
+                await self.db.execute(
+                    pg_insert(ChatMessage)
+                    .values(
+                        thread_id=data.thread_id,
+                        user_id=user_id,
+                        role=data.role,
+                        content=data.content,
+                        token_count=message_token_count,
+                        latency_ms=data.latency_ms,
+                        stopped=bool(data.stopped),
+                        client_message_id=data.client_message_id,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=["thread_id", "client_message_id"],
+                        # Literal role: an enum bind parameter stops PostgreSQL
+                        # inferring the partial index (see _persist_user_message).
+                        index_where=text(
+                            "client_message_id IS NOT NULL AND role = 'user'"
+                        ),
+                    )
+                    .returning(ChatMessage.id)
+                )
+            ).scalar_one_or_none()
+            if inserted_id is None:
+                # A retry of a turn already stored: return that row untouched,
+                # counters and attachments included.
+                return (
+                    await self.db.execute(
+                        select(ChatMessage).where(
+                            ChatMessage.thread_id == data.thread_id,
+                            ChatMessage.client_message_id == data.client_message_id,
+                            ChatMessage.role == MessageRole.USER,
+                        )
+                    )
+                ).scalar_one_or_none()
+            message = await self.db.get(ChatMessage, inserted_id)
+            if message is None:  # pragma: no cover - inserted row must exist
+                return None
+        else:
+            message = ChatMessage(
+                thread_id=data.thread_id,
+                user_id=user_id if data.role == MessageRole.USER else None,
+                role=data.role,
+                content=data.content,
+                token_count=message_token_count,
+                latency_ms=data.latency_ms,
+                stopped=bool(data.stopped),
+            )
+            self.db.add(message)
         await self.db.flush()  # Flush to get message.id for citations/attachments
 
         # Handle attachments — only documents the caller's org owns may be

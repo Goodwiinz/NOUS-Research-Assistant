@@ -81,6 +81,54 @@ async def create_thread(
 
 
 @router.get(
+    "/{workspace_id}/threads",
+    response_model=ThreadListResponse,
+)
+async def list_workspace_threads(
+    workspace_id: UUID,
+    status_filter: Optional[str] = Query(
+        None, description="Filter by status: active, resolved, archived"
+    ),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ThreadListResponse:
+    """List threads across every live conversation in a workspace."""
+    status_enum = None
+    if status_filter:
+        try:
+            status_enum = ThreadStatus(status_filter)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid status: {status_filter}"
+            )
+
+    offset = (page - 1) * limit
+    result = await thread_service.list_workspace_threads(
+        db,
+        workspace_id,
+        current_user.id,
+        status_filter=status_enum,
+        limit=limit,
+        offset=offset,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    threads, total, previews = result
+    return ThreadListResponse(
+        threads=[
+            _thread_to_response(thread, last_message_preview=previews.get(thread.id))
+            for thread in threads
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+        has_more=(offset + len(threads)) < total,
+    )
+
+
+@router.get(
     "/{workspace_id}/conversations/{conversation_id}/threads",
     response_model=ThreadListResponse,
 )

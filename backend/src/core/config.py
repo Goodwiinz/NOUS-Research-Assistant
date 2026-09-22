@@ -6,9 +6,9 @@ variables. Default values are only used for local development.
 """
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
-from pydantic import ValidationInfo, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 _LOCAL_SECRET_KEY = "local-development-secret-key-not-for-production"
@@ -445,6 +445,8 @@ class Settings(BaseSettings):
     # Research Connector APIs
     CROSSREF_MAILTO: Optional[str] = None
     NCBI_API_KEY: Optional[str] = None
+    OPENALEX_API_KEY: Optional[str] = None
+    SEMANTIC_SCHOLAR_API_KEY: Optional[str] = None
 
     # Azure OpenAI Configuration
     AZURE_OPENAI_API_KEY: Optional[str] = None
@@ -550,6 +552,18 @@ class Settings(BaseSettings):
     # reasoning_effort is "minimal", which AGENT_PARALLEL_TOOL_CALLS assumes;
     # "none" sidesteps that coupling too.
     AGENT_LIGHTWEIGHT_REASONING_EFFORT: str = "none"
+
+    # Opt-in semantic router; Azure still owns generation and routing fallback.
+    AGENT_INTENT_PROVIDER: Literal["azure", "typesafe"] = "azure"
+    TYPESAFE_API_KEY: Optional[SecretStr] = None
+    TYPESAFE_MODEL: str = "jev-1.13.0"
+    TYPESAFE_TIMEOUT_SECONDS: float = Field(
+        default=1.0, gt=0, le=25, allow_inf_nan=False
+    )
+    # Unset disables acceptance until a deployment-specific calibration is approved.
+    TYPESAFE_MIN_CONFIDENCE: Optional[float] = Field(
+        default=None, ge=0, le=1, allow_inf_nan=False
+    )
 
     # Synthesis-only override. Unset (None) inherits
     # AGENT_LIGHTWEIGHT_REASONING_EFFORT, so leaving it alone is a no-op —

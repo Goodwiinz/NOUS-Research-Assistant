@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200" preserveAspectRatio="xMidYMid slice" role="img" aria-labelledby="title desc">
+  <title id="title">A quiet place to understand</title>
+  <desc id="desc">A researcher seen from behind reads at a desk beside a tall sunlit window. Gold bookshelves and parchment light evoke a warm reading room, rendered in flat risograph shapes. The lower left is dark and open for an editorial headline.</desc>
+  <defs>
+    <pattern id="grain" width="19" height="23" patternUnits="userSpaceOnUse">
+      <g fill="#0A0A0E" opacity=".14"><circle cx="2" cy="5" r=".7"/><circle cx="12" cy="2" r=".5"/><circle cx="8" cy="16" r=".8"/><circle cx="17" cy="21" r=".5"/></g>
+      <g fill="#FDF6E3" opacity=".2"><circle cx="15" cy="11" r=".8"/><circle cx="3" cy="21" r=".5"/></g>
+    </pattern>
+    <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(18)">
+      <path d="M0 0V7" stroke="#0A0A0E" stroke-width="1" opacity=".18"/>
+    </pattern>
+    <clipPath id="window"><path d="M440 462V215a164 164 0 0 1 328 0v247Z"/></clipPath>
+    <clipPath id="coat"><path d="M508 407Q540 389 555 392L614 391Q642 388 677 416L719 552 668 618 504 643 459 555Z"/></clipPath>
+  </defs>
+  <!-- Architecture: flat ink plates, all colors from the NOUS brand palette. -->
+  <path fill="#D4A039" d="M0 0h900v1200H0z"/>
+  <path fill="#F5D680" d="M338 0h562v630L340 548Z"/>
+  <path fill="#E8B84A" d="M338 0h46v550l-46 31Z"/>
+  <path fill="#0A0A0E" d="M0 0h338v692H0Z"/>
+  <path fill="#4A4A4E" d="M0 34h304v573H0Z"/>
+  <g fill="#D4A039">
+    <path d="M0 173h330v17H0zM0 352h330v17H0zM0 540h330v20H0zM36 0h17v570H36zM287 0h17v570h-17z"/>
+    <path d="M64 63h23v109H64zM94 49h17v123H94zM119 67h31v105h-31zM176 59h20v114h-20zM242 51h28v122h-28z"/>
+    <path d="M64 224h30v127H64zM103 240h16v111h-16zM127 214h23v137h-23zM210 241h25v110h-25zM245 223h26v128h-26z"/>
+    <path d="M61 421h23v119H61zM94 402h20v138H94zM124 433h31v107h-31zM170 413h18v127h-18zM246 418h23v122h-23z"/>
+  </g>
+  <g fill="#F5D680">
+    <path d="m151 60 14-3 23 113-14 3ZM206 42h20v131h-20zM162 231h32v120h-32zM198 420l18-5 33 119-18 5Z"/>
+    <path d="M69 78h13v3H69zM69 83h13v3H69zM123 140h24v3h-24zM215 66h3v71h-3zM70 247h17v3H70zM133 319h11v3h-11zM133 325h11v3h-11zM252 244h13v3h-13zM99 425h10v3H99zM99 431h10v3H99zM130 515h19v3h-19z"/>
+  </g>
+  <!-- Tall window and sunlight. -->
+  <path d="M416 487V215a188 188 0 0 1 376 0v272Z" fill="#D4A039"/>
+  <path d="M440 462V215a164 164 0 0 1 328 0v247Z" fill="#FDF6E3"/>
+  <g clip-path="url(#window)">
+    <path fill="#F5D680" d="M436 377q75-65 143-30t194-39v161H436Z"/>
+    <path fill="#E8B84A" d="M443 425q100-71 194-24t134-13v92H443Z"/>
+    <path d="M694 468q-10-135 30-226m-25 159-32-37m43-7 32-33m-23-2-16-32" fill="none" stroke="#D4A039" stroke-width="5"/>
+    <path fill="#FDF6E3" d="M596 36h15v441h-15zM435 227h338v13H435z"/>
+  </g>
+  <path d="M427 477h357v15H427z" fill="#4A4A4E"/>
+  <path d="m441 493 326 0 133 252-546-89Z" fill="#FDF6E3" opacity=".47"/>
+  <path d="M0 680 354 573 900 659v541H0Z" fill="#4A4A4E"/>
+  <path d="m531 678 235 10 134 157v101Z" fill="#D4A039"/>
+  <path d="m640 715 36 4 188 196-34-15Z" fill="#F5D680"/>
+  <!-- Desk, papers, lamp and cup. -->
+  <path d="m279 557 426-50 195 105-479 93L243 588Z" fill="#D4A039"/>
+  <path d="m279 548 426-50 195 105-479 84L243 579Z" fill="#E8B84A"/>
+  <path d="m423 687 477-84v22l-478 88Z" fill="#0A0A0E"/>
+  <path d="m830 639 22-5-12 267-18-4ZM326 644l19 9-14 181-16 4Z" fill="#0A0A0E"/>
+  <g stroke="#4A4A4E" fill="none" stroke-width="8" stroke-linecap="round">
+    <path d="M387 534V387l51-68"/>
+    <path d="m360 542 59-7"/>
+  </g>
+  <path d="m418 310 45 18 18 54-95-35Z" fill="#0A0A0E"/>
+  <path d="m391 347 88 31-11 7-75-27Z" fill="#FDF6E3"/>
+  <path d="m727 536 41-4-3 36q-19 12-34 2Z" fill="#FDF6E3"/>
+  <path d="M768 541q25-2 17 17-5 10-20 6" fill="none" stroke="#FDF6E3" stroke-width="6"/>
+  <path d="m695 589 105-15 36 15-109 19Z" fill="#4A4A4E"/>
+  <path d="m697 583 101-15 36 15-108 19Z" fill="#FDF6E3"/>
+  <!-- Open book lies beyond the reader's right shoulder. -->
+  <path transform="translate(58 -36)" d="m626 546 38-34q41 3 69 18l-42 44q-28-21-65-28Z" fill="#FDF6E3"/>
+  <path transform="translate(58 -36)" d="m626 546-4-42q-35-8-65 2l6 44q31-13 63-4Z" fill="#F5D680"/>
+  <path transform="translate(58 -36)" d="m626 546 1-38m14 21 22-10m-18 16 27-10m-21 17 28-11" fill="none" stroke="#D4A039" stroke-width="2"/>
+  <!-- Reader, back of head, relaxed shoulders and work coat. -->
+  <path d="m551 364 2 47q24 29 66-3l-16-59Z" fill="#D4A039"/>
+  <path d="M520 291q8-54 58-52 64 2 64 71l-18 58q-11 24-40 23-28-1-48-28Z" fill="#D4A039"/>
+  <path d="M521 334q-18-26-10-55 7-40 47-49 19-13 46-3 46 7 50 53 5 31-16 58l-11 29q-35 23-78-1Z" fill="#0A0A0E"/>
+  <path d="M524 284q10-35 39-39m-22 47q18-30 45-33m-11 21q28 9 47-1" fill="none" stroke="#4A4A4E" stroke-width="4" stroke-linecap="round"/>
+  <path d="M508 407Q540 389 555 392L614 391Q642 388 677 416L719 552 668 618 504 643 459 555Z" fill="#D4A039"/>
+  <path d="M600 398q51-13 72 29l36 117-45 32-25-104 9 154-72 10Z" fill="#E8B84A"/>
+  <path d="m508 408-31 137 30 48 18-136-5 181-33-5-32-75Z" fill="#4A4A4E"/>
+  <path d="M548 400q33 25 72-1m-91 40q53 14 102-3m-44 27-8 130m54-161 13 53m-121-60-11 55" stroke="#0A0A0E" stroke-width="3" fill="none" opacity=".42"/>
+  <path d="m684 533 14-2q20-9 28 0l-18 26-22 4Z" fill="#F5D680"/>
+  <g clip-path="url(#coat)"><path d="M457 391h267v252H457Z" fill="url(#hatch)"/></g>
+  <!-- Curved chair anchors the human silhouette. -->
+  <path d="m504 655-15 247 18 3 35-232m110-24 35 245 18-3-14-257" fill="#0A0A0E"/>
+  <path d="M477 616q95-48 210-20l-5 113q-91 41-199 9Z" fill="#0A0A0E"/>
+  <path d="M487 614q87-35 189-17l-3 22q-95-15-184 20Z" fill="#4A4A4E"/>
+  <path d="M517 632v65m32-73v78m32-84v86m32-88v85m32-82v75" stroke="#D4A039" stroke-width="5" opacity=".65"/>
+  <!-- Foreground shadow is intentionally quiet for a live headline overlay. -->
+  <path d="M0 687q181 4 343 129t557 112v272H0Z" fill="#0A0A0E"/>
+  <path d="M0 0h900v1200H0Z" fill="url(#grain)"/>
+</svg>

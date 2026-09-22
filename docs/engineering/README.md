@@ -22,6 +22,8 @@ file it as a proposal instead.
 - **[gotchas.md](gotchas.md)** — operational invariants preserved from the
   retired root `CLAUDE.md` (#1491). Exempt from the enforced-rule bar above:
   these are hard-won environment/API/tenancy facts, not CI-backed rules.
+- **[typesafe-routing.md](typesafe-routing.md)** — opt-in routing configuration,
+  offline replay, validation gates, and rollback; Azure remains the default.
 - **[nous-loop.md](nous-loop.md)** — canonical, cross-runtime workflow for one
   evidence-driven self-improvement tick. Its static contract is enforced by
   `tests/unit/scripts/test_nous_loop_contract.py`; agent pressure tests verify

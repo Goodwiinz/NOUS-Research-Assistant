@@ -39,16 +39,20 @@ def _capture_db():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_title_fallback_uses_substring_wildcards():
+async def test_title_fallback_uses_exact_match_not_wildcards():
     user = MagicMock()
     user.organization_id = "org-1"
     db, captured = _capture_db()
 
     # Not a UUID and not an arXiv ID → falls through to the title branch.
+    # R7-L8: exact case-insensitive equality, never a substring ILIKE — a
+    # wildcard match let "report" resolve to the newest "Q3 Report (draft)".
     await _resolve_document_id("transformers review", db, user)
 
     sql = _compiled(captured["stmt"])
-    assert "%transformers review%" in sql, sql
+    assert "%transformers review%" not in sql, sql
+    assert "lower(documents.title)" in sql, sql
+    assert "transformers review" in sql, sql
 
 
 @pytest.mark.unit

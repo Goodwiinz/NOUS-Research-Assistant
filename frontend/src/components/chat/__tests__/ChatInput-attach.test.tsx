@@ -6,7 +6,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithChatRuntime } from './renderWithChatRuntime';
 
 // Mock framer-motion to avoid animation issues in tests
@@ -324,7 +324,7 @@ describe('ChatInput file attach', () => {
       expect(onSubmit).toHaveBeenCalledWith(['doc-2']);
     });
 
-    it('sends no id for a file that failed to upload', async () => {
+    it('blocks until a failed retained chip is removed', async () => {
       const onSubmit = vi.fn();
       const onAttach = vi.fn(async () => [
         { ok: true, documentId: 'doc-1' },
@@ -344,6 +344,9 @@ describe('ChatInput file attach', () => {
 
       fireEvent.submit(container.querySelector('form') as HTMLFormElement);
 
+      expect(onSubmit).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByLabelText('Remove b.pdf'));
+      fireEvent.submit(container.querySelector('form') as HTMLFormElement);
       expect(onSubmit).toHaveBeenCalledWith(['doc-1']);
     });
 
@@ -403,6 +406,103 @@ describe('ChatInput file attach', () => {
       expect(
         container.querySelector('[aria-label="Upload failed for paper.pdf"]')
       ).toBeNull();
+    });
+
+    it('blocks click and Enter while an upload is pending and keeps the draft and chip', async () => {
+      let settle: (
+        r: { ok: boolean; documentId?: string }[]
+      ) => void = () => {};
+      const onSubmit = vi.fn();
+      const onChange = vi.fn();
+      const onAttach = vi.fn(
+        () =>
+          new Promise<{ ok: boolean; documentId?: string }[]>((resolve) => {
+            settle = resolve;
+          })
+      );
+      const { container } = renderWithChatRuntime(
+        <ChatInput
+          {...baseProps}
+          value="pending draft"
+          onChange={onChange}
+          onSubmit={onSubmit}
+          onAttach={onAttach}
+        />
+      );
+      attachOne(container);
+
+      const form = container.querySelector('form') as HTMLFormElement;
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      fireEvent.keyDown(
+        container.querySelector('textarea') as HTMLTextAreaElement,
+        {
+          key: 'Enter',
+          code: 'Enter',
+        }
+      );
+      fireEvent.submit(form);
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(onChange).not.toHaveBeenCalledWith('');
+      expect(
+        container.querySelector('[aria-label="Uploading paper.pdf"]')
+      ).not.toBeNull();
+
+      await act(async () => {
+        settle([{ ok: true, documentId: 'doc-pending' }]);
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+      expect(onSubmit).toHaveBeenCalledWith(['doc-pending']);
+    });
+
+    it('blocks Queue for a mixed batch until every retained upload settles', async () => {
+      let settle: (
+        r: { ok: boolean; documentId?: string }[]
+      ) => void = () => {};
+      const onSubmit = vi.fn();
+      const onAttach = vi
+        .fn()
+        .mockResolvedValueOnce([{ ok: true, documentId: 'doc-done' }])
+        .mockImplementationOnce(
+          () =>
+            new Promise<{ ok: boolean; documentId?: string }[]>((resolve) => {
+              settle = resolve;
+            })
+        );
+      const { container } = renderWithChatRuntime(
+        <ChatInput
+          {...baseProps}
+          value="queued draft"
+          isLoading
+          onSubmit={onSubmit}
+          onAttach={onAttach}
+        />
+      );
+      await act(async () => {
+        attachOne(container, 'done.pdf');
+      });
+      attachOne(container, 'pending.pdf');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+      fireEvent.keyDown(
+        container.querySelector('textarea') as HTMLTextAreaElement,
+        {
+          key: 'Enter',
+          code: 'Enter',
+        }
+      );
+      fireEvent.submit(container.querySelector('form') as HTMLFormElement);
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(
+        container.querySelector('[aria-label="Uploading pending.pdf"]')
+      ).not.toBeNull();
+
+      await act(async () => {
+        settle([{ ok: true, documentId: 'doc-pending' }]);
+      });
+      fireEvent.submit(container.querySelector('form') as HTMLFormElement);
+      expect(onSubmit).toHaveBeenCalledWith(['doc-done', 'doc-pending']);
     });
 
     it('marks the chip failed when the host reports a failed upload', async () => {
@@ -503,5 +603,23 @@ describe('ChatInput file attach', () => {
         container.querySelector('ul[aria-label="Attached files"]')
       ).not.toBeNull();
     });
+  });
+});
+
+describe('ChatInput attach controls are keyboard reachable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ['Attach file', /attach file/i],
+    ['Attach image', /attach image/i],
+  ])('%s input is focusable and named', (_label, matcher) => {
+    renderWithChatRuntime(<ChatInput {...baseProps} />);
+    const input = screen.getByLabelText(matcher) as HTMLInputElement;
+    expect(input.tagName).toBe('INPUT');
+    expect(input).not.toHaveClass('hidden');
+    input.focus();
+    expect(document.activeElement).toBe(input);
   });
 });

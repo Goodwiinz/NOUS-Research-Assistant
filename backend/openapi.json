@@ -2142,6 +2142,18 @@
             ],
             "title": "Citations"
           },
+          "client_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Message Id"
+          },
           "content": {
             "minLength": 1,
             "title": "Content",
@@ -2364,6 +2376,17 @@
               }
             ],
             "title": "Progress Steps"
+          },
+          "reasoning_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Summary"
           },
           "role": {
             "$ref": "#/components/schemas/MessageRole-Output",
@@ -6656,6 +6679,17 @@
             ],
             "title": "Plan Reasoning"
           },
+          "reasoning_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Summary"
+          },
           "role": {
             "title": "Role",
             "type": "string"
@@ -7362,6 +7396,19 @@
             "description": "Page context type",
             "title": "Type",
             "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Active chat workspace for durable thread creation",
+            "title": "Workspace Id"
           }
         },
         "title": "PageContextRequest",
@@ -11571,6 +11618,26 @@
         "title": "StepType",
         "type": "string"
       },
+      "StreamCancelRequest": {
+        "properties": {
+          "expected_run_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The active run the caller intends to stop",
+            "title": "Expected Run Id"
+          }
+        },
+        "title": "StreamCancelRequest",
+        "type": "object"
+      },
       "StreamConfirmRequest": {
         "properties": {
           "confirmed": {
@@ -14390,6 +14457,17 @@
               }
             ],
             "title": "Snippet Preview"
+          },
+          "source_position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Position"
           }
         },
         "required": [
@@ -15596,7 +15674,7 @@
     },
     "/api/v1/agent/stream/cancel/{thread_id}": {
       "post": {
-        "description": "Durably abandon a caller-owned graph parked on HITL confirmation.",
+        "description": "Request durable cancellation of a caller-owned stream run.\n\nAn omitted body preserves the parked-confirmation endpoint contract. A\nbody identifies a normal running turn; its producer must observe the\n``stopping`` marker and acknowledge cancellation before the response can\nbecome terminal.",
         "operationId": "cancel_stream_confirmation_api_v1_agent_stream_cancel__thread_id__post",
         "parameters": [
           {
@@ -15610,6 +15688,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StreamCancelRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Cancellation"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -15632,7 +15727,7 @@
                 }
               }
             },
-            "description": "Run is not awaiting confirmation"
+            "description": "Run is no longer the expected active run"
           },
           "422": {
             "content": {
@@ -24290,6 +24385,16 @@
               }
             },
             "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [
@@ -24499,6 +24604,16 @@
               }
             },
             "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [
@@ -24550,6 +24665,16 @@
           "200": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "Thread not found"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -24559,6 +24684,26 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "Export failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportError"
+                }
+              }
+            },
+            "description": "PDF renderer unavailable"
           }
         },
         "security": [
@@ -39482,6 +39627,96 @@
           }
         ],
         "summary": "Update Member Role",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/api/v2/workspaces/{workspace_id}/threads": {
+      "get": {
+        "description": "List threads across every live conversation in a workspace.",
+        "operationId": "list_workspace_threads_api_v2_workspaces__workspace_id__threads_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by status: active, resolved, archived",
+            "in": "query",
+            "name": "status_filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by status: active, resolved, archived",
+              "title": "Status Filter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/src__schemas__chat__ThreadListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Workspace Threads",
         "tags": [
           "workspaces"
         ]

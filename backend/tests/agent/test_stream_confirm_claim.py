@@ -11,6 +11,10 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from tests.utils.agent_thread_access import editable_thread
+
+THREAD_ID = "11111111-1111-4111-8111-111111111611"
+
 
 class _FakeRedisLock:
     """Minimal in-memory stand-in for redis.asyncio, NX-lock semantics only."""
@@ -124,6 +128,10 @@ def stream_confirm_harness(monkeypatch):
     monkeypatch.setattr(
         streaming_mod, "_latest_user_client_message_id", AsyncMock(return_value=None)
     )
+    monkeypatch.setattr(
+        "src.services.threads.workspace_access.get_thread",
+        AsyncMock(return_value=editable_thread(THREAD_ID)),
+    )
     # The claim code does a lazy `from src.services.agent.job_store import
     # get_redis` inside the generator, so patching the source attribute is
     # picked up on every call — same pattern the file already uses for
@@ -133,7 +141,7 @@ def stream_confirm_harness(monkeypatch):
     )
 
     def make_confirm_generator():
-        body = SimpleNamespace(thread_id="thread-cx1", confirmed=True, model="gpt-5")
+        body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="gpt-5")
         request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
         current_user = Mock(id="user-1", organization_id="org-1")
         return streaming_mod.stream_confirm_event_generator(body, request, current_user)

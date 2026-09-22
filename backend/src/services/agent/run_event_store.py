@@ -44,7 +44,9 @@ into ``RunAlreadyTerminalError`` on the retry pass.
 compared null-safely — ``== None`` compiles to ``IS NULL``. It is NEVER
 stringified: ``str(None) == "None"`` has merged tenants in this codebase
 before. Both ``append_event`` and ``read_events`` take ``organization_id`` as a
-required keyword argument so a caller cannot silently omit the scope.
+required keyword argument so a caller cannot silently omit the scope, and
+``read_events`` additionally requires ``user_id`` — events have no owner
+column, so the scope is joined off ``agent_runs.user_id``.
 
 **The caller owns the transaction.** These primitives never commit and never
 roll back the outer transaction, so an append can be made atomic with the
@@ -213,20 +215,28 @@ async def read_events(
     run_id: str,
     *,
     organization_id: Any,
+    user_id: Any,
     after_seq: int = 0,
     limit: int = DEFAULT_READ_LIMIT,
 ) -> list[AgentRunEvent]:
-    """Ordered replay of a run's ledger after *after_seq*, tenant-scoped.
+    """Ordered replay of a run's ledger after *after_seq*, caller-scoped.
 
     ``organization_id`` is mandatory and null-safe: ``None`` compiles to
     ``IS NULL``, so an org-less caller sees only org-less rows and never
     another tenant's history.
+
+    ``user_id`` is mandatory too (R7-L7). Events carry no owner column, so the
+    predicate comes from the run they belong to: org scope alone would let any
+    member of a shared organization replay a colleague's prompts and tool args
+    given a run id.
     """
     stmt = (
         select(AgentRunEvent)
+        .join(AgentRun, AgentRun.job_id == AgentRunEvent.run_id)
         .where(
             AgentRunEvent.run_id == run_id,
             AgentRunEvent.organization_id == _coerce_uuid(organization_id),
+            AgentRun.user_id == _coerce_uuid(user_id),
             AgentRunEvent.seq > after_seq,
         )
         .order_by(AgentRunEvent.seq.asc())

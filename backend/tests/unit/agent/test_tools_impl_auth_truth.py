@@ -374,3 +374,57 @@ class TestGetCurrentDraftTruth:
         assert result["status"] == "draft_found"
         assert result["draft"]["version"] == 2
         assert result["draft"]["content"] == draft.content
+
+
+# ---------------------------------------------------------------------------
+# B8-S2 / B8-S3 — extract_entities payload honesty
+# ---------------------------------------------------------------------------
+
+
+def _extraction_result(entities: List[Any], error: Optional[str]) -> Any:
+    return SimpleNamespace(entities=entities, chunks_processed=1, error=error)
+
+
+async def _run_extract_entities(result: Any) -> Dict[str, Any]:
+    doc = SimpleNamespace(content_text="some text", title="Doc")
+    service = AsyncMock()
+    service.extract_entities = AsyncMock(return_value=result)
+    with (
+        patch.object(tools_impl, "_resolve_document_id", AsyncMock(return_value=doc)),
+        patch(
+            "src.services.processing.llm_entity_extraction.LLMEntityExtractionService",
+            Mock(return_value=service),
+        ),
+    ):
+        return await tools_impl._tool_extract_entities(
+            {"document_id": str(uuid4())}, Mock(), _mock_user()
+        )
+
+
+async def test_zero_entities_without_failure_carries_no_error_key():
+    payload = await _run_extract_entities(_extraction_result([], None))
+
+    # B8-S2: `_execute_single_tool` classifies on key PRESENCE, so an
+    # `"error": None` reported an empty-but-successful extraction as a
+    # crashed tool and counted it toward MAX_ERRORS.
+    assert "error" not in payload
+    assert payload["total"] == 0
+
+
+async def test_zero_entities_with_failure_keeps_the_error():
+    payload = await _run_extract_entities(_extraction_result([], "llm timeout"))
+
+    assert payload["error"] == "llm timeout"
+
+
+async def test_partial_extraction_reports_partial_error_with_the_entities():
+    entity = SimpleNamespace(
+        name="X", type="PERSON", description="", confidence=0.9, aliases=[]
+    )
+    payload = await _run_extract_entities(_extraction_result([entity], "truncated"))
+
+    # B8-S3: the partial signal must reach the model, but not under `error`
+    # (that key means "the tool failed" to the classifier).
+    assert payload["partial_error"] == "truncated"
+    assert "error" not in payload
+    assert payload["total"] == 1

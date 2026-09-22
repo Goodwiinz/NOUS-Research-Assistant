@@ -8,10 +8,18 @@
 export interface Citation {
   documentId?: string; // Optional: may be undefined for external references
   externalReferenceId?: string; // For non-database references (e.g., arXiv IDs)
+  /** Canonical one-based `[Doc N]` position retained across persistence. */
+  sourcePosition?: number;
+  chunkId?: string;
+  chunkIndex?: number;
   title: string;
   score: number;
   content?: string;
   source?: string;
+  /** Page the cited passage sits on, when the backend knows it. Renders as the
+   * `p. N` locator in the sources list; absent means no locator, never a
+   * guessed one. */
+  pageNumber?: number;
 }
 
 /**
@@ -257,6 +265,19 @@ export function getReferencedCitations(
   citations: Citation[]
 ): Citation[] {
   return getReferencedItemsByCitationIndex(content, citations);
+}
+
+/**
+ * Match the committed-message source policy: prefer citations that resolve
+ * from inline markers, otherwise keep every source attached by the backend.
+ * Invalid-only markers therefore follow the same fallback as no markers.
+ */
+export function getVisibleCitations(
+  content: string,
+  citations: Citation[]
+): Citation[] {
+  const referenced = getReferencedCitations(content, citations);
+  return referenced.length > 0 ? referenced : citations;
 }
 
 /**

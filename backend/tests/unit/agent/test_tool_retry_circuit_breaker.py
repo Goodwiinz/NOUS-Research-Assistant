@@ -10,6 +10,7 @@ the breaker stops the third+ identical attempt within a turn.
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -176,3 +177,74 @@ class TestCappedBuilders:
         assert entry["capped_from"] == "tc-2"
         assert entry["tool_name"] == "search_arxiv"
         assert entry["args"] == ARGS
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("specialist", [False, True])
+async def test_exhausted_arxiv_retry_is_blocked_until_next_user_turn(
+    specialist: bool,
+) -> None:
+    """Trace 47c93300: internal retries must not restart on the next model pass.
+
+    Mutation check: remove the retry_exhausted branch in find_repeated_failures;
+    this test fails at executor.await_count == 1. Run this file with pytest -q.
+    """
+    from src.services.agent import _nodes_tools
+    from src.services.agent.error_recovery import tool_error_payload
+
+    node = (
+        _nodes_tools.make_filtered_tool_node({"search_arxiv"})
+        if specialist
+        else _nodes_tools.tool_node
+    )
+    executor = AsyncMock(
+        return_value=tool_error_payload(
+            "search_arxiv", RuntimeError("ArXiv rate limited (HTTP 429)")
+        )
+    )
+    state = {
+        "messages": [HumanMessage(content="Find analytical method validation papers")],
+        "tool_executions": [],
+        "page_context": {},
+        "error_count": 0,
+        "tool_loop_count": 0,
+    }
+    with patch("src.services.agent.graph._get_execute_tool", return_value=executor):
+        for attempt in range(2):
+            state["messages"].append(
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": f"search-{attempt}",
+                            "name": "search_arxiv",
+                            "args": ARGS,
+                        }
+                    ],
+                )
+            )
+            update = await node(state, {"configurable": {}})
+            state["messages"].extend(update.pop("messages"))
+            state.update(update)
+
+        assert executor.await_count == 1
+        message = state["messages"][-1]
+        assert message.status == "error"
+        assert "exhausted its retry budget" in message.content
+        assert "60 seconds" in message.content
+        assert state["tool_executions"][-1]["capped_from"] == "search-0"
+
+        state["messages"].extend(
+            [
+                HumanMessage(content="Try again now"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"id": "search-new", "name": "search_arxiv", "args": ARGS}
+                    ],
+                ),
+            ]
+        )
+        await node(state, {"configurable": {}})
+        assert executor.await_count == 2

@@ -50,7 +50,7 @@ export function RetrievalChunks({
         {query}
       </span>
 
-      <div className="text-foreground/45 text-xs">
+      <div className="text-xs text-(--nous-fg-2)">
         {searching ? (
           <ShimmerLabel className="relative inline-block leading-none">
             Retrieving
@@ -76,7 +76,7 @@ export function RetrievalChunks({
               <span className="text-foreground/90 min-w-0 flex-1 truncate text-[13px] font-medium">
                 {chunk.source}
               </span>
-              <span className={cn(mono, 'text-foreground/30 shrink-0')}>
+              <span className={cn(mono, 'shrink-0 text-(--nous-fg-3)')}>
                 {chunk.locator}
               </span>
               <span
@@ -84,20 +84,22 @@ export function RetrievalChunks({
                   mono,
                   'shrink-0 tabular-nums',
                   finiteScore(chunk.score) >= 0.8
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : 'text-foreground/35'
+                    ? 'text-(--nous-terra)'
+                    : 'text-(--nous-fg-3)'
                 )}
               >
                 {finiteScore(chunk.score).toFixed(2)}
               </span>
             </div>
-            <p className="text-foreground/55 line-clamp-2 text-xs leading-relaxed">
+            <p className="line-clamp-2 text-xs leading-relaxed text-(--nous-fg-2)">
               {chunk.text}
             </p>
             <span className="bg-foreground/[0.06] h-[2px] w-full overflow-hidden rounded-full">
               <span
-                className="block h-full rounded-full bg-blue-500/70 transition-[width] duration-500 dark:bg-blue-400/70"
-                style={{ width: `${pct(finiteScore(chunk.score), 1)}%` }}
+                className="block h-full w-full origin-left rounded-full bg-(--nous-sol)/70 transition-transform duration-500"
+                style={{
+                  transform: `scaleX(${pct(finiteScore(chunk.score), 1) / 100})`,
+                }}
               />
             </span>
           </div>

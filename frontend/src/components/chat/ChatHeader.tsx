@@ -6,10 +6,7 @@ import {
   exportAsJson,
   exportAsMarkdown,
 } from '@/components/chat/shared/exportConversation';
-import {
-  exportThread,
-  type ExportFormat,
-} from '@/services/export-service';
+import { exportThread, type ExportFormat } from '@/services/export-service';
 import {
   ClipboardCopy,
   Download,
@@ -19,8 +16,13 @@ import {
   Menu,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { memo, useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { memo, useState } from 'react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { JobsIndicator } from './JobsIndicator';
 
 export const EXPORT_BLOCKED_REASON =
@@ -57,18 +59,6 @@ export const ChatHeader = memo(function ChatHeader({
 }: ChatHeaderProps) {
   const [exportOpen, setExportOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const exportRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!exportOpen) return;
-    const handler = (e: MouseEvent): void => {
-      if (!exportRef.current?.contains(e.target as Node)) {
-        setExportOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [exportOpen]);
 
   const slug = chatTitle.toLowerCase().replace(/\s+/g, '-').slice(0, 40);
 
@@ -110,14 +100,17 @@ export const ChatHeader = memo(function ChatHeader({
   };
 
   return (
-    <div className="bg-(--nous-bg-1) flex h-12 sm:h-14 shrink-0 items-center gap-2 sm:gap-3 border-b border-(--nous-border-1) px-3 sm:px-4 z-40">
+    <div
+      data-testid="chat-mobile-header"
+      className="bg-(--nous-bg-1) flex h-12 sm:h-14 shrink-0 items-center gap-2 sm:gap-3 border-b border-(--nous-border-1) px-3 sm:px-4 z-40"
+    >
       {/* Left: sidebar trigger + title */}
-      <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
         {onMobileSidebarToggle && (
           <button
             type="button"
             onClick={onMobileSidebarToggle}
-            className="md:hidden h-9 w-9 shrink-0 flex items-center justify-center text-(--nous-fg-3) hover:text-(--nous-sol) hover:bg-(--nous-sol)/8 transition-all rounded-xl"
+            className="xl:hidden h-11 w-11 shrink-0 flex items-center justify-center text-(--nous-fg-2) hover:text-(--nous-sol) hover:bg-(--nous-sol)/8 transition-colors rounded-lg"
             aria-label="Toggle chat history"
           >
             <Menu className="w-5 h-5" />
@@ -152,22 +145,24 @@ export const ChatHeader = memo(function ChatHeader({
         )}
 
         {messages.length > 0 && (
-          <div className="relative" ref={exportRef}>
-            <IconButton
-              label="Export chat"
-              icon={
-                isExporting ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Download className="w-4 h-4" />
-                )
-              }
-              className="p-1.5 text-(--nous-fg-3) hover:text-(--nous-fg-1) hover:bg-(--nous-sol)/8 rounded-lg transition-colors"
-              disabled={isStreaming}
-              aria-disabled={isStreaming}
-              title={isStreaming ? EXPORT_BLOCKED_REASON : undefined}
-              onClick={() => setExportOpen((v) => !v)}
-            />
+          <DropdownMenu open={exportOpen} onOpenChange={setExportOpen}>
+            <DropdownMenuTrigger asChild disabled={isStreaming}>
+              <IconButton
+                label="Export chat"
+                showTooltip={false}
+                icon={
+                  isExporting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )
+                }
+                className="p-1.5 text-(--nous-fg-3) hover:text-(--nous-fg-1) hover:bg-(--nous-sol)/8 rounded-lg transition-colors"
+                disabled={isStreaming}
+                aria-disabled={isStreaming}
+                title={isStreaming ? EXPORT_BLOCKED_REASON : undefined}
+              />
+            </DropdownMenuTrigger>
             <span className="sr-only" role="status" aria-live="polite">
               {isStreaming
                 ? EXPORT_BLOCKED_REASON
@@ -175,50 +170,52 @@ export const ChatHeader = memo(function ChatHeader({
                   ? 'Preparing export…'
                   : ''}
             </span>
-            <AnimatePresence>
-              {exportOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: -5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -5 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-(--nous-border-1) bg-(--nous-bg-2) shadow-lg z-50 overflow-hidden p-1"
-                  style={{ fontFamily: 'var(--nous-font-ui)' }}
+            <DropdownMenuContent
+              align="end"
+              className="mt-1 w-48 rounded-xl border border-(--nous-border-1) bg-(--nous-bg-2) shadow-lg z-50 overflow-hidden p-1"
+              style={{ fontFamily: 'var(--nous-font-ui)' }}
+            >
+              <DropdownMenuItem asChild disabled={isExporting || isStreaming}>
+                <button
+                  onClick={() => runExport('markdown')}
+                  disabled={isExporting || isStreaming}
+                  aria-disabled={isExporting || isStreaming}
+                  title={isStreaming ? EXPORT_BLOCKED_REASON : undefined}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-(--nous-fg-2) hover:bg-(--nous-sol)/8 hover:text-(--nous-fg-1) focus-visible:bg-(--nous-sol)/8 focus-visible:outline-hidden rounded-lg transition-colors disabled:opacity-50"
                 >
-                  <button
-                    onClick={() => runExport('markdown')}
-                    disabled={isExporting || isStreaming}
-                    aria-disabled={isExporting || isStreaming}
-                    title={isStreaming ? EXPORT_BLOCKED_REASON : undefined}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-(--nous-fg-2) hover:bg-(--nous-sol)/8 hover:text-(--nous-fg-1) focus-visible:bg-(--nous-sol)/8 focus-visible:outline-hidden rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    <FileText className="w-3.5 h-3.5 text-(--nous-fg-3)" />
-                    Export as Markdown
-                  </button>
-                  <button
-                    onClick={() => runExport('pdf')}
-                    disabled={isExporting || isStreaming || !threadId}
-                    aria-disabled={isExporting || isStreaming || !threadId}
-                    title={isStreaming ? EXPORT_BLOCKED_REASON : undefined}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-(--nous-fg-2) hover:bg-(--nous-sol)/8 hover:text-(--nous-fg-1) focus-visible:bg-(--nous-sol)/8 focus-visible:outline-hidden rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    <FileText className="w-3.5 h-3.5 text-(--nous-fg-3)" />
-                    Export as PDF
-                  </button>
-                  <button
-                    onClick={() => runExport('json')}
-                    disabled={isExporting || isStreaming}
-                    aria-disabled={isExporting || isStreaming}
-                    title={isStreaming ? EXPORT_BLOCKED_REASON : undefined}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-(--nous-fg-2) hover:bg-(--nous-sol)/8 hover:text-(--nous-fg-1) focus-visible:bg-(--nous-sol)/8 focus-visible:outline-hidden rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    <FileJson className="w-3.5 h-3.5 text-(--nous-fg-3)" />
-                    Export as JSON
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+                  <FileText className="w-3.5 h-3.5 text-(--nous-fg-3)" />
+                  Export as Markdown
+                </button>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                asChild
+                disabled={isExporting || isStreaming || !threadId}
+              >
+                <button
+                  onClick={() => runExport('pdf')}
+                  disabled={isExporting || isStreaming || !threadId}
+                  aria-disabled={isExporting || isStreaming || !threadId}
+                  title={isStreaming ? EXPORT_BLOCKED_REASON : undefined}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-(--nous-fg-2) hover:bg-(--nous-sol)/8 hover:text-(--nous-fg-1) focus-visible:bg-(--nous-sol)/8 focus-visible:outline-hidden rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <FileText className="w-3.5 h-3.5 text-(--nous-fg-3)" />
+                  Export as PDF
+                </button>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild disabled={isExporting || isStreaming}>
+                <button
+                  onClick={() => runExport('json')}
+                  disabled={isExporting || isStreaming}
+                  aria-disabled={isExporting || isStreaming}
+                  title={isStreaming ? EXPORT_BLOCKED_REASON : undefined}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-(--nous-fg-2) hover:bg-(--nous-sol)/8 hover:text-(--nous-fg-1) focus-visible:bg-(--nous-sol)/8 focus-visible:outline-hidden rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <FileJson className="w-3.5 h-3.5 text-(--nous-fg-3)" />
+                  Export as JSON
+                </button>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
     </div>

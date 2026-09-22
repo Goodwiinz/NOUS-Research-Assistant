@@ -12,10 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.agent._nodes_llm import (
-    NO_RETRIEVAL_GUIDANCE,
-    _retrieval_context_part,
-)
+from src.services.agent._nodes_llm import NO_RETRIEVAL_GUIDANCE, _retrieval_context_part
 from src.services.agent._prompts import _LLM_NODE_STATIC_PROMPT
 
 
@@ -35,8 +32,10 @@ class TestRetrievalContextPart:
             ]
         )
         assert part.startswith("Retrieved context:")
-        assert "[Doc 1] Attention Is All You Need" in part
-        assert "[Doc 2] Transformer-XL" in part
+        assert "[Doc 1]" in part
+        assert "title: Attention Is All You Need" in part
+        assert "[Doc 2]" in part
+        assert "title: Transformer-XL" in part
         assert NO_RETRIEVAL_GUIDANCE not in part
 
 

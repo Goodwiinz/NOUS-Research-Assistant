@@ -16,11 +16,12 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-const listThreadsMock = vi.fn();
+const listWorkspaceThreadsMock = vi.fn();
 const listMessagesMock = vi.fn();
 vi.mock('@/services/workspaceService', () => ({
   workspaceService: {
-    listThreads: (...args: unknown[]) => listThreadsMock(...args),
+    listWorkspaceThreads: (...args: unknown[]) =>
+      listWorkspaceThreadsMock(...args),
     listMessages: (...args: unknown[]) => listMessagesMock(...args),
   },
 }));
@@ -65,7 +66,7 @@ function threadPage(
 
 describe('useChatSession sidebar thread pagination (CX8)', () => {
   beforeEach(() => {
-    listThreadsMock.mockReset();
+    listWorkspaceThreadsMock.mockReset();
     listMessagesMock.mockReset();
     listMessagesMock.mockResolvedValue({
       messages: [],
@@ -77,7 +78,9 @@ describe('useChatSession sidebar thread pagination (CX8)', () => {
   });
 
   it('exposes hasMoreThreads from the first page and loadMoreThreads appends the next page', async () => {
-    listThreadsMock.mockResolvedValueOnce(threadPage(makeThreads(50, 0), 1, 120));
+    listWorkspaceThreadsMock.mockResolvedValueOnce(
+      threadPage(makeThreads(50, 0), 1, 120)
+    );
 
     const { result } = renderHook(() => useChatSession());
 
@@ -91,7 +94,7 @@ describe('useChatSession sidebar thread pagination (CX8)', () => {
       'Latest message 0'
     );
 
-    listThreadsMock.mockResolvedValueOnce(
+    listWorkspaceThreadsMock.mockResolvedValueOnce(
       threadPage(makeThreads(50, 50), 2, 120)
     );
 
@@ -99,7 +102,7 @@ describe('useChatSession sidebar thread pagination (CX8)', () => {
       await result.current.loadMoreThreads();
     });
 
-    expect(listThreadsMock).toHaveBeenLastCalledWith('conv-1', {
+    expect(listWorkspaceThreadsMock).toHaveBeenLastCalledWith('conv-1', {
       page: 2,
       limit: 50,
     });
@@ -114,7 +117,9 @@ describe('useChatSession sidebar thread pagination (CX8)', () => {
   });
 
   it('stops exposing hasMoreThreads once the last page is loaded', async () => {
-    listThreadsMock.mockResolvedValueOnce(threadPage(makeThreads(50, 0), 1, 70));
+    listWorkspaceThreadsMock.mockResolvedValueOnce(
+      threadPage(makeThreads(50, 0), 1, 70)
+    );
     const { result } = renderHook(() => useChatSession());
 
     await act(async () => {
@@ -122,7 +127,7 @@ describe('useChatSession sidebar thread pagination (CX8)', () => {
     });
     expect(result.current.hasMoreThreads).toBe(true);
 
-    listThreadsMock.mockResolvedValueOnce(
+    listWorkspaceThreadsMock.mockResolvedValueOnce(
       threadPage(makeThreads(20, 50), 2, 70)
     );
     await act(async () => {

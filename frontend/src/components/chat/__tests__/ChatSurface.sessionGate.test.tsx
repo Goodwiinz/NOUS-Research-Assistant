@@ -32,6 +32,7 @@ type InputCapture = {
 };
 type TranscriptCapture = {
   onRegenerate: (index: number) => void;
+  onPromptSelect: (prompt: string) => void;
 };
 
 let runtimeProps: RuntimeCapture;
@@ -235,5 +236,25 @@ describe('ChatSurface session-interactivity gate', () => {
     expect(submitMessage).toHaveBeenCalledTimes(1);
     expect(handleSlashCommand).toHaveBeenCalledWith('new');
     expect(handleRegenerate).toHaveBeenCalledWith(0);
+  });
+
+  it('treats starter prompts as editable drafts and returns focus to the composer', () => {
+    const setInput = vi.fn();
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    const focusSpy = vi.spyOn(textarea, 'focus');
+    const { props } = makeProps(makeSession());
+    props.streaming.setInput = setInput;
+    props.streaming.chatInputRef = { current: textarea };
+
+    render(<ChatSurface {...props} />);
+    transcriptProps.onPromptSelect('Summarize the passage I provide: ');
+
+    expect(focusSpy).toHaveBeenCalled();
+    const update = setInput.mock.calls[0][0] as (current: string) => string;
+    expect(update('')).toBe('Summarize the passage I provide: ');
+    expect(update(' ')).toBe(' ');
+    expect(update('draft already here')).toBe('draft already here');
+    textarea.remove();
   });
 });

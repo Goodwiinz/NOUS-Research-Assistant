@@ -1,6 +1,8 @@
 packages:
   - frontend
   - tests/e2e
+  - terminal
+  - packages/chat-runtime
 
 allowBuilds:
   '@sentry/cli': true
@@ -13,8 +15,9 @@ allowBuilds:
 
 overrides:
   next: 16.2.11
-  react: 18.3.1
-  react-dom: 18.3.1
+  # Keep the web app on React 18; the Ink terminal owns React 19.
+  multimodal-rag-frontend>react: 18.3.1
+  multimodal-rag-frontend>react-dom: 18.3.1
   # Security pins use this workspace-level map as the sole pnpm authority.
   '@isaacs/brace-expansion': '^5.0.1'
   '@modelcontextprotocol/sdk': '^1.26.0'

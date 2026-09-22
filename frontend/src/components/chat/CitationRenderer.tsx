@@ -10,6 +10,7 @@ import {
   parseMessageWithCitations,
   getCitationByIndex,
 } from '@/utils/citationParser';
+import { citationKey } from './shared/CitationChips';
 
 interface CitationRendererProps {
   content: string;
@@ -19,6 +20,11 @@ interface CitationRendererProps {
   className?: string;
   /** Tint the trailing text while a turn is still arriving. */
   freshTail?: boolean;
+  /** Footnote numbering shared with the sources list (see `numberCitations`).
+   * Inline markers still RESOLVE by the model's 1-based `[Doc N]` index; this
+   * only decides the numeral shown, so two chunks of one document read as one
+   * footnote instead of two. Absent means show the raw index. */
+  citationNumbers?: Map<string, number>;
 }
 
 const CITATION_DESTINATION = '#nous-citation-';
@@ -86,6 +92,7 @@ export function CitationRenderer({
   activeCitationIndex,
   className,
   freshTail = false,
+  citationNumbers,
 }: CitationRendererProps): React.ReactElement {
   const citationCount = citations.length;
   const citationPlugin = useMemo(
@@ -99,17 +106,21 @@ export function CitationRenderer({
         if (!match) return <MarkdownLink href={href}>{children}</MarkdownLink>;
 
         const citationIndex = Number(match[1]);
+        const citation = getCitationByIndex(citations, citationIndex);
+        const displayNumber =
+          (citation && citationNumbers?.get(citationKey(citation))) ??
+          citationIndex;
         return (
           <CitationLink
-            citationNumber={citationIndex}
-            citation={getCitationByIndex(citations, citationIndex)}
+            citationNumber={displayNumber}
+            citation={citation}
             onClick={onCitationClick}
             isActive={activeCitationIndex === citationIndex}
           />
         );
       },
     }),
-    [activeCitationIndex, citations, onCitationClick]
+    [activeCitationIndex, citations, citationNumbers, onCitationClick]
   );
 
   return (

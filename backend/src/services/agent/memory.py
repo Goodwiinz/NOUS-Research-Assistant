@@ -154,18 +154,33 @@ async def close_memory_store() -> None:
     await reset_memory_store()
 
 
+def _memory_namespace(user_id: str, organization_id: str | None = None) -> tuple:
+    """Return the store namespace for one user's memories.
+
+    Org-scoped when the caller knows the tenant, so two users that happen to
+    share a ``user_id`` string across tenants can never read each other's
+    memories. Falls back to the legacy ``("user", user_id)`` namespace when
+    no org is known — older entries written before this change stay under the
+    legacy namespace and simply become unreachable for org-scoped callers
+    (memory is best-effort; no migration).
+    """
+    org = str(organization_id or "").strip()
+    return (org, "user", user_id) if org else ("user", user_id)
+
+
 async def search_memories(
     store,
     user_id: str,
     query: str,
     limit: int = 5,
+    organization_id: str | None = None,
 ) -> list:
     """Search for relevant memories for a user."""
     if store is None:
         return []
 
     try:
-        namespace = ("user", user_id)
+        namespace = _memory_namespace(user_id, organization_id)
         results = await store.asearch(namespace, query=query, limit=limit)
         return [
             {
@@ -185,13 +200,14 @@ async def save_memory(
     user_id: str,
     key: str,
     value: dict,
+    organization_id: str | None = None,
 ) -> bool:
     """Save a memory for a user."""
     if store is None:
         return False
 
     try:
-        namespace = ("user", user_id)
+        namespace = _memory_namespace(user_id, organization_id)
         await store.aput(namespace, key, value)
         logger.debug("Saved memory for user %s: %s", user_id, key)
         return True
@@ -254,6 +270,7 @@ async def delete_memory_by_query(
     user_id: str,
     query: str,
     limit: int = 3,
+    organization_id: str | None = None,
 ) -> dict:
     """Find the top semantic matches for *query* under the user's namespace,
     delete those above the safety threshold, and return a report.
@@ -263,12 +280,15 @@ async def delete_memory_by_query(
     if store is None or not query:
         return {"deleted": 0, "matches": []}
 
-    namespace = ("user", user_id)
+    namespace = _memory_namespace(user_id, organization_id)
     try:
         results = await store.asearch(namespace, query=query, limit=limit)
     except Exception as exc:  # noqa: BLE001
+        # B8-S1: never report a failed search as "nothing matched" — the
+        # caller turns that into {"status": "completed", "deleted": 0} for a
+        # HITL-approved destructive action that never ran.
         logger.warning("forget_memory: asearch failed: %s", exc)
-        return {"deleted": 0, "matches": []}
+        raise
 
     matches = [
         {

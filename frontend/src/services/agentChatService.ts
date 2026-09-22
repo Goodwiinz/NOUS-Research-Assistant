@@ -22,6 +22,10 @@ export type {
   AgentStreamEvent,
 } from '@/services/agentStreamEvents';
 
+/** Client-only HTTP failures. These values never enter the SSE wire enum. */
+export type AgentStreamLocalFailure =
+  'authentication_required' | 'permission_denied';
+
 /**
  * Client-derived category for an HTTP-level failure — the stream never opened,
  * so there is no server `error` frame and no server-authored category.
@@ -39,6 +43,12 @@ function httpFailureCategory(status: number): AgentErrorCategory | undefined {
   // generic treatment rather than blaming the user's input.
   if (status === 401 || status === 403) return undefined;
   if (status >= 400 && status < 500) return 'invalid_request';
+  return undefined;
+}
+
+function httpLocalFailure(status: number): AgentStreamLocalFailure | undefined {
+  if (status === 401) return 'authentication_required';
+  if (status === 403) return 'permission_denied';
   return undefined;
 }
 
@@ -84,6 +94,10 @@ async function getStreamAuthHeaders(
  * some events (e.g. streamConfirm never emits trace).
  */
 export interface AgentStreamCallbacks {
+  /** Client-only lifecycle marker fired immediately before the one auth retry. */
+  onAuthRefreshAttempt?: () => void;
+  /** The retried HTTP response accepted refreshed auth and is ready to read. */
+  onAuthRefreshSuccess?: () => void;
   onToken?: (content: string) => void;
   /** Provider-authored reasoning summary only; raw reasoning is never sent. */
   onReasoningDelta?: (content: string) => void;
@@ -108,7 +122,9 @@ export interface AgentStreamCallbacks {
   ) => void;
   onConfirmation?: (
     threadId: string,
-    confirmation: Record<string, unknown>
+    confirmation: Record<string, unknown>,
+    /** Durable AgentRun id, when the server can correlate the parked turn. */
+    runId?: string
   ) => void;
   onTrace?: (threadId: string) => void;
   /** Keepalive emitted roughly every 15s during silent planner/LLM phases,
@@ -116,6 +132,8 @@ export interface AgentStreamCallbacks {
    * readout on the pre-first-token thinking pill. */
   onHeartbeat?: (elapsedMs: number) => void;
   onStatus?: (phase: AgentStreamPhase, detail?: string) => void;
+  /** Durable run id from the accepted status frame, used by Stop. */
+  onRunId?: (runId: string) => void;
   onUsage?: (inputTokens: number, outputTokens: number) => void;
   /** Fires for every frame carrying an `id: <seq>` line — the resumable-SSE
    * cursor. Persist the latest value to resume after a disconnect. */
@@ -136,6 +154,8 @@ export interface AgentStreamCallbacks {
      * results, real durations) — richer than the live SSE summaries. */
     tool_executions?: Array<Record<string, unknown>>;
     progress_steps?: AgentProgressStep[];
+    /** Bounded provider-authored summary persisted for this turn. */
+    reasoning_summary?: string | null;
   }) => void;
   /**
    * Fired for a server `error` frame and for HTTP-level failures on new or
@@ -147,7 +167,11 @@ export interface AgentStreamCallbacks {
    * from the status, and is left `undefined` for 5xx/network — a transport
    * failure carries no server claim, so guessing one would be a lie.
    */
-  onError?: (error: string, category?: AgentErrorCategory) => void;
+  onError?: (
+    error: string,
+    category?: AgentErrorCategory,
+    localFailure?: AgentStreamLocalFailure
+  ) => void;
 }
 
 export type AgentResumeResult =
@@ -157,6 +181,16 @@ export type AgentResumeResult =
   | { status: 'failed'; error: string };
 
 const INCOMPLETE_STREAM_ERROR = 'Stream ended before completion. Please retry.';
+
+/**
+ * A Stop POST only records the durable `stopping` marker. The producer owns
+ * the terminal transition, so the UI waits for the job projection to report
+ * `cancelled` before it closes the activity run.
+ */
+// Keep the bounded poll below the backend's 120-request/minute read bucket,
+// while still covering the producers' sub-second cancellation checks.
+export const CANCEL_ACK_POLL_INTERVAL_MS = 750;
+export const CANCEL_ACK_MAX_POLLS = 16;
 
 /** Read the backend's error body so the user sees the real cause, not just
  * an HTTP number. The backend returns the structured envelope
@@ -235,7 +269,9 @@ export const HANDLED_STREAM_EVENTS: ReadonlySet<AgentStreamEvent> = new Set([
 async function fetchStreamWithAuthRetry(
   url: string,
   init: Omit<RequestInit, 'headers'>,
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  onAuthRefreshAttempt?: () => void,
+  onAuthRefreshSuccess?: () => void
 ): Promise<Response> {
   const open = async (forceRefresh: boolean): Promise<Response> => {
     const headers = new Headers(await getStreamAuthHeaders({ forceRefresh }));
@@ -246,7 +282,10 @@ async function fetchStreamWithAuthRetry(
   };
   const response = await open(false);
   if (response.status !== 401) return response;
-  return open(true);
+  onAuthRefreshAttempt?.();
+  const retriedResponse = await open(true);
+  if (retriedResponse.ok) onAuthRefreshSuccess?.();
+  return retriedResponse;
 }
 
 /**
@@ -337,6 +376,13 @@ async function consumeSse(
           callbacks.onHeartbeat?.(Number(data.elapsed_ms) || 0);
           break;
         case 'status':
+          if (
+            data.phase === 'accepted' &&
+            typeof data.run_id === 'string' &&
+            data.run_id
+          ) {
+            callbacks.onRunId?.(data.run_id);
+          }
           callbacks.onStatus?.(
             data.phase as AgentStreamPhase,
             typeof data.detail === 'string' ? data.detail : undefined
@@ -351,7 +397,15 @@ async function consumeSse(
           );
           break;
         case 'confirmation':
-          callbacks.onConfirmation?.(data.thread_id, data.confirmation);
+          if (typeof data.run_id === 'string' && data.run_id) {
+            callbacks.onConfirmation?.(
+              data.thread_id,
+              data.confirmation,
+              data.run_id
+            );
+          } else {
+            callbacks.onConfirmation?.(data.thread_id, data.confirmation);
+          }
           break;
         case 'usage':
           callbacks.onUsage?.(
@@ -624,6 +678,34 @@ class AgentChatService {
     return api.get(`/agent/jobs/${encodeURIComponent(jobId)}`);
   }
 
+  private async waitForCancellationAck(jobId: string): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < CANCEL_ACK_MAX_POLLS; attempt += 1) {
+      let job: Awaited<ReturnType<AgentChatService['pollJob']>> | undefined;
+      try {
+        job = await this.pollJob(jobId);
+      } catch (error) {
+        // The projection can lag the command's commit (or Redis can be
+        // briefly unavailable). Keep polling within the bounded window, then
+        // surface the failure instead of claiming that Stop completed.
+        lastError = error;
+      }
+      if (job?.status === 'cancelled') return;
+      if (job && isTerminalJobStatus(job.status)) {
+        throw new Error(
+          `Run cancellation was not acknowledged; run is already ${job.status}.`
+        );
+      }
+      if (attempt + 1 < CANCEL_ACK_MAX_POLLS) {
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, CANCEL_ACK_POLL_INTERVAL_MS)
+        );
+      }
+    }
+    if (lastError instanceof Error) throw lastError;
+    throw new Error('Timed out waiting for the producer to acknowledge Stop.');
+  }
+
   async confirmAction(
     jobId: string,
     confirmed: boolean
@@ -649,11 +731,17 @@ class AgentChatService {
 
     let response: Response;
     try {
-      response = await fetchStreamWithAuthRetry(agentStreamUrl('stream'), {
-        method: 'POST',
-        body: JSON.stringify(cappedRequest),
-        signal,
-      });
+      response = await fetchStreamWithAuthRetry(
+        agentStreamUrl('stream'),
+        {
+          method: 'POST',
+          body: JSON.stringify(cappedRequest),
+          signal,
+        },
+        {},
+        callbacks.onAuthRefreshAttempt,
+        callbacks.onAuthRefreshSuccess
+      );
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       throw err;
@@ -665,7 +753,8 @@ class AgentChatService {
         backendMessage
           ? `Stream failed (${response.status}): ${backendMessage}`
           : `Stream failed: ${response.status}`,
-        httpFailureCategory(response.status)
+        httpFailureCategory(response.status),
+        httpLocalFailure(response.status)
       );
       return;
     }
@@ -790,7 +879,10 @@ class AgentChatService {
           method: 'POST',
           body: JSON.stringify(request),
           signal,
-        }
+        },
+        {},
+        callbacks.onAuthRefreshAttempt,
+        callbacks.onAuthRefreshSuccess
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -803,7 +895,8 @@ class AgentChatService {
         backendMessage
           ? `Stream confirm failed (${response.status}): ${backendMessage}`
           : `Stream confirm failed: ${response.status}`,
-        httpFailureCategory(response.status)
+        httpFailureCategory(response.status),
+        httpLocalFailure(response.status)
       );
       return;
     }
@@ -834,6 +927,38 @@ class AgentChatService {
           ? `Stream cancellation failed (${response.status}): ${backendMessage}`
           : `Stream cancellation failed: ${response.status}`
       );
+    }
+  }
+
+  async cancelActiveRun(
+    threadId: string,
+    expectedRunId?: string
+  ): Promise<void> {
+    const headers = await getStreamAuthHeaders();
+    const response = await fetch(
+      agentStreamUrl(`stream/cancel/${encodeURIComponent(threadId)}`),
+      {
+        method: 'POST',
+        headers,
+        // An explicit JSON body distinguishes normal-run Stop from the
+        // legacy no-body parked-confirmation cancellation. The run id is
+        // optional only for the pre-accepted race; when present it fences a
+        // stale browser request from cancelling a newer run.
+        body: JSON.stringify(
+          expectedRunId ? { expected_run_id: expectedRunId } : {}
+        ),
+      }
+    );
+    if (!response.ok) {
+      const backendMessage = await readErrorBody(response);
+      throw new Error(
+        backendMessage
+          ? `Stream cancellation failed (${response.status}): ${backendMessage}`
+          : `Stream cancellation failed: ${response.status}`
+      );
+    }
+    if (expectedRunId) {
+      await this.waitForCancellationAck(expectedRunId);
     }
   }
 

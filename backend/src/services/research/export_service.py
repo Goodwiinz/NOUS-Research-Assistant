@@ -8,12 +8,15 @@ Handles conversion of thread data to various formats:
 - HTML: Self-contained viewable file
 """
 
+import asyncio
 import io
 import json
+import re
 import zipfile
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, BinaryIO, Dict, List, Optional, Protocol
+from urllib.parse import SplitResult, parse_qsl, quote, urlsplit, urlunsplit
 
 import structlog
 from jinja2 import BaseLoader, Environment, select_autoescape
@@ -22,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.core.config import settings
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.citation import Citation
 from src.models.conversation import Conversation
@@ -31,10 +35,191 @@ from src.shared.export_schemas import (
     ExportFormat,
     ExportOptions,
     MessageExport,
+    ProviderTokenUsage,
     ThreadExport,
 )
 
 logger = structlog.get_logger(__name__)
+
+
+class PDFExportUnavailableError(RuntimeError):
+    """Raised when the PDF renderer cannot be loaded in this process."""
+
+    def __init__(self) -> None:
+        super().__init__("PDF export unavailable")
+
+
+class PDFExportConversionError(RuntimeError):
+    """Raised when PDF conversion fails or produces non-PDF bytes."""
+
+    def __init__(self) -> None:
+        super().__init__("PDF export failed")
+
+
+def _provider_token_usage(value: Any) -> Optional[ProviderTokenUsage]:
+    """Preserve valid provider usage while keeping missing values unknown."""
+    if not isinstance(value, dict):
+        return None
+
+    known: dict[str, int] = {}
+    for key in ("input_tokens", "output_tokens"):
+        token_count = value.get(key)
+        if (
+            token_count is None
+            or isinstance(token_count, bool)
+            or not isinstance(token_count, int)
+            or token_count < 0
+        ):
+            continue
+        known[key] = token_count
+
+    return ProviderTokenUsage(**known) if known else None
+
+
+# HTML-sensitive characters are escaped by Jinja when the plain-text source
+# string enters the template. Escaping angle brackets here as well would leave
+# visible backslashes/entities in the rendered Markdown label.
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_[\]{}()])")
+_ARXIV_ID = re.compile(
+    r"(?:\d{4}\.\d{4,5}|[a-z][a-z0-9.-]*/\d{7})(?:v\d+)?",
+    re.IGNORECASE,
+)
+_DOI = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
+_MARKDOWN_URL_SAFE = ":/?#[]@!$&'*+,;=%~-._"
+_SENSITIVE_QUERY_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "credential",
+        "exp",
+        "expires",
+        "expiry",
+        "id_token",
+        "refresh_token",
+        "sig",
+        "signature",
+        "token",
+        "x-amz-credential",
+        "x-amz-expires",
+        "x-amz-security-token",
+        "x-amz-signature",
+        "x-goog-credential",
+        "x-goog-expires",
+        "x-goog-signature",
+    }
+)
+
+
+def _split_safe_http_url(value: str) -> Optional[SplitResult]:
+    """Parse a link destination, rejecting active schemes and credentials."""
+    if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+
+    try:
+        parsed = urlsplit(value.strip())
+        # Reading ``port`` also rejects malformed/out-of-range port syntax.
+        parsed.port
+    except ValueError:
+        return None
+
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    if any(char.isspace() for char in parsed.netloc) or "\\" in parsed.netloc:
+        return None
+    return parsed
+
+
+def _safe_markdown_destination(value: str) -> Optional[str]:
+    """Return a Markdown-safe absolute HTTP(S) URL, or no destination."""
+    parsed = _split_safe_http_url(value)
+    if (
+        parsed is None
+        or _has_sensitive_query(parsed.query)
+        or _has_sensitive_query(parsed.fragment)
+    ):
+        return None
+    normalized = urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc,
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+    return quote(normalized, safe=_MARKDOWN_URL_SAFE)
+
+
+def _configured_frontend_origin() -> Optional[str]:
+    """Resolve the trusted frontend origin without consulting request headers."""
+    base_url = settings.FRONTEND_BASE_URL.strip()
+    if not base_url:
+        origins = settings.cors_origins_list
+        base_url = origins[0] if origins else ""
+
+    parsed = _split_safe_http_url(base_url)
+    if parsed is None:
+        return None
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc, "", "", "")).rstrip("/")
+
+
+def _external_reference_destination(reference: Optional[str]) -> Optional[str]:
+    """Resolve only external identifier formats with canonical public URLs."""
+    if not reference:
+        return None
+
+    direct_url = _safe_markdown_destination(reference)
+    if direct_url:
+        return direct_url
+
+    normalized = reference.strip()
+    arxiv_id = (
+        normalized[6:].strip()
+        if normalized.lower().startswith("arxiv:")
+        else normalized
+    )
+    if _ARXIV_ID.fullmatch(arxiv_id):
+        return f"https://arxiv.org/abs/{quote(arxiv_id, safe='/.')}"
+
+    doi = (
+        normalized[4:].strip() if normalized.lower().startswith("doi:") else normalized
+    )
+    if _DOI.fullmatch(doi):
+        return f"https://doi.org/{quote(doi, safe='/.-_:;')}"
+
+    return None
+
+
+def _has_sensitive_query(query: str) -> bool:
+    """Detect common signed/expiring URL credentials without logging values."""
+    query_keys = {key.casefold() for key, _ in parse_qsl(query, keep_blank_values=True)}
+    return not _SENSITIVE_QUERY_KEYS.isdisjoint(query_keys)
+
+
+def _contains_sensitive_url_data(value: Optional[str]) -> bool:
+    """Return whether an identifier embeds credentials or signed query data."""
+    if not value:
+        return False
+    try:
+        parsed = urlsplit(value.strip())
+    except ValueError:
+        return False
+    return (
+        parsed.username is not None
+        or parsed.password is not None
+        or _has_sensitive_query(parsed.query)
+        or _has_sensitive_query(parsed.fragment)
+    )
+
+
+def _escape_markdown_label(value: str) -> str:
+    """Escape source labels without allowing line or inline-markup injection."""
+    flattened = " ".join(value.splitlines())
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", flattened)
 
 
 # Markdown template
@@ -48,7 +233,9 @@ MARKDOWN_TEMPLATE = """# {{ thread.title or "Untitled Thread" }}
 **Created**: {{ thread.created_at.strftime(date_format) }}
 **Messages**: {{ thread.message_count }}
 {% if options.include_metadata %}
-**Tokens**: {{ thread.token_count }}
+{% if thread.token_count > 0 %}
+**Legacy token count**: {{ thread.token_count }}
+{% endif %}
 {% endif %}
 
 ---
@@ -62,10 +249,14 @@ MARKDOWN_TEMPLATE = """# {{ thread.title or "Untitled Thread" }}
 
 {{ message.content }}
 
+{% if message.provider_usage and options.include_metadata %}
+**Provider usage**: {{ message.provider_usage.input_tokens if message.provider_usage.input_tokens is not none else "unknown" }} input tokens; {{ message.provider_usage.output_tokens if message.provider_usage.output_tokens is not none else "unknown" }} output tokens
+{% endif %}
+
 {% if message.citations and options.include_citations %}
 ### Sources
 {% for citation in message.citations %}
-- **{{ citation.document_title or citation.external_reference_id or "Source " ~ loop.index }}**{% if citation.page_number %} (p. {{ citation.page_number }}){% endif %}{% if citation.score %} [{{ "%.2f"|format(citation.score) }}]{% endif %}
+- {{ citation | citation_source(loop.index) }}{% if citation.page_number is not none %} (p. {{ citation.page_number }}){% endif %}{% if citation.score %} [{{ "%.2f"|format(citation.score) }}]{% endif %}
 {% if citation.snippet %}
   > {{ citation.snippet | truncate(200) }}
 {% endif %}
@@ -142,7 +333,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <strong>Status:</strong> {{ thread.status }} | 
         <strong>Created:</strong> {{ thread.created_at.strftime(date_format) }} | 
         <strong>Messages:</strong> {{ thread.message_count }}
-        {% if options.include_metadata %} | <strong>Tokens:</strong> {{ thread.token_count }}{% endif %}
+        {% if options.include_metadata and thread.token_count > 0 %} | <strong>Legacy token count:</strong> {{ thread.token_count }}{% endif %}
     </div>
     
     {% for message in thread.messages %}
@@ -155,6 +346,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <span>{{ message.created_at.strftime(date_format) }}{% if message.model_name and options.include_metadata %} | {{ message.model_name }}{% endif %}</span>
         </div>
         <div class="content">{{ message.content }}</div>
+
+        {% if message.provider_usage and options.include_metadata %}
+        <div class="usage"><strong>Provider usage:</strong> {{ message.provider_usage.input_tokens if message.provider_usage.input_tokens is not none else "unknown" }} input tokens; {{ message.provider_usage.output_tokens if message.provider_usage.output_tokens is not none else "unknown" }} output tokens</div>
+        {% endif %}
         
         {% if message.citations and options.include_citations %}
         <div class="citations">
@@ -207,11 +402,38 @@ class MarkdownFormatter(ExportFormatter):
     """Format thread as Markdown."""
 
     def __init__(self):
+        self._frontend_origin = _configured_frontend_origin()
         # Enable autoescape for security (even for Markdown)
         self._env = Environment(
             loader=BaseLoader(), extensions=[loopcontrols], autoescape=True
         )
+        self._env.filters["citation_source"] = self._citation_source
         self._template = self._env.from_string(MARKDOWN_TEMPLATE)
+
+    def _citation_source(self, citation: CitationExport, source_number: int) -> str:
+        """Render one bold source label, linking only to stable safe targets."""
+        reference = citation.external_reference_id
+        if citation.document_title:
+            label = citation.document_title
+        elif _contains_sensitive_url_data(reference):
+            # Never copy URL credentials or signed query secrets into an export.
+            label = f"Source {source_number}"
+        else:
+            label = reference or f"Source {source_number}"
+
+        destination = None
+        if citation.document_id and self._frontend_origin:
+            document_id = quote(citation.document_id, safe="")
+            destination = f"{self._frontend_origin}/documents/{document_id}"
+        elif reference:
+            destination = _external_reference_destination(reference)
+
+        escaped_label = _escape_markdown_label(label)
+        # Return ordinary text so the template's autoescape remains in force
+        # for both untrusted source labels and URL query parameters.
+        if destination:
+            return f"**[{escaped_label}]({destination})**"
+        return f"**{escaped_label}**"
 
     def format(self, thread: ThreadExport, options: ExportOptions) -> bytes:
         content = self._template.render(
@@ -284,50 +506,88 @@ class PDFFormatter(ExportFormatter):
 
     def __init__(self):
         self._html_formatter = HTMLFormatter()
-        self._weasyprint_available = self._check_weasyprint()
+        self._weasyprint: Any = None
 
-    def _check_weasyprint(self) -> bool:
+    def _load_weasyprint(self) -> Any:
+        """Load the native renderer only when a PDF is actually requested."""
+        if self._weasyprint is not None:
+            return self._weasyprint
+
         try:
             import weasyprint
 
-            return True
-        except ImportError:
+        except (ImportError, OSError) as exc:
             logger.warning(
-                "WeasyPrint not installed, PDF export will use HTML fallback"
+                "PDF renderer unavailable",
+                error_type=type(exc).__name__,
             )
-            return False
+            raise PDFExportUnavailableError() from None
+
+        self._weasyprint = weasyprint
+        return weasyprint
+
+    @staticmethod
+    def _resource_fetcher() -> tuple[Any, type[BaseException]]:
+        """Build a fetcher that blocks all local and remote resource loads."""
+        import weasyprint
+
+        urls = getattr(weasyprint, "urls", None)
+        if urls is None:
+            raise PDFExportUnavailableError()
+
+        url_fetcher = urls.URLFetcher
+        resource_error = urls.FatalURLFetchingError
+
+        class DenyResourceFetcher(url_fetcher):
+            def fetch(self, url: str, headers: Any = None) -> Any:
+                raise resource_error("Resource loading is disabled for thread exports")
+
+        return DenyResourceFetcher(), resource_error
 
     def format(self, thread: ThreadExport, options: ExportOptions) -> bytes:
+        weasyprint = self._load_weasyprint()
         html_content = self._html_formatter.format(thread, options)
 
-        if not self._weasyprint_available:
-            # Fallback: return HTML with PDF content type suggestion
+        try:
+            resource_fetcher, resource_error = self._resource_fetcher()
+        except PDFExportUnavailableError:
+            raise
+        except (ImportError, OSError, AttributeError, TypeError) as exc:
             logger.warning(
-                "PDF export falling back to HTML - install weasyprint for true PDF"
+                "PDF resource policy unavailable",
+                error_type=type(exc).__name__,
             )
-            return html_content
+            raise PDFExportUnavailableError() from None
 
         try:
-            import weasyprint
-
-            html_doc = weasyprint.HTML(string=html_content.decode("utf-8"))
+            html_doc = weasyprint.HTML(
+                string=html_content.decode("utf-8"),
+                url_fetcher=resource_fetcher,
+            )
             pdf_bytes = html_doc.write_pdf()
-            return pdf_bytes
-        except Exception as e:
-            logger.error("PDF generation failed", error=str(e))
-            raise RuntimeError(f"PDF generation failed: {e}")
+        except resource_error:
+            logger.warning("PDF export resource blocked")
+            raise PDFExportConversionError() from None
+        except Exception as exc:
+            logger.error(
+                "PDF generation failed",
+                error_type=type(exc).__name__,
+            )
+            raise PDFExportConversionError() from None
+
+        if not isinstance(pdf_bytes, bytes) or not pdf_bytes.startswith(b"%PDF-"):
+            logger.error("PDF generation returned an invalid signature")
+            raise PDFExportConversionError()
+
+        return pdf_bytes
 
     @property
     def content_type(self) -> str:
-        if self._weasyprint_available:
-            return "application/pdf"
-        return "text/html; charset=utf-8"
+        return "application/pdf"
 
     @property
     def file_extension(self) -> str:
-        if self._weasyprint_available:
-            return "pdf"
-        return "html"
+        return "pdf"
 
 
 class ExportService:
@@ -356,7 +616,7 @@ class ExportService:
             raise ValueError(f"Thread {thread_id} not found or access denied")
 
         formatter = self._formatters[format]
-        content = formatter.format(thread, options)
+        content = await self._format_thread(format, formatter, thread, options)
 
         # Generate filename
         title_slug = self._slugify(thread.title or "thread")
@@ -405,7 +665,9 @@ class ExportService:
                         )
                         continue
 
-                    content = formatter.format(thread, options)
+                    content = await self._format_thread(
+                        format, formatter, thread, options
+                    )
                     title_slug = self._slugify(thread.title or "thread")
                     filename = (
                         f"{title_slug}_{thread_id[:8]}.{formatter.file_extension}"
@@ -413,12 +675,15 @@ class ExportService:
 
                     zf.writestr(filename, content)
 
-                except Exception as e:
+                except (PDFExportUnavailableError, PDFExportConversionError):
+                    raise
+                except Exception as exc:
                     logger.error(
-                        "Failed to export thread", thread_id=thread_id, error=str(e)
+                        "Failed to export thread",
+                        thread_id=thread_id,
+                        error_type=type(exc).__name__,
                     )
-                    # Add error file
-                    zf.writestr(f"error_{thread_id[:8]}.txt", f"Export failed: {e}")
+                    zf.writestr(f"error_{thread_id[:8]}.txt", "Export failed")
 
         zip_buffer.seek(0)
         zip_content = zip_buffer.read()
@@ -434,6 +699,19 @@ class ExportService:
         )
 
         return zip_content, filename, "application/zip"
+
+    async def _format_thread(
+        self,
+        format: ExportFormat,
+        formatter: ExportFormatter,
+        thread: ThreadExport,
+        options: ExportOptions,
+    ) -> bytes:
+        """Format a thread without blocking the event loop with native PDF work."""
+        thread.export_format = format
+        if format == ExportFormat.PDF:
+            return await asyncio.to_thread(formatter.format, thread, options)
+        return formatter.format(thread, options)
 
     async def _load_thread(
         self, thread_id: str, user_id: str, options: ExportOptions
@@ -531,6 +809,11 @@ class ExportService:
                     content=msg.content,
                     created_at=msg.created_at,
                     model_name=msg.model_name if options.include_metadata else None,
+                    provider_usage=(
+                        _provider_token_usage(getattr(msg, "token_usage", None))
+                        if options.include_metadata
+                        else None
+                    ),
                     token_count=msg.token_count if options.include_metadata else 0,
                     latency_ms=msg.latency_ms if options.include_metadata else None,
                     feedback_rating=(
@@ -563,8 +846,6 @@ class ExportService:
 
     def _slugify(self, text: str, max_length: int = 50) -> str:
         """Convert text to URL-safe slug."""
-        import re
-
         text = text.lower()
         text = re.sub(r"[^\w\s-]", "", text)
         text = re.sub(r"[-\s]+", "_", text)

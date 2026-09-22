@@ -1,9 +1,12 @@
 """Agent state schema for LangGraph."""
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from langgraph.graph import add_messages
 from typing_extensions import TypedDict
+
+THREAD_PERSISTENCE_DURABLE = "durable"
+THREAD_PERSISTENCE_EPHEMERAL = "ephemeral"
 
 
 class AgentState(TypedDict):
@@ -18,8 +21,19 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     page_context: dict
     retrieved_contexts: list
+    # Server-validated document ids for the current turn. The rag node treats
+    # a non-empty list as an exact source scope and never widens it to corpus
+    # search; an empty list may resolve the latest thread-owned attachments on
+    # a retrieval-enabled follow-up.
+    attachment_ids: list
+    # Prompt-safe readiness records for explicitly requested attachments.
+    attachment_status: list
     tool_executions: list
     thread_id: str
+    # Server-authored checkpoint provenance. An exact ``ephemeral`` value is
+    # the only proof that a confirmation checkpoint intentionally has no
+    # durable Thread row; missing/unknown values are treated as durable.
+    thread_persistence: Literal["durable", "ephemeral"]
     # preprocessing_node increments once per fresh turn. Plain last-value state
     # prevents compiled specialist subgraphs from adding the value again.
     turn_index: int

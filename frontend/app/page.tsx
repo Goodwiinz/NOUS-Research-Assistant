@@ -10,12 +10,12 @@ export default function HomePage() {
 
   return (
     <div
-      className="min-h-screen flex flex-col bg-(--nous-nyx) text-(--nous-ivory) selection:bg-(--nous-sol) selection:text-(--nous-erebus)"
+      className="min-h-screen flex flex-col bg-(--nous-selene) text-(--nous-erebus) selection:bg-(--nous-sol) selection:text-(--nous-erebus)"
       suppressHydrationWarning
     >
       <HeroSection isAuthenticated={isAuthenticated} />
       <CapabilitiesSection />
-      <FooterSection />
+      <FooterSection isAuthenticated={isAuthenticated} />
     </div>
   );
 }

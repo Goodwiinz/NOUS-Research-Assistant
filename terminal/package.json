@@ -1,0 +1,30 @@
+{
+  "name": "@nous/terminal",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.18.2",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "start": "node --import ./react-runtime.mjs --import tsx src/index.tsx",
+    "type-check": "tsc --noEmit",
+    "test": "node --import ./react-runtime.mjs --import tsx --test src/*.test.tsx"
+  },
+  "dependencies": {
+    "@assistant-ui/react-ink": "0.0.43",
+    "@assistant-ui/react-ink-markdown": "0.0.42",
+    "ink": "7.1.1",
+    "react": "19.2.8",
+    "shiki": "^4.4.2",
+    "@nous/chat-runtime": "workspace:*",
+    "@assistant-ui/core": "0.3.19"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.5"
+  }
+}

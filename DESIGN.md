@@ -27,7 +27,7 @@ Planetary palette (`nous-tokens.css`). Warm gold is the identity accent.
 - Background: `--nous-bg-1`, `--nous-bg-2`, `--nous-bg-3`
 - Border: `--nous-border-1`, `--nous-border-2`
 
-**Dark warm-amber depth stack** (used for the always-dark brand landing): Nyx `#141210` → Obsidian `#1e1b17` → Umber `#28241e` → Sepia `#332e26` → Dusk `#3d372e`. Text: Ivory `#f5f0e8` → Parchment `#c8bfa8` → Dust `#8a8070`. Border: Shade `#2a261f`.
+**Dark warm-amber depth stack** (used for auth and other dark brand surfaces): Nyx `#141210` → Obsidian `#1e1b17` → Umber `#28241e` → Sepia `#332e26` → Dusk `#3d372e`. Text: Ivory `#f5f0e8` → Parchment `#c8bfa8` → Dust `#8a8070`. Border: Shade `#2a261f`.
 
 **Status**: Terra `#34d399` (success), Corona `#f59e0b` (warning), Mars `#ef4444` (error).
 
@@ -71,7 +71,7 @@ Scale: fixed rem in product (≈1.125–1.2 ratio); larger display steps allowed
 ## Theming
 
 - Light/dark via `.dark` class (`next-themes`). `--nous-*` semantic vars flip; brand anchors and the dark depth stack are absolute.
-- The brand landing is intentionally always-dark (warm Erebus/Nyx ground), independent of user theme.
+- The brand landing is intentionally always-light in the manuscript direction (Selene `#f7f7f5` ground, Aurum `#fdf6e3` band, Erebus ink), independent of user theme. The dark depth stack remains for auth and any dark brand surfaces.
 
 ## Anti-patterns (do not ship)
 

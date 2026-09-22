@@ -79,6 +79,7 @@ async def retrieve_kb_chunks(
     org_id: Any = None,
     top_k: Optional[int] = None,
     timeout: Optional[float] = None,
+    filters: Optional[dict[str, Any]] = None,
 ) -> DOKBRetrieveOutcome:
     """Call DO KB retrieve with unified timeout + 404/error classification.
 
@@ -100,14 +101,21 @@ async def retrieve_kb_chunks(
     from src.services.do_kb import DOKnowledgeBaseError, get_do_kb_client
 
     client = get_do_kb_client()
+    retrieve_kwargs: dict[str, Any] = {
+        "kb_uuid": kb_uuid,
+        "query": query,
+        "top_k": top_k,
+    }
+    if filters is not None:
+        retrieve_kwargs["filters"] = filters
     try:
         if timeout is not None:
             result = await asyncio.wait_for(
-                client.retrieve(kb_uuid=kb_uuid, query=query, top_k=top_k),
+                client.retrieve(**retrieve_kwargs),
                 timeout=timeout,
             )
         else:
-            result = await client.retrieve(kb_uuid=kb_uuid, query=query, top_k=top_k)
+            result = await client.retrieve(**retrieve_kwargs)
     except asyncio.TimeoutError:
         logger.warning(
             "do_kb retrieve timed out after %.1fs — falling back (org_id=%s)",

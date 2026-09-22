@@ -12,8 +12,6 @@
     "src/components/ui/enhanced-new-chat-dialog.tsx",
     "src/components/ui/shadcn-io/**/*",
     "src/hooks/useAnalyticsTracking.ts",
-    "src/lib/analytics.ts",
-    "src/lib/thread-hooks.ts",
     "src/services/analytics/**/*",
     "src/services/graphAnalyticsService.ts",
     "src/services/graphService.ts",
@@ -25,8 +23,8 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 199,
-    "warnings": 2724,
+    "errors": 116,
+    "warnings": 2003,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
         "errors": 1,
@@ -458,7 +456,7 @@
       },
       "src/components/chat/__tests__/ChatSidebar.test.tsx": {
         "errors": 0,
-        "warnings": 1
+        "warnings": 0
       },
       "src/components/chat/__tests__/renderWithChatRuntime.tsx": {
         "errors": 0,
@@ -506,7 +504,7 @@
       },
       "src/components/chat/ChatSidebar.tsx": {
         "errors": 0,
-        "warnings": 1
+        "warnings": 0
       },
       "src/components/chat/CitationLink.tsx": {
         "errors": 0,
@@ -1543,10 +1541,6 @@
       "src/lib/supabase/middleware.ts": {
         "errors": 0,
         "warnings": 1
-      },
-      "src/lib/thread-hooks.ts": {
-        "errors": 2,
-        "warnings": 3
       },
       "src/lib/utils.ts": {
         "errors": 0,

@@ -4,6 +4,7 @@ Covers:
  - SandboxManager lifecycle: availability, create, execute, install, cleanup
  - _tool_execute_code: auth, validation, success, error, package install, outputs
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +29,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.unit]
 # replaced real packages (boto3, PIL, tiktoken, ...) with mocks for every
 # test collected after this file — silent cross-test poisoning.
 # ---------------------------------------------------------------------------
+
 
 def _stub_if_missing(name: str) -> None:
     """Insert an empty module stub for *name* (and each prefix) if not loaded."""
@@ -344,7 +346,9 @@ class TestSandboxManagerExecute:
     async def test_text_result_captured(self, monkeypatch):
         fake_sb = AsyncMock()
         fake_sb.run_code = AsyncMock(
-            return_value=_make_e2b_execution(results=[_text_result("DataFrame summary")])
+            return_value=_make_e2b_execution(
+                results=[_text_result("DataFrame summary")]
+            )
         )
 
         m = self._manager_with_sandbox(monkeypatch, fake_sb)
@@ -363,13 +367,18 @@ class TestSandboxManagerExecute:
 class TestInstallPackages:
     async def test_valid_packages_produce_pip_command(self, monkeypatch):
         monkeypatch.setenv("E2B_API_KEY", "key-abc")
-        from src.services.sandbox.e2b_sandbox_manager import ExecutionResult, SandboxManager
+        from src.services.sandbox.e2b_sandbox_manager import (
+            ExecutionResult,
+            SandboxManager,
+        )
 
         captured: list[str] = []
 
         async def fake_execute(thread_id, code, **kwargs):
             captured.append(code)
-            return ExecutionResult(stdout="", stderr="", exit_code=0, execution_time_ms=5)
+            return ExecutionResult(
+                stdout="", stderr="", exit_code=0, execution_time_ms=5
+            )
 
         m = SandboxManager()
         m.execute = fake_execute  # type: ignore[assignment]
@@ -379,7 +388,9 @@ class TestInstallPackages:
         assert "numpy" in captured[0]
         assert "scikit-learn" in captured[0]
 
-    async def test_all_invalid_names_returns_error_without_calling_execute(self, monkeypatch):
+    async def test_all_invalid_names_returns_error_without_calling_execute(
+        self, monkeypatch
+    ):
         monkeypatch.setenv("E2B_API_KEY", "key-abc")
         from src.services.sandbox.e2b_sandbox_manager import SandboxManager
 
@@ -399,13 +410,18 @@ class TestInstallPackages:
     async def test_hyphenated_package_name_is_valid(self, monkeypatch):
         """scikit-learn, torch-geometric etc. should pass validation."""
         monkeypatch.setenv("E2B_API_KEY", "key-abc")
-        from src.services.sandbox.e2b_sandbox_manager import ExecutionResult, SandboxManager
+        from src.services.sandbox.e2b_sandbox_manager import (
+            ExecutionResult,
+            SandboxManager,
+        )
 
         executed = []
 
         async def fake_execute(thread_id, code, **kwargs):
             executed.append(code)
-            return ExecutionResult(stdout="", stderr="", exit_code=0, execution_time_ms=5)
+            return ExecutionResult(
+                stdout="", stderr="", exit_code=0, execution_time_ms=5
+            )
 
         m = SandboxManager()
         m.execute = fake_execute  # type: ignore[assignment]
@@ -585,13 +601,17 @@ def _import_tools_impl():
 class TestToolExecuteCode:
     async def test_requires_authenticated_user(self):
         tools_impl = _import_tools_impl()
-        result = await tools_impl._tool_execute_code({"code": "print(1)"}, current_user=None)
+        result = await tools_impl._tool_execute_code(
+            {"code": "print(1)"}, current_user=None, thread_id="t-test"
+        )
         assert "error" in result
         assert "authentication" in result["error"].lower()
 
     async def test_requires_non_empty_code(self):
         tools_impl = _import_tools_impl()
-        result = await tools_impl._tool_execute_code({"code": ""}, current_user=_mock_user())
+        result = await tools_impl._tool_execute_code(
+            {"code": ""}, current_user=_mock_user(), thread_id="t-test"
+        )
         assert "error" in result
         assert "no code" in result["error"].lower()
 
@@ -605,7 +625,7 @@ class TestToolExecuteCode:
             return_value=mock_mgr,
         ):
             result = await tools_impl._tool_execute_code(
-                {"code": "print(1)"}, current_user=_mock_user()
+                {"code": "print(1)"}, current_user=_mock_user(), thread_id="t-test"
             )
 
         assert "error" in result
@@ -659,7 +679,7 @@ class TestToolExecuteCode:
             return_value=mock_mgr,
         ):
             result = await tools_impl._tool_execute_code(
-                {"code": "print(x)"}, current_user=_mock_user()
+                {"code": "print(x)"}, current_user=_mock_user(), thread_id="t-test"
             )
 
         assert result["status"] == "error"
@@ -698,7 +718,10 @@ class TestToolExecuteCode:
 
         tools_impl = _import_tools_impl()
         bad_install = ExecutionResult(
-            stdout="", stderr="WARNING: ...", exit_code=1, execution_time_ms=5,
+            stdout="",
+            stderr="WARNING: ...",
+            exit_code=1,
+            execution_time_ms=5,
             error="some warning",
         )
         mock_mgr = AsyncMock()
@@ -717,6 +740,7 @@ class TestToolExecuteCode:
             result = await tools_impl._tool_execute_code(
                 {"code": "print('ok')", "packages": ["somelib"]},
                 current_user=_mock_user(),
+                thread_id="t-test",
             )
 
         mock_mgr.execute.assert_awaited_once()
@@ -740,7 +764,9 @@ class TestToolExecuteCode:
             return_value=mock_mgr,
         ):
             result = await tools_impl._tool_execute_code(
-                {"code": "plt.savefig('fig.png')"}, current_user=_mock_user()
+                {"code": "plt.savefig('fig.png')"},
+                current_user=_mock_user(),
+                thread_id="t-test",
             )
 
         assert "outputs" in result
@@ -798,7 +824,7 @@ class TestToolExecuteCode:
             return_value=mock_mgr,
         ):
             result = await tools_impl._tool_execute_code(
-                {"code": "1/0"}, current_user=_mock_user()
+                {"code": "1/0"}, current_user=_mock_user(), thread_id="t-test"
             )
 
         assert result["status"] == "error"
@@ -821,7 +847,9 @@ class TestToolExecuteCode:
             return_value=mock_mgr,
         ):
             result = await tools_impl._tool_execute_code(
-                {"code": "while True: pass"}, current_user=_mock_user()
+                {"code": "while True: pass"},
+                current_user=_mock_user(),
+                thread_id="t-test",
             )
 
         assert result["status"] == "error"
@@ -844,7 +872,7 @@ class TestToolExecuteCode:
             return_value=mock_mgr,
         ):
             result = await tools_impl._tool_execute_code(
-                {"code": "print('ok')"}, current_user=_mock_user()
+                {"code": "print('ok')"}, current_user=_mock_user(), thread_id="t-test"
             )
 
         assert result["status"] == "success"

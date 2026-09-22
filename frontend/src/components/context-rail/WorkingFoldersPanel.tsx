@@ -27,7 +27,10 @@ export function WorkingFoldersPanel({
   workspaceName: _workspaceName,
   onSelect,
 }: WorkingFoldersPanelProps) {
-  const { documents, notes, drafts } = useProjectWorkingFolders(projectId);
+  const { documents, notes, drafts, isLoading, errors, refetch } =
+    useProjectWorkingFolders(projectId);
+
+  const hasError = Object.values(errors).some(Boolean);
 
   const threadInternal = allCitations.filter((c) => c.documentId);
   const threadExternal = allCitations.filter((c) => !c.documentId);
@@ -108,7 +111,7 @@ export function WorkingFoldersPanel({
         id: `note-${n.id}`,
         label: n.title,
         icon: 'note',
-        meta: n.isPinned ? '📌' : undefined,
+        meta: n.isPinned ? 'Pinned' : undefined,
         onSelect: () => onSelect?.({ kind: 'note', id: n.id, title: n.title }),
       })),
     });
@@ -144,15 +147,30 @@ export function WorkingFoldersPanel({
       icon={<Folder className="h-3 w-3" strokeWidth={1.7} />}
       badge={totalFiles > 0 ? String(totalFiles) : undefined}
     >
-      {totalFiles === 0 ? (
-        <p
-          className="py-2 text-[11px] text-(--nous-fg-3)"
-          style={{
-            fontFamily: 'var(--nous-font-mono)',
-            letterSpacing: '0.04em',
-          }}
-        >
-          No files yet — cited sources will appear here.
+      {isLoading ? (
+        <div role="status" aria-live="polite" className="py-2">
+          <span className="sr-only">Loading project files</span>
+          <div
+            aria-hidden
+            className="h-3 w-2/3 animate-pulse rounded bg-(--nous-bg-2)"
+          />
+        </div>
+      ) : hasError ? (
+        <div role="alert" className="py-2">
+          <p className="text-[11px] text-(--nous-fg-2)">
+            Couldn&apos;t load project files.
+          </p>
+          <button
+            type="button"
+            onClick={refetch}
+            className="mt-1.5 rounded border border-(--nous-border-1) px-2 py-1 text-[11px] text-(--nous-fg-2) transition-colors hover:bg-(--nous-bg-2) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/40"
+          >
+            Retry
+          </button>
+        </div>
+      ) : totalFiles === 0 ? (
+        <p className="py-2 text-[11px] text-(--nous-fg-3)">
+          No files yet. Cited sources will appear here.
         </p>
       ) : (
         <FolderTree nodes={tree} />

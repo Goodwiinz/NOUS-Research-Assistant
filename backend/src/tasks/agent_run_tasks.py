@@ -49,6 +49,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from celery.signals import worker_process_shutdown
+
 from src.core.config import get_settings
 from src.shared.enums import JobStatus
 from src.tasks._async_utils import run_async
@@ -62,6 +64,16 @@ logger = logging.getLogger(__name__)
 _RUN_FUTURE_TIMEOUT_SECONDS = 420
 
 _SWEEP_FUTURE_TIMEOUT_SECONDS = 240
+
+
+@worker_process_shutdown.connect
+def _close_typesafe_router(**kwargs: Any) -> None:
+    """Close the worker's pooled client on the same persistent event loop."""
+    from src.services.agent.typesafe_classifier import close_typesafe_client
+
+    if get_settings().AGENT_INTENT_PROVIDER == "typesafe":
+        run_async(close_typesafe_client(), timeout=5)
+
 
 # ---------------------------------------------------------------------------
 # Sync→async boundary
@@ -265,6 +277,9 @@ async def _execute_agent_job(
     # timeout/cancel/exception paths), so nothing to do afterwards. The
     # execution lease is intentionally NOT released: terminal status ends the
     # run's lifecycle, and a NULL lease would re-open the one-shot claim.
+    from src.services.agent.typesafe_classifier import start_typesafe_client
+
+    start_typesafe_client()
     await _run_agent_graph(job_id, request, user)
     return {"job_id": job_id, "outcome": "ran"}
 

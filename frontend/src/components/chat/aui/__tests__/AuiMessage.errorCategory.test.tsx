@@ -53,7 +53,7 @@ describe('AuiMessage error category', () => {
   it('renders the rate_limited helper line', () => {
     renderErrorMessage('rate_limited');
     expect(
-      screen.getByText('The service is busy — try again in a moment.')
+      screen.getByText('The service is busy. Try again in a moment.')
     ).toBeInTheDocument();
   });
 
@@ -78,29 +78,37 @@ describe('AuiMessage error category', () => {
     ).toBeInTheDocument();
   });
 
-  it('falls back to the raw failure text for an unmapped category', () => {
-    renderErrorMessage('stream-error', 'Stream error: boom');
-    expect(screen.getByText('Stream error: boom')).toBeInTheDocument();
-  });
-
-  it('falls back to the raw failure text when no category is present', () => {
-    renderErrorMessage(undefined, 'Stream error: boom');
-    expect(screen.getByText('Stream error: boom')).toBeInTheDocument();
-  });
-
-  it('degrades quietly for an unknown category from a newer backend', () => {
-    renderErrorMessage('some_future_category', 'Stream error: boom');
-    expect(screen.getByText('Stream error: boom')).toBeInTheDocument();
+  it('uses stable safe copy for an unmapped category', () => {
+    renderErrorMessage('stream-error', 'Stream error: /srv/private/example.py');
     expect(
-      screen.getByRole('button', { name: /retry/i })
+      screen.getByText('The response could not be completed. Please try again.')
     ).toBeInTheDocument();
+    expect(screen.queryByText(/private\/example\.py/)).not.toBeInTheDocument();
+  });
+
+  it('uses stable safe copy when no category is present', () => {
+    renderErrorMessage(undefined, 'Stream error: /srv/private/example.py');
+    expect(
+      screen.getByText('The response could not be completed. Please try again.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/private\/example\.py/)).not.toBeInTheDocument();
+  });
+
+  it('degrades safely for an unknown category from a newer backend', () => {
+    renderErrorMessage(
+      'some_future_category',
+      'Stream error: /srv/private/example.py'
+    );
+    expect(
+      screen.getByText('The response could not be completed. Please try again.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/private\/example\.py/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
 
   it('keeps Retry for retryable categories', () => {
     renderErrorMessage('rate_limited');
-    expect(
-      screen.getByRole('button', { name: /retry/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
 
   it('hides Retry for invalid_request — an identical retry cannot succeed', () => {
@@ -112,6 +120,16 @@ describe('AuiMessage error category', () => {
 
   it('hides Retry for conflict — another confirmation holds the claim', () => {
     renderErrorMessage('conflict');
+    expect(
+      screen.queryByRole('button', { name: /retry/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('renders permission guidance without offering a doomed Retry', () => {
+    renderErrorMessage('permission_denied');
+    expect(
+      screen.getByText("You don't have permission to complete this action.")
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /retry/i })
     ).not.toBeInTheDocument();

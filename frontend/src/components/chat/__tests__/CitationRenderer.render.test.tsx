@@ -137,7 +137,7 @@ describe('CitationRenderer — citation-segmented path', () => {
     const paragraph = container.querySelector('p');
     expect(paragraph).toBeTruthy();
     expect(paragraph).toContainElement(
-      screen.getByRole('button', { name: /^Citation 1/ })
+      screen.getByRole('button', { name: /^Source 1/ })
     );
   });
 
@@ -165,7 +165,7 @@ describe('CitationRenderer — citation-segmented path', () => {
     expect(container.querySelectorAll('ul')).toHaveLength(1);
     expect(container.querySelectorAll('li')).toHaveLength(3);
     expect(container.querySelector('li')).toContainElement(
-      screen.getByRole('button', { name: /^Citation 1/ })
+      screen.getByRole('button', { name: /^Source 1/ })
     );
   });
 
@@ -186,16 +186,16 @@ describe('CitationRenderer — citation-segmented path', () => {
     );
 
     expect(screen.getByRole('heading', { level: 2 })).toContainElement(
-      screen.getAllByRole('button', { name: /^Citation 1/ })[0]
+      screen.getAllByRole('button', { name: /^Source 1/ })[0]
     );
     expect(container.querySelector('strong')).toContainElement(
-      screen.getAllByRole('button', { name: /^Citation 1/ })[1]
+      screen.getAllByRole('button', { name: /^Source 1/ })[1]
     );
     expect(container.querySelector('blockquote')).toContainElement(
-      screen.getAllByRole('button', { name: /^Citation 1/ })[2]
+      screen.getAllByRole('button', { name: /^Source 1/ })[2]
     );
     expect(screen.getByRole('cell', { name: /Improved/ })).toContainElement(
-      screen.getAllByRole('button', { name: /^Citation 1/ })[3]
+      screen.getAllByRole('button', { name: /^Source 1/ })[3]
     );
   });
 
@@ -212,7 +212,7 @@ describe('CitationRenderer — citation-segmented path', () => {
       screen.getByRole('link', { name: 'the paper' })
     );
     expect(strong).toContainElement(
-      screen.getByRole('button', { name: /^Citation 1/ })
+      screen.getByRole('button', { name: /^Source 1/ })
     );
     expect(container).not.toHaveTextContent('**');
   });
@@ -240,12 +240,12 @@ describe('CitationRenderer — citation-segmented path', () => {
 
     expect(view.container.querySelectorAll('ul')).toHaveLength(1);
     expect(view.container.querySelectorAll('li')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'Citation 1' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Source 1' })).toBeDisabled();
 
     view.rerender(<CitationRenderer content={content} citations={CITATIONS} />);
     expect(view.container.querySelectorAll('ul')).toHaveLength(1);
     expect(view.container.querySelectorAll('li')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: /^Citation 1:/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Source 1:/ })).toBeEnabled();
   });
 
   it('keeps bracketed indexing inside a code fence as code, not a chip', () => {
@@ -254,7 +254,7 @@ describe('CitationRenderer — citation-segmented path', () => {
     const block = screen.getByTestId('syntax-highlighter');
     expect(block).toHaveTextContent('a = arr[1]');
     // Exactly one chip (the prose [Doc 1]); arr[1] must not become one.
-    expect(screen.getAllByRole('button', { name: /^Citation 1/ })).toHaveLength(
+    expect(screen.getAllByRole('button', { name: /^Source 1/ })).toHaveLength(
       1
     );
   });
@@ -268,7 +268,7 @@ describe('CitationRenderer — citation-segmented path', () => {
     );
 
     expect(screen.getByText('[Doc 1]').tagName).toBe('CODE');
-    expect(screen.getAllByRole('button', { name: /^Citation 1/ })).toHaveLength(
+    expect(screen.getAllByRole('button', { name: /^Source 1/ })).toHaveLength(
       1
     );
   });
@@ -282,7 +282,7 @@ describe('CitationRenderer — citation-segmented path', () => {
     );
 
     expect(
-      await screen.findByRole('button', { name: /^Citation 1/ })
+      await screen.findByRole('button', { name: /^Source 1/ })
     ).toBeInTheDocument();
     await waitFor(() => expect(container.querySelector('.katex')).toBeTruthy());
   });
@@ -296,7 +296,7 @@ describe('CitationRenderer — citation-segmented path', () => {
         onCitationClick={onClick}
       />
     );
-    const chip = screen.getByRole('button', { name: 'Citation 3' });
+    const chip = screen.getByRole('button', { name: 'Source 3' });
     expect(chip).toBeDisabled();
     chip.click();
     expect(onClick).not.toHaveBeenCalled();

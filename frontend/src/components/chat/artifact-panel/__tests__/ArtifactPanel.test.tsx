@@ -4,11 +4,24 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import React from 'react';
+import { flushSync } from 'react-dom';
 import { act } from '@testing-library/react';
 import { render, screen, waitFor } from '@/test/test-utils';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 
 import { ArtifactPanel } from '../ArtifactPanel';
-import { useArtifactPanelStore, type Artifact } from '@/store/artifactPanelStore';
+import {
+  useArtifactPanelStore,
+  type Artifact,
+} from '@/store/artifactPanelStore';
 import { documentService } from '@/services/documentService';
 import { projectService } from '@/services/projectService';
 
@@ -22,6 +35,7 @@ vi.mock('@/services/projectService', () => ({
   projectService: {
     getNote: vi.fn(),
     getDraft: vi.fn(),
+    getDraftCitations: vi.fn(),
   },
 }));
 
@@ -41,9 +55,41 @@ const docArtifact: Artifact = {
   title: 'RLHF Survey',
 };
 
+function ArtifactWithRadixPalette(): React.ReactElement {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <button type="button">Open palette</button>
+        </DialogTrigger>
+        <DialogContent
+          aria-label="Command palette"
+          onEscapeKeyDown={() => {
+            // Radix removes its portal during the Escape dispatch. This is
+            // the ordering the panel's global listener must tolerate.
+            flushSync(() => setOpen(false));
+          }}
+        >
+          <DialogTitle>Command palette</DialogTitle>
+          <DialogDescription>Search commands</DialogDescription>
+          <DialogPrimitive.Close asChild>
+            <button type="button">Close palette</button>
+          </DialogPrimitive.Close>
+        </DialogContent>
+      </Dialog>
+      <ArtifactPanel artifact={docArtifact} />
+    </>
+  );
+}
+
 describe('ArtifactPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(projectService.getDraftCitations).mockResolvedValue({
+      citations: [],
+      total: 0,
+    });
     act(() => {
       useArtifactPanelStore.setState({
         artifact: docArtifact,
@@ -84,17 +130,14 @@ describe('ArtifactPanel', () => {
     render(<ArtifactPanel artifact={docArtifact} />);
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
-    expect(
-      screen.getByText("Couldn't load this document")
-    ).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load this document")).toBeInTheDocument();
   });
 
   it('links to the full document page', () => {
     render(<ArtifactPanel artifact={docArtifact} />);
-    expect(screen.getByRole('link', { name: 'Open full page' })).toHaveAttribute(
-      'href',
-      '/documents/doc-1'
-    );
+    expect(
+      screen.getByRole('link', { name: 'Open full page' })
+    ).toHaveAttribute('href', '/documents/doc-1');
   });
 
   it('close button hides the panel but keeps the artifact', async () => {
@@ -130,6 +173,41 @@ describe('ArtifactPanel', () => {
     }
   });
 
+  it('keeps the artifact open when a Radix palette consumes Escape', async () => {
+    const { user } = render(<ArtifactWithRadixPalette />);
+    await user.click(screen.getByRole('button', { name: 'Open palette' }));
+    expect(
+      screen.getByRole('dialog', { name: 'Command palette' })
+    ).toBeInTheDocument();
+
+    const palette = screen.getByRole('dialog', { name: 'Command palette' });
+    const escape = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    // Radix's DismissableLayer normally calls preventDefault after dismissing
+    // the dialog. Keep that call observable while leaving defaultPrevented
+    // false so this regression isolates the original composed event path.
+    const preventDefault = vi.fn();
+    Object.defineProperty(escape, 'preventDefault', {
+      configurable: true,
+      value: preventDefault,
+    });
+    act(() => {
+      palette.dispatchEvent(escape);
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Command palette' })
+      ).not.toBeInTheDocument()
+    );
+    expect(escape.defaultPrevented).toBe(false);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(useArtifactPanelStore.getState().isOpen).toBe(true);
+  });
+
   it('pin button toggles the pinned flag with aria-pressed', async () => {
     const { user } = render(<ArtifactPanel artifact={docArtifact} />);
     const pin = screen.getByRole('button', { name: 'Pin this artifact' });
@@ -143,9 +221,7 @@ describe('ArtifactPanel', () => {
     const { user, rerender } = render(
       <ArtifactPanel artifact={docArtifact} onToggleRail={onToggleRail} />
     );
-    await user.click(
-      screen.getByRole('button', { name: 'Show context rail' })
-    );
+    await user.click(screen.getByRole('button', { name: 'Show context rail' }));
     expect(onToggleRail).toHaveBeenCalledTimes(1);
 
     rerender(<ArtifactPanel artifact={docArtifact} />);
@@ -257,6 +333,55 @@ describe('ArtifactPanel', () => {
     expect(screen.getByText('14 citations')).toBeInTheDocument();
   });
 
+  it('opens the document referenced by a draft [Doc N] citation', async () => {
+    vi.mocked(projectService.getDraft).mockResolvedValue({
+      id: 'draft-1',
+      project_id: 'proj-1',
+      version: 4,
+      title: 'Transformer survey',
+      content: 'Deep transitions increase representational depth [Doc 6].',
+      themes: [],
+      word_count: 8,
+      citation_count: 6,
+      is_current: true,
+      created_at: '2026-09-15',
+    });
+    vi.mocked(projectService.getDraftCitations).mockResolvedValue({
+      citations: [
+        {
+          id: 'draft-citation-6',
+          citation_index: 6,
+          document_id: 'doc-6',
+          snippet: 'Deep transition architectures',
+          context: 'Representational depth between sequential states.',
+        },
+      ],
+      total: 1,
+    });
+    const artifact: Artifact = {
+      kind: 'draft',
+      projectId: 'proj-1',
+      id: 'draft-1',
+      title: 'Transformer survey',
+    };
+    const { user } = render(<ArtifactPanel artifact={artifact} />);
+
+    const citation = await screen.findByRole('button', {
+      name: 'Source 6: Document 6',
+    });
+    await user.click(citation);
+
+    expect(projectService.getDraftCitations).toHaveBeenCalledWith(
+      'proj-1',
+      'draft-1'
+    );
+    expect(useArtifactPanelStore.getState().artifact).toEqual({
+      kind: 'document',
+      id: 'doc-6',
+      title: 'Document 6',
+    });
+  });
+
   it('shows an error state when a note fetch fails', async () => {
     vi.mocked(projectService.getNote).mockRejectedValue(new Error('404'));
     const artifact: Artifact = {
@@ -269,6 +394,52 @@ describe('ArtifactPanel', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect(screen.getByText("Couldn't load this note")).toBeInTheDocument();
+  });
+
+  it('traps Tab inside the panel in sheet mode', async () => {
+    // Below md the panel is a modal bottom sheet, so Tab must not walk the
+    // obscured composer behind it.
+    const realMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: (query: string) => ({
+        matches: query.includes('max-width'),
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+    try {
+      const { user } = render(<ArtifactPanel artifact={docArtifact} />);
+      const sheet = screen.getByRole('dialog', { name: 'Artifact viewer' });
+      const focusables = Array.from(
+        sheet.querySelectorAll<HTMLElement>(
+          'a[href],button:not([disabled]),input,textarea,select,[tabindex]:not([tabindex="-1"])'
+        )
+      );
+      expect(focusables.length).toBeGreaterThan(1);
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      last.focus();
+      await user.tab();
+      expect(document.activeElement).toBe(first);
+
+      first.focus();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(last);
+    } finally {
+      Object.defineProperty(window, 'matchMedia', {
+        writable: true,
+        configurable: true,
+        value: realMatchMedia,
+      });
+    }
   });
 
   it('renders an external artifact as an outbound link card', () => {
