@@ -20,10 +20,9 @@ data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
 
-# Trust is limited to the goodwiins/rag repository building on the develop
-# branch (the only branch that runs the image build/push pipeline). Note the
-# sub pin: a workflow_dispatch from any non-develop branch will fail OIDC
-# role assumption by design.
+# The deploy role retains the original develop-only trust. ECR builds need
+# a separate trust policy for the migration branch in the renamed repository;
+# do not grant that branch the EKS deploy role.
 data "aws_iam_policy_document" "github_oidc_assume_role" {
   statement {
     sid     = "AssumeRoleByWebIdentity"
@@ -49,9 +48,38 @@ data "aws_iam_policy_document" "github_oidc_assume_role" {
   }
 }
 
+data "aws_iam_policy_document" "github_ecr_oidc_assume_role" {
+  statement {
+    sid     = "AssumeRoleByWebIdentity"
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [data.aws_iam_openid_connect_provider.github.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values = [
+        "repo:goodwiins/rag:ref:refs/heads/develop",
+        "repo:Goodwiinz/NOUS-Research-Assistant:ref:refs/heads/develop",
+        "repo:Goodwiinz/NOUS-Research-Assistant:ref:refs/heads/migration/aws",
+      ]
+    }
+  }
+}
+
 resource "aws_iam_role" "github_ecr_push" {
   name               = "${var.project_name}-github-ecr-push"
-  assume_role_policy = data.aws_iam_policy_document.github_oidc_assume_role.json
+  assume_role_policy = data.aws_iam_policy_document.github_ecr_oidc_assume_role.json
 
   tags = {
     Name = "${var.project_name}-github-ecr-push"
