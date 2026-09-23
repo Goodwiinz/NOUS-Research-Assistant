@@ -57,7 +57,6 @@ class ArXivSearchRequest(BaseModel):
 class ArXivIngestRequest(BaseModel):
     paper_ids: List[str] = Field(
         ...,
-        min_length=1,
         max_length=MAX_ARXIV_INGEST_PAPERS,
         description="List of arXiv paper IDs to ingest",
     )
@@ -101,7 +100,6 @@ class EvaluationDatasetRequest(BaseModel):
     questions_per_paper: int = Field(5, ge=1, le=10, description="Questions per paper")
     difficulty_levels: List[str] = Field(
         ["easy", "medium", "hard"],
-        min_length=1,
         max_length=3,
         description="Difficulty levels",
     )
