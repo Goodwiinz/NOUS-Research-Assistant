@@ -365,7 +365,7 @@ Expected: exit 0, no `error:` lines. (Warnings about extensions/privileges that 
 **2f. Verify row counts match** — exact count per public table on both sides, then diff:
 
 ```bash
-COUNTS='SELECT string_agg(format('"'"'SELECT %L AS tbl, count(*) FROM %I'"'"', tablename, tablename), '"'"' UNION ALL '"'"') FROM pg_tables WHERE schemaname = '"'"'public'"'"';'
+COUNTS='SELECT string_agg(format('"'"'SELECT %L AS tbl, count(*) FROM %I'"'"', tablename, tablename), '"'"' UNION ALL '"'"' ORDER BY tablename) FROM pg_tables WHERE schemaname = '"'"'public'"'"';'
 psql_do  -Atc "$COUNTS" | psql_do  > .cutover/counts-do.txt
 psql_rds -Atc "$COUNTS" | psql_rds > .cutover/counts-rds.txt
 diff .cutover/counts-do.txt .cutover/counts-rds.txt && echo COUNTS-MATCH
