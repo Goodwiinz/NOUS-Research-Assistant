@@ -94,6 +94,8 @@ def test_docker_outputs_full_sha_trace_tag_and_immutable_digest() -> None:
         build["with"]["build-args"]
     )
     assert ":latest" not in str(build["with"]["tags"])
+    assert "cache-from" not in build["with"]
+    assert "cache-to" not in build["with"]
     assert "sha256:[0-9a-f]{64}" in str(verify["run"])
     assert 'echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"' in str(verify["run"])
 
