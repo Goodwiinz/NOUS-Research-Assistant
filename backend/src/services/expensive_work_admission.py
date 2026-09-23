@@ -16,7 +16,7 @@ EXPENSIVE_WORK_RATE_KEY = "research_expensive_work"
 EXPENSIVE_WORK_LIMIT = 5
 EXPENSIVE_WORK_WINDOW_SECONDS = 60
 
-_limiter = RateLimiter(get_settings().REDIS_URL)
+_limiter = RateLimiter(get_settings().REDIS_URL, fail_open=False)
 _local_lock = threading.Lock()
 _local_buckets: dict[str, tuple[int, int]] = {}
 
