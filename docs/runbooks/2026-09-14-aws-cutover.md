@@ -759,7 +759,7 @@ Run all from outside the cluster (real user path, via ALB). Use the
 | 5 | Knowledge-graph entities page | Open entities page | Nodes/edges render (Neo4j restored — data visible from Step 4) |
 | 6 | Celery beat | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-beat --tail=50` | Heartbeat/tick lines; no task failures |
 | 7 | Celery worker | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-worker --tail=50` | Tasks consumed from ElastiCache queue |
-| 8 | Worker autoscaling (HPA) | `kubectl get hpa -n multimodal-rag-system --context $EKS_CONTEXT` | Worker HPA present (KEDA is NOT installed on EKS — `keda.enabled: false`; re-test ScaledObject after KEDA install) |
+| 8 | Worker autoscaling (HPA) | `kubectl get hpa -n multimodal-rag-system --context $EKS_CONTEXT` | Worker HPA present with numeric CPU/memory targets (`metrics-server` installed; see `infrastructure/kubernetes/aws-addons.md`). KEDA is NOT installed on EKS — `keda.enabled: false`; re-test ScaledObject after KEDA install. |
 | 9 | DO Spaces round-trip | Download a pre-migration file and upload/download a small new file through the UI/app | Both served from DO Spaces (`rag-system-storage`); new file indexes in DO KB and is searchable |
 | 10 | Synthetic traffic | After tests 1-9 pass, commit `syntheticTraffic.suspend=false` in `values-aws.yaml`, wait for Argo sync and next `*/20` tick, then check job logs | Synthetic job succeeds; leave suspended if earlier smoke tests fail |
 

@@ -56,8 +56,34 @@ helm repo add eks https://aws.github.io/eks-charts
 helm repo add autoscaler https://kubernetes.github.io/autoscaler
 helm repo add external-secrets https://charts.external-secrets.io
 helm repo add external-dns https://kubernetes-sigs.github.io/external-dns
+helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
 helm repo update
 ```
+
+## metrics-server (chart 3.13.1 / app v0.8.1 for Kubernetes 1.31)
+
+The worker's CPU/memory HPA needs the `metrics.k8s.io` API, which EKS does
+not install by default. The chart generates a serving certificate and puts
+its CA in the APIService instead of skipping APIService TLS verification:
+
+```sh
+eval "$(aws configure export-credentials --format env)" && \
+helm upgrade --install metrics-server metrics-server/metrics-server \
+  -n kube-system --version 3.13.1 \
+  --set tls.type=helm \
+  --set apiService.insecureSkipTLSVerify=false \
+  --wait --timeout=3m
+
+eval "$(aws configure export-credentials --format env)" && kubectl top nodes
+eval "$(aws configure export-credentials --format env)" && \
+kubectl top pods -n multimodal-rag-system
+eval "$(aws configure export-credentials --format env)" && \
+kubectl get hpa nous-dev-aws-celery-worker -n multimodal-rag-system
+```
+
+Expect real CPU/memory readings in `kubectl top` and, after HPA reconciliation,
+non-`<unknown>` HPA targets. The Helm-generated serving certificate has a
+365-day default validity; rotate before expiry.
 
 ## aws-load-balancer-controller (chart 1.13.4 / app v2.13.4)
 
