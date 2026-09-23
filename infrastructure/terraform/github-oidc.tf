@@ -20,9 +20,9 @@ data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
 
-# The deploy role retains the original develop-only trust. ECR builds need
-# a separate trust policy for the migration branch in the renamed repository;
-# do not grant that branch the EKS deploy role.
+# The deploy role stays develop-only, including the renamed repository. ECR
+# builds need a separate trust policy for migration/aws; do not grant that
+# branch the EKS deploy role.
 data "aws_iam_policy_document" "github_oidc_assume_role" {
   statement {
     sid     = "AssumeRoleByWebIdentity"
@@ -43,7 +43,10 @@ data "aws_iam_policy_document" "github_oidc_assume_role" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:goodwiins/rag:ref:refs/heads/develop"]
+      values = [
+        "repo:goodwiins/rag:ref:refs/heads/develop",
+        "repo:Goodwiinz/NOUS-Research-Assistant:ref:refs/heads/develop",
+      ]
     }
   }
 }
