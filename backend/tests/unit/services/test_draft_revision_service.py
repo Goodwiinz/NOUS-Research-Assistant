@@ -113,7 +113,145 @@ async def _service(
         return_value=(MagicMock(), "gpt-5-test"),
     ):
         service = DraftGenerationService(cast(AsyncSession, session))
+
+    async def _passing_review(_db, content, _documents):
+        indices = DraftGenerationService._citation_indices(content)
+        return {
+            "verdicts": [
+                {
+                    "doc_index": index,
+                    "verdict": "exact",
+                    "evidence": f"Evidence for document {index}",
+                    "page_number": index,
+                    "location": f"Page {index}",
+                }
+                for index in indices
+            ],
+            "summary": {
+                "exact": len(indices),
+                "minor": 0,
+                "major": 0,
+                "unverified": 0,
+            },
+            "docs_checked": len(indices),
+            "docs_skipped": 0,
+        }
+
+    service._review_citations = AsyncMock(side_effect=_passing_review)
     return service, session
+
+
+@pytest.mark.parametrize("verdict", ["major", "unverified"])
+async def test_revision_review_failure_blocks_persistence(verdict: str) -> None:
+    base = _draft(3, "Original [Doc 1].", current=True)
+    service, session = await _service(base, [_document("Paper")])
+    service._review_citations = AsyncMock(
+        return_value={
+            "verdicts": [
+                {
+                    "doc_index": 1,
+                    "verdict": verdict,
+                    "evidence": "Claim is not available in the source.",
+                }
+            ],
+            "summary": {verdict: 1},
+            "docs_checked": 1,
+            "docs_skipped": 0,
+        }
+    )
+
+    with (
+        patch.object(
+            service,
+            "_build_revision_with_llm",
+            new=AsyncMock(return_value="Unsupported claim is not available [Doc 1]."),
+        ),
+        pytest.raises(ValueError, match="blocked persistence"),
+    ):
+        await service.revise_draft(project_id=uuid4(), instructions="Add claim")
+
+    assert not any(isinstance(value, GeneratedDraft) for value in session.added)
+    assert session.commits == 1
+
+
+async def test_minor_revision_persists_review_evidence_and_location() -> None:
+    base = _draft(3, "Original [Doc 1].", current=True)
+    service, session = await _service(base, [_document("Paper")])
+    review = {
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "minor",
+                "evidence": "Training took 3.5 days on 8 GPUs.",
+                "page_number": 12,
+                "location": "Page 12",
+            }
+        ],
+        "summary": {"exact": 0, "minor": 1, "major": 0, "unverified": 0},
+        "docs_checked": 1,
+        "docs_skipped": 0,
+    }
+    service._review_citations = AsyncMock(return_value=review)
+
+    with patch.object(
+        service,
+        "_build_revision_with_llm",
+        new=AsyncMock(return_value="Clarified [Doc 1]."),
+    ):
+        await service.revise_draft(project_id=uuid4(), instructions="Clarify")
+
+    saved = next(value for value in session.added if isinstance(value, GeneratedDraft))
+    citation = next(
+        value for value in session.added if isinstance(value, DraftCitation)
+    )
+    assert saved.generation_params["citation_review"] == review
+    assert citation.snippet == "Training took 3.5 days on 8 GPUs."
+    assert "Page 12" in citation.context
+
+
+async def test_revision_reviewer_exception_blocks_persistence() -> None:
+    base = _draft(3, "Original [Doc 1].", current=True)
+    service, session = await _service(base, [_document("Paper")])
+    service._review_citations = AsyncMock(
+        side_effect=RuntimeError("review unavailable")
+    )
+
+    with (
+        patch.object(
+            service,
+            "_build_revision_with_llm",
+            new=AsyncMock(return_value="Clarified [Doc 1]."),
+        ),
+        pytest.raises(RuntimeError, match="review unavailable"),
+    ):
+        await service.revise_draft(project_id=uuid4(), instructions="Clarify")
+
+    assert not any(isinstance(value, GeneratedDraft) for value in session.added)
+
+
+async def test_revision_skipped_cited_document_blocks_persistence() -> None:
+    base = _draft(3, "Original [Doc 1].", current=True)
+    service, session = await _service(base, [_document("Paper")])
+    service._review_citations = AsyncMock(
+        return_value={
+            "verdicts": [],
+            "summary": {"exact": 0, "minor": 0, "major": 0, "unverified": 0},
+            "docs_checked": 0,
+            "docs_skipped": 1,
+        }
+    )
+
+    with (
+        patch.object(
+            service,
+            "_build_revision_with_llm",
+            new=AsyncMock(return_value="Clarified [Doc 1]."),
+        ),
+        pytest.raises(ValueError, match="skipped cited documents"),
+    ):
+        await service.revise_draft(project_id=uuid4(), instructions="Clarify")
+
+    assert not any(isinstance(value, GeneratedDraft) for value in session.added)
 
 
 async def test_explicit_base_version_is_used_even_when_later_version_is_current() -> (
@@ -332,7 +470,7 @@ async def test_short_base_revision_still_rejects_proportional_collapse() -> None
         )
 
     DraftGenerationService._validate_revision_content(
-        "Done.", "Tiny base.", [_document("Paper")], "revise"
+        "Done [Doc 1].", "Tiny base.", [_document("Paper")], "revise"
     )
 
 

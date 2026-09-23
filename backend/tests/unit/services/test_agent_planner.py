@@ -114,14 +114,14 @@ class TestGeneratePlan:
         assert "proj-123" in prompt
         # Complexity gating folded into the prompt
         assert "FEWER" in prompt and "empty steps list" in prompt
-        assert "create_draft returns pending" in prompt
-        assert "final planned step" in prompt
+        assert "normally returns a completed terminal result" in prompt
+        assert "pending result is terminal for the turn" in prompt
         assert "revise_draft is synchronous" in prompt
 
         # Empty plan passes through unmodified (node layer treats it as "simple").
         assert result.steps == []
 
-    async def test_generate_plan_truncates_steps_after_pending_create_draft(self):
+    async def test_generate_plan_keeps_steps_after_create_draft(self):
         model_plan = AgentPlan(
             steps=[
                 PlanStep(
@@ -158,8 +158,9 @@ class TestGeneratePlan:
         assert [step.tool for step in result.steps] == [
             "search_arxiv",
             "create_draft",
+            "get_current_draft",
         ]
-        assert result.steps[-1].depends_on == [1]
+        assert result.steps[-1].depends_on == [2]
         assert result.reasoning == model_plan.reasoning
 
 

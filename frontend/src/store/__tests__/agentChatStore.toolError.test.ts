@@ -19,7 +19,9 @@ import { setAppQueryClient } from '@/lib/query-client';
 const mockAgentChatService = vi.mocked(agentChatService);
 
 function toolExecutions(): NonNullable<
-  ReturnType<typeof useAgentChatStore.getState>['messages'][number]['toolExecutions']
+  ReturnType<
+    typeof useAgentChatStore.getState
+  >['messages'][number]['toolExecutions']
 > {
   const messages = useAgentChatStore.getState().messages;
   return messages[messages.length - 1]?.toolExecutions ?? [];
@@ -71,6 +73,27 @@ describe('agentChatStore tool_end error handling', () => {
     const execs = toolExecutions();
     expect(execs[0].status).toBe('completed');
     expect(execs[0].error).toBeUndefined();
+  });
+
+  it('keeps a successful frame pending when the result payload is pending', async () => {
+    mockAgentChatService.streamMessage.mockImplementation(
+      async (_request, callbacks) => {
+        callbacks.onToolStart?.('create_draft', {});
+        callbacks.onToolEnd?.(
+          'create_draft',
+          '{"status":"pending","task_id":"draft-task"}',
+          false
+        );
+        callbacks.onDone?.();
+      }
+    );
+
+    await act(async () => {
+      useAgentChatStore.getState().setInputValue('create a draft');
+      await useAgentChatStore.getState().sendMessage();
+    });
+
+    expect(toolExecutions()[0].status).toBe('pending');
   });
 
   it('settles a running tool when the stream finishes without tool_end', async () => {

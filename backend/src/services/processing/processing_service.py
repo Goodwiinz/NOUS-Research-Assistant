@@ -257,7 +257,8 @@ class ProcessingPipeline:
                     page_text = page.get_text()
 
                     if page_text.strip():
-                        text.append(page_text)
+                        cleaned = self._clean_extracted_text(page_text)
+                        text.append(f"[Page {page_num + 1}]\n{cleaned}")
                     else:
                         # If no text found, try OCR
                         pix = page.get_pixmap()
@@ -265,7 +266,8 @@ class ProcessingPipeline:
                         img = Image.open(io.BytesIO(img_data))
                         ocr_text = pytesseract.image_to_string(img)
                         if ocr_text.strip():
-                            text.append(f"[OCR Page {page_num + 1}]\n{ocr_text}")
+                            cleaned = self._clean_extracted_text(ocr_text)
+                            text.append(f"[Page {page_num + 1}]\n{cleaned}")
 
                 doc.close()
 
@@ -282,13 +284,13 @@ class ProcessingPipeline:
                         img = Image.open(io.BytesIO(img_data))
                         ocr_text = pytesseract.image_to_string(img)
                         if ocr_text.strip():
-                            text.append(f"[OCR Page {page_num + 1}]\n{ocr_text}")
+                            cleaned = self._clean_extracted_text(ocr_text)
+                            text.append(f"[Page {page_num + 1}]\n{cleaned}")
 
-            extracted_text = "\n".join(text)
+            extracted_text = "\n\n".join(text)
 
             # Post-process and clean the text
             if extracted_text:
-                extracted_text = self._clean_extracted_text(extracted_text)
                 logger.info(
                     f"Successfully extracted {len(extracted_text)} characters from PDF"
                 )
@@ -315,8 +317,6 @@ class ProcessingPipeline:
 
             # Fix common OCR errors
             text = re.sub(r"\|", "I", text)  # Vertical bars to I
-            text = re.sub(r"1", "l", text)  # Sometimes 1 is misrecognized as l
-
             # Normalize line breaks
             text = re.sub(
                 r"\n\s*\n", "\n\n", text
