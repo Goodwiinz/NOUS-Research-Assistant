@@ -72,7 +72,9 @@ def test_docker_outputs_full_sha_trace_tag_and_immutable_digest() -> None:
     docker = _load_workflow(DOCKER_PATH)
     call_outputs = _triggers(docker)["workflow_call"]["outputs"]
     job = docker["jobs"]["build-backend"]
-    identity = _step_with_run(docker, "build-backend", 'IMAGE_TAG="$REGISTRY/backend')
+    identity = _step_with_run(
+        docker, "build-backend", 'IMAGE_TAG="$REGISTRY/nous/backend'
+    )
     build = _step_with_action(docker, "build-backend", "docker/build-push-action@")
     verify = _step_with_run(docker, "build-backend", "valid registry digest")
 
@@ -86,7 +88,7 @@ def test_docker_outputs_full_sha_trace_tag_and_immutable_digest() -> None:
         "${{ jobs.build-backend.outputs.digest }}"
     )
     assert job["outputs"]["digest"] == "${{ steps.verify-image.outputs.digest }}"
-    assert 'IMAGE_TAG="$REGISTRY/backend:$SOURCE_SHA"' in str(identity["run"])
+    assert 'IMAGE_TAG="$REGISTRY/nous/backend:$SOURCE_SHA"' in str(identity["run"])
     assert build["with"]["tags"] == "${{ steps.identity.outputs.image_tag }}"
     assert "GIT_SHA=${{ steps.identity.outputs.source_sha }}" in str(
         build["with"]["build-args"]
@@ -208,7 +210,7 @@ def test_release_source_gate_skips_image_bumps_and_stale_runs(tmp_path: Path) ->
 
     proposal_branch = f"codex/release-dev-{source_sha}"
     assert proposal_status(proposal_branch).returncode == 0
-    values = repo / "infrastructure/helm/knowledge-graph-analytics/values-dev.yaml"
+    values = repo / "infrastructure/helm/knowledge-graph-analytics/values-aws.yaml"
     values.parent.mkdir(parents=True)
     values.write_text("backend: {image: {tag: tested}}")
     git("add", ".")
