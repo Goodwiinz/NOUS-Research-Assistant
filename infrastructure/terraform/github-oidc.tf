@@ -45,7 +45,7 @@ data "aws_iam_policy_document" "github_oidc_assume_role" {
       variable = "token.actions.githubusercontent.com:sub"
       values = [
         "repo:goodwiins/rag:ref:refs/heads/develop",
-        "repo:Goodwiinz/NOUS-Research-Assistant:ref:refs/heads/develop",
+        "repo:Goodwiinz@234833987/NOUS-Research-Assistant@1073120335:ref:refs/heads/develop",
       ]
     }
   }
@@ -73,8 +73,8 @@ data "aws_iam_policy_document" "github_ecr_oidc_assume_role" {
       variable = "token.actions.githubusercontent.com:sub"
       values = [
         "repo:goodwiins/rag:ref:refs/heads/develop",
-        "repo:Goodwiinz/NOUS-Research-Assistant:ref:refs/heads/develop",
-        "repo:Goodwiinz/NOUS-Research-Assistant:ref:refs/heads/migration/aws",
+        "repo:Goodwiinz@234833987/NOUS-Research-Assistant@1073120335:ref:refs/heads/develop",
+        "repo:Goodwiinz@234833987/NOUS-Research-Assistant@1073120335:ref:refs/heads/migration/aws",
       ]
     }
   }
