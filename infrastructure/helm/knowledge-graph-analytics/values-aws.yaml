@@ -120,8 +120,6 @@ backend:
     - secretRef:
         name: supabase-credentials
     - secretRef:
-        name: redis-credentials
-    - secretRef:
         name: spaces-credentials
     - secretRef:
         name: langsmith-credentials
@@ -129,6 +127,9 @@ backend:
     # DO Knowledge Base remains the primary retrieval service in phase 1.
     - secretRef:
         name: do-kb-credentials
+    # /do-kb also contains the old DO REDIS_URL; the last envFrom wins.
+    - secretRef:
+        name: redis-credentials
   env:
     - name: ENVIRONMENT
       value: "dev"
