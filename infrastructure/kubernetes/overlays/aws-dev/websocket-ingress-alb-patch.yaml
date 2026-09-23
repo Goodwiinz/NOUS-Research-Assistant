@@ -1,4 +1,4 @@
-# ALB patch for the websocket ingress (backend-service:8001). Long-lived
+# ALB patch for the websocket ingress (Helm backend Service:80). Long-lived
 # connections: raise the ALB idle timeout toward the nginx-era 86400s ceiling
 # (ALB max 4000s). $patch: replace swaps the entire annotation map.
 apiVersion: networking.k8s.io/v1
@@ -14,7 +14,7 @@ metadata:
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
-    alb.ingress.kubernetes.io/healthcheck-path: /ws/health
+    alb.ingress.kubernetes.io/healthcheck-path: /health
     alb.ingress.kubernetes.io/idle-timeout: "4000"
     # TLS is AWS ACM (NOT cert-manager): terraform aws_acm_certificate
     # (Task 3) with DNS validation — the validation CNAME is managed manually
