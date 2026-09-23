@@ -5,8 +5,9 @@ Generates literature review drafts from project documents using AI
 
 import asyncio
 import hashlib
+import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from src.models.citation import Citation
 from src.models.document import Document
 from src.models.draft_citation import DraftCitation
 from src.models.generated_draft import GeneratedDraft
+from src.services.agent.job_store import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -42,6 +44,11 @@ class DraftGenerationStatus:
 # R2-L2: bounded — unbounded growth leaked one entry per generation forever.
 _GENERATION_STATUS_MAX = 500
 _generation_status: Dict[str, Dict[str, Any]] = {}
+_DRAFT_STATUS_KEY_PREFIX = "research:draft-status:"
+_DRAFT_STATUS_TTL_SECONDS = 3600
+_DRAFT_TERMINAL_STATUS_TTL_SECONDS = 30 * 24 * 3600
+_DRAFT_ACTIVE_STALE_SECONDS = 120
+_DRAFT_HEARTBEAT_INTERVAL_SECONDS = 30
 _draft_metrics_initialized = False
 _draft_metrics_disabled = False
 
@@ -165,9 +172,10 @@ class DraftGenerationService:
             "project_id": str(project_id),
             "user_id": str(user_id),
         }
+        await self.publish_status(task_id)
 
         # Start generation in background
-        self._fire_and_forget(
+        generation_task = self._fire_and_forget(
             self._generate_draft_async(
                 task_id=task_id,
                 project_id=project_id,
@@ -179,6 +187,8 @@ class DraftGenerationService:
                 include_abstract=include_abstract,
             )
         )
+        heartbeat_task = self._fire_and_forget(self._heartbeat_status(task_id))
+        generation_task.add_done_callback(lambda _: heartbeat_task.cancel())
 
         return {
             "task_id": task_id,
@@ -241,7 +251,7 @@ class DraftGenerationService:
             # survive session close.
             async with AsyncSessionLocal() as db:
                 # Phase 1: Analyzing documents
-                self._update_status(
+                await self._set_status(
                     task_id,
                     DraftGenerationStatus.ANALYZING,
                     10,
@@ -264,7 +274,7 @@ class DraftGenerationService:
                 document_count = len(documents)
 
                 if not documents:
-                    self._update_status(
+                    await self._set_status(
                         task_id, DraftGenerationStatus.FAILED, 0, "No documents found"
                     )
                     self._record_generation_metrics(
@@ -277,7 +287,7 @@ class DraftGenerationService:
 
             # Phase 2: Generating content — no DB session held here; this is
             # the ~60s LLM call the window split above exists for.
-            self._update_status(
+            await self._set_status(
                 task_id, DraftGenerationStatus.GENERATING, 30, "Generating content"
             )
 
@@ -290,13 +300,13 @@ class DraftGenerationService:
                 include_abstract=include_abstract,
             )
 
-            self._update_status(
+            await self._set_status(
                 task_id, DraftGenerationStatus.GENERATING, 60, "Building sections"
             )
             await asyncio.sleep(0.3)
 
             # Phase 3: Adding citations
-            self._update_status(
+            await self._set_status(
                 task_id, DraftGenerationStatus.CITING, 80, "Adding citations"
             )
 
@@ -310,7 +320,7 @@ class DraftGenerationService:
                 from src.core.config import settings
 
                 if settings.DRAFT_CITATION_REVIEW_ENABLED and citations_data:
-                    self._update_status(
+                    await self._set_status(
                         task_id,
                         DraftGenerationStatus.REVIEWING,
                         85,
@@ -334,7 +344,7 @@ class DraftGenerationService:
                         citation_review = {"error": str(exc)}
 
                 # Phase 4: Finalizing
-                self._update_status(
+                await self._set_status(
                     task_id, DraftGenerationStatus.FINALIZING, 90, "Finalizing draft"
                 )
 
@@ -404,7 +414,7 @@ class DraftGenerationService:
 
                 # Mark complete
                 duration = time.time() - start_time
-                self._update_status(
+                await self._set_status(
                     task_id,
                     DraftGenerationStatus.COMPLETED,
                     100,
@@ -428,7 +438,7 @@ class DraftGenerationService:
                 )
 
         except asyncio.CancelledError:
-            self._update_status(
+            await self._set_status(
                 task_id, DraftGenerationStatus.CANCELLED, 0, "Generation cancelled"
             )
             logger.info("draft_generation_cancelled", task_id=task_id)
@@ -441,7 +451,7 @@ class DraftGenerationService:
         except IntegrityError as e:
             # Lost the uq_draft_version race to a concurrent generation —
             # surface a readable status instead of the raw psycopg error.
-            self._update_status(
+            await self._set_status(
                 task_id,
                 DraftGenerationStatus.FAILED,
                 0,
@@ -458,7 +468,7 @@ class DraftGenerationService:
             )
 
         except Exception as e:
-            self._update_status(
+            await self._set_status(
                 task_id, DraftGenerationStatus.FAILED, 0, f"Error: {str(e)}"
             )
             logger.error("draft_generation_failed", task_id=task_id, error=str(e))
@@ -724,6 +734,49 @@ Key takeaways include the importance of continued investigation and the potentia
                 )
                 _generation_status.pop(oldest)
 
+    @classmethod
+    async def publish_status(cls, task_id: str) -> None:
+        """Share the latest snapshot with other API replicas for live polling."""
+        snapshot = cls.get_status(task_id)
+        if snapshot is None:
+            return
+        try:
+            redis = await get_redis()
+            if redis is not None:
+                await redis.setex(
+                    f"{_DRAFT_STATUS_KEY_PREFIX}{task_id}",
+                    (
+                        _DRAFT_TERMINAL_STATUS_TTL_SECONDS
+                        if snapshot.get("status") in cls.TERMINAL_STATUSES
+                        else _DRAFT_STATUS_TTL_SECONDS
+                    ),
+                    json.dumps(snapshot, default=str),
+                )
+        except Exception:
+            logger.exception("draft_status_publish_failed", task_id=task_id)
+
+    @classmethod
+    async def _heartbeat_status(cls, task_id: str) -> None:
+        """Keep a long-running generation visible while its process is alive."""
+        while True:
+            await asyncio.sleep(_DRAFT_HEARTBEAT_INTERVAL_SECONDS)
+            status = _generation_status.get(task_id)
+            if status is None or status.get("status") in cls.TERMINAL_STATUSES:
+                return
+            status["updated_at"] = datetime.utcnow().isoformat()
+            await cls.publish_status(task_id)
+
+    async def _set_status(
+        self,
+        task_id: str,
+        status: str,
+        progress: int,
+        step: str,
+        **extra: Any,
+    ) -> None:
+        self._update_status(task_id, status, progress, step, **extra)
+        await self.publish_status(task_id)
+
     @staticmethod
     def get_status(task_id: str) -> Optional[Dict[str, Any]]:
         """Get generation status for a task"""
@@ -731,6 +784,39 @@ Key takeaways include the importance of continued investigation and the potentia
         if not status:
             return None
         return {**status, "task_id": task_id}
+
+    @classmethod
+    async def get_status_shared(cls, task_id: str) -> Optional[Dict[str, Any]]:
+        """Read a task from Redis, with local state as a fallback."""
+        local = cls.get_status(task_id)
+        selected = local
+        try:
+            redis = await get_redis()
+            if redis is not None:
+                raw = await redis.get(f"{_DRAFT_STATUS_KEY_PREFIX}{task_id}")
+                if raw:
+                    snapshot = json.loads(raw)
+                    if (
+                        isinstance(snapshot, dict)
+                        and snapshot.get("task_id") == task_id
+                    ):
+                        if not local or cls._status_timestamp(
+                            snapshot
+                        ) >= cls._status_timestamp(local):
+                            selected = snapshot
+        except Exception:
+            logger.exception("draft_status_read_failed", task_id=task_id)
+        if selected is not None and cls._is_stale_active(selected):
+            return None
+        return selected
+
+    @classmethod
+    def _is_stale_active(cls, payload: Dict[str, Any]) -> bool:
+        if payload.get("status") in cls.TERMINAL_STATUSES:
+            return False
+        return datetime.utcnow() - cls._status_timestamp(payload) > timedelta(
+            seconds=_DRAFT_ACTIVE_STALE_SECONDS
+        )
 
     @staticmethod
     def _status_timestamp(payload: Dict[str, Any]) -> datetime:
@@ -740,7 +826,10 @@ Key takeaways include the importance of continued investigation and the potentia
             if not raw:
                 continue
             try:
-                return datetime.fromisoformat(raw)
+                parsed = datetime.fromisoformat(raw)
+                if parsed.tzinfo is not None:
+                    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+                return parsed
             except ValueError:
                 continue
         return datetime.min
@@ -771,6 +860,8 @@ Key takeaways include the importance of continued investigation and the potentia
             if not cls._status_matches_scope(payload, project_id, user_id):
                 continue
             if active_only and payload.get("status") in cls.TERMINAL_STATUSES:
+                continue
+            if active_only and cls._is_stale_active(payload):
                 continue
             scoped_statuses.append((task_id, payload))
 

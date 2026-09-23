@@ -13,6 +13,7 @@ const mockPush = vi.fn();
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: 'proj-1' }),
   useRouter: () => ({ push: mockPush }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock('@/stores/authStore', () => ({
@@ -103,6 +104,7 @@ const mockClearError = vi.fn();
 
 describe('ProjectDetailPage agent sync', () => {
   beforeEach(() => {
+    window.history.replaceState(null, '', '/projects/proj-1');
     useAgentChatStore.getState().reset();
     vi.clearAllMocks();
     // Vitest config has `restoreMocks: true`, which resets `.mockResolvedValue`
@@ -118,7 +120,9 @@ describe('ProjectDetailPage agent sync', () => {
     mockUpdateNote.mockResolvedValue(undefined);
     mockDeleteNote.mockResolvedValue(undefined);
     mockToggleNotePin.mockResolvedValue(undefined);
-    mockProjectSkillService.list.mockRejectedValue({ error: { status_code: 404 } });
+    mockProjectSkillService.list.mockRejectedValue({
+      error: { status_code: 404 },
+    });
 
     mockUseProjectStore.mockReturnValue({
       currentProject: {
@@ -198,6 +202,118 @@ describe('ProjectDetailPage agent sync', () => {
 
     await waitFor(() => {
       expect(mockProjectService.listDrafts).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('opens the draft named by a chat completion link', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/projects/proj-1?tab=drafts&draftId=draft-1'
+    );
+    mockProjectService.listDrafts.mockResolvedValue({
+      drafts: [
+        {
+          id: 'draft-2',
+          project_id: 'proj-1',
+          version: 2,
+          title: 'Draft Two',
+          is_current: true,
+          created_at: '2026-03-26T00:00:00Z',
+        },
+        {
+          id: 'draft-1',
+          project_id: 'proj-1',
+          version: 1,
+          title: 'Draft One',
+          is_current: false,
+          created_at: '2026-03-25T00:00:00Z',
+        },
+      ],
+      total: 2,
+      skip: 0,
+      limit: 50,
+    } as never);
+
+    render(<ProjectDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /drafts/i })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      expect(mockProjectService.getDraft).toHaveBeenCalledWith(
+        'proj-1',
+        'draft-1'
+      );
+    });
+  });
+
+  it('opens a linked draft beyond the first page of versions', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/projects/proj-1?tab=drafts&draftId=draft-1'
+    );
+    mockProjectService.listDrafts.mockResolvedValue({
+      drafts: Array.from({ length: 50 }, (_, index) => ({
+        id: `draft-${51 - index}`,
+        project_id: 'proj-1',
+        version: 51 - index,
+        title: `Draft ${51 - index}`,
+        is_current: index === 0,
+        created_at: '2026-03-26T00:00:00Z',
+      })),
+      total: 51,
+      skip: 0,
+      limit: 50,
+    } as never);
+    mockProjectService.getDraft.mockImplementation(
+      async (_projectId, draftId) => ({
+        id: draftId,
+        project_id: 'proj-1',
+        version: draftId === 'draft-1' ? 1 : 51,
+        title: draftId === 'draft-1' ? 'Draft One' : 'Draft 51',
+        content: 'Draft content',
+        themes: ['theme'],
+        word_count: 500,
+        citation_count: 2,
+        is_current: draftId !== 'draft-1',
+        created_at: '2026-03-25T00:00:00Z',
+      })
+    );
+
+    render(<ProjectDetailPage />);
+
+    expect(await screen.findByText('Draft One')).toBeInTheDocument();
+    expect(mockProjectService.getDraft).toHaveBeenCalledWith(
+      'proj-1',
+      'draft-1'
+    );
+  });
+
+  it('opens a completion link while already viewing the project', async () => {
+    const { rerender } = render(<ProjectDetailPage />);
+    expect(
+      await screen.findByRole('tab', { name: /documents/i })
+    ).toHaveAttribute('aria-selected', 'true');
+
+    window.history.pushState(
+      null,
+      '',
+      '/projects/proj-1?tab=drafts&draftId=draft-1'
+    );
+    rerender(<ProjectDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /drafts/i })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      expect(mockProjectService.getDraft).toHaveBeenCalledWith(
+        'proj-1',
+        'draft-1'
+      );
     });
   });
 

@@ -435,7 +435,7 @@ async def get_generation_status(
     await _validate_project_ownership(project_id, current_user, db)
 
     if task_id:
-        generation_status = DraftGenerationService.get_status(task_id)
+        generation_status = await DraftGenerationService.get_status_shared(task_id)
     else:
         generation_status = DraftGenerationService.get_latest_status(
             project_id=project_id,
@@ -512,6 +512,7 @@ async def cancel_generation(
             detail="Cannot cancel: task not found or already completed",
         )
 
+    await DraftGenerationService.publish_status(task_id)
     return {"message": "Generation cancelled", "task_id": task_id, "cancelled": True}
 
 
