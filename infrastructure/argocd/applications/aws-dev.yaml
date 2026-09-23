@@ -58,6 +58,8 @@ spec:
   ignoreDifferences:
     - group: apps
       kind: Deployment
+      # Only the worker HPA owns replicas. Backend and beat must follow Git.
+      name: nous-dev-aws-celery-worker
       jsonPointers:
         - /spec/replicas
     # The Infisical operator owns the synced Secret lifecycle and mutates
