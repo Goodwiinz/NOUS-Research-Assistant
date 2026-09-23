@@ -9,6 +9,7 @@ Tests cover:
 - SSE events are yielded in correct event:/data: format
 """
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -554,8 +555,16 @@ class TestStreamEndpointSuccess:
             reproducibility_manifest={"parameters_override": {}},
         )
         db = AsyncMock()
+        db.execute = AsyncMock(return_value=Mock(rowcount=1))
         db.commit = AsyncMock()
-        db.refresh = AsyncMock()
+
+        async def refresh_with_pause(_obj):
+            run.reproducibility_manifest = {
+                "parameters_override": {},
+                "_pause_requested": True,
+            }
+
+        db.refresh = AsyncMock(side_effect=refresh_with_pause)
         current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
 
         with patch(
@@ -570,6 +579,153 @@ class TestStreamEndpointSuccess:
                 await stream_run(run_id, current_user, db)
 
         assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_pause_request_losing_completion_race_preserves_final_manifest(self):
+        """A late pause cannot overwrite a run that completed concurrently."""
+        run_id = uuid.uuid4()
+        final_manifest = {
+            "run_id": str(run_id),
+            "total_tokens": 42,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        run = _make_run(
+            id=run_id,
+            status="running",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        update_result = Mock(rowcount=0)
+        db = AsyncMock()
+
+        async def completion_wins(_statement):
+            run.status = "completed"
+            run.reproducibility_manifest = final_manifest
+            return update_result
+
+        db.execute = AsyncMock(side_effect=completion_wins)
+        db.commit = AsyncMock()
+        db.rollback = AsyncMock()
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        with patch(
+            "src.api.research_engine.runs._get_owned_run",
+            new=AsyncMock(return_value=run),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await pause_run(run_id, current_user, db)
+
+        assert exc_info.value.status_code == 409
+        assert run.reproducibility_manifest == final_manifest
+        db.rollback.assert_awaited_once()
+        db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stream_cancellation_rolls_back_before_persisting_pause(self):
+        """Disconnect cleanup starts from a usable database transaction."""
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        mock_run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="pending",
+            reproducibility_manifest={"_pause_requested": True},
+        )
+        mock_bp = _make_blueprint(id=bp_id)
+        db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        async def cancelled_engine(*_args, **_kwargs):
+            raise asyncio.CancelledError("client disconnected")
+            yield  # pragma: no cover - keeps this function an async generator
+
+        with (
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+            patch("src.api.research_engine.runs.ArxivConnector"),
+            patch("src.api.research_engine.runs.SemanticScholarConnector"),
+        ):
+            engine = Mock()
+            engine.run = cancelled_engine
+            engine_cls.return_value = engine
+            response = await stream_run(run_id, current_user, db)
+
+            with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+                async for _chunk in response.body_iterator:
+                    pass
+
+        db.rollback.assert_awaited_once()
+        assert mock_run.status == "paused"
+        assert mock_run.reproducibility_manifest is None
+
+    @pytest.mark.asyncio
+    async def test_stream_commit_failure_refreshes_after_rollback(self):
+        """A failed write is rolled back and refreshed before terminal recovery."""
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        mock_run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="pending",
+            reproducibility_manifest={"_pause_requested": True},
+        )
+        mock_bp = _make_blueprint(id=bp_id)
+        db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        async def completed_step(*_args, **_kwargs):
+            yield {
+                "event": "step_complete",
+                "run_id": str(run_id),
+                "step_index": 0,
+                "step_type": "search",
+                "output": {"content": "done"},
+                "quality_marks": [],
+                "token_count": 10,
+            }
+
+        operations: list[str] = []
+
+        async def rollback():
+            operations.append("rollback")
+
+        async def refresh(_obj):
+            operations.append("refresh")
+
+        with (
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+            patch("src.api.research_engine.runs.ArxivConnector"),
+            patch("src.api.research_engine.runs.SemanticScholarConnector"),
+        ):
+            engine = Mock()
+            engine.run = completed_step
+            engine_cls.return_value = engine
+            response = await stream_run(run_id, current_user, db)
+            operations.clear()
+            db.rollback = AsyncMock(side_effect=rollback)
+            db.refresh = AsyncMock(side_effect=refresh)
+            db.commit = AsyncMock(side_effect=[RuntimeError("db write failed"), None])
+
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        rollback_index = operations.index("rollback")
+        assert operations[rollback_index : rollback_index + 2] == [
+            "rollback",
+            "refresh",
+        ]
+        assert mock_run.status == "failed"
+        assert mock_run.reproducibility_manifest is None
+        assert "db write failed" in "".join(chunks)
 
 
 # ============================================================================

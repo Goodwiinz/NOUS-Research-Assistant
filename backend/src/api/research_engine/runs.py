@@ -6,12 +6,13 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Dict, List, Optional
 from uuid import UUID
 
+from anyio import CancelScope
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
@@ -60,6 +61,22 @@ def _set_pause_requested(run: ResearchRun, requested: bool) -> None:
     else:
         manifest.pop(_PAUSE_REQUESTED_KEY, None)
     run.reproducibility_manifest = manifest or None
+
+
+async def _run_interrupted_cleanup(cleanup: Awaitable[None]) -> None:
+    """Finish durable stream cleanup outside the request cancellation scope."""
+
+    async def shielded_cleanup() -> None:
+        with CancelScope(shield=True):
+            await cleanup
+
+    cleanup_task = asyncio.create_task(shielded_cleanup())
+    while not cleanup_task.done():
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            continue
+    cleanup_task.result()
 
 
 def _get_verified_organization_id(current_user: Any) -> Any:
@@ -328,7 +345,23 @@ async def pause_run(
     # Keep the run claimed while the active stream reaches a safe boundary.
     # Publishing PAUSED here would let a second stream reclaim and replay the
     # in-flight paid step before the first stream can persist its result.
-    _set_pause_requested(run, True)
+    pause_manifest = dict(run.reproducibility_manifest or {})
+    pause_manifest[_PAUSE_REQUESTED_KEY] = True
+    pause_update = await db.execute(
+        update(ResearchRun)
+        .where(
+            ResearchRun.id == run_id,
+            ResearchRun.status == RunStatus.RUNNING.value,
+        )
+        .values(reproducibility_manifest=pause_manifest)
+        .execution_options(synchronize_session=False)
+    )
+    if pause_update.rowcount == 0:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Run finished before the pause request was recorded",
+        )
     await db.commit()
     await db.refresh(run)
     return RunResponse.model_validate(run)
@@ -463,13 +496,11 @@ async def stream_run(
     # R5-M18: claim the transition atomically — the old read-check-write let
     # two concurrent SSE streams both pass the PENDING check and double-execute
     # a paid run.
-    from sqlalchemy import update as _sa_update
-
     organization_id = _get_verified_organization_id(current_user)
     connectors = _build_connectors(organization_id=str(organization_id))
 
     claim = await db.execute(
-        _sa_update(ResearchRun)
+        update(ResearchRun)
         .where(
             ResearchRun.id == run_id,
             ResearchRun.status.in_(["pending", "paused"]),
@@ -491,7 +522,7 @@ async def stream_run(
         organization_id=organization_id,
     ):
         release = await db.execute(
-            _sa_update(ResearchRun)
+            update(ResearchRun)
             .where(
                 ResearchRun.id == run_id,
                 ResearchRun.status == RunStatus.RUNNING.value,
@@ -519,6 +550,19 @@ async def stream_run(
     async def event_generator():
         """Yield SSE-formatted events from the workflow engine."""
         nonlocal total_tokens
+
+        async def recover_run(status_value: str, *, completed: bool = False) -> None:
+            # Rollback also expires ORM state, so refresh before inspecting the
+            # manifest or starting the recovery transaction.
+            await db.rollback()
+            await db.refresh(run)
+            _set_pause_requested(run, False)
+            run.status = status_value
+            run.total_tokens = total_tokens
+            if completed:
+                run.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
         executor = StepExecutor(providers=providers, connectors=connectors)
         # R5-M19: rehydrate accumulated step outputs so resumed/synthesize
         # steps see everything earlier steps produced instead of starting
@@ -664,20 +708,19 @@ async def stream_run(
                     break
         except asyncio.CancelledError:
             # Client disconnected; persist paused state so run can resume later.
-            _set_pause_requested(run, False)
-            run.status = RunStatus.PAUSED.value
-            run.total_tokens = total_tokens
-            await db.commit()
+            await _run_interrupted_cleanup(recover_run(RunStatus.PAUSED.value))
             raise
         except Exception as exc:
             # If streaming fails unexpectedly, mark run as failed
-            await db.rollback()
             logger.error(f"Stream error for run {run_id}: {exc}")
-            _set_pause_requested(run, False)
-            run.status = RunStatus.FAILED.value
-            run.total_tokens = total_tokens
-            run.completed_at = datetime.now(timezone.utc)
-            await db.commit()
+            try:
+                await recover_run(RunStatus.FAILED.value, completed=True)
+            except Exception as recovery_exc:
+                logger.error(
+                    "Failed to persist terminal state for research run %s: %s",
+                    run_id,
+                    recovery_exc,
+                )
             error_event = json.dumps({"event": "run_failed", "error": str(exc)})
             yield f"event: run_failed\ndata: {error_event}\n\n"
 
