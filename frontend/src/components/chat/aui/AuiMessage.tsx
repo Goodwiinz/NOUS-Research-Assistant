@@ -59,6 +59,11 @@ import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { normalizeCitation } from '@/utils/citationNormalizer';
 import { getVisibleCitations, type Citation } from '@/utils/citationParser';
 import { toToolCallParts } from './convertMessage';
+import {
+  DraftTaskStatus,
+  draftTasksFromMessage,
+  removeStaleDraftStatus,
+} from './DraftTaskStatus';
 
 export type OnCitationClick = (
   citations: Citation[],
@@ -701,6 +706,8 @@ export function AuiAssistantMessage({
   retryDisabled?: boolean;
   onCitationClick?: OnCitationClick;
 }): ReactElement {
+  const draftTasks =
+    message && !message.isStreaming ? draftTasksFromMessage(message) : [];
   const allCitations = useMemo(
     () => message?.citations ?? [],
     [message?.citations]
@@ -734,7 +741,11 @@ export function AuiAssistantMessage({
     // content is deliberately excluded — the text is still moving.
     <div data-quotable>
       <CitationRenderer
-        content={message.content}
+        content={
+          draftTasks.length > 0
+            ? removeStaleDraftStatus(message.content)
+            : message.content
+        }
         citations={allCitations}
         citationNumbers={citationNumbers}
         onCitationClick={(citation) => {
@@ -844,6 +855,9 @@ export function AuiAssistantMessage({
             executionByToolCallId={executionByToolCallId}
           />
         </div>
+        {draftTasks.map((task) => (
+          <DraftTaskStatus key={`${task.projectId}:${task.taskId}`} {...task} />
+        ))}
         <MessageError />
         {/* Citations footer chips — provenance over assertion */}
         {visibleCitations.length > 0 && (
