@@ -244,14 +244,25 @@ can write.
 
 **1c. Scale DO Deployments to 0** (StatefulSets keep running):
 
+The DO Celery worker has a KEDA ScaledObject with `minReplicaCount: 1`; it
+recreates the worker if only the Deployment is scaled down. Pause it at zero
+first (remove this annotation during rollback):
+
+```bash
+kubectl annotate scaledobject nous-dev-celery-worker -n rag-dev --context $DOKS_CONTEXT \
+  'autoscaling.keda.sh/paused-replicas=0' --overwrite
+```
+
 ```bash
 kubectl scale deployments --all -n rag-dev --context $DOKS_CONTEXT --replicas=0
 kubectl get deploy -n rag-dev --context $DOKS_CONTEXT
 kubectl get statefulset -n rag-dev --context $DOKS_CONTEXT
+kubectl get pods -n rag-dev --context $DOKS_CONTEXT --field-selector=status.phase=Running
 ```
 
-Expected: every Deployment `0/1`; Neo4j StatefulSet still `1/1` Ready until
-Step 4. A stale Qdrant PVC is not a running workload.
+Expected: every Deployment `0/0`, KEDA ScaledObject `PAUSED=True`, and Neo4j
+is the only Running app pod until Step 4. A stale Qdrant PVC is not a running
+workload. **HALT** if any worker pod reappears; it can still write to DO.
 
 **1d. Confirm quiescence externally** (pods are gone, so check through the LB):
 
@@ -769,6 +780,8 @@ kubectl scale statefulset nous-dev-knowledge-graph-analytics-neo4j -n rag-dev \
   --context $DOKS_CONTEXT --replicas=1
 kubectl rollout status statefulset/nous-dev-knowledge-graph-analytics-neo4j \
   -n rag-dev --context $DOKS_CONTEXT --timeout=180s
+kubectl annotate scaledobject nous-dev-celery-worker -n rag-dev --context $DOKS_CONTEXT \
+  'autoscaling.keda.sh/paused-replicas-'
 # restore recorded replica counts (selfHeal also enforces git values)
 while read -r name reps; do
   [ -n "$reps" ] && kubectl scale deploy "$name" -n rag-dev --context $DOKS_CONTEXT --replicas="$reps"
