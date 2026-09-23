@@ -11,7 +11,7 @@ import pytest
 from src.services.arxiv import arxiv_service as arxiv_module
 from src.services.arxiv.arxiv_service import ArXivIngestionService
 
-PAPER = {
+PAPER: dict[str, object] = {
     "id": "2401.00001",
     "title": "Bounded research",
     "abstract": "A paper about bounded provider requests.",
@@ -90,13 +90,13 @@ async def test_background_dataset_forwards_absolute_deadline(
     create_dataset = AsyncMock(return_value={"test_cases": []})
 
     class FakeArXivService:
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeArXivService":
             return self
 
-        async def __aexit__(self, *_args):
+        async def __aexit__(self, *_args: object) -> None:
             return None
 
-        async def search_papers(self, **_kwargs):
+        async def search_papers(self, **_kwargs: object) -> list[dict[str, object]]:
             return [PAPER]
 
         create_evaluation_dataset = create_dataset
@@ -115,4 +115,5 @@ async def test_background_dataset_forwards_absolute_deadline(
         deadline=321.0,
     )
 
+    assert create_dataset.await_args is not None
     assert create_dataset.await_args.kwargs["deadline"] == 321.0

@@ -170,6 +170,10 @@ class TestStreamEndpointSuccess:
     def _patch_engine_and_get(self, stream_app, stream_client, run_id, mock_engine_run):
         """Patch engine classes and collect a bounded SSE response snapshot."""
         with (
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
             patch("src.api.research_engine.runs.WorkflowEngine") as mock_engine_cls,
             patch("src.api.research_engine.runs.StepExecutor"),
             patch("src.api.research_engine.runs.ArxivConnector"),

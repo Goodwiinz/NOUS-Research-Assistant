@@ -1,8 +1,9 @@
 """Security regression tests for shared expensive-work admission."""
 
 from types import SimpleNamespace
+from typing import Any, Awaitable, cast
 from unittest.mock import AsyncMock, Mock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
@@ -14,28 +15,32 @@ from src.api.arxiv.core import (
     ingest_arxiv_papers,
 )
 from src.api.research_engine.runs import stream_run
+from src.models.research_run import ResearchRun
+from src.models.user import User
 from src.services.expensive_work_admission import admit_expensive_work
 
 
-def _user():
-    return SimpleNamespace(id=uuid4(), organization_id=uuid4())
+def _user() -> User:
+    return cast(User, SimpleNamespace(id=uuid4(), organization_id=uuid4()))
 
 
-def test_ingest_caps_ids_and_rejects_untrusted_id_values():
+def test_ingest_caps_ids_and_rejects_untrusted_id_values() -> None:
     with pytest.raises(ValueError):
         ArXivIngestRequest(paper_ids=["2401.00001"] * 51)
     with pytest.raises(ValueError):
         ArXivIngestRequest(paper_ids=["not-an-arxiv-id"])
 
 
-def test_dataset_caps_aggregate_question_work():
+def test_dataset_caps_aggregate_question_work() -> None:
     with pytest.raises(ValueError):
         EvaluationDatasetRequest(num_papers=200, questions_per_paper=10)
 
 
 @pytest.mark.asyncio
-async def test_missing_verified_organization_is_rejected_before_enqueue():
-    user = SimpleNamespace(id=uuid4(), organization_id=None, organization=None)
+async def test_missing_verified_organization_is_rejected_before_enqueue() -> None:
+    user = cast(
+        User, SimpleNamespace(id=uuid4(), organization_id=None, organization=None)
+    )
     background_tasks = BackgroundTasks()
 
     with pytest.raises(HTTPException) as exc_info:
@@ -48,12 +53,14 @@ async def test_missing_verified_organization_is_rejected_before_enqueue():
 
 
 @pytest.mark.asyncio
-async def test_ingest_and_dataset_use_same_shared_admission_key(monkeypatch):
+async def test_ingest_and_dataset_use_same_shared_admission_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     user = _user()
     background_tasks = BackgroundTasks()
     calls = []
 
-    async def fake_admission(*, user_id, organization_id):
+    async def fake_admission(*, user_id: UUID, organization_id: UUID) -> bool:
         calls.append((user_id, organization_id))
         return True
 
@@ -71,7 +78,9 @@ async def test_ingest_and_dataset_use_same_shared_admission_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_repeated_ingest_is_rejected_before_enqueue(monkeypatch):
+async def test_repeated_ingest_is_rejected_before_enqueue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     user = _user()
     background_tasks = BackgroundTasks()
     limiter = AsyncMock(side_effect=[True, False])
@@ -90,14 +99,19 @@ async def test_repeated_ingest_is_rejected_before_enqueue(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_claims_before_shared_admission(monkeypatch):
-    run = SimpleNamespace(
-        id=uuid4(),
-        blueprint_id=uuid4(),
-        status="pending",
-        total_tokens=0,
-        started_at=None,
-        reproducibility_manifest=None,
+async def test_stream_claims_before_shared_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = cast(
+        ResearchRun,
+        SimpleNamespace(
+            id=uuid4(),
+            blueprint_id=uuid4(),
+            status="pending",
+            total_tokens=0,
+            started_at=None,
+            reproducibility_manifest=None,
+        ),
     )
     blueprint = SimpleNamespace(steps=[], parameters={}, version=1)
     blueprint_result = Mock()
@@ -110,7 +124,7 @@ async def test_stream_claims_before_shared_admission(monkeypatch):
     db_calls = 0
     events = []
 
-    async def execute(_statement):
+    async def execute(_statement: Any) -> Any:
         nonlocal db_calls
         events.append("db")
         result = [blueprint_result, last_step_result, claim_result][db_calls]
@@ -120,7 +134,7 @@ async def test_stream_claims_before_shared_admission(monkeypatch):
     db.execute = AsyncMock(side_effect=execute)
     user = _user()
 
-    async def admit(*, user_id, organization_id):
+    async def admit(*, user_id: UUID, organization_id: UUID) -> bool:
         events.append("admission")
         return True
 
@@ -136,14 +150,19 @@ async def test_stream_claims_before_shared_admission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_denied_admission_releases_claim(monkeypatch):
-    run = SimpleNamespace(
-        id=uuid4(),
-        blueprint_id=uuid4(),
-        status="pending",
-        total_tokens=0,
-        started_at=None,
-        reproducibility_manifest=None,
+async def test_stream_denied_admission_releases_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = cast(
+        ResearchRun,
+        SimpleNamespace(
+            id=uuid4(),
+            blueprint_id=uuid4(),
+            status="pending",
+            total_tokens=0,
+            started_at=None,
+            reproducibility_manifest=None,
+        ),
     )
     blueprint = SimpleNamespace(steps=[], parameters={}, version=1)
     blueprint_result = Mock()
@@ -175,7 +194,9 @@ async def test_stream_denied_admission_releases_claim(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_expired_background_ingest_does_not_start_external_work(monkeypatch):
+async def test_expired_background_ingest_does_not_start_external_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from src.api.arxiv import core
 
     work = AsyncMock()
@@ -194,7 +215,9 @@ async def test_expired_background_ingest_does_not_start_external_work(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_background_ingest_rechecks_actor_scope(monkeypatch):
+async def test_background_ingest_rechecks_actor_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from src.api.arxiv import core
 
     work = AsyncMock()
@@ -202,7 +225,7 @@ async def test_background_ingest_rechecks_actor_scope(monkeypatch):
     await core._process_arxiv_ingestion(
         paper_ids=["2401.00001"],
         user_id="user-1",
-        organization_id=None,
+        organization_id=cast(str, None),
         download_pdfs=True,
         extract_content=True,
         batch_size=1,
@@ -212,7 +235,9 @@ async def test_background_ingest_rechecks_actor_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_background_ingest_rechecks_paper_ids(monkeypatch):
+async def test_background_ingest_rechecks_paper_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from src.api.arxiv import core
 
     work = AsyncMock()
@@ -230,13 +255,15 @@ async def test_background_ingest_rechecks_paper_ids(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_background_ingest_applies_default_deadline(monkeypatch):
+async def test_background_ingest_applies_default_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from src.api.arxiv import core
 
     work = AsyncMock()
     recorded_timeouts = []
 
-    async def wait_for(awaitable, *, timeout):
+    async def wait_for(awaitable: Awaitable[Any], *, timeout: float) -> Any:
         recorded_timeouts.append(timeout)
         return await awaitable
 
@@ -257,7 +284,9 @@ async def test_background_ingest_applies_default_deadline(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_shared_admission_key_is_organization_aggregate(monkeypatch):
+async def test_shared_admission_key_is_organization_aggregate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     limiter = AsyncMock()
     limiter.is_allowed.return_value = (True, {})
     monkeypatch.setattr("src.services.expensive_work_admission._limiter", limiter)

@@ -12,9 +12,11 @@ class _UnavailableRedis:
 
 
 @pytest.mark.asyncio
-async def test_general_rate_limiter_remains_fail_open_on_redis_error() -> None:
+async def test_general_rate_limiter_remains_fail_open_on_redis_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     limiter = RateLimiter("redis://unused")
-    limiter._redis = _UnavailableRedis()
+    monkeypatch.setattr(limiter, "_redis", _UnavailableRedis())
 
     allowed, _info = await limiter.is_allowed("ordinary", 5, 60, "actor")
 
