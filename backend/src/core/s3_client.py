@@ -13,15 +13,24 @@ logger = structlog.get_logger(__name__)
 _s3_client = None
 
 
+def missing_s3_credentials() -> list[str]:
+    """Only custom S3 endpoints need explicit keys; AWS uses the IAM chain."""
+    if not settings.S3_ENDPOINT_URL:
+        return []
+    return [
+        name
+        for name in ("S3_ACCESS_KEY", "S3_SECRET_KEY")
+        if not getattr(settings, name)
+    ]
+
+
 def get_s3_client():
     """Get or create the boto3 S3 client singleton."""
     global _s3_client
     if _s3_client is not None:
         return _s3_client
 
-    if settings.S3_ENDPOINT_URL and (
-        not settings.S3_ACCESS_KEY or not settings.S3_SECRET_KEY
-    ):
+    if missing_s3_credentials():
         logger.warning(
             "s3_not_configured",
             msg="S3_ACCESS_KEY or S3_SECRET_KEY not set for custom endpoint",

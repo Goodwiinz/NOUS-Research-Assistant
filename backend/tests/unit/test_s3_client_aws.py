@@ -10,6 +10,16 @@ from src.core import s3_client
 pytestmark = pytest.mark.unit
 
 
+def test_explicit_keys_required_only_for_custom_endpoints(monkeypatch):
+    monkeypatch.setattr(s3_client.settings, "S3_ENDPOINT_URL", None)
+    monkeypatch.setattr(s3_client.settings, "S3_ACCESS_KEY", None)
+    monkeypatch.setattr(s3_client.settings, "S3_SECRET_KEY", None)
+    assert s3_client.missing_s3_credentials() == []
+
+    monkeypatch.setattr(s3_client.settings, "S3_ENDPOINT_URL", "https://spaces.example")
+    assert s3_client.missing_s3_credentials() == ["S3_ACCESS_KEY", "S3_SECRET_KEY"]
+
+
 def test_aws_s3_uses_iam_and_omits_acls(monkeypatch):
     monkeypatch.setattr(s3_client, "_s3_client", None)
     monkeypatch.setattr(s3_client.settings, "S3_ENDPOINT_URL", None)
