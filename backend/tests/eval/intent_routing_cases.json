@@ -2,7 +2,7 @@
   {"id":"export-kb","query":"Export our knowledge base references as BibTeX.","acceptable_intents":["writing"],"required_tools":["export_bibliography"]},
   {"id":"entities-kb","query":"Extract the entities mentioned across our knowledge base documents.","acceptable_intents":["knowledge_graph"],"required_tools":["extract_entities"]},
   {"id":"retrieve-kb","query":"Retrieve evidence from our library about sparse attention.","acceptable_intents":["research","general","knowledge_graph"],"required_tools":["do_kb_retrieve"]},
-  {"id":"revise-draft","query":"Make it shorter","previous_turn":"I saved a literature review draft. What should I change in that saved draft?","acceptable_intents":["writing"],"required_tools":["create_draft"]},
+  {"id":"revise-draft","query":"Make it shorter","previous_turn":"I saved a literature review draft. What should I change in that saved draft?","acceptable_intents":["writing"],"required_tools":["revise_draft"]},
   {"id":"short-explanation","query":"Make it shorter","previous_turn":"GPT stands for Generative Pre-trained Transformer. Here is a long explanation of the term.","acceptable_intents":["general"],"required_tools":[]},
   {"id":"context-path","query":"Who connects these?","previous_turn":"The selected graph nodes are Ada and Ben. I can find the entity path connecting them.","acceptable_intents":["knowledge_graph"],"required_tools":["find_entity_paths"]},
   {"id":"paper-metadata","query":"Condense the selected document into three takeaways.","page_context":{"type":"documents","metadata":{"paper_id":"synthetic-paper","paper_title":"Efficient Attention Methods"}},"acceptable_intents":["writing","general"],"required_tools":["summarize_document"]},

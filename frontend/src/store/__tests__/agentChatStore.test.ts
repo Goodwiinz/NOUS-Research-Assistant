@@ -1068,6 +1068,79 @@ describe('agentChatStore', () => {
     });
   });
 
+  describe('persisted execution hydration', () => {
+    it('restores the latest assistant plan and keeps pending results incomplete', async () => {
+      serviceMocks.getThreadMessages.mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'assistant-1',
+            role: 'assistant',
+            content: 'Draft generation is still running.',
+            created_at: new Date().toISOString(),
+            plan: [
+              {
+                step: 1,
+                description: 'Create draft',
+                tool: 'create_draft',
+                args_hint: {},
+                depends_on: [],
+              },
+            ],
+            tool_executions: [
+              {
+                id: 'exec-1',
+                tool_name: 'create_draft',
+                tool_display_name: 'Create draft',
+                args: {},
+                status: 'completed',
+                result: { status: 'pending', task_id: 'draft-task' },
+              },
+            ],
+          },
+        ],
+      });
+      useAgentChatStore.getState().selectThread('thread-1');
+
+      await useAgentChatStore.getState().loadThreadMessages('thread-1');
+
+      const state = useAgentChatStore.getState();
+      expect(state.currentPlan).toHaveLength(1);
+      expect(state.messages[0].plan).toHaveLength(1);
+      expect(state.messages[0].toolExecutions?.[0].status).toBe('pending');
+    });
+
+    it('restores a persisted execution error as failed', async () => {
+      serviceMocks.getThreadMessages.mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'assistant-error',
+            role: 'assistant',
+            content: 'Draft generation failed.',
+            created_at: new Date().toISOString(),
+            tool_executions: [
+              {
+                id: 'exec-error',
+                tool_name: 'create_draft',
+                tool_display_name: 'Create draft',
+                args: {},
+                status: 'completed',
+                result: undefined,
+                error: 'citation review failed',
+              },
+            ],
+          },
+        ],
+      });
+      useAgentChatStore.getState().selectThread('thread-1');
+
+      await useAgentChatStore.getState().loadThreadMessages('thread-1');
+
+      expect(
+        useAgentChatStore.getState().messages[0].toolExecutions?.[0].status
+      ).toBe('failed');
+    });
+  });
+
   describe('reset', () => {
     it('restores all state to initial values', () => {
       // Mutate state

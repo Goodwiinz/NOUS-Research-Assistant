@@ -29,8 +29,10 @@ def test_generation_status_dicts_bounded() -> None:
 # R2-L3
 def test_doc_zero_not_wrapped_to_last_document() -> None:
     src = _read("src/services/research/draft_generation_service.py")
-    blk = src[src.find('pattern = r"\\[Doc (\\d+)\\]"') :]
-    assert "if doc_idx < 0:" in blk[:600]
+    start = src.index("def _extract_citations_from_content")
+    end = src.index("\n    def _update_status", start)
+    blk = src[start:end]
+    assert "if doc_idx < 0:" in blk
 
 
 # R2-L5

@@ -32,6 +32,10 @@ from src.models.document import Document
 from src.services.agent._sanitize import _sanitize_prompt_field
 from src.services.agent.llm_factory import build_lightweight_llm
 from src.services.research.citation_extraction_service import CitationExtractionService
+from src.services.research.evidence_selection import (
+    evidence_location,
+    select_relevant_passages,
+)
 from src.shared.research_schemas import CitationCreate, CitationVerdict
 
 logger = structlog.get_logger()
@@ -165,15 +169,21 @@ class CitationVerificationService:
                     f"{resolved.document_title!r}"
                 ),
                 "escalated_to_fulltext": False,
+                "page_number": None,
+                "location": "resolved identifier metadata",
                 "claims_checked": len(claims),
             }
 
         doc_title = document.title or ""
-        source_pass1 = (
-            document.content_summary
-            or (resolved.abstract if resolved is not None else None)
-            or (document.content_text[:2000] if document.content_text else None)
+        source_pass1 = document.content_summary or (
+            resolved.abstract if resolved is not None else None
         )
+        if not source_pass1 and document.content_text:
+            source_pass1 = select_relevant_passages(
+                document.content_text,
+                queries=claims,
+                max_chars=2000,
+            )
 
         llm_verdict = (
             await self._judge_faithfulness(claims, source_pass1, doc_title)
@@ -186,8 +196,13 @@ class CitationVerificationService:
             and llm_verdict.verdict != "exact"
             and document.content_text
         ):
+            fulltext_excerpt = select_relevant_passages(
+                document.content_text,
+                queries=claims,
+                max_chars=_FULLTEXT_CHARS,
+            )
             escalated_verdict = await self._judge_faithfulness(
-                claims, document.content_text[:_FULLTEXT_CHARS], doc_title
+                claims, fulltext_excerpt, doc_title
             )
             if escalated_verdict is not None:
                 llm_verdict = escalated_verdict
@@ -200,6 +215,14 @@ class CitationVerificationService:
             verdict = llm_verdict.verdict
             evidence = llm_verdict.evidence
 
+        page_number, location = evidence_location(document.content_text, evidence)
+        if (
+            not escalated
+            and source_pass1 == document.content_summary
+            and _normalize_text(evidence) in _normalize_text(source_pass1)
+        ):
+            location = "document summary"
+
         return {
             "doc_index": doc_index,
             "document_id": str(document.id),
@@ -208,6 +231,8 @@ class CitationVerificationService:
             "identity_source": identity_source,
             "evidence": evidence,
             "escalated_to_fulltext": escalated,
+            "page_number": page_number,
+            "location": location,
             "claims_checked": len(claims),
         }
 
@@ -216,21 +241,16 @@ class CitationVerificationService:
     def _claims_by_doc_index(draft_content: str) -> Dict[int, List[str]]:
         """Group the sentence containing each ``[Doc N]`` marker by 1-based index."""
         claims: Dict[int, List[str]] = {}
+        boundary_re = re.compile(r"(?<!\d)[.!?](?!\d)|\n")
         for match in _CITATION_PATTERN.finditer(draft_content):
             doc_index = int(match.group(1))
             if doc_index < 1:
                 continue
 
-            boundary = max(
-                draft_content.rfind(".", 0, match.start()),
-                draft_content.rfind("\n", 0, match.start()),
-            )
-            start = boundary + 1 if boundary != -1 else 0
-
-            end_dot = draft_content.find(".", match.end())
-            end_nl = draft_content.find("\n", match.end())
-            candidates = [pos for pos in (end_dot, end_nl) if pos != -1]
-            end = min(candidates) + 1 if candidates else len(draft_content)
+            previous = list(boundary_re.finditer(draft_content, 0, match.start()))
+            start = previous[-1].end() if previous else 0
+            following = boundary_re.search(draft_content, match.end())
+            end = following.end() if following else len(draft_content)
 
             sentence = draft_content[start:end].strip()
             if not sentence:

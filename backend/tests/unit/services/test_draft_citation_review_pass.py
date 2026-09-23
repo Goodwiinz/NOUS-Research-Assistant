@@ -1,11 +1,4 @@
-"""Citation-faithfulness reviewer pass in the draft pipeline (Phase 2, flag default-off).
-
-Builds on PR-B's session mocking (test_draft_bg_session.py). Flag off = merge
-inert. Flag on = REVIEWING tick, verifier result persisted into
-`generation_params["citation_review"]`, verifier failure never fails the
-draft. Test 5 is the adversarial-review acceptance case: identifier
-hijacking must still yield MAJOR even when the faithfulness LLM is fooled.
-"""
+"""Fail-closed citation-faithfulness review in the draft pipeline."""
 
 from __future__ import annotations
 
@@ -61,12 +54,14 @@ def _make_bg_session(documents, add_sink: list):
 
     docs_result = MagicMock()
     docs_result.scalars.return_value.all.return_value = documents
+    lock_result = MagicMock()
+    lock_result.scalar_one_or_none.return_value = uuid4()
     version_result = MagicMock()
     version_result.scalar.return_value = 0
     update_result = MagicMock()
 
     session.execute = AsyncMock(
-        side_effect=[docs_result, version_result, update_result]
+        side_effect=[docs_result, lock_result, version_result, update_result]
     )
     session.add = MagicMock(side_effect=add_sink.append)
     session.flush = AsyncMock()
@@ -114,7 +109,7 @@ def _draft_from_sink(add_sink):
 
 
 @pytest.mark.asyncio
-async def test_flag_off_verifier_never_constructed_no_citation_review_key():
+async def test_citation_review_is_always_active():
     documents = [_make_document()]
     add_sink: list = []
     bg_session = _make_bg_session(documents, add_sink)
@@ -129,20 +124,33 @@ async def test_flag_off_verifier_never_constructed_no_citation_review_key():
 
     service._update_status = _capture
 
-    with (
-        patch("src.core.config.settings.DRAFT_CITATION_REVIEW_ENABLED", False),
-        patch(f"{_VERIFIER_MODULE}.CitationVerificationService") as verifier_cls,
-    ):
+    with patch(f"{_VERIFIER_MODULE}.CitationVerificationService") as verifier_cls:
+        verifier_cls.return_value.verify_draft_citations = AsyncMock(
+            return_value={
+                "verdicts": [
+                    {
+                        "doc_index": 1,
+                        "verdict": "exact",
+                        "evidence": "Some abstract text.",
+                        "page_number": None,
+                        "location": "document summary",
+                    }
+                ],
+                "summary": {"exact": 1, "minor": 0, "major": 0, "unverified": 0},
+                "docs_checked": 1,
+                "docs_skipped": 0,
+            }
+        )
         patcher = _patch_session_factory(bg_session)
         try:
             await _run(service, "task-flag-off", "Findings from [Doc 1].")
         finally:
             patcher.stop()
 
-    verifier_cls.assert_not_called()
-    assert DraftGenerationStatus.REVIEWING not in statuses_seen
+    verifier_cls.assert_called_once()
+    assert DraftGenerationStatus.REVIEWING in statuses_seen
     draft = _draft_from_sink(add_sink)
-    assert "citation_review" not in draft.generation_params
+    assert draft.generation_params["citation_review"]["summary"]["exact"] == 1
 
 
 @pytest.mark.asyncio
@@ -153,7 +161,15 @@ async def test_flag_on_reviewing_tick_and_verdict_persisted():
     service = DraftGenerationService(MagicMock())
 
     review_blob = {
-        "verdicts": [{"doc_index": 1, "verdict": "exact"}],
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "exact",
+                "evidence": "Training took 3.5 days on 8 GPUs.",
+                "page_number": 12,
+                "location": "Page 12",
+            }
+        ],
         "summary": {"exact": 1, "minor": 0, "major": 0, "unverified": 0},
         "docs_checked": 1,
         "docs_skipped": 0,
@@ -168,10 +184,7 @@ async def test_flag_on_reviewing_tick_and_verdict_persisted():
 
     service._update_status = _capture
 
-    with (
-        patch("src.core.config.settings.DRAFT_CITATION_REVIEW_ENABLED", True),
-        patch(f"{_VERIFIER_MODULE}.CitationVerificationService") as verifier_cls,
-    ):
+    with patch(f"{_VERIFIER_MODULE}.CitationVerificationService") as verifier_cls:
         verifier_cls.return_value.verify_draft_citations = AsyncMock(
             return_value=review_blob
         )
@@ -184,19 +197,23 @@ async def test_flag_on_reviewing_tick_and_verdict_persisted():
     assert (DraftGenerationStatus.REVIEWING, 85) in ticks
     draft = _draft_from_sink(add_sink)
     assert draft.generation_params["citation_review"] == review_blob
+    from src.models.draft_citation import DraftCitation
+
+    citation = next(obj for obj in add_sink if isinstance(obj, DraftCitation))
+    assert citation.snippet == "Training took 3.5 days on 8 GPUs."
+    assert "Page 12" in citation.context
     status = DraftGenerationService.get_status("task-flag-on")
     assert status["status"] == DraftGenerationStatus.COMPLETED
 
 
 @pytest.mark.asyncio
-async def test_flag_on_verifier_raises_draft_still_persists_completed():
+async def test_reviewer_exception_blocks_persistence():
     documents = [_make_document()]
     add_sink: list = []
     bg_session = _make_bg_session(documents, add_sink)
     service = DraftGenerationService(MagicMock())
 
     with (
-        patch("src.core.config.settings.DRAFT_CITATION_REVIEW_ENABLED", True),
         patch(f"{_VERIFIER_MODULE}.CitationVerificationService") as verifier_cls,
         patch(f"{_MODULE}.logger") as logger_mock,
     ):
@@ -209,29 +226,21 @@ async def test_flag_on_verifier_raises_draft_still_persists_completed():
         finally:
             patcher.stop()
 
-    draft = _draft_from_sink(add_sink)
-    assert draft.generation_params["citation_review"] == {"error": "crossref outage"}
-    bg_session.commit.assert_awaited_once()
+    assert add_sink == []
+    bg_session.commit.assert_not_awaited()
     status = DraftGenerationService.get_status("task-flag-on-error")
-    assert status["status"] == DraftGenerationStatus.COMPLETED
-    logger_mock.warning.assert_any_call(
-        "citation_review_failed",
-        task_id="task-flag-on-error",
-        error="crossref outage",
-    )
+    assert status["status"] == DraftGenerationStatus.FAILED
+    assert "crossref outage" in status["current_step"]
 
 
 @pytest.mark.asyncio
-async def test_flag_on_no_citations_verifier_skipped():
+async def test_create_without_citations_fails_before_persistence():
     documents = [_make_document()]
     add_sink: list = []
     bg_session = _make_bg_session(documents, add_sink)
     service = DraftGenerationService(MagicMock())
 
-    with (
-        patch("src.core.config.settings.DRAFT_CITATION_REVIEW_ENABLED", True),
-        patch(f"{_VERIFIER_MODULE}.CitationVerificationService") as verifier_cls,
-    ):
+    with patch(f"{_VERIFIER_MODULE}.CitationVerificationService") as verifier_cls:
         patcher = _patch_session_factory(bg_session)
         try:
             # Template draft with no [Doc N] markers -> citations_data == [].
@@ -240,8 +249,10 @@ async def test_flag_on_no_citations_verifier_skipped():
             patcher.stop()
 
     verifier_cls.assert_not_called()
-    draft = _draft_from_sink(add_sink)
-    assert "citation_review" not in draft.generation_params
+    assert not add_sink
+    assert bg_session.commit.await_count == 0
+    status = DraftGenerationService.get_status("task-no-citations")
+    assert status["status"] == DraftGenerationStatus.FAILED
 
 
 @pytest.mark.asyncio
@@ -273,7 +284,6 @@ async def test_end_to_end_identifier_hijacking_forces_major_despite_llm_exact():
     llm.with_structured_output.return_value = structured
 
     with (
-        patch("src.core.config.settings.DRAFT_CITATION_REVIEW_ENABLED", True),
         patch.object(
             CitationExtractionService,
             "extract_from_crossref",
@@ -295,10 +305,42 @@ async def test_end_to_end_identifier_hijacking_forces_major_despite_llm_exact():
     # mismatch short-circuits straight to MAJOR.
     structured.ainvoke.assert_not_awaited()
 
-    draft = _draft_from_sink(add_sink)
-    review = draft.generation_params["citation_review"]
-    entry = review["verdicts"][0]
-    assert entry["identity"] == "mismatch"
-    assert entry["verdict"] == "major"
-    assert "A Completely Unrelated Paper" in entry["evidence"]
-    assert review["summary"]["major"] == 1
+    assert add_sink == []
+    assert bg_session.commit.await_count == 0
+    status = DraftGenerationService.get_status("task-hijack")
+    assert status["status"] == DraftGenerationStatus.FAILED
+    assert "major" in status["current_step"]
+
+
+@pytest.mark.parametrize(
+    "verdicts",
+    [
+        [{"doc_index": 1, "verdict": "unknown"}],
+        [
+            {"doc_index": 1, "verdict": "exact"},
+            {"doc_index": 1, "verdict": "minor"},
+        ],
+    ],
+)
+def test_review_gate_rejects_unknown_or_duplicate_verdicts(verdicts):
+    with pytest.raises(ValueError):
+        DraftGenerationService._require_passing_citation_review(
+            {"verdicts": verdicts, "docs_skipped": 0}, list(range(1, len(verdicts) + 1))
+        )
+
+
+def test_review_gate_rejects_passing_verdict_without_grounded_evidence():
+    review = {
+        "docs_skipped": 0,
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "exact",
+                "evidence": "",
+                "location": "source excerpt",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="grounded evidence"):
+        DraftGenerationService._require_passing_citation_review(review, [1])

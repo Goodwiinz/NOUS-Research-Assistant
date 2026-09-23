@@ -428,7 +428,7 @@ test.describe('WCAG 2.1 AA Accessibility Compliance', () => {
         .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
         .analyze();
 
-      expect(accessibilityScan.violations.filter(v => v.impact === 'moderate' && v.tags.includes('wcag2aa')).toHaveLength(0);
+      expect(accessibilityScan.violations.filter(v => v.impact === 'moderate' && v.tags.includes('wcag2aa'))).toHaveLength(0);
     });
 
     test('UNDER-2: Input assistance and form validation', async ({ page, testDataManager }) => {

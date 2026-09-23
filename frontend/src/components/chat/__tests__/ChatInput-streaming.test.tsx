@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
-import { screen, fireEvent } from '@testing-library/react';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
 
 // Mock framer-motion to avoid animation issues in tests
 vi.mock('framer-motion', () => ({
@@ -279,6 +279,114 @@ describe('ChatInput streaming behavior', () => {
       fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
       expect(onChange).not.toHaveBeenCalled();
       expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    });
+
+    it('opens Commands over an existing draft and restores its selection on Escape', () => {
+      const onChange = vi.fn();
+      renderWithChatRuntime(
+        <ChatInput
+          {...defaultProps}
+          value="Draft to preserve"
+          onChange={onChange}
+        />
+      );
+      const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+      textarea.focus();
+      textarea.setSelectionRange(2, 7);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open commands' }));
+      expect(screen.getByRole('listbox')).toBeInTheDocument();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(textarea).toHaveValue('Draft to preserve');
+
+      fireEvent.keyDown(textarea, { key: 'Escape' });
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(textarea);
+      expect(textarea.selectionStart).toBe(2);
+      expect(textarea.selectionEnd).toBe(7);
+    });
+
+    it('runs a safe command without discarding an existing draft', () => {
+      const onChange = vi.fn();
+      const onCommand = vi.fn();
+      renderWithChatRuntime(
+        <ChatInput
+          {...defaultProps}
+          value="Draft to preserve"
+          onChange={onChange}
+          onCommand={onCommand}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open commands' }));
+      fireEvent.click(screen.getByText('/help'));
+
+      expect(onCommand).toHaveBeenCalledWith('help');
+      expect(onChange).not.toHaveBeenCalledWith('');
+    });
+
+    it('also confirms retry before it can replace an existing draft', () => {
+      const onChange = vi.fn();
+      const onCommand = vi.fn();
+      renderWithChatRuntime(
+        <ChatInput
+          {...defaultProps}
+          value="Draft to preserve"
+          onChange={onChange}
+          onCommand={onCommand}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open commands' }));
+      fireEvent.click(screen.getByText('/retry'));
+
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onCommand).not.toHaveBeenCalled();
+    });
+
+    it('requires an explicit discard before a draft-affecting command runs', async () => {
+      const onChange = vi.fn();
+      const onCommand = vi.fn();
+      renderWithChatRuntime(
+        <ChatInput
+          {...defaultProps}
+          value="Draft to preserve"
+          onChange={onChange}
+          onCommand={onCommand}
+        />
+      );
+      const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+      textarea.focus();
+      textarea.setSelectionRange(2, 7);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open commands' }));
+      fireEvent.click(screen.getByText('/clear'));
+
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+      expect(onCommand).not.toHaveBeenCalled();
+      expect(onChange).not.toHaveBeenCalled();
+
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Keep draft', exact: true })
+      );
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(onCommand).not.toHaveBeenCalled();
+      await waitFor(() => expect(document.activeElement).toBe(textarea));
+      expect(textarea.selectionStart).toBe(2);
+      expect(textarea.selectionEnd).toBe(7);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open commands' }));
+      fireEvent.click(screen.getByText('/clear'));
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Run and discard draft',
+          exact: true,
+        })
+      );
+      expect(onChange).toHaveBeenCalledWith('');
+      expect(onCommand).toHaveBeenCalledWith('clear');
     });
   });
 });

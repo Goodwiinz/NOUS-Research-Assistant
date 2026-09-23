@@ -757,9 +757,10 @@ class ArXivIngestionService:
 
             for page_num, page in enumerate(pdf_reader.pages):
                 try:
-                    page_text = page.extract_text()
+                    page_text = page.extract_text() or ""
                     page_texts.append({"page": page_num + 1, "text": page_text})
-                    full_text += page_text + "\n"
+                    if page_text.strip():
+                        full_text += f"[Page {page_num + 1}]\n{page_text}\n\n"
                 except Exception as e:
                     logger.warning(
                         f"Failed to extract text from page {page_num + 1}: {e}"
@@ -896,10 +897,12 @@ class ArXivIngestionService:
                 if extract_content and pdf_content:
                     extracted = await self.extract_pdf_content(pdf_content)
 
-                    # Add first page or excerpt
+                    # Persist page-anchored full text so later evidence
+                    # selection can reach relevant passages beyond page one.
                     if extracted["full_text"]:
-                        preview = extracted["full_text"][:2000]
-                        content_parts.append(f"\n# Content Preview\n\n{preview}...")
+                        content_parts.append(
+                            f"\n# Full Text\n\n{extracted['full_text']}"
+                        )
                         has_full_text = True
 
                     # Update metadata with PDF info

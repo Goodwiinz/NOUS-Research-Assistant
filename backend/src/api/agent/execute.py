@@ -115,6 +115,7 @@ from src.services.agent.tools_impl import (  # noqa: F401
     _tool_list_external_databases,
     _tool_list_project_documents,
     _tool_list_projects,
+    _tool_revise_draft,
     _tool_search_arxiv,
     _tool_search_documents,
     _tool_search_external_database,

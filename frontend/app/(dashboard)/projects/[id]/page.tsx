@@ -6,13 +6,8 @@
  * Drafts, Chat, Matrix, and Pipeline
  */
 
-import React, {
-  useEffect,
-  useState,
-  useCallback,
-  useRef,
-} from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   FileText,
   StickyNote,
@@ -88,6 +83,11 @@ type TabType =
 export default function ProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const draftLinkKey =
+    searchParams?.get('tab') === 'drafts'
+      ? (searchParams.get('draftId') ?? '')
+      : null;
   const projectId = params.id as string;
   const { isAuthenticated } = useAuthStore();
 
@@ -116,6 +116,8 @@ export default function ProjectDetailPage() {
   const [mounted, setMounted] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('documents');
+  const linkedDraftIdRef = useRef<string | null>(null);
+  const appliedDraftLinkRef = useRef<string | null>(null);
   const [bibFormat, setBibFormat] = useState<'bibtex' | 'ieee' | 'apa' | 'mla'>(
     'bibtex'
   );
@@ -228,12 +230,31 @@ export default function ProjectDetailPage() {
         const response = await projectService.listDrafts(projectId, {
           limit: 50,
         });
-        const versions = response.drafts.map((draft) => ({
+        let versions = response.drafts.map((draft) => ({
           id: draft.id,
           version: draft.version,
           created_at: draft.created_at,
           is_current: draft.is_current,
         }));
+
+        // A completion link can point to an older version outside this page.
+        const linkedDraftId = linkedDraftIdRef.current;
+        let linkedDraft: Draft | null = null;
+        if (
+          linkedDraftId &&
+          !versions.some((draft) => draft.id === linkedDraftId)
+        ) {
+          linkedDraft = await projectService.getDraft(projectId, linkedDraftId);
+          versions = [
+            ...versions,
+            {
+              id: linkedDraft.id,
+              version: linkedDraft.version,
+              created_at: linkedDraft.created_at,
+              is_current: linkedDraft.is_current,
+            },
+          ];
+        }
 
         setDraftVersions(versions);
 
@@ -249,6 +270,8 @@ export default function ProjectDetailPage() {
 
         const selectedVersion =
           preferredVersion ??
+          versions.find((draft) => draft.id === linkedDraftIdRef.current)
+            ?.version ??
           versions.find((draft) => draft.is_current)?.version ??
           versions[0].version;
 
@@ -256,10 +279,11 @@ export default function ProjectDetailPage() {
           versions.find((draft) => draft.version === selectedVersion) ??
           versions[0];
 
-        const selectedDraft = await projectService.getDraft(
-          projectId,
-          selectedDraftMeta.id
-        );
+        const selectedDraft =
+          linkedDraft?.id === selectedDraftMeta.id
+            ? linkedDraft
+            : await projectService.getDraft(projectId, selectedDraftMeta.id);
+        linkedDraftIdRef.current = null;
         setCurrentDraft(selectedDraft);
 
         setCompareVersionA((previous) => {
@@ -291,6 +315,26 @@ export default function ProjectDetailPage() {
     },
     [projectId]
   );
+
+  useEffect(() => {
+    if (
+      !mounted ||
+      !isAuthenticated ||
+      draftLinkKey === appliedDraftLinkRef.current
+    ) {
+      return;
+    }
+    appliedDraftLinkRef.current = draftLinkKey;
+    if (draftLinkKey === null) return;
+    linkedDraftIdRef.current = draftLinkKey || null;
+    if (activeTab === 'drafts') {
+      // A new draft link on this page needs to reload the selected version.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void loadDrafts();
+    } else {
+      setActiveTab('drafts');
+    }
+  }, [activeTab, draftLinkKey, isAuthenticated, loadDrafts, mounted]);
 
   useEffect(() => {
     if (activeTab === 'drafts' && mounted && isAuthenticated && projectId) {

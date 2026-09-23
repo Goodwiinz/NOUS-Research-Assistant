@@ -1,5 +1,5 @@
 import { test, expect } from '../../fixtures/test-data.fixture';
-import { DocumentsPage, SearchPage, KnowledgeGraphPage } from '../utils/page-objects';
+import { DocumentsPage, SearchPage, KnowledgeGraphPage } from '../../utils/page-objects';
 
 /**
  * Performance Testing Suite

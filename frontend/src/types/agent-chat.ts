@@ -51,7 +51,7 @@ export interface ToolExecution {
   args: Record<string, unknown>;
   /** 'cancelled': still running when the turn was stopped or superseded —
    * distinct from 'failed' (the tool itself errored). */
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   result?: unknown;
   error?: string;
   durationMs?: number;
