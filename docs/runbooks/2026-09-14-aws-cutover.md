@@ -69,9 +69,11 @@ the live store.
   Expected: DOKS nodes Ready; EKS ≥1 node Ready.
 - [ ] **Optional backup:** rclone remotes configured and reachable:
   ```bash
+  mkdir -p .cutover
   rclone lsd spaces: && rclone lsd s3:
-  rclone lsf spaces:rag-system-storage --max-depth 1 | head
-  rclone lsf s3:nous-development-storage-3ilp9pj2 --max-depth 1 | head
+  rclone lsf spaces:rag-system-storage --max-depth 1 > .cutover/spaces-top.txt
+  rclone lsf s3:nous-development-storage-3ilp9pj2 --max-depth 1 > .cutover/s3-top.txt
+  head .cutover/spaces-top.txt .cutover/s3-top.txt
   ```
   Expected: both remotes list without auth errors (`spaces` = DO Spaces keys, `s3` = AWS profile).
 - [ ] Disk space for dumps on the operator machine: `df -h .` — need ≥
