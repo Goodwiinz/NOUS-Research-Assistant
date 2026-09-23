@@ -140,7 +140,8 @@ the live store.
   `SELECT 1` succeeds from an EKS pod using the **RDS-managed Secrets Manager
   master secret**; RDS and ElastiCache ports are reachable from EKS. The DO
   `/database` secret has a private `10.10.0.10` host, which is not routable
-  from EKS. Step 2 streams a dump between pods instead of dialing DO from EKS.
+  from EKS. Step 2 stages a dump through the operator machine instead of
+  dialing DO from EKS.
 - [ ] EKS addons healthy (Task 3) — required before Step 6 scale-up, check now:
   ```bash
   kubectl get pods -n kube-system --context $EKS_CONTEXT \
@@ -281,8 +282,9 @@ Expected: non-200 / connection failure — no DO backend is running, so no DO wr
 ## 2. Postgres: DO managed PG → RDS
 
 Use one transient PostgreSQL client pod in each cluster. The DO secret points
-at a private `10.10.0.10` address, which EKS cannot reach. Stream the dump
-from the DOKS pod to the EKS pod without a laptop dump file. RDS is VPC-private.
+at a private `10.10.0.10` address, which EKS cannot reach. Stage a compressed
+dump in both pods via a mode-600 file in ignored `.cutover/`; delete the local
+copy after row-count verification. RDS is VPC-private.
 
 **2a. Launch migration pods:**
 
@@ -349,16 +351,25 @@ kubectl exec -i -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- env 
 **2d. Dump DO:**
 
 ```bash
-set -o pipefail
 kubectl exec -n rag-dev pg-do --context "$DOKS_CONTEXT" -- \
-  sh -c 'exec pg_dump -Fc "$DATABASE_URL"' | \
-  kubectl exec -i -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- \
-  sh -c 'cat > /tmp/nous.dump'
+  sh -c 'exec pg_dump -Fc "$DATABASE_URL" -f /tmp/nous.dump'
+kubectl exec -n rag-dev pg-do --context "$DOKS_CONTEXT" -- \
+  pg_restore --list /tmp/nous.dump > .cutover/pg-toc-source.txt
+umask 077
+kubectl cp --context "$DOKS_CONTEXT" rag-dev/pg-do:/tmp/nous.dump .cutover/nous.dump
+kubectl cp --context "$EKS_CONTEXT" .cutover/nous.dump multimodal-rag-system/pg-mig:/tmp/nous.dump
+shasum -a 256 .cutover/nous.dump
+kubectl exec -n rag-dev pg-do --context "$DOKS_CONTEXT" -- sha256sum /tmp/nous.dump
+kubectl exec -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- sha256sum /tmp/nous.dump
 kubectl exec -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- ls -lh /tmp/nous.dump
-kubectl exec -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- pg_restore --list /tmp/nous.dump | tail -5
+kubectl exec -n multimodal-rag-system pg-mig --context "$EKS_CONTEXT" -- \
+  pg_restore --list /tmp/nous.dump > .cutover/pg-toc-target.txt
 ```
 
-Expected: non-trivial file size; `pg_restore --list` prints TOC entries without error.
+Expected: non-trivial file size; all three SHA-256 hashes match and both
+`pg_restore --list` commands exit 0. A direct `kubectl exec | kubectl exec -i`
+pipe exited 141 and truncated the dump during the 2026-09-22 window; do not
+retry it or restore an archive that fails validation.
 
 **HALT:** dump exits non-zero (e.g. version mismatch, auth failure) — nothing has been written to RDS yet; safe to fix and retry.
 
@@ -379,8 +390,10 @@ Expected: exit 0, no `error:` lines. (Warnings about extensions/privileges that 
 
 ```bash
 COUNTS='SELECT string_agg(format('"'"'SELECT %L AS tbl, count(*) FROM %I'"'"', tablename, tablename), '"'"' UNION ALL '"'"' ORDER BY tablename) FROM pg_tables WHERE schemaname = '"'"'public'"'"';'
-psql_do  -Atc "$COUNTS" | psql_do  > .cutover/counts-do.txt
-psql_rds -Atc "$COUNTS" | psql_rds > .cutover/counts-rds.txt
+COUNT_SQL=$(psql_do -Atc "$COUNTS")
+test -n "$COUNT_SQL"
+psql_do  -Atc "$COUNT_SQL ORDER BY tbl;" > .cutover/counts-do.txt
+psql_rds -Atc "$COUNT_SQL ORDER BY tbl;" > .cutover/counts-rds.txt
 diff .cutover/counts-do.txt .cutover/counts-rds.txt && echo COUNTS-MATCH
 ```
 
@@ -406,6 +419,7 @@ Expected: secrets saved (operator re-syncs on next reconcile, ≤60s; new backen
 ```bash
 kubectl delete pod pg-mig -n multimodal-rag-system --context $EKS_CONTEXT
 kubectl delete pod pg-do -n rag-dev --context $DOKS_CONTEXT
+rm .cutover/nous.dump   # sensitive, ignored, mode-600 staging copy; source DO PG remains intact
 unset RDS_PASSWORD
 ```
 
