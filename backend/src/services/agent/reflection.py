@@ -638,6 +638,7 @@ CREATION_TOOLS: frozenset[str] = frozenset(
         "create_project",
         "create_project_note",
         "create_draft",
+        "revise_draft",
         "add_document_to_project",
     }
 )
@@ -673,6 +674,9 @@ _CREATE_SUCCESS_CLAIM_RE = re.compile(
     r"|\b(I'?ve|I\s+have)\s+(created|added|saved)\b"  # "I've created / I have added"
     r"|\bnote\b.{0,25}(created|saved|added)\b"  # "note created / note has been saved"
     r"|\badded\s+.{0,40}\bto\s+(the\s+)?project\b"  # "added X to project"
+    r"|\bi(?:'ve|\s+have)?\s+saved\s+(?:the\s+)?revision(?:\s+v?\d+)?\b"
+    r"|\brevision(?:\s+v?\d+)?\s+(?:was\s+|has\s+been\s+)?saved\b"
+    r"|\bupdated\s+the\s+draft\b"
     # B) inline fabricated JSON blob -----------------------------------------
     r'|\{[^}]*"name"\s*:'  # {"name": …}
     r'|\{[^}]*"project_id"\s*:'  # {"project_id": …}

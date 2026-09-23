@@ -618,13 +618,6 @@ class Settings(BaseSettings):
     PROJECT_SKILL_RUNTIME_ENABLED: bool = False
     PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS: int = 30
 
-    # Citation-faithfulness reviewer pass in draft generation (WS1).
-    # Default off: merge inert, flip in values-dev after verify.
-    # When flipping on in dev, no secret is needed — boolean env only;
-    # if ever sourced from Infisical, add DRAFT_CITATION_REVIEW_ENABLED
-    # to the /do-kb path per project convention.
-    DRAFT_CITATION_REVIEW_ENABLED: bool = False
-
     # Option B server-side history rebuild. When True, the agent stream ignores
     # all but the newest user turn in the request and rebuilds conversation
     # context from the LangGraph checkpoint (source of truth), seeding it from

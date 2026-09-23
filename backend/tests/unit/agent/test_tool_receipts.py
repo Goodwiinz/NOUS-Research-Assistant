@@ -65,6 +65,7 @@ async def test_side_effect_tools_are_the_fixed_audited_set() -> None:
         "create_project",
         "create_project_note",
         "create_draft",
+        "revise_draft",
         "ingest_arxiv_papers",
         "execute_code",
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CitationPanelBody } from '../CitationPanelBody';
 import type { Citation } from '@/utils/citationParser';
 
@@ -19,7 +19,10 @@ function citation(overrides: Partial<Citation>): Citation {
 function fillsFor(container: HTMLElement): { bg: string; opacity: number }[] {
   return Array.from(
     container.querySelectorAll<HTMLElement>('span.origin-left')
-  ).map((el) => ({ bg: el.style.background, opacity: Number(el.style.opacity) }));
+  ).map((el) => ({
+    bg: el.style.background,
+    opacity: Number(el.style.opacity),
+  }));
 }
 
 describe('CitationPanelBody relevance meter', () => {
@@ -57,5 +60,42 @@ describe('CitationPanelBody relevance meter', () => {
 
     expect(fillsFor(container)).toHaveLength(0);
     expect(screen.getByText('Preview only')).toBeInTheDocument();
+  });
+
+  it('bounds long source text and expands the untouched content', () => {
+    const source = `${'A supplied source passage. '.repeat(20)}END OF SOURCE`;
+    render(
+      <CitationPanelBody
+        citations={[citation({ content: source, score: 0.8 })]}
+      />
+    );
+
+    const text = screen.getByTestId('citation-source-text');
+    expect(text.textContent).not.toContain('END OF SOURCE');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show full source text' })
+    );
+
+    expect(text).toHaveTextContent(source);
+    expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+  });
+
+  it('renders short and empty source text honestly as inert text', () => {
+    const source = '**literal** <script>alert(1)</script> [not a link]';
+    const { rerender } = render(
+      <CitationPanelBody citations={[citation({ content: source })]} />
+    );
+
+    const text = screen.getByTestId('citation-source-text');
+    expect(text).toHaveTextContent(source);
+    expect(text.querySelector('script')).toBeNull();
+
+    rerender(<CitationPanelBody citations={[citation({ content: '' })]} />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Source text unavailable.'
+    );
   });
 });

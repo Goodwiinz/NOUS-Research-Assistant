@@ -7,12 +7,26 @@ import {
 } from '@assistant-ui/react';
 import { cn } from '@/lib/utils';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   SlashCommandMenu,
   SLASH_LISTBOX_ID,
   slashOptionId,
 } from './SlashCommandMenu';
 import { useSlashCommandMenu } from './useSlashCommandMenu';
-import type { SlashCommand, SlashCommandId } from './slashCommands';
+import {
+  isSlashTrigger,
+  type SlashCommand,
+  type SlashCommandId,
+} from './slashCommands';
 import {
   AlertCircle,
   ArrowRight,
@@ -103,7 +117,11 @@ export function ChatInput({
   const textareaRef = inputRef ?? internalRef;
   const [isFocused, setIsFocused] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [pendingCommand, setPendingCommand] = useState<SlashCommand | null>(
+    null
+  );
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const draftSelectionRef = useRef<{ start: number; end: number } | null>(null);
   // Browser capability, read through useSyncExternalStore so the server
   // snapshot is explicitly `false`. It used to be useState(false) + a mount
   // effect, which is a setState-in-effect (an extra render) — and it could not
@@ -324,10 +342,59 @@ export function ChatInput({
     }
   }, [aui, value]);
 
+  const restoreDraftSelection = (): void => {
+    const textarea = textareaRef.current;
+    const selection = draftSelectionRef.current;
+    if (!textarea || !selection) return;
+    textarea.focus();
+    textarea.setSelectionRange(selection.start, selection.end);
+  };
+
+  const executeCommand = (
+    command: SlashCommand,
+    discardDraft = false
+  ): void => {
+    const typedSlash = isSlashTrigger(value);
+    if (typedSlash || discardDraft) onChange('');
+    menu.dismiss();
+    onCommand?.(command.id);
+    if (!typedSlash && !discardDraft) {
+      restoreDraftSelection();
+    }
+    draftSelectionRef.current = null;
+  };
+
+  const commandReplacesDraft = (command: SlashCommand): boolean =>
+    command.id === 'new' ||
+    command.id === 'retry' ||
+    command.id === 'clear' ||
+    command.id === 'summarize' ||
+    command.id === 'keypoints' ||
+    command.id === 'gaps' ||
+    command.id === 'timeline';
+
   const runCommand = (command: SlashCommand | undefined): void => {
     if (!command) return;
-    onChange('');
-    onCommand?.(command.id);
+    if (menu.isManual && value.trim() && commandReplacesDraft(command)) {
+      // Commands opened from the button can otherwise replace/send a real
+      // draft. Make that choice explicit instead of losing text on selection.
+      menu.dismiss();
+      setPendingCommand(command);
+      return;
+    }
+    executeCommand(command);
+  };
+
+  const openCommands = (): void => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      draftSelectionRef.current = {
+        start: textarea.selectionStart,
+        end: textarea.selectionEnd,
+      };
+    }
+    menu.open();
+    restoreDraftSelection();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent): void => {
@@ -338,30 +405,35 @@ export function ChatInput({
     // the highlighted command and never submits. The menu can only be open
     // while the whole value is a "/word" token, which is never a sendable
     // message — so normal send-on-Enter is unaffected.
-    if (menu.isOpen && menu.filtered.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        menu.move(1);
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        menu.move(-1);
-        return;
-      }
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        menu.move(e.shiftKey ? -1 : 1);
-        return;
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        runCommand(menu.filtered[menu.highlightedIndex]);
-        return;
+    if (menu.isOpen) {
+      if (menu.filtered.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          menu.move(1);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          menu.move(-1);
+          return;
+        }
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          menu.move(e.shiftKey ? -1 : 1);
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          runCommand(menu.filtered[menu.highlightedIndex]);
+          return;
+        }
       }
       if (e.key === 'Escape') {
         e.preventDefault();
+        const wasManual = menu.isManual;
         menu.dismiss();
+        if (wasManual) restoreDraftSelection();
+        draftSelectionRef.current = null;
         return;
       }
     }
@@ -396,6 +468,10 @@ export function ChatInput({
 
   const handleComposerSubmit = (e: React.FormEvent<HTMLFormElement>): void => {
     prepareSubmission(e);
+  };
+
+  const closeCommandConfirmation = (): void => {
+    setPendingCommand(null);
   };
 
   const isDisabled = disabled;
@@ -827,10 +903,7 @@ export function ChatInput({
 
                 <button
                   type="button"
-                  onClick={() => {
-                    onChange('/');
-                    textareaRef.current?.focus();
-                  }}
+                  onClick={openCommands}
                   className="hidden @min-[480px]:inline-flex items-center gap-1.5 rounded-md ml-1.5 min-h-[44px] text-[12px] cursor-pointer transition-colors hover:bg-(--nous-aurum)"
                   style={{
                     padding: '4px 8px',
@@ -926,6 +999,41 @@ export function ChatInput({
           </div>
         </ComposerPrimitive.Root>
       </div>
+
+      <AlertDialog
+        open={pendingCommand !== null}
+        onOpenChange={(open) => {
+          if (!open) closeCommandConfirmation();
+        }}
+      >
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            restoreDraftSelection();
+            draftSelectionRef.current = null;
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Run {pendingCommand?.label}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Running this command will discard your unsent draft.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={closeCommandConfirmation}>
+              Keep draft
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingCommand) executeCommand(pendingCommand, true);
+                setPendingCommand(null);
+              }}
+            >
+              Run and discard draft
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

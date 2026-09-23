@@ -1,159 +1,113 @@
 /**
  * Thread and Message Search Types
- * 
+ *
  * Types for full-text search functionality across threads and messages
  */
+
+import type { components } from '@/types/generated/api';
 
 // ============================================================================
 // Enums
 // ============================================================================
 
-export type ThreadSearchSortOrder = 
-  | 'relevance'
-  | 'date_desc'
-  | 'date_asc'
-  | 'message_count'
-  | 'last_activity';
+export type ThreadSearchSortOrder =
+  components['schemas']['ThreadSearchSortOrder'];
 
-export type MessageSearchSortOrder = 
-  | 'relevance'
-  | 'date_desc'
-  | 'date_asc';
+export type MessageSearchSortOrder =
+  components['schemas']['MessageSearchSortOrder'];
 
-export type ThreadStatus = 'active' | 'resolved' | 'archived';
-export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
+export type ThreadStatus = components['schemas']['ThreadStatus-Output'];
+export type MessageRole = components['schemas']['MessageRole-Output'];
 
 // ============================================================================
 // Filter Types
 // ============================================================================
 
-export interface ThreadSearchFilter {
-  conversation_id?: string;
-  workspace_id?: string;
-  status?: ThreadStatus[];
-  created_by_id?: string;
-  date_from?: string;
-  date_to?: string;
-  min_message_count?: number;
-}
+export type ThreadSearchFilter = components['schemas']['ThreadSearchFilter'];
 
-export interface MessageSearchFilter {
-  thread_id?: string;
-  conversation_id?: string;
-  workspace_id?: string;
-  user_id?: string;
-  roles?: MessageRole[];
-  date_from?: string;
-  date_to?: string;
-  has_citations?: boolean;
-}
+export type MessageSearchFilter = components['schemas']['MessageSearchFilter'];
 
 // ============================================================================
 // Request Types
 // ============================================================================
 
-export interface ThreadSearchRequest {
-  query: string;
-  filters?: ThreadSearchFilter;
-  sort_order?: ThreadSearchSortOrder;
-  limit?: number;
-  offset?: number;
-  include_snippets?: boolean;
-  include_messages?: boolean;
-}
+type ApiThreadSearchRequest = components['schemas']['ThreadSearchRequest'];
 
-export interface MessageSearchRequest {
-  query: string;
-  filters?: MessageSearchFilter;
-  sort_order?: MessageSearchSortOrder;
-  limit?: number;
-  offset?: number;
-  include_context?: boolean;
-}
+// openapi-typescript marks Pydantic defaults as required. The service accepts
+// those fields as optional so the backend can apply its documented defaults.
+export type ThreadSearchRequest = Omit<
+  ApiThreadSearchRequest,
+  | 'filters'
+  | 'sort_order'
+  | 'limit'
+  | 'offset'
+  | 'include_snippets'
+  | 'include_messages'
+> &
+  Partial<
+    Pick<
+      ApiThreadSearchRequest,
+      | 'filters'
+      | 'sort_order'
+      | 'limit'
+      | 'offset'
+      | 'include_snippets'
+      | 'include_messages'
+    >
+  >;
+
+type ApiMessageSearchRequest = components['schemas']['MessageSearchRequest'];
+
+export type MessageSearchRequest = Omit<
+  ApiMessageSearchRequest,
+  'filters' | 'sort_order' | 'limit' | 'offset' | 'include_context'
+> &
+  Partial<
+    Pick<
+      ApiMessageSearchRequest,
+      'filters' | 'sort_order' | 'limit' | 'offset' | 'include_context'
+    >
+  >;
 
 // ============================================================================
 // Result Types
 // ============================================================================
 
-export interface ThreadSearchResult {
-  thread_id: string;
-  title: string | null;
-  summary: string | null;
+type ApiThreadSearchResult = components['schemas']['ThreadSearchResult'];
+
+export type ThreadSearchResult = Omit<
+  ApiThreadSearchResult,
+  | 'highlighted_title'
+  | 'highlighted_summary'
+  | 'matching_message_count'
+  | 'status'
+> & {
   status: ThreadStatus;
-  conversation_id: string;
-  relevance_score: number;
-  message_count: number;
-  last_message_at: string;
-  created_at: string;
   highlighted_title?: string;
   highlighted_summary?: string;
   matching_message_count?: number;
-}
+};
 
-export interface MessageSearchResult {
-  message_id: string;
-  thread_id: string;
-  content: string;
-  role: MessageRole;
-  user_id: string | null;
-  relevance_score: number;
-  created_at: string;
-  highlighted_content?: string;
-  thread_title?: string;
-  conversation_id?: string;
-  citation_count: number;
-}
+export type MessageSearchResult = components['schemas']['MessageSearchResult'];
 
-export interface CombinedSearchResult {
-  result_type: 'thread' | 'message';
-  id: string;
-  relevance_score: number;
-  title?: string;
-  content?: string;
-  snippet: string;
-  thread_id?: string;
-  conversation_id?: string;
-  created_at: string;
-}
+export type CombinedSearchResult =
+  components['schemas']['CombinedSearchResult'];
 
 // ============================================================================
 // Response Types
 // ============================================================================
 
-export interface ThreadSearchResponse {
-  query: string;
-  search_id: string;
+type ApiThreadSearchResponse = components['schemas']['ThreadSearchResponse'];
+
+export type ThreadSearchResponse = Omit<ApiThreadSearchResponse, 'results'> & {
   results: ThreadSearchResult[];
-  total_results: number;
-  returned_results: number;
-  search_time_ms: number;
-  limit: number;
-  offset: number;
-  has_more: boolean;
-  filters_applied?: Record<string, unknown>;
-}
+};
 
-export interface MessageSearchResponse {
-  query: string;
-  search_id: string;
-  results: MessageSearchResult[];
-  total_results: number;
-  returned_results: number;
-  search_time_ms: number;
-  limit: number;
-  offset: number;
-  has_more: boolean;
-  filters_applied?: Record<string, unknown>;
-}
+export type MessageSearchResponse =
+  components['schemas']['MessageSearchResponse'];
 
-export interface CombinedSearchResponse {
-  query: string;
-  search_id: string;
-  results: CombinedSearchResult[];
-  total_results: number;
-  search_time_ms: number;
-  has_more: boolean;
-}
+export type CombinedSearchResponse =
+  components['schemas']['CombinedSearchResponse'];
 
 export interface SearchSuggestionsResponse {
   query: string;

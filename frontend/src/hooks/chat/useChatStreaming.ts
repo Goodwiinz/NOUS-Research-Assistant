@@ -41,6 +41,7 @@ import {
 } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
+import { projectIdFromToolResult } from '@/store/agentChatStore';
 import {
   toolLabel,
   toolStatusLabel,
@@ -95,6 +96,42 @@ export function parseCreatedNoteResult(
     };
   } catch {
     return null;
+  }
+}
+
+function isPendingToolResult(result: string, isError: boolean): boolean {
+  if (isError) return false;
+  try {
+    const parsed = JSON.parse(result) as { status?: unknown };
+    return [
+      'pending',
+      'running',
+      'analyzing',
+      'generating',
+      'citing',
+      'reviewing',
+      'finalizing',
+    ].includes(String(parsed?.status ?? '').toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function isFailedToolResult(result: string, isError: boolean): boolean {
+  if (isError) return true;
+  try {
+    const parsed = JSON.parse(result) as {
+      status?: unknown;
+      error?: unknown;
+    };
+    return (
+      Boolean(parsed?.error) ||
+      ['failed', 'error', 'cancelled'].includes(
+        String(parsed?.status ?? '').toLowerCase()
+      )
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -194,6 +231,7 @@ const PROJECT_MUTATING_TOOLS = new Set([
   'create_project',
   'create_project_note',
   'create_draft',
+  'revise_draft',
 ]);
 
 // ============================================
@@ -843,14 +881,17 @@ export function useChatStreaming(
   // succeeds, so the rail shows agent-created sources/notes/drafts without
   // waiting out the 5-minute staleTime.
   const invalidateProjectDataForTool = useCallback(
-    (tool: string, isError: boolean) => {
+    (tool: string, result: string, isError: boolean) => {
       if (isError || !PROJECT_MUTATING_TOOLS.has(tool)) return;
+      const resultProjectId =
+        tool === 'revise_draft' ? projectIdFromToolResult(result) : undefined;
+      const projectId = resultProjectId ?? boundProjectId;
       // Scope to the bound project so we don't invalidate every
       // ['project', …] query (project list, unrelated project details,
       // metadata). Fall back to broad invalidation when no project is
       // bound (global chat has no narrower key to target).
       void queryClient.invalidateQueries({
-        queryKey: boundProjectId ? ['project', boundProjectId] : ['project'],
+        queryKey: projectId ? ['project', projectId] : ['project'],
       });
     },
     [queryClient, boundProjectId]
@@ -1248,18 +1289,22 @@ export function useChatStreaming(
             },
             onToolEnd: (tool, result, isError, callId) => {
               console.log('[Agent] Tool end:', tool, result, { isError });
-              if (currentThreadId) {
+              const remainsPending = isPendingToolResult(result, isError);
+              const resultFailed = isFailedToolResult(result, isError);
+              if (currentThreadId && !remainsPending) {
                 useAgentActivityStore
                   .getState()
-                  .pushToolEnd(currentThreadId, tool, !isError, callId);
+                  .pushToolEnd(currentThreadId, tool, !resultFailed, callId);
               }
-              invalidateProjectDataForTool(tool, isError);
-              maybeAutoFocusCreatedNote(
-                tool,
-                result,
-                isError,
-                currentThreadId || null
-              );
+              if (!remainsPending) {
+                invalidateProjectDataForTool(tool, result, resultFailed);
+                maybeAutoFocusCreatedNote(
+                  tool,
+                  result,
+                  resultFailed,
+                  currentThreadId || null
+                );
+              }
               // Update last matching running step for this tool
               // Newest-first, matching the newest running step settled below.
               const invocationKey = toolInvocationKey(tool, callId);
@@ -1269,7 +1314,11 @@ export function useChatStreaming(
               if (idx !== undefined) {
                 turnSteps[idx] = {
                   ...turnSteps[idx],
-                  status: isError ? 'error' : 'done',
+                  status: remainsPending
+                    ? 'running'
+                    : resultFailed
+                      ? 'error'
+                      : 'done',
                   durationMs,
                   resultSummary: summarizeToolResult(result),
                   result,
@@ -1279,7 +1328,7 @@ export function useChatStreaming(
                 streamingSteps: [...turnSteps],
                 streamingStatusDetail: toolStatusLabel(
                   tool,
-                  isError ? 'error' : 'done'
+                  remainsPending ? 'active' : resultFailed ? 'error' : 'done'
                 ),
               });
             },
@@ -2727,26 +2776,34 @@ export function useChatStreaming(
                 });
               },
               onToolEnd: (tool, result, isError, callId) => {
-                useAgentActivityStore
-                  .getState()
-                  .pushToolEnd(
-                    pendingConfirmation.workspaceThreadId,
-                    tool,
-                    !isError,
-                    callId
-                  );
+                const remainsPending = isPendingToolResult(result, isError);
+                const resultFailed = isFailedToolResult(result, isError);
+                if (!remainsPending) {
+                  useAgentActivityStore
+                    .getState()
+                    .pushToolEnd(
+                      pendingConfirmation.workspaceThreadId,
+                      tool,
+                      !resultFailed,
+                      callId
+                    );
+                }
                 // HITL-confirmed tools are exactly the mutating ones (ingest,
                 // create_note, create_draft) — refresh the rail here too.
-                invalidateProjectDataForTool(tool, isError);
+                if (!remainsPending) {
+                  invalidateProjectDataForTool(tool, result, resultFailed);
+                }
                 // create_project_note is destructive, so its successful
                 // tool_end arrives HERE (post-approval resume stream), not on
                 // the primary stream — auto-focus must run from this path.
-                maybeAutoFocusCreatedNote(
-                  tool,
-                  result,
-                  isError,
-                  pendingConfirmation.workspaceThreadId
-                );
+                if (!remainsPending) {
+                  maybeAutoFocusCreatedNote(
+                    tool,
+                    result,
+                    resultFailed,
+                    pendingConfirmation.workspaceThreadId
+                  );
+                }
                 const invocationKey = toolInvocationKey(tool, callId);
                 const startTime = confirmToolStartTimes
                   .get(invocationKey)
@@ -2762,7 +2819,11 @@ export function useChatStreaming(
                 if (idx !== undefined) {
                   confirmSteps[idx] = {
                     ...confirmSteps[idx],
-                    status: isError ? 'error' : 'done',
+                    status: remainsPending
+                      ? 'running'
+                      : resultFailed
+                        ? 'error'
+                        : 'done',
                     durationMs,
                     resultSummary: summarizeToolResult(result),
                     result,
@@ -2772,7 +2833,7 @@ export function useChatStreaming(
                   streamingSteps: [...confirmSteps],
                   streamingStatusDetail: toolStatusLabel(
                     tool,
-                    isError ? 'error' : 'done'
+                    remainsPending ? 'active' : resultFailed ? 'error' : 'done'
                   ),
                 });
               },

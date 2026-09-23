@@ -49,12 +49,18 @@ class TestToolTimeoutTiers:
             "add_document_to_project",
             "create_project_note",
             "create_draft",
+            "revise_draft",
             "execute_code",
             "forget_memory",
         } <= _NO_OUTER_RETRY_TOOLS
 
     def test_ingest_and_draft_tools_stay_slow(self):
-        for tool in ("ingest_arxiv_papers", "create_draft", "compare_documents"):
+        for tool in (
+            "ingest_arxiv_papers",
+            "create_draft",
+            "revise_draft",
+            "compare_documents",
+        ):
             assert _resolve_timeout(tool) == _SLOW_TOOL_TIMEOUT_SECONDS
 
     def test_default_tier_unchanged_for_fast_tools(self):

@@ -47,15 +47,15 @@ The CLI is an optional second view of the shared backend. Rehearse the workflow 
 
 ## Screenshots
 
-| Dashboard | Chat | Search |
-| --- | --- | --- |
-| ![NOUS dashboard](brand/screenshots/01-dashboard.png) | ![NOUS chat](brand/screenshots/02-chat.png) | ![NOUS search](brand/screenshots/03-search.png) |
+| 1. Compose a question | 2. Watch the answer stream |
+| --- | --- |
+| ![Compose an evidence-review question in NOUS](brand/screenshots/live-chat-01-compose.png) | ![NOUS streams its progress and answer](brand/screenshots/live-chat-02-streaming.png) |
 
-| Documents | Entity graph | Research |
-| --- | --- | --- |
-| ![Document collection](brand/screenshots/04-documents.png) | ![Entity graph](brand/screenshots/06-entities.png) | ![Research workspace](brand/screenshots/08-research.png) |
+| 3. Review the structured answer | 4. Continue with a follow-up |
+| --- | --- |
+| ![Review a completed NOUS answer](brand/screenshots/live-chat-03-answer.png) | ![Ask a follow-up in the same NOUS conversation](brand/screenshots/live-chat-04-follow-up.png) |
 
-Screenshots capture particular UI versions. See the [showcase](https://goodwiins.github.io/nous/) for the broader product presentation.
+Captured from the live [NOUS deployment](https://goodwiinz.tech/) using a fictional study record with workspace sources disabled, so no private source or message content is included.
 
 ## Architecture
 

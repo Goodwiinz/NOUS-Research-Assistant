@@ -124,6 +124,11 @@ function messageComposer(page) {
   return page.getByRole('textbox', { name: 'Message', exact: true });
 }
 
+/** Scope transient transport failures to the newest alert in a long chat. */
+export function latestAlertLocator(page) {
+  return page.getByRole('alert').last();
+}
+
 async function waitForCondition(check, timeoutMs, message) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
@@ -934,7 +939,7 @@ const scenarios = [
         mimeType: 'application/octet-stream',
         buffer: Buffer.from('MZ'),
       });
-      const error = page.getByRole('alert');
+      const error = latestAlertLocator(page);
       await error.waitFor({ state: 'visible', timeout: session.config.timeoutMs });
       return { assertion: 'Unsupported attachment is rejected with a user-facing alert', evidence: ['Attach file', 'role=alert'] };
     },
@@ -984,7 +989,7 @@ const scenarios = [
       await message.fill(`${evidence.fixturePrefix} controlled transport fault`);
       await message.press('Enter');
       try {
-        await page.getByRole('alert').waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await latestAlertLocator(page).waitFor({ state: 'visible', timeout: session.config.timeoutMs });
       } finally {
         await page.unroute('**/api/v1/agent/stream');
       }

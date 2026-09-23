@@ -63,8 +63,15 @@ def _prune_checkpoint_history(messages: List[Any]) -> List[RemoveMessage]:
 
 
 def _extract_prior_tool(messages: List[Any]) -> Optional[Dict[str, Any]]:
-    """Return bounded outcomes from the latest batch, not just its first call."""
-    for ai_idx in range(len(messages) - 1, -1, -1):
+    """Return bounded tool outcomes from the immediately preceding user turn."""
+    user_indexes = [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message, HumanMessage)
+    ]
+    current_user_idx = user_indexes[-1] if user_indexes else len(messages)
+    previous_user_idx = user_indexes[-2] if len(user_indexes) > 1 else -1
+    for ai_idx in range(current_user_idx - 1, previous_user_idx, -1):
         msg = messages[ai_idx]
         if not isinstance(msg, AIMessage):
             continue

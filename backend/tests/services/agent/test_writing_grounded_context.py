@@ -27,6 +27,8 @@ def test_writing_prompt_forbids_claiming_pending_artifacts_are_complete() -> Non
     assert "does not prove that a particular task completed" in prompt
     assert "list_project_documents` says `project_id is required" in prompt
     assert "call `list_projects`" in prompt
+    assert "Never route a revision through `create_draft`" in prompt
+    assert "pending `create_draft` result is terminal" in prompt
 
 
 def _grounded_state(
@@ -215,11 +217,7 @@ async def test_pending_create_draft_returns_without_synthesis() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_batched_pending_create_draft_still_synthesizes() -> None:
-    llm = MagicMock()
-    bound = MagicMock()
-    bound.ainvoke = AsyncMock(return_value=AIMessage(content="Combined result"))
-    llm.bind_tools.return_value = bound
+async def test_batched_pending_create_draft_is_terminal() -> None:
     state = {
         "messages": [
             HumanMessage(content="Create a draft and summarize the project."),
@@ -241,11 +239,33 @@ async def test_batched_pending_create_draft_still_synthesizes() -> None:
         ]
     }
 
+    llm = MagicMock()
+    bound = MagicMock()
+    combined = AIMessage(
+        content="The summary completed. Draft generation started and is pending."
+    )
+    bound.ainvoke = AsyncMock(return_value=combined)
+    llm.bind_tools.return_value = bound
+
     with (
         patch("src.core.config.get_settings", return_value=_settings()),
-        patch("src.services.agent.llm_factory.build_synthesis_llm", return_value=llm),
+        patch(
+            "src.services.agent.llm_factory.build_synthesis_llm",
+            return_value=llm,
+        ),
+        patch(
+            "src.services.agent.graph._build_llm",
+            side_effect=AssertionError("mixed pending batch must use synthesis"),
+        ),
     ):
         result = await writing_llm_node(state, config={})
 
-    assert result["messages"][0].content == "Combined result"
-    bound.ainvoke.assert_awaited_once()
+    llm.bind_tools.assert_called_once_with([], parallel_tool_calls=False)
+    assert result["messages"] == [combined]
+    system_text = "\n".join(
+        str(message.content)
+        for message in bound.ainvoke.await_args.args[0]
+        if isinstance(message, SystemMessage)
+    )
+    assert "pending and terminal" in system_text
+    assert "substantive completed tool results" in system_text

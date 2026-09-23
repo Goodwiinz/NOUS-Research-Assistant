@@ -1,4 +1,4 @@
-export { ContextRail } from './ContextRail';
+export { ContextRail, ContextRailDrawer } from './ContextRail';
 export { CollapsibleCard } from './CollapsibleCard';
 export { AgentActivityPanel } from './AgentActivityPanel';
 export { AllCitationsPanel } from './AllCitationsPanel';

@@ -577,6 +577,36 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "revise_draft",
+            "description": "Revise a saved project draft using a durable server-loaded base version. Use for edits, updates, or citation-only changes to an existing draft; never use create_draft for revisions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "The UUID of the project. Optional if on a project page.",
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "The requested changes. Do not include draft content.",
+                    },
+                    "base_version": {
+                        "type": "integer",
+                        "description": "Exact saved version to revise. Defaults to current.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["revise", "citations_only"],
+                        "default": "revise",
+                    },
+                },
+                "required": ["instructions"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "export_bibliography",
             "description": "Export bibliography/references for documents in a specific citation format.",
             "parameters": {
@@ -940,6 +970,8 @@ async def _dispatch_tool(
         return await _tool_get_graph_stats(args, current_user)
     if tool_name == "create_draft":
         return await _tool_create_draft(args, db, current_user)
+    if tool_name == "revise_draft":
+        return await _tool_revise_draft(args, db, current_user)
     if tool_name == "export_bibliography":
         return await _tool_export_bibliography(args, db, current_user)
     if tool_name == "execute_code":
@@ -3191,16 +3223,82 @@ async def _tool_create_draft(
             style=style,
         )
 
+        task_id = str(result.get("task_id", ""))
+        terminal = await DraftGenerationService.wait_for_terminal_status(
+            task_id, timeout_seconds=105.0
+        )
+        status = str(terminal.get("status", result.get("status", "pending")))
+        if status == "completed":
+            message = f"Draft generated for project '{project.name}'."
+        elif status in {"failed", "cancelled"}:
+            detail = str(terminal.get("current_step") or "Draft generation failed")
+            message = detail.removeprefix("Error: ").strip()
+        else:
+            message = f"Draft generation for project '{project.name}' is still running."
+
         return {
-            "task_id": result.get("task_id", ""),
-            "status": str(result.get("status", "pending")),
-            "message": f"Draft generation started for project '{project.name}'. It will appear in the Drafts tab once complete.",
+            **terminal,
+            "task_id": task_id,
+            "status": status,
+            "message": message,
+            **({"error": message} if status in {"failed", "cancelled"} else {}),
             "project_id": str(project.id),
             "project_name": project.name,
         }
     except Exception as e:
         logger.error("create_draft tool failed", exc_info=e)
         return tool_error_payload("create_draft", e)
+
+
+async def _tool_revise_draft(
+    args: Dict[str, Any],
+    db: Optional[AsyncSession],
+    current_user: Optional[User],
+) -> Dict[str, Any]:
+    """Revise a durable project draft and return the completed new version."""
+    if not db or not current_user:
+        return {"error": "Authentication required"}
+
+    project_id = args.get("project_id", "")
+    instructions = str(args.get("instructions", "") or "").strip()
+    base_version = args.get("base_version")
+    mode = args.get("mode", "revise")
+    if not project_id:
+        return {"error": "project_id is required"}
+    if not instructions:
+        return {"error": "Revision instructions are required"}
+    if base_version is not None and (
+        not isinstance(base_version, int)
+        or isinstance(base_version, bool)
+        or base_version < 1
+    ):
+        return {"error": "base_version must be a positive integer"}
+    if mode not in {"revise", "citations_only"}:
+        return {"error": "mode must be 'revise' or 'citations_only'"}
+
+    try:
+        project = await _verify_project_ownership(project_id, db, current_user)
+        if not project:
+            return {"error": "Project not found or access denied"}
+
+        from src.services.research.draft_generation_service import (
+            DraftGenerationService,
+        )
+
+        result = await DraftGenerationService(db).revise_draft(
+            project_id=project.id,
+            instructions=instructions,
+            base_version=base_version,
+            mode=mode,
+        )
+        return {
+            **result,
+            "project_id": str(project.id),
+            "project_name": project.name,
+        }
+    except Exception as e:
+        logger.error("revise_draft tool failed", exc_info=e)
+        return tool_error_payload("revise_draft", e)
 
 
 @dataclass
