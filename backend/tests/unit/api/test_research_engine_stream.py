@@ -16,10 +16,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from src.api.research_engine.runs import router, stream_run
+from src.api.research_engine.runs import pause_run, router, stream_run
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 
@@ -460,7 +460,7 @@ class TestStreamEndpointSuccess:
             nonlocal refresh_counter
             refresh_counter += 1
             if refresh_counter >= 3:
-                mock_run.status = "paused"
+                mock_run.reproducibility_manifest = {"_pause_requested": True}
 
         db.refresh = AsyncMock(side_effect=refresh_with_pause)
 
@@ -518,7 +518,7 @@ class TestStreamEndpointSuccess:
         async def refresh_with_pause(_obj):
             refresh_counter["count"] += 1
             if refresh_counter["count"] >= 3:
-                mock_run.status = "paused"
+                mock_run.reproducibility_manifest = {"_pause_requested": True}
 
         db.refresh = AsyncMock(side_effect=refresh_with_pause)
 
@@ -543,6 +543,33 @@ class TestStreamEndpointSuccess:
         assert "event: run_paused" in response.text
         assert '"step_index": 1' not in response.text
         stream_app.dependency_overrides.pop(get_db, None)
+
+    @pytest.mark.asyncio
+    async def test_pause_request_keeps_inflight_run_claimed(self):
+        """A second stream cannot reclaim a run until the first acknowledges pause."""
+        run_id = uuid.uuid4()
+        run = _make_run(
+            id=run_id,
+            status="running",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        db = AsyncMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        with patch(
+            "src.api.research_engine.runs._get_owned_run",
+            new=AsyncMock(return_value=run),
+        ):
+            response = await pause_run(run_id, current_user, db)
+
+            assert response.status.value == "running"
+            assert run.reproducibility_manifest["_pause_requested"] is True
+            with pytest.raises(HTTPException) as exc_info:
+                await stream_run(run_id, current_user, db)
+
+        assert exc_info.value.status_code == 409
 
 
 # ============================================================================

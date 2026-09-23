@@ -10,7 +10,7 @@ import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import tiktoken
-from openai import AzureOpenAI, OpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 from src.core.config import settings
 from src.core.openai_endpoint import classify_openai_endpoint
@@ -23,6 +23,7 @@ class AzureOpenAIService:
 
     def __init__(self):
         self.client = None
+        self.async_client = None
         self.embedding_client = None
         self.chat_client = None
         self._initialize_clients()
@@ -140,6 +141,33 @@ class AzureOpenAIService:
             or settings.AZURE_OPENAI_DEPLOYMENT_NAME
         )
 
+    def _get_async_chat_client(self) -> Any:
+        """Return a lazily initialized async client for cancellable requests."""
+        if self.async_client is not None:
+            return self.async_client
+
+        chat_endpoint = (
+            settings.AZURE_OPENAI_CHAT_ENDPOINT or settings.AZURE_OPENAI_ENDPOINT
+        )
+        chat_api_key = (
+            settings.AZURE_OPENAI_CHAT_API_KEY or settings.AZURE_OPENAI_API_KEY
+        )
+        if not chat_endpoint or not chat_api_key:
+            raise ValueError("Azure OpenAI chat client not initialized")
+
+        if classify_openai_endpoint(chat_endpoint) == "openai_compatible":
+            self.async_client = AsyncOpenAI(
+                api_key=chat_api_key,
+                base_url=chat_endpoint,
+            )
+        else:
+            self.async_client = AsyncAzureOpenAI(
+                api_key=chat_api_key,
+                azure_endpoint=chat_endpoint,
+                api_version=settings.AZURE_OPENAI_CHAT_API_VERSION,
+            )
+        return self.async_client
+
     async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
         Get embeddings for a list of texts using Azure OpenAI
@@ -208,24 +236,11 @@ class AzureOpenAIService:
 
         request_deadline = time.monotonic() + timeout if timeout is not None else None
 
-        def create_completion(**kwargs: Any) -> Any:
-            request_client = chat_client
-            if request_deadline is not None:
-                remaining_timeout = request_deadline - time.monotonic()
-                if remaining_timeout <= 0:
-                    raise asyncio.TimeoutError
-                request_client = chat_client.with_options(
-                    timeout=remaining_timeout,
-                    max_retries=0,
-                )
-            return request_client.chat.completions.create(**kwargs)
-
         try:
             # Handle different parameter names for newer models
             if deployment_name and "gpt-5" in deployment_name.lower():
                 # GPT-5 models use max_completion_tokens and temperature must be 1.0
-                response = await asyncio.to_thread(
-                    create_completion,
+                kwargs = dict(
                     model=deployment_name,
                     messages=messages,
                     temperature=1.0,  # GPT-5 Nano only supports temperature=1.0
@@ -243,7 +258,24 @@ class AzureOpenAIService:
                 )
                 if tools:
                     kwargs["tools"] = tools
-                response = await asyncio.to_thread(create_completion, **kwargs)
+
+            if request_deadline is None:
+                response = await asyncio.to_thread(
+                    chat_client.chat.completions.create,
+                    **kwargs,
+                )
+            else:
+                remaining_timeout = request_deadline - time.monotonic()
+                if remaining_timeout <= 0:
+                    raise asyncio.TimeoutError
+                request_client = self._get_async_chat_client().with_options(
+                    timeout=remaining_timeout,
+                    max_retries=0,
+                )
+                response = await asyncio.wait_for(
+                    request_client.chat.completions.create(**kwargs),
+                    timeout=remaining_timeout,
+                )
 
             if stream:
                 return response  # Return streaming response

@@ -4,7 +4,7 @@
 
 **Goal:** Close the three security review findings on PR #1661 without changing unrelated research behavior.
 
-**Architecture:** Preserve a completed research step before honoring a concurrent pause, configure the shared Redis limiter to fail closed only for paid work, and carry the ArXiv job's monotonic deadline to the synchronous OpenAI request as an SDK timeout. Existing fail-open rate-limit callers and non-ArXiv model callers keep their current behavior.
+**Architecture:** Keep an active research stream claimed until it acknowledges a pause and persist any completed step before releasing that claim. Configure the shared Redis limiter to fail closed only for paid work. Carry the ArXiv job's monotonic deadline to a cancellable async OpenAI request with an SDK timeout and retries disabled. Existing fail-open rate-limit callers and non-ArXiv model callers keep their current behavior.
 
 **Tech Stack:** Python 3.12, FastAPI, SQLAlchemy async sessions, Redis, OpenAI Python SDK, pytest.
 
@@ -22,6 +22,7 @@
 
 - A pause arriving on `step_complete` persists the step and token count before `run_paused` is emitted.
 - A pause arriving before completion still stops without persisting an unfinished step.
+- A pause request does not make an in-flight run claimable by a second stream.
 - Redis failures deny expensive work while general-purpose limiter callers retain their configured policy.
 - GPT-5 and older deployment request branches both forward the provider timeout.
 - An exhausted ArXiv deadline raises cancellation instead of falling through to template generation.
@@ -50,7 +51,7 @@ Expected: FAIL because the current pause branch exits before `db.add(...)` and t
 
 - [ ] **Step 3: Implement the minimal ordering change**
 
-Capture whether a pause was requested after `db.refresh(run)`. Keep the immediate pause path for events other than `step_complete`; process and commit `step_complete`, emit it, then emit `run_paused` and stop before requesting another engine event.
+Record the pause request without publishing the run as streamable. Capture it after `db.refresh(run)`. Keep the immediate pause path for events other than `step_complete`; process and commit `step_complete`, acknowledge the paused state, emit it, then emit `run_paused` and stop before requesting another engine event.
 
 - [ ] **Step 4: Run the focused test and surrounding stream tests**
 
@@ -110,9 +111,8 @@ Expected: FAIL because the service signatures do not accept or forward a deadlin
 
 - [ ] **Step 3: Implement deadline propagation**
 
-Add optional `timeout` to `AzureOpenAIService.chat_completion` and pass it to `chat.completions.create`. Pass the existing effective deadline through `_create_arxiv_dataset_work`, `create_evaluation_dataset`, and `_generate_questions_for_paper`; compute remaining time immediately before each provider request and re-raise `asyncio.TimeoutError` rather than converting it to template fallback.
+Add optional `timeout` to `AzureOpenAIService.chat_completion`. Deadline-bearing calls use the async SDK client with both an SDK timeout and `asyncio.wait_for`, with retries disabled so cancellation stops the in-flight request. Pass the existing effective deadline through `_create_arxiv_dataset_work`, `create_evaluation_dataset`, and `_generate_questions_for_paper`; compute remaining time immediately before each provider request and re-raise `asyncio.TimeoutError` rather than converting it to template fallback.
 
 - [ ] **Step 4: Run focused and static verification**
 
 Run the two focused service test files, Ruff on changed source, Black/isort checks on changed Python files, compile checks, and inspect `git diff --check` plus the final diff.
-

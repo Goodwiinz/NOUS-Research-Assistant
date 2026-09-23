@@ -45,6 +45,22 @@ from src.services.research_engine.step_executor import StepExecutor
 
 logger = logging.getLogger(__name__)
 
+_PAUSE_REQUESTED_KEY = "_pause_requested"
+
+
+def _pause_requested(run: ResearchRun) -> bool:
+    manifest = run.reproducibility_manifest or {}
+    return bool(manifest.get(_PAUSE_REQUESTED_KEY))
+
+
+def _set_pause_requested(run: ResearchRun, requested: bool) -> None:
+    manifest = dict(run.reproducibility_manifest or {})
+    if requested:
+        manifest[_PAUSE_REQUESTED_KEY] = True
+    else:
+        manifest.pop(_PAUSE_REQUESTED_KEY, None)
+    run.reproducibility_manifest = manifest or None
+
 
 def _get_verified_organization_id(current_user: Any) -> Any:
     """Return the authenticated user's server-side organization ID."""
@@ -309,7 +325,10 @@ async def pause_run(
             status_code=status.HTTP_409_CONFLICT,
             detail="Run is not currently running",
         )
-    run.status = RunStatus.PAUSED.value
+    # Keep the run claimed while the active stream reaches a safe boundary.
+    # Publishing PAUSED here would let a second stream reclaim and replay the
+    # in-flight paid step before the first stream can persist its result.
+    _set_pause_requested(run, True)
     await db.commit()
     await db.refresh(run)
     return RunResponse.model_validate(run)
@@ -542,13 +561,13 @@ async def stream_run(
                 event_type = event.get("event")
                 await db.refresh(run)
 
-                pause_requested = (
-                    run.status == RunStatus.PAUSED.value and event_type != "run_paused"
-                )
+                pause_requested = _pause_requested(run) and event_type != "run_paused"
 
                 # An unfinished event can stop immediately. A completed paid step
                 # must be persisted and charged before the pause takes effect.
                 if pause_requested and event_type != "step_complete":
+                    _set_pause_requested(run, False)
+                    run.status = RunStatus.PAUSED.value
                     run.total_tokens = total_tokens
                     await db.commit()
                     paused_event = {
@@ -600,12 +619,17 @@ async def stream_run(
                     )
                     total_tokens += int(event.get("token_count") or 0)
                     run.total_tokens = total_tokens
+                    if pause_requested:
+                        _set_pause_requested(run, False)
+                        run.status = RunStatus.PAUSED.value
                     await db.commit()
                 elif event_type == "run_paused":
+                    _set_pause_requested(run, False)
                     run.status = RunStatus.PAUSED.value
                     run.total_tokens = total_tokens
                     await db.commit()
                 elif event_type == "run_failed":
+                    _set_pause_requested(run, False)
                     run.status = RunStatus.FAILED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
@@ -640,6 +664,7 @@ async def stream_run(
                     break
         except asyncio.CancelledError:
             # Client disconnected; persist paused state so run can resume later.
+            _set_pause_requested(run, False)
             run.status = RunStatus.PAUSED.value
             run.total_tokens = total_tokens
             await db.commit()
@@ -648,6 +673,7 @@ async def stream_run(
             # If streaming fails unexpectedly, mark run as failed
             await db.rollback()
             logger.error(f"Stream error for run {run_id}: {exc}")
+            _set_pause_requested(run, False)
             run.status = RunStatus.FAILED.value
             run.total_tokens = total_tokens
             run.completed_at = datetime.now(timezone.utc)

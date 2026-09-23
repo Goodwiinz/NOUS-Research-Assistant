@@ -29,11 +29,10 @@ def _identity_part(value: Any) -> Optional[str]:
 
 
 def _local_admission(identifier: str, now: int) -> bool:
-    """Keep a bounded per-process fallback when Redis is unavailable.
+    """Apply a bounded per-process prefilter before shared admission.
 
-    Redis remains the shared source across workers; this fallback prevents an
-    outage from turning an expensive endpoint into an unlimited sink within a
-    single process.
+    Redis remains the authoritative cross-worker decision. If it is
+    unavailable, the fail-closed shared limiter rejects the operation.
     """
     window = now // EXPENSIVE_WORK_WINDOW_SECONDS
     with _local_lock:
