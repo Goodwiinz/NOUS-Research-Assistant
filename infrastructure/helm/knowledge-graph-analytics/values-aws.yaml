@@ -47,8 +47,8 @@ infisical:
 # ──────────────────────────────────────────────
 backend:
   enabled: true
-  # Keep EKS writers off until the frozen DO data and AWS endpoints are ready.
-  replicaCount: 0
+  # DO writers are frozen; PostgreSQL and Neo4j were verified on AWS.
+  replicaCount: 1
   image:
     # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # Immutable source tag and ECR digest for the AWS image build.
@@ -298,9 +298,9 @@ neo4j:
 
 celeryWorker:
   enabled: true
-  replicaCount: 0
+  replicaCount: 1
   autoscaling:
-    enabled: false
+    enabled: true
     minReplicas: 1
     maxReplicas: 3
     targetCPUUtilizationPercentage: 75
@@ -330,7 +330,7 @@ celeryWorker:
 
 celeryBeat:
   enabled: true
-  replicaCount: 0
+  replicaCount: 1
   env:
     - name: DB_ASYNC_POOL_SIZE
       value: "1"
