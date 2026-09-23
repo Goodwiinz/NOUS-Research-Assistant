@@ -22,7 +22,7 @@ const taskId = 'dfb4d4b84b3e';
 function renderDraftMessage(
   result: unknown,
   content = `Draft generation started.\n\nStatus: pending\nTask ID: ${taskId}`
-) {
+): ReturnType<typeof render> {
   const message = makeChatPageMessage({
     id: 'assistant-draft',
     role: 'assistant',
