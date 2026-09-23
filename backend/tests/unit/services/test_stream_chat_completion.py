@@ -164,3 +164,27 @@ async def test_chat_completion_does_not_block_asyncio_deadlines(
                 ),
                 timeout=0.005,
             )
+
+
+@pytest.mark.parametrize("deployment_name", ["gpt-4", "gpt-5"])
+@pytest.mark.asyncio
+async def test_chat_completion_bounds_provider_request_without_retries(
+    service: AzureOpenAIService,
+    deployment_name: str,
+) -> None:
+    """A caller timeout must constrain both SDK request branches."""
+    scoped_client = MagicMock()
+    scoped_client.chat.completions.create.return_value = iter([])
+    service.client.with_options.return_value = scoped_client
+
+    with patch.object(service, "get_chat_deployment", return_value=deployment_name):
+        await service.chat_completion(
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            timeout=7.5,
+        )
+
+    request_options = service.client.with_options.call_args.kwargs
+    assert 0 < request_options["timeout"] <= 7.5
+    assert request_options["max_retries"] == 0
+    scoped_client.chat.completions.create.assert_called_once()

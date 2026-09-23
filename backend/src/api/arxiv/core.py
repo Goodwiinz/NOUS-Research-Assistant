@@ -565,6 +565,7 @@ async def _create_arxiv_dataset(
                 num_papers=num_papers,
                 questions_per_paper=questions_per_paper,
                 difficulty_levels=difficulty_levels,
+                deadline=effective_deadline,
             ),
             timeout=remaining,
         )
@@ -582,6 +583,7 @@ async def _create_arxiv_dataset_work(
     num_papers: int,
     questions_per_paper: int,
     difficulty_levels: List[str],
+    deadline: Optional[float] = None,
 ):
     async with ArXivIngestionService() as arxiv_service:
         papers = await arxiv_service.search_papers(query=query, max_results=num_papers)
@@ -591,6 +593,7 @@ async def _create_arxiv_dataset_work(
                 papers=papers,
                 num_questions=questions_per_paper,
                 difficulty_levels=difficulty_levels,
+                deadline=deadline,
             )
             logger.info(
                 "Created evaluation dataset %s with %d test cases",

@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -960,6 +961,7 @@ class ArXivIngestionService:
         papers: List[Dict[str, Any]],
         num_questions: int = 5,
         difficulty_levels: List[str] = ["easy", "medium", "hard"],
+        deadline: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Create an evaluation dataset from arXiv papers
@@ -968,6 +970,7 @@ class ArXivIngestionService:
             papers: List of paper metadata
             num_questions: Number of questions to generate per paper
             difficulty_levels: List of difficulty levels to sample from
+            deadline: Optional absolute monotonic deadline for provider work
 
         Returns:
             Evaluation dataset dictionary
@@ -989,7 +992,11 @@ class ArXivIngestionService:
 
         for paper in sample_papers:
             # Generate questions based on paper content
-            questions = await self._generate_questions_for_paper(paper, num_questions)
+            questions = await self._generate_questions_for_paper(
+                paper,
+                num_questions,
+                deadline=deadline,
+            )
 
             test_case = {
                 "paper_id": paper["id"],
@@ -1018,7 +1025,10 @@ class ArXivIngestionService:
         return evaluation_data
 
     async def _generate_questions_for_paper(
-        self, paper: Dict[str, Any], num_questions: int
+        self,
+        paper: Dict[str, Any],
+        num_questions: int,
+        deadline: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generate questions for a specific paper using Azure OpenAI
@@ -1046,6 +1056,13 @@ class ArXivIngestionService:
                 Generate {num_questions} questions for this paper.
                 """
 
+                request_kwargs: Dict[str, Any] = {}
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError
+                    request_kwargs["timeout"] = remaining
+
                 response = await azure_openai_service.chat_completion(
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -1053,6 +1070,7 @@ class ArXivIngestionService:
                     ],
                     temperature=0.7,
                     max_tokens=2000,
+                    **request_kwargs,
                 )
 
                 content = response.get("content", "")
@@ -1086,6 +1104,8 @@ class ArXivIngestionService:
                     )
                     return questions
 
+            except asyncio.TimeoutError:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to generate questions using LLM: {e}")
                 # Fallback to templates below

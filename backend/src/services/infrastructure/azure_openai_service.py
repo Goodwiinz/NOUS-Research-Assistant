@@ -6,6 +6,7 @@ Provides support for Azure OpenAI models alongside existing OpenAI and Anthropic
 import asyncio
 import logging
 import os
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import tiktoken
@@ -178,6 +179,7 @@ class AzureOpenAIService:
         max_tokens: Optional[int] = None,
         stream: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Get chat completion from Azure OpenAI
@@ -187,6 +189,7 @@ class AzureOpenAIService:
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             stream: Whether to stream the response
+            timeout: Optional provider request budget in seconds
 
         Returns:
             Chat completion response
@@ -200,12 +203,29 @@ class AzureOpenAIService:
         if not deployment_name:
             raise ValueError("Azure OpenAI chat deployment name not configured")
 
+        if timeout is not None and timeout <= 0:
+            raise asyncio.TimeoutError
+
+        request_deadline = time.monotonic() + timeout if timeout is not None else None
+
+        def create_completion(**kwargs: Any) -> Any:
+            request_client = chat_client
+            if request_deadline is not None:
+                remaining_timeout = request_deadline - time.monotonic()
+                if remaining_timeout <= 0:
+                    raise asyncio.TimeoutError
+                request_client = chat_client.with_options(
+                    timeout=remaining_timeout,
+                    max_retries=0,
+                )
+            return request_client.chat.completions.create(**kwargs)
+
         try:
             # Handle different parameter names for newer models
             if deployment_name and "gpt-5" in deployment_name.lower():
                 # GPT-5 models use max_completion_tokens and temperature must be 1.0
                 response = await asyncio.to_thread(
-                    chat_client.chat.completions.create,
+                    create_completion,
                     model=deployment_name,
                     messages=messages,
                     temperature=1.0,  # GPT-5 Nano only supports temperature=1.0
@@ -223,9 +243,7 @@ class AzureOpenAIService:
                 )
                 if tools:
                     kwargs["tools"] = tools
-                response = await asyncio.to_thread(
-                    chat_client.chat.completions.create, **kwargs
-                )
+                response = await asyncio.to_thread(create_completion, **kwargs)
 
             if stream:
                 return response  # Return streaming response
