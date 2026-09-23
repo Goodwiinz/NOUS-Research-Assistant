@@ -259,8 +259,9 @@ class AsyncCache:
 class RateLimiter:
     """Async rate limiter using Redis"""
 
-    def __init__(self, redis_url: str):
+    def __init__(self, redis_url: str, *, fail_open: bool = True):
         self.redis_url = redis_url
+        self.fail_open = fail_open
         self._redis = None
 
     async def _get_redis(self):
@@ -314,10 +315,9 @@ class RateLimiter:
 
         except Exception as e:
             logger.error(f"Rate limiter error: {e}")
-            # Allow request if rate limiter fails
-            return True, {
+            return self.fail_open, {
                 "limit": limit,
-                "remaining": limit,
+                "remaining": limit if self.fail_open else 0,
                 "reset_time": int(time.time()) + window,
             }
 

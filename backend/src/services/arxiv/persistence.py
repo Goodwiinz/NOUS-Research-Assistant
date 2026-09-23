@@ -302,13 +302,25 @@ async def persist_arxiv_documents(
         # fails, promoted_storage is the complete compensation manifest.
         for index, source_document, arxiv_id, existing_id in pending_sources:
             document_uuid = uuid4()
-            try:
-                storage_fields = await asyncio.to_thread(
+            promotion_task = asyncio.create_task(
+                asyncio.to_thread(
                     store_arxiv_pdf,
                     source_document,
                     organization_id,
                     document_uuid,
                 )
+            )
+            try:
+                # Shield the worker thread so cancellation cannot abandon a
+                # successful upload before it reaches the compensation list.
+                storage_fields = await asyncio.shield(promotion_task)
+            except asyncio.CancelledError as cancellation:
+                try:
+                    storage_fields = await asyncio.shield(promotion_task)
+                except BaseException:
+                    raise cancellation
+                promoted_storage.append(storage_fields)
+                raise cancellation
             except Exception:  # noqa: BLE001 - one bad paper must not lose the batch
                 logger.warning(
                     "arxiv ingest storage promotion failed for %s",
@@ -592,6 +604,9 @@ async def persist_arxiv_documents(
         promoted_storage[:] = discarded_storage
         await _cleanup_promoted(promoted_storage)
         promoted_storage.clear()
+    except asyncio.CancelledError:
+        await _cleanup_promoted(promoted_storage)
+        raise
     except Exception:
         await _cleanup_promoted(promoted_storage)
         raise

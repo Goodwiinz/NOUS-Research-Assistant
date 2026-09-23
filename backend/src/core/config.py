@@ -7,6 +7,7 @@ variables. Default values are only used for local development.
 
 import re
 from typing import Dict, List, Literal, Optional
+from uuid import UUID
 
 from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -437,6 +438,32 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_ATTEMPTS: int = 50  # Max auth attempts in window
     AUTH_RATE_LIMIT_WINDOW_MINUTES: int = 15  # Time window for rate limiting
+
+    # UUIDs of explicitly trusted platform operators.  This is intentionally
+    # separate from tenant roles: an organization ADMIN must not gain access
+    # to process-wide worker controls or global ingestion sinks.  The value is
+    # a comma-separated environment setting; parsing is fail-closed so a
+    # malformed deployment value authorizes nobody.
+    PLATFORM_OPERATOR_USER_IDS: str = ""
+
+    @property
+    def platform_operator_user_ids(self) -> frozenset[UUID]:
+        """Return the configured platform-operator UUIDs, or none on error."""
+        raw = self.PLATFORM_OPERATOR_USER_IDS.strip()
+        if not raw:
+            return frozenset()
+
+        values = [value.strip() for value in raw.split(",")]
+        if not values or any(not value for value in values):
+            return frozenset()
+
+        parsed: set[UUID] = set()
+        for value in values:
+            try:
+                parsed.add(UUID(value))
+            except (AttributeError, ValueError):
+                return frozenset()
+        return frozenset(parsed)
 
     # External APIs
     OPENAI_API_KEY: Optional[str] = None

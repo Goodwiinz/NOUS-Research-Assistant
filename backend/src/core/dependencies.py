@@ -3,12 +3,14 @@ FastAPI dependencies for authentication and authorization
 """
 
 from typing import Optional
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.core.config import settings
 from src.core.database import get_db
 from src.core.security import get_current_user_token
 from src.models.organization import Organization
@@ -100,6 +102,28 @@ def require_role(required_role: UserRole):
 
 def require_admin(current_user: User = Depends(require_role(UserRole.ADMIN))) -> User:
     """Require admin role"""
+    return current_user
+
+
+def require_platform_operator(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Require an explicitly allowlisted platform-operator user UUID.
+
+    Tenant roles intentionally do not participate in this decision.  An empty
+    or malformed ``PLATFORM_OPERATOR_USER_IDS`` value produces an empty parsed
+    allowlist and therefore denies every caller.
+    """
+    try:
+        user_id = UUID(str(current_user.id))
+    except (AttributeError, TypeError, ValueError):
+        user_id = None
+
+    if user_id is None or user_id not in settings.platform_operator_user_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform operator access required",
+        )
     return current_user
 
 

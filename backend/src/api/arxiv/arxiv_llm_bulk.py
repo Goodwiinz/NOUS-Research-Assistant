@@ -14,7 +14,7 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src.core.dependencies import require_admin
+from src.core.dependencies import require_platform_operator
 from src.services.ingestion.kaggle_llm_bulk_ingestion import (
     KaggleLLMBulkIngestionService,
     LLMIngestionProgress,
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/arxiv/llm-bulk",
     tags=["ArXiv LLM Bulk Ingestion"],
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_platform_operator)],
 )
 
 # Global progress tracker

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from src.core.dependencies import require_admin
+from src.core.dependencies import require_platform_operator
 from src.models.user import User
 
 router = APIRouter(prefix="/workers", tags=["workers"])
@@ -45,7 +45,7 @@ class QueueStatsResponse(BaseModel):
 
 
 @router.get("/status", response_model=WorkerStatsResponse)
-async def get_worker_status(current_user: User = Depends(require_admin)):
+async def get_worker_status(current_user: User = Depends(require_platform_operator)):
     """
     Get Celery worker status and statistics
 
@@ -142,7 +142,7 @@ async def get_worker_status(current_user: User = Depends(require_admin)):
 
 
 @router.get("/queues", response_model=List[QueueStatsResponse])
-async def get_queue_status(current_user: User = Depends(require_admin)):
+async def get_queue_status(current_user: User = Depends(require_platform_operator)):
     """
     Get queue statistics (admin only)
 
@@ -217,7 +217,7 @@ async def get_queue_status(current_user: User = Depends(require_admin)):
 
 
 @router.post("/ping")
-async def ping_workers(current_user: User = Depends(require_admin)):
+async def ping_workers(current_user: User = Depends(require_platform_operator)):
     """
     Ping all workers to check connectivity (admin only)
 
@@ -257,7 +257,9 @@ async def ping_workers(current_user: User = Depends(require_admin)):
 
 
 @router.get("/registered-tasks")
-async def get_registered_tasks(current_user: User = Depends(require_admin)):
+async def get_registered_tasks(
+    current_user: User = Depends(require_platform_operator),
+):
     """
     Get list of all registered tasks across all workers (admin only)
     """
@@ -290,7 +292,7 @@ async def get_registered_tasks(current_user: User = Depends(require_admin)):
 
 @router.post("/shutdown/{worker_name}")
 async def shutdown_worker(
-    worker_name: str, current_user: User = Depends(require_admin)
+    worker_name: str, current_user: User = Depends(require_platform_operator)
 ):
     """
     Shutdown a specific worker (admin only)
@@ -316,7 +318,7 @@ async def shutdown_worker(
 
 
 @router.get("/health")
-async def get_workers_health(current_user: User = Depends(require_admin)):
+async def get_workers_health(current_user: User = Depends(require_platform_operator)):
     """
     Get overall health status of worker infrastructure
 

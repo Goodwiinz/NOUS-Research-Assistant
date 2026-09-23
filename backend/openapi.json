@@ -452,6 +452,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 50,
             "title": "Paper Ids",
             "type": "array"
           }
@@ -1208,6 +1209,7 @@
             "items": {
               "$ref": "#/components/schemas/BlueprintStepDefinition"
             },
+            "maxItems": 32,
             "minItems": 1,
             "title": "Steps",
             "type": "array"
@@ -1369,6 +1371,7 @@
           "system_prompt_template": {
             "anyOf": [
               {
+                "maxLength": 16384,
                 "type": "string"
               },
               {
@@ -5001,6 +5004,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 3,
             "title": "Difficulty Levels",
             "type": "array"
           },
@@ -5015,6 +5019,7 @@
           "query": {
             "default": "machine learning",
             "description": "Query to find papers for dataset",
+            "maxLength": 1000,
             "title": "Query",
             "type": "string"
           },

@@ -175,10 +175,11 @@ export function RunView({ runId }: RunViewProps) {
                     event: currentEventType,
                   });
 
-                  // Update run status from terminal events
+                  // Refresh the persisted status after lifecycle events.
                   if (
                     currentEventType === 'run_complete' ||
-                    currentEventType === 'run_failed'
+                    currentEventType === 'run_failed' ||
+                    currentEventType === 'run_paused'
                   ) {
                     fetchRun();
                   }

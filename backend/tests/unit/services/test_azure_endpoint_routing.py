@@ -146,3 +146,33 @@ def test_model_router_endpoint_uses_openai_compatible_client(
         base_url="https://goodwiinzapix.cognitiveservices.azure.com/openai/v1/",
     )
     mock_azure_openai.assert_not_called()
+
+
+@patch("src.services.infrastructure.azure_openai_service.AsyncOpenAI")
+@patch("src.services.infrastructure.azure_openai_service.AsyncAzureOpenAI")
+@patch("src.services.infrastructure.azure_openai_service.OpenAI")
+@patch("src.services.infrastructure.azure_openai_service.AzureOpenAI")
+def test_timed_chat_lazily_uses_matching_async_azure_client(
+    mock_azure_openai,
+    _mock_openai,
+    mock_async_azure_openai,
+    mock_async_openai,
+    monkeypatch,
+):
+    _set_azure_settings(
+        monkeypatch,
+        AZURE_OPENAI_CHAT_ENDPOINT="https://example.services.ai.azure.com",
+        AZURE_OPENAI_CHAT_API_KEY="chat-key",
+    )
+    service = AzureOpenAIService()
+
+    async_client = service._get_async_chat_client()
+
+    assert async_client is mock_async_azure_openai.return_value
+    mock_async_azure_openai.assert_called_once_with(
+        api_key="chat-key",
+        azure_endpoint="https://example.services.ai.azure.com",
+        api_version="2024-06-01",
+    )
+    mock_async_openai.assert_not_called()
+    mock_azure_openai.assert_called_once()

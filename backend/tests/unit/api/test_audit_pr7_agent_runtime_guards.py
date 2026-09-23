@@ -106,7 +106,7 @@ def test_stream_claims_running_atomically() -> None:
         if "async def stream_run" in src
         else src
     )
-    assert "_sa_update(ResearchRun)" in stream
+    assert "update(ResearchRun)" in stream
     assert 'ResearchRun.status.in_(["pending", "paused"])' in stream
     assert "rowcount == 0" in stream
 
