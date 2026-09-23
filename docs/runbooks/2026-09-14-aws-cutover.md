@@ -507,7 +507,7 @@ errors, leave DO data untouched; remove the helper and restart the DO
 StatefulSet for rollback or halt and diagnose.
 
 **4c. Keep the dump in DO until the EKS staging pod is Ready.** Record its
-byte count; Step 4e streams it directly to the EKS PVC. Keep the DO helper
+byte count; Step 4e copies it to the EKS PVC. Keep the DO helper
 mounted until the transfer is verified, then delete it (not its PVC).
 
 **4d. Pause EKS GitOps and Neo4j before loading.** If the EKS STS has already
@@ -554,14 +554,17 @@ spec:
 EOF
 kubectl wait --for=condition=Ready pod/neo4j-stage -n multimodal-rag-system --context $EKS_CONTEXT --timeout=180s
 kubectl exec -n multimodal-rag-system --context $EKS_CONTEXT neo4j-stage -- mkdir -p /data/dumps
-set -o pipefail
-kubectl exec -n rag-dev --context "$DOKS_CONTEXT" neo4j-source -- cat /data/dumps/neo4j.dump | \
-  kubectl exec -i -n multimodal-rag-system --context "$EKS_CONTEXT" neo4j-stage -- \
-  sh -c 'cat > /data/dumps/neo4j.dump'
+umask 077
+kubectl cp --context "$DOKS_CONTEXT" rag-dev/neo4j-source:/data/dumps/neo4j.dump .cutover/neo4j.dump
+kubectl cp --context "$EKS_CONTEXT" .cutover/neo4j.dump multimodal-rag-system/neo4j-stage:/data/dumps/neo4j.dump
+shasum -a 256 .cutover/neo4j.dump
+kubectl exec -n rag-dev --context "$DOKS_CONTEXT" neo4j-source -- sha256sum /data/dumps/neo4j.dump
+kubectl exec -n multimodal-rag-system --context "$EKS_CONTEXT" neo4j-stage -- sha256sum /data/dumps/neo4j.dump
 kubectl exec -n multimodal-rag-system --context $EKS_CONTEXT neo4j-stage -- ls -lh /data/dumps
 ```
 
-Expected: dump file inside the PVC at `/data/dumps/neo4j.dump` (no server running → load happens before first start).
+Expected: all three SHA-256 hashes match; dump file is inside the EKS PVC at
+`/data/dumps/neo4j.dump` (no server running → load happens before first start).
 
 **4f. Load into the PVC** (runs in the helper before the real pod ever starts):
 
@@ -578,6 +581,7 @@ overwritten; the DO source PVC/dump are untouched.
 ```bash
 kubectl delete pod neo4j-stage -n multimodal-rag-system --context $EKS_CONTEXT
 kubectl delete pod neo4j-source -n rag-dev --context $DOKS_CONTEXT
+rm .cutover/neo4j.dump   # sensitive, ignored, mode-600 staging copy; DO PVC/dump remains intact
 ```
 
 Note: the `neo4j` database dump carries graph data only — users/credentials live in the `system` db and are NOT migrated. Auth on EKS is governed by the secret `nous-dev-aws-knowledge-graph-analytics-neo4j-credentials` (`NEO4J_AUTH`) — pre-created OUT-OF-BAND (`kubectl create secret`, 32-hex password); ArgoCD NEVER manages this secret (chart renders it only when `neo4j.password` is set, which values-aws deliberately does not). Backend's `NEO4J_PASSWORD` (Infisical `app-secrets`) must match. NEVER commit the password.
