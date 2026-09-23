@@ -203,6 +203,31 @@ kubectl get pods -n kube-system
 helm list -n kube-system; helm list -n external-secrets
 ```
 
+## Argo CD private access
+
+Cloudflare Access app `NOUS Argo CD` protects `argo.goodwiinz.tech` with the
+`Argo - Abdel only` Allow policy. Tunnel `nous-dev-eks` routes that hostname to
+`https://argocd-server.argocd.svc.cluster.local:443`; Access JWT validation is
+enabled at the tunnel. Origin TLS verification stays enabled, with Origin Server
+Name `argocd-server.argocd.svc.cluster.local` and CA Pool
+`/etc/argocd-tls/ca.pem` (the public certificate projected from `argocd-secret`).
+
+The connector token is stored only in Kubernetes secret
+`argocd/cloudflared-tunnel-token` under key `token`; create it from the
+Cloudflare dashboard token before applying the manifest. Never commit it.
+
+```sh
+eval "$(aws configure export-credentials --format env)" && \
+kubectl apply -f infrastructure/kubernetes/cloudflared-argocd.yaml
+eval "$(aws configure export-credentials --format env)" && \
+helm upgrade argocd argo/argo-cd -n argocd --version 10.9.2 \
+  -f infrastructure/helm/argocd-values.yaml --wait
+```
+
+Unauthenticated requests to `https://argo.goodwiinz.tech/` should redirect to
+Cloudflare Access, not reach Argo directly. Recheck origin TLS after Argo's
+self-signed certificate rotates.
+
 ## Known issues / flags
 
 - `external-dns` CrashLoopBackOff until the real Cloudflare token replaces

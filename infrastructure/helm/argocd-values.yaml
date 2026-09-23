@@ -47,6 +47,8 @@ repoServer:
 # never contained the git timeout) -> every fresh git fetch of the big rag repo
 # died at the 90s exec timeout.
 configs:
+  cm:
+    url: https://argo.goodwiinz.tech
   params:
     # Git client request budget; subprocess fetch also needs ARGOCD_EXEC_TIMEOUT.
     reposerver.git.request.timeout: "900"
