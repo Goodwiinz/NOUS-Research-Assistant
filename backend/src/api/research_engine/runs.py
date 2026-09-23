@@ -542,8 +542,13 @@ async def stream_run(
                 event_type = event.get("event")
                 await db.refresh(run)
 
-                # Honor external pause requests before moving to the next step.
-                if run.status == RunStatus.PAUSED.value and event_type != "run_paused":
+                pause_requested = (
+                    run.status == RunStatus.PAUSED.value and event_type != "run_paused"
+                )
+
+                # An unfinished event can stop immediately. A completed paid step
+                # must be persisted and charged before the pause takes effect.
+                if pause_requested and event_type != "step_complete":
                     run.total_tokens = total_tokens
                     await db.commit()
                     paused_event = {
@@ -623,6 +628,16 @@ async def stream_run(
                 event_type = event.get("event", "message")
                 data = json.dumps(event)
                 yield f"event: {event_type}\ndata: {data}\n\n"
+
+                if pause_requested:
+                    paused_event = {
+                        "event": "run_paused",
+                        "run_id": str(run.id),
+                        "reason": "Paused by user",
+                    }
+                    data = json.dumps(paused_event)
+                    yield f"event: run_paused\ndata: {data}\n\n"
+                    break
         except asyncio.CancelledError:
             # Client disconnected; persist paused state so run can resume later.
             run.status = RunStatus.PAUSED.value

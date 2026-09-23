@@ -439,6 +439,73 @@ class TestStreamEndpointSuccess:
         step = next(row for row in added if isinstance(row, ResearchStep))
         assert step.output["source_records"][0]["source_id"] == str(sources[0].id)
 
+    @pytest.mark.asyncio
+    async def test_stream_persists_completed_step_before_honoring_external_pause(
+        self,
+    ):
+        from src.models.research_step import ResearchStep
+
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        mock_run = _make_run(id=run_id, blueprint_id=bp_id, status="pending")
+        mock_bp = _make_blueprint(
+            id=bp_id,
+            steps=[{"type": "search", "mode": "deterministic"}],
+        )
+        db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+        refresh_counter = 0
+
+        async def refresh_with_pause(_obj):
+            nonlocal refresh_counter
+            refresh_counter += 1
+            if refresh_counter >= 3:
+                mock_run.status = "paused"
+
+        db.refresh = AsyncMock(side_effect=refresh_with_pause)
+
+        async def mock_engine_run(blueprint, run_id, start_from_step=0, **kwargs):
+            yield {
+                "event": "step_complete",
+                "run_id": str(run_id),
+                "step_index": 0,
+                "step_type": "search",
+                "output": {"content": "done"},
+                "quality_marks": [],
+                "token_count": 10,
+            }
+            yield {"event": "step_start", "run_id": str(run_id), "step_index": 1}
+
+        with (
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+            patch("src.api.research_engine.runs.ArxivConnector"),
+            patch("src.api.research_engine.runs.SemanticScholarConnector"),
+        ):
+            engine = Mock()
+            engine.run = mock_engine_run
+            engine_cls.return_value = engine
+            response = await stream_run(run_id, current_user, db)
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        body = "".join(chunks)
+        persisted_steps = [
+            call.args[0]
+            for call in db.add.call_args_list
+            if isinstance(call.args[0], ResearchStep)
+        ]
+        assert len(persisted_steps) == 1
+        assert persisted_steps[0].token_count == 10
+        assert mock_run.total_tokens == 10
+        assert body.index("event: step_complete") < body.index("event: run_paused")
+        assert '"step_index": 1' not in body
+
     def test_stream_honors_external_pause_request(self, stream_app, stream_client):
         run_id = uuid.uuid4()
         bp_id = uuid.uuid4()
