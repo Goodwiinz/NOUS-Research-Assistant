@@ -123,14 +123,18 @@ the live store.
   production deployment observed 2026-09-22 is
   `dpl_7cfxWcqfJ93vDadt1Tg1khbxxgMi` in scope `md-basit` (project `nous`).
   `vercel inspect <deployment-id> --scope md-basit` must still show it Ready;
-  record its ID again if the live alias has changed. Its `/frontend-build`
-  Infisical `dev` values are `BACKEND_URL`, `NEXT_PUBLIC_API_URL`, and
-  `NEXT_PUBLIC_API_BASE_URL` = `https://dev-api.gen-text.app`, and
-  `NEXT_PUBLIC_WS_URL` = `wss://dev-api.gen-text.app/ws`. The current
+  record its ID again if the live alias has changed. The actual production
+  build uses the Vercel project environment variables `BACKEND_URL` =
+  `https://dev-api.gen-text.app` and `NEXT_PUBLIC_WS_URL` =
+  `wss://dev-api.gen-text.app/ws`; root `vercel.json` overrides the project's
+  Infisical-backed Build Command with `cd frontend && pnpm run build`.
+  `/frontend-build` Infisical `dev` also has four DO-backed URL keys, but
+  changing those alone does **not** change this Vercel build. The current
   `goodwiinz.tech/api/v1/auth/me` and DO API both return 401 while the AWS
   hostname returns 503 with zero replicas. After cutover, rollback with
   `vercel rollback <recorded-DO-deployment-id> --scope md-basit --yes`, then
-  restore the four Infisical build secrets for future deployments.
+  restore the two Vercel production URLs and four Infisical build URLs for
+  future deployments.
   Do not assume the DO ingress serves
   `dev-api.goodwiinz.tech`: on 2026-09-22 it did not, while that hostname
   already pointed at the AWS ALB and returned 503 with EKS replicas at zero.
@@ -698,10 +702,19 @@ Expected: issuer `Amazon`, HTTP 200 (or the app's health response), no cert warn
 
 **HALT:** cert mismatch/`SSL_ERROR` → ACM cert ARN on the ingress ≠ cert covering the host; fix annotation + `kubectl rollout restart` is not enough — the ingress must be re-applied (argocd app sync). Do not proceed to smoke tests on a broken TLS chain.
 
-**7e. Switch the live Vercel frontend build.** The `md-basit/nous` project
-build command injects Infisical `dev` `/frontend-build`; the current build is
-hard-coded to DO. After AWS `/health` and `/ws/health` pass, update its four
-values (recorded in Step 0):
+**7e. Switch the live Vercel frontend build.** Root `vercel.json` runs
+`cd frontend && pnpm run build`, so the Vercel **Production environment
+variables**, not Infisical, set the current build's URLs. After AWS `/health`
+passes on both API and ws hostnames, update its two production URLs:
+
+```bash
+vercel link --yes --scope md-basit --project nous  # only if this worktree is not linked
+printf '%s' 'https://dev-api.goodwiinz.tech' | vercel env update BACKEND_URL production --scope md-basit --yes
+printf '%s' 'wss://dev-ws.goodwiinz.tech' | vercel env update NEXT_PUBLIC_WS_URL production --scope md-basit --yes
+```
+
+Also update Infisical `dev` `/frontend-build` for builds that use
+`build:cloud` (these values alone do not affect the current Vercel build):
 
 - `BACKEND_URL`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_BASE_URL` → `https://dev-api.goodwiinz.tech`
 - `NEXT_PUBLIC_WS_URL` → `wss://dev-ws.goodwiinz.tech` (**origin only**; callers append `/ws` or other paths)
@@ -716,10 +729,17 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://goodwiinz.tech/
 ```
 
 Expected: new deployment Ready, `goodwiinz.tech` and `www.goodwiinz.tech`
-alias it, and its built API/WS settings point to AWS. Verify the browser
-bundle or network requests, not just a 401 (both DO and AWS can return 401).
+alias it, and its built API/WS settings point to AWS. While DO is frozen,
+`goodwiinz.tech/api/v1/auth/me` must **not** return the same nginx 503 body as
+`dev-api.gen-text.app/api/v1/auth/me`; that proved an initial redeploy was
+still DO-backed on 2026-09-22. Verify the browser bundle or network requests.
+AWS `backend.env.TRUSTED_HOSTS` must include `*.goodwiinz.tech`; `/health`
+exempts host validation, so a healthy probe alone cannot establish that API
+requests work. An unauthenticated `/api/v1/auth/me` should return 401, not
+`Invalid host header` (400).
 If deployment fails, run `vercel rollback <recorded-DO-deployment-id> --scope md-basit --yes`
-and restore `/frontend-build` versions before retrying.
+and restore both Vercel production URLs and `/frontend-build` versions before
+retrying.
 **HALT:** live alias or build still points to DO → do not claim cutover.
 
 ---
@@ -735,7 +755,7 @@ Run all from outside the cluster (real user path, via ALB). Use the
 | 1 | Auth/login | Log in on the verified live frontend | Session created; no 5xx on `/api` calls |
 | 2 | Upload → embed → search | Upload a small document in the UI, wait for ingestion, run a search | Doc status becomes ingested; search returns it |
 | 3 | Chat streaming (SSE) | Send a chat message | Tokens stream incrementally (ALB `idle-timeout: 300` ≥ app `TIMEOUT: 300`) |
-| 4 | WebSocket | Open a session that uses the ws path | Socket connects (ALB `idle-timeout: 4000` on websocket-ingress); `/ws/health` 200 |
+| 4 | WebSocket | Open a session that uses the ws path | Socket connects (ALB `idle-timeout: 4000` on websocket-ingress); `https://dev-ws.goodwiinz.tech/health` 200 |
 | 5 | Knowledge-graph entities page | Open entities page | Nodes/edges render (Neo4j restored — data visible from Step 4) |
 | 6 | Celery beat | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-beat --tail=50` | Heartbeat/tick lines; no task failures |
 | 7 | Celery worker | `kubectl logs -n multimodal-rag-system --context $EKS_CONTEXT deploy/nous-dev-aws-celery-worker --tail=50` | Tasks consumed from ElastiCache queue |
@@ -810,8 +830,10 @@ kubectl get pods -n rag-dev --context $DOKS_CONTEXT -w
 **9.4. Restore the tested frontend → DO API route:**
 `vercel rollback <recorded-DO-deployment-id> --scope md-basit --yes`; verify
 the Ready DO-backed deployment again owns both `goodwiinz.tech` and
-`www.goodwiinz.tech`. Restore the four `/frontend-build` Infisical versions
-recorded in Step 0, so subsequent Vercel builds also target DO. Merely pointing
+`www.goodwiinz.tech`. Restore Vercel Production `BACKEND_URL` to
+`https://dev-api.gen-text.app` and `NEXT_PUBLIC_WS_URL` to
+`wss://dev-api.gen-text.app/ws`, then the four `/frontend-build` Infisical
+versions recorded in Step 0, so subsequent Vercel builds also target DO. Merely pointing
 `dev-api.goodwiinz.tech` at the DO LB is **not sufficient** unless the DO
 ingress and its certificate have been verified for that host. If external-dns
 on EKS fights a DNS change, scale it to 0 first:

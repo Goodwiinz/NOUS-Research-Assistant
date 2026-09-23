@@ -331,3 +331,4 @@ data/archives/
 picker-check.png
 picker-snapshot.txt
 .venv/
+.vercel
