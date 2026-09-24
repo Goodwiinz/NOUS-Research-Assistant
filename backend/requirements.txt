@@ -38,7 +38,7 @@ numpy>=1.26,<3
 sentence-transformers>=6.1.0,<7.0.0
 transformers>=4.36.0
 torch>=2.1.0,<3.0.0
-huggingface_hub>=0.20.0
+huggingface_hub>=1.32.0
 
 # Vector Database
 # Pin to avoid CI import crash in older qdrant-client builds
