@@ -88,7 +88,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.citation import Citation
 from src.models.collection import CollectionDocument
-from src.models.document import Document
+from src.models.document import Document, ProcessingStatus
 from src.models.user import User
 from src.services.agent.trace_metadata import internal_llm_config
 
@@ -1432,9 +1432,9 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
             return payload
     except Exception as e:
         logger.error("ArXiv search tool failed", exc_info=e)
-        # On 429 or other failure, serve the last known result so the LLM can
-        # proceed instead of looping: L1 any-age (bypasses the fresh check),
-        # then L2 stale (entries live STALE_TTL past the fresh window).
+        # On upstream or coordination failure, serve the last known result so
+        # the LLM can proceed instead of looping: L1 any-age (bypasses the
+        # fresh check), then L2 stale (entries live STALE_TTL past freshness).
         stale = _ARXIV_SEARCH_CACHE.get(cache_key)
         stale_payload = (
             stale[1]
@@ -1747,7 +1747,7 @@ async def _tool_search_documents(
     db: Optional[AsyncSession],
     current_user: Optional[User],
 ) -> Dict[str, Any]:
-    """Search user's indexed documents by title or filename."""
+    """Search org documents by title/filename and report retrieval truth."""
     if not db or not current_user:
         return {"error": "Authentication required"}
 
@@ -1767,7 +1767,10 @@ async def _tool_search_documents(
                 (Document.title.ilike(pattern) | Document.filename.ilike(pattern)),
             )
             .order_by(desc(Document.created_at))
-            .limit(max_results)
+            # Grouping happens after the query because legacy arXiv rows have
+            # NULL canonical keys. Keep the scan bounded while preventing a
+            # few duplicate rows from filling the caller's entire result cap.
+            .limit(50)
         )
         result = await db.execute(stmt)
         docs = result.scalars().all()
@@ -1775,24 +1778,111 @@ async def _tool_search_documents(
         from src.services.agent._pii_redact import redact_pii
         from src.shared.enums import ApiDocumentStatus
 
-        payload: Dict[str, Any] = {
-            "documents": [
+        def exact_arxiv_revision(document: Any) -> Optional[str]:
+            metadata = getattr(document, "document_metadata", None)
+            metadata_id = (
+                metadata.get("arxiv_id") if isinstance(metadata, dict) else None
+            )
+            for raw in (getattr(document, "arxiv_id", None), metadata_id):
+                candidate = str(raw or "").strip()
+                # Only a versioned identifier is an exact revision. A bare id
+                # could refer to whichever revision was newest at ingest time
+                # and must not merge independently stored rows.
+                if (
+                    candidate
+                    and _ARXIV_VERSION_RE.search(candidate)
+                    and _reject_invalid_arxiv_ids([candidate]) is None
+                ):
+                    return candidate
+            return None
+
+        grouped: Dict[str, List[Any]] = {}
+        revisions: Dict[str, Optional[str]] = {}
+        for document in docs:
+            revision = exact_arxiv_revision(document)
+            group_key = f"arxiv:{revision}" if revision else f"document:{document.id}"
+            grouped.setdefault(group_key, []).append(document)
+            revisions[group_key] = revision
+
+        documents: List[Dict[str, Any]] = []
+        for group_key, matches in list(grouped.items())[:max_results]:
+            revision = revisions[group_key]
+            # PostgreSQL full-text retrieval requires a completed row with a
+            # search vector. arXiv persistence builds that vector without
+            # setting ``is_indexed``, so the flag remains useful metadata but
+            # is not an eligibility gate. Prefer an eligible duplicate as the
+            # representative so the returned id agrees with ``retrievable``.
+            retrievable_matches = [
+                document
+                for document in matches
+                if getattr(document, "processing_status", None)
+                == ProcessingStatus.COMPLETED
+                and getattr(document, "search_vector", None) is not None
+            ]
+            representative = (
+                retrievable_matches[0] if retrievable_matches else matches[0]
+            )
+            indexed_document_ids = [
+                str(document.id)
+                for document in matches
+                if bool(getattr(document, "is_indexed", False))
+            ]
+            retrievable_document_ids = [
+                str(document.id) for document in retrievable_matches
+            ]
+            documents.append(
                 {
-                    "id": str(d.id),
-                    "title": redact_pii(d.title) if d.title else d.title,
-                    "type": d.document_type.value if d.document_type else None,
-                    "status": (
-                        ApiDocumentStatus.from_db(d.processing_status).value
-                        if d.processing_status
+                    "id": str(representative.id),
+                    "matching_document_ids": [str(document.id) for document in matches],
+                    "indexed_document_ids": indexed_document_ids,
+                    "retrievable_document_ids": retrievable_document_ids,
+                    "duplicate_count": len(matches),
+                    "title": (
+                        redact_pii(representative.title)
+                        if representative.title
+                        else representative.title
+                    ),
+                    "type": (
+                        representative.document_type.value
+                        if representative.document_type
                         else None
                     ),
-                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                    "status": (
+                        ApiDocumentStatus.from_db(
+                            representative.processing_status
+                        ).value
+                        if representative.processing_status
+                        else None
+                    ),
+                    "created_at": (
+                        representative.created_at.isoformat()
+                        if representative.created_at
+                        else None
+                    ),
+                    "arxiv_id": revision,
+                    "source_url": (
+                        f"https://arxiv.org/abs/{revision}" if revision else None
+                    ),
+                    "source_match": "database_title_or_filename",
+                    "is_indexed": bool(getattr(representative, "is_indexed", False)),
+                    "retrievable": bool(retrievable_matches),
                 }
-                for d in docs
-            ],
-            "total": len(docs),
+            )
+
+        payload: Dict[str, Any] = {
+            "documents": documents,
+            "total": len(documents),
+            "database_match_count": len(docs),
             "query": query,
         }
+        unavailable_count = sum(not document["retrievable"] for document in documents)
+        if unavailable_count:
+            payload["warning"] = (
+                "These are database title/filename matches, not retrieved corpus "
+                f"content. {unavailable_count} result group(s) are not full-text "
+                "retrievable; do not describe them as RAG sources. "
+                "matching_document_ids preserves every stored row."
+            )
         if not docs:
             # Zero-hit escalation hint: this tool matches title/filename
             # substrings only, so a miss says nothing about content. Without

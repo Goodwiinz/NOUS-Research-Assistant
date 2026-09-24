@@ -63,6 +63,13 @@ TOOL_ERROR_HINTS: dict[tuple[str, str], tuple[ErrorCategory, str]] = {
 _TRANSIENT_EXCEPTIONS = (asyncio.TimeoutError, ConnectionError, OSError)
 _USER_FIXABLE_EXCEPTIONS = (PermissionError,)
 _RATE_LIMIT_KEYWORDS = ("rate limit", "http 429", "too many requests")
+_ARXIV_UNAVAILABLE_KEYWORDS = (
+    "http 406",
+    "arxiv search unavailable",
+    "arxiv search is temporarily unavailable",
+    "arxiv request coordination",
+)
+_ARXIV_TOOLS = frozenset({"search_arxiv", "ingest_arxiv_papers"})
 
 # Keyword signals that an error is transient/upstream — retrying (or simply
 # waiting) can recover, and regenerating the AI response cannot. Connection
@@ -131,6 +138,15 @@ def _arxiv_rate_limit_error() -> ToolError:
     )
 
 
+def _arxiv_unavailable_error() -> ToolError:
+    """Return a client-safe 406/coordination outcome distinct from 429."""
+    return ToolError(
+        category="transient",
+        message="ArXiv search is temporarily unavailable.",
+        suggestion="Do not retry arXiv this turn. Use cached or existing sources.",
+    )
+
+
 def classify_error(tool_name: str, exc: Exception) -> ToolError:
     """Classify a thrown exception into a ToolError."""
     msg = str(exc)
@@ -142,6 +158,11 @@ def classify_error(tool_name: str, exc: Exception) -> ToolError:
             message="The tool could not access the requested resource.",
             suggestion="Check your permissions or ask the user for help.",
         )
+
+    if tool_name in _ARXIV_TOOLS and any(
+        kw in msg.lower() for kw in _ARXIV_UNAVAILABLE_KEYWORDS
+    ):
+        return _arxiv_unavailable_error()
 
     if tool_name == "search_arxiv" and any(
         kw in msg.lower() for kw in _RATE_LIMIT_KEYWORDS
@@ -235,6 +256,11 @@ def classify_error_from_payload(tool_name: str, payload: dict) -> ToolError:
             message=error_msg,
             suggestion="You may need different permissions.",
         )
+
+    if tool_name in _ARXIV_TOOLS and any(
+        kw in msg_lower for kw in _ARXIV_UNAVAILABLE_KEYWORDS
+    ):
+        return _arxiv_unavailable_error()
 
     if tool_name == "search_arxiv" and any(
         kw in msg_lower for kw in _RATE_LIMIT_KEYWORDS

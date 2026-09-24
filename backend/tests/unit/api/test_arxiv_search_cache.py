@@ -109,6 +109,47 @@ async def test_429_falls_back_to_stale_l2(monkeypatch):
     assert "error" not in out and out["papers"][0]["title"] == "old"
 
 
+async def test_406_falls_back_to_stale_l2(monkeypatch):
+    _clear_l1()
+    stale = {"papers": [{"id": "9", "title": "old"}], "total": 1, "query": "rag"}
+
+    async def fake_get(_key, allow_stale):
+        return stale if allow_stale else None
+
+    monkeypatch.setattr(ti, "_arxiv_redis_get", fake_get)
+    monkeypatch.setattr(ti, "_arxiv_redis_set", _noop_set)
+    _patch_arxiv(
+        monkeypatch,
+        raise_exc=Exception("ArXiv search unavailable (HTTP 406); secret body"),
+    )
+
+    out = await ti._tool_search_arxiv({"query": "rag"})
+    assert out["cached"] is True and out["stale"] is True
+    assert "error" not in out and out["papers"][0]["title"] == "old"
+
+
+async def test_cold_406_is_unavailable_not_an_empty_search(monkeypatch):
+    _clear_l1()
+
+    async def fake_get(_key, allow_stale):
+        return None
+
+    monkeypatch.setattr(ti, "_arxiv_redis_get", fake_get)
+    monkeypatch.setattr(ti, "_arxiv_redis_set", _noop_set)
+    _patch_arxiv(
+        monkeypatch,
+        raise_exc=Exception("ArXiv search unavailable (HTTP 406); secret body"),
+    )
+
+    out = await ti._tool_search_arxiv({"query": "rag"})
+
+    assert out["error_type"] == "transient"
+    assert "temporarily unavailable" in out["error"]
+    assert "rate limit" not in out["error"].lower()
+    assert "papers" not in out
+    assert "secret body" not in str(out)
+
+
 async def test_redis_down_still_does_live_call(monkeypatch):
     _clear_l1()
 

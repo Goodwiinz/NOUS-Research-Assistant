@@ -4,11 +4,9 @@ arXiv asks for one request every three seconds from a single connection,
 counted across every machine you control, and tightened enforcement in
 Feb 2026 — 429s now arrive even for callers honouring that interval.
 
-``ArXivIngestionService`` implements this with a Redis slot reservation shared
-by all pods. This connector skipped it entirely: plain-HTTP GET straight to
-``export.arxiv.org``, no reservation, no backoff, no ``Retry-After``, driven
-from Celery. It is the one arXiv path that can get the whole platform
-rate-limited on behalf of every other feature.
+The shared request implementation now owns an exclusive Redis lease, pacing,
+and response policy for every attempt. This connector previously skipped that
+boundary and contacted ``export.arxiv.org`` directly from Celery.
 """
 
 from __future__ import annotations
@@ -113,6 +111,10 @@ async def test_429_is_retried_after_reserving_another_slot() -> None:
     with (
         patch("httpx.AsyncClient", _Client),
         patch("src.services.arxiv.arxiv_service._acquire_arxiv_rate_slot", slot),
+        patch(
+            "src.services.arxiv.arxiv_service._arm_arxiv_cooldown",
+            AsyncMock(),
+        ),
     ):
         docs = await ArxivConnector().search("transformers")
 
@@ -136,3 +138,19 @@ def test_parser_is_defusedxml_not_stdlib() -> None:
 
     assert "from defusedxml import" in src
     assert "import xml.etree.ElementTree" not in src
+
+
+def test_connector_uses_the_shared_request_implementation() -> None:
+    """The Celery connector must not grow an independent HTTP retry loop."""
+    src = (
+        Path(__file__).resolve().parents[3]
+        / "src"
+        / "services"
+        / "research_engine"
+        / "connectors"
+        / "arxiv_connector.py"
+    ).read_text()
+
+    assert "request_arxiv_api" in src
+    assert "_MAX_ATTEMPTS" not in src
+    assert "await client.get(" not in src
