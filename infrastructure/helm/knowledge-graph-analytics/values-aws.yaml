@@ -24,12 +24,10 @@ global:
   storageClass: "gp3"
   dnsZone: "goodwiinz.tech"
   environment: "dev" # aws-dev
-
 commonLabels:
   app.kubernetes.io/name: knowledge-graph-analytics
   app.kubernetes.io/part-of: nous-platform
   environment: aws-dev
-
 # ──────────────────────────────────────────────
 # Infisical secret sync — dev env
 # /database is retained for DO rollback. AWS reads the separate rotating
@@ -39,7 +37,6 @@ infisical:
   enabled: true
   envSlug: "dev"
   # Keep /spaces and /do-kb materialized for rollback, not in backend envFrom.
-
 # Use the RDS-managed credential, synced by External Secrets Operator.
 awsRdsSecret:
   enabled: true
@@ -47,7 +44,6 @@ awsRdsSecret:
   secretArn: "arn:aws:secretsmanager:us-east-1:267685730035:secret:rds!db-a32f02a3-cc8b-46b9-a67f-a7002405df5c-Jf82DC"
   host: "nous-postgres.cqvm2i08i6qf.us-east-1.rds.amazonaws.com"
   database: "nous_merged_preflight"
-
 # ──────────────────────────────────────────────
 # Frontend deployed via Vercel — no in-cluster manifests; rebuild with AWS API/WS URLs in cutover Step 7.
 # ──────────────────────────────────────────────
@@ -63,9 +59,9 @@ backend:
     # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # Immutable source tag and ECR digest for the AWS image build.
     repository: "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
-    tag: "9478ed6a89f18c86da0ef9bd90ae439ba920d961"
-    digest: "sha256:4298e919cb991fd02f3c82e8f31ed2afad3472a672b98a790f2ca20aa00b16c6"
-    sourceSha: "9478ed6a89f18c86da0ef9bd90ae439ba920d961"
+    tag: "db15a27001c9f52479dcdc6e821c660c2886f16f"
+    digest: "sha256:1c15d0ebaaa9c9b87af2a91af169a971307b6224bea5a0bd5032407d4d1dcd63"
+    sourceSha: "db15a27001c9f52479dcdc6e821c660c2886f16f"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -267,10 +263,8 @@ backend:
 # ──────────────────────────────────────────────
 postgresql:
   enabled: false
-
 redis:
   enabled: false
-
 neo4j:
   enabled: true
   image:
@@ -295,7 +289,6 @@ neo4j:
       requests:
         cpu: 250m
         memory: 2Gi
-
 celeryWorker:
   enabled: true
   replicaCount: 1
@@ -328,7 +321,6 @@ celeryWorker:
       value: "1"
     - name: DB_SYNC_MAX_OVERFLOW
       value: "0"
-
 celeryBeat:
   enabled: true
   replicaCount: 1
@@ -348,46 +340,36 @@ celeryBeat:
     requests:
       cpu: 50m
       memory: 1536Mi
-
 prometheus:
   enabled: false
-
 grafana:
   enabled: false
-
 nginx-ingress-controller:
   enabled: false
-
 monitoring:
   enabled: false
-
 securityContext:
   runAsNonRoot: true
   runAsUser: 1001
   runAsGroup: 1001
   fsGroup: 1001
-
 podSecurityPolicy:
   enabled: false
-
 networkPolicy:
   enabled: false
   ingress:
     enabled: true
   egress:
     enabled: false
-
 podDisruptionBudget:
   enabled: true
   maxUnavailable: 1
-
 serviceAccount:
   create: true
   # IRSA grants the app AWS S3 object access and scoped Bedrock retrieval.
   annotations:
     eks.amazonaws.com/role-arn: "arn:aws:iam::267685730035:role/nous-development-app-s3"
   name: ""
-
 # KEDA not installed on EKS yet; re-enable after keda install (helm chart + IRSA).
 keda:
   enabled: false
@@ -401,7 +383,6 @@ keda:
     passwordKey: REDIS_PASSWORD
     enableTLS: "true" # ElastiCache in-transit encryption (rediss://)
     databaseIndex: "0"
-
 syntheticTraffic:
   enabled: true
   suspend: true
