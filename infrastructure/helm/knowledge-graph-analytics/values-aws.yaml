@@ -303,7 +303,8 @@ celeryWorker:
   enabled: true
   replicaCount: 1
   autoscaling:
-    enabled: true
+    # Keep the EBS-pinned Neo4j pod schedulable on the three-node dev cluster.
+    enabled: false
     minReplicas: 1
     maxReplicas: 3
     targetCPUUtilizationPercentage: 75
