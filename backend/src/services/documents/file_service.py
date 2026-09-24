@@ -713,11 +713,12 @@ class FileService:
                 text = []
                 with open(file_path, "rb") as file:
                     pdf_reader = PdfReader(file)
-                    for page in pdf_reader.pages:
+                    for page_number, page in enumerate(pdf_reader.pages, start=1):
                         # `or ""` so a single page that yields None doesn't
                         # TypeError the whole join (losing every other page).
-                        text.append(page.extract_text() or "")
-                return "\n".join(text)
+                        page_text = page.extract_text() or ""
+                        text.append(f"[Page {page_number}]\n{page_text}")
+                return "\n\n".join(text)
 
             elif document.document_type in [DocumentType.SPREADSHEET]:
                 # Excel file - process if pandas is available

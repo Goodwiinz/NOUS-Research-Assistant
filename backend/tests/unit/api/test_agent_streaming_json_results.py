@@ -55,12 +55,48 @@ class TestEncodeToolResult:
         assert parsed["note_id"] == payload["note_id"]
         assert parsed["project_id"] == payload["project_id"]
 
-    def test_truncates_at_500_chars_when_uncompactable(self) -> None:
-        # Many keys (not long values) can't be compacted — falls back to the
-        # hard slice, same as before.
+    def test_oversized_uncompactable_dict_stays_valid_json(self) -> None:
         big = {f"k{i}": i for i in range(200)}
         out = _encode_tool_result(big)
-        assert len(out) == 500
+        assert len(out) <= 500
+        assert json.loads(out) == {"truncated": True}
+
+    def test_long_draft_result_preserves_terminal_identity(self) -> None:
+        payload = {
+            "status": "completed",
+            "task_id": "task-1",
+            "draft_id": "draft-9",
+            "project_id": "project-2",
+            "message": "x" * 1000,
+            "current_step": "y" * 1000,
+        }
+
+        parsed = json.loads(_encode_tool_result(payload))
+
+        assert parsed["status"] == "completed"
+        assert parsed["task_id"] == "task-1"
+        assert parsed["draft_id"] == "draft-9"
+
+    def test_priority_fallback_caps_error_and_preserves_terminal_identity(self) -> None:
+        payload = {
+            "status": "failed",
+            "task_id": "task-12345678",
+            "draft_id": "draft-87654321",
+            "project_id": "project-12345678",
+            "error": "review failed: " + "e" * 1000,
+            "message": "draft generation failed: " + "m" * 1000,
+            **{f"metadata_{index}": "x" * 120 for index in range(12)},
+        }
+
+        out = _encode_tool_result(payload)
+        parsed = json.loads(out)
+
+        assert len(out) <= 500
+        assert parsed["status"] == "failed"
+        assert parsed["task_id"] == "task-12345678"
+        assert parsed["draft_id"] == "draft-87654321"
+        assert parsed["error"].startswith("review failed:")
+        assert parsed["truncated"] is True
 
     def test_non_serializable_falls_back_to_str_via_default(self) -> None:
         # default=str makes datetime serializable; verify that path works.

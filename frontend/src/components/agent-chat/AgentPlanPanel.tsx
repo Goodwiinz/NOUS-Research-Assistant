@@ -18,7 +18,11 @@ export function AgentPlanPanel(): React.JSX.Element | null {
   const messages = useAgentChatStore((s) => s.messages);
 
   const toolExecutions = useMemo<ToolExecution[]>(
-    () => messages[messages.length - 1]?.toolExecutions ?? [],
+    () =>
+      [...messages]
+        .reverse()
+        .find((message) => message.role === 'assistant' && message.plan)
+        ?.toolExecutions ?? [],
     [messages]
   );
 

@@ -99,6 +99,42 @@ export function parseCreatedNoteResult(
   }
 }
 
+function isPendingToolResult(result: string, isError: boolean): boolean {
+  if (isError) return false;
+  try {
+    const parsed = JSON.parse(result) as { status?: unknown };
+    return [
+      'pending',
+      'running',
+      'analyzing',
+      'generating',
+      'citing',
+      'reviewing',
+      'finalizing',
+    ].includes(String(parsed?.status ?? '').toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function isFailedToolResult(result: string, isError: boolean): boolean {
+  if (isError) return true;
+  try {
+    const parsed = JSON.parse(result) as {
+      status?: unknown;
+      error?: unknown;
+    };
+    return (
+      Boolean(parsed?.error) ||
+      ['failed', 'error', 'cancelled'].includes(
+        String(parsed?.status ?? '').toLowerCase()
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function toCitationCreate(ctx: Record<string, unknown>): CitationCreate {
   const documentId =
     (ctx.document_id as string | undefined) ??
@@ -1253,18 +1289,22 @@ export function useChatStreaming(
             },
             onToolEnd: (tool, result, isError, callId) => {
               console.log('[Agent] Tool end:', tool, result, { isError });
-              if (currentThreadId) {
+              const remainsPending = isPendingToolResult(result, isError);
+              const resultFailed = isFailedToolResult(result, isError);
+              if (currentThreadId && !remainsPending) {
                 useAgentActivityStore
                   .getState()
-                  .pushToolEnd(currentThreadId, tool, !isError, callId);
+                  .pushToolEnd(currentThreadId, tool, !resultFailed, callId);
               }
-              invalidateProjectDataForTool(tool, result, isError);
-              maybeAutoFocusCreatedNote(
-                tool,
-                result,
-                isError,
-                currentThreadId || null
-              );
+              if (!remainsPending) {
+                invalidateProjectDataForTool(tool, result, resultFailed);
+                maybeAutoFocusCreatedNote(
+                  tool,
+                  result,
+                  resultFailed,
+                  currentThreadId || null
+                );
+              }
               // Update last matching running step for this tool
               // Newest-first, matching the newest running step settled below.
               const invocationKey = toolInvocationKey(tool, callId);
@@ -1274,7 +1314,11 @@ export function useChatStreaming(
               if (idx !== undefined) {
                 turnSteps[idx] = {
                   ...turnSteps[idx],
-                  status: isError ? 'error' : 'done',
+                  status: remainsPending
+                    ? 'running'
+                    : resultFailed
+                      ? 'error'
+                      : 'done',
                   durationMs,
                   resultSummary: summarizeToolResult(result),
                   result,
@@ -1284,7 +1328,7 @@ export function useChatStreaming(
                 streamingSteps: [...turnSteps],
                 streamingStatusDetail: toolStatusLabel(
                   tool,
-                  isError ? 'error' : 'done'
+                  remainsPending ? 'active' : resultFailed ? 'error' : 'done'
                 ),
               });
             },
@@ -2732,26 +2776,34 @@ export function useChatStreaming(
                 });
               },
               onToolEnd: (tool, result, isError, callId) => {
-                useAgentActivityStore
-                  .getState()
-                  .pushToolEnd(
-                    pendingConfirmation.workspaceThreadId,
-                    tool,
-                    !isError,
-                    callId
-                  );
+                const remainsPending = isPendingToolResult(result, isError);
+                const resultFailed = isFailedToolResult(result, isError);
+                if (!remainsPending) {
+                  useAgentActivityStore
+                    .getState()
+                    .pushToolEnd(
+                      pendingConfirmation.workspaceThreadId,
+                      tool,
+                      !resultFailed,
+                      callId
+                    );
+                }
                 // HITL-confirmed tools are exactly the mutating ones (ingest,
                 // create_note, create_draft) — refresh the rail here too.
-                invalidateProjectDataForTool(tool, result, isError);
+                if (!remainsPending) {
+                  invalidateProjectDataForTool(tool, result, resultFailed);
+                }
                 // create_project_note is destructive, so its successful
                 // tool_end arrives HERE (post-approval resume stream), not on
                 // the primary stream — auto-focus must run from this path.
-                maybeAutoFocusCreatedNote(
-                  tool,
-                  result,
-                  isError,
-                  pendingConfirmation.workspaceThreadId
-                );
+                if (!remainsPending) {
+                  maybeAutoFocusCreatedNote(
+                    tool,
+                    result,
+                    resultFailed,
+                    pendingConfirmation.workspaceThreadId
+                  );
+                }
                 const invocationKey = toolInvocationKey(tool, callId);
                 const startTime = confirmToolStartTimes
                   .get(invocationKey)
@@ -2767,7 +2819,11 @@ export function useChatStreaming(
                 if (idx !== undefined) {
                   confirmSteps[idx] = {
                     ...confirmSteps[idx],
-                    status: isError ? 'error' : 'done',
+                    status: remainsPending
+                      ? 'running'
+                      : resultFailed
+                        ? 'error'
+                        : 'done',
                     durationMs,
                     resultSummary: summarizeToolResult(result),
                     result,
@@ -2777,7 +2833,7 @@ export function useChatStreaming(
                   streamingSteps: [...confirmSteps],
                   streamingStatusDetail: toolStatusLabel(
                     tool,
-                    isError ? 'error' : 'done'
+                    remainsPending ? 'active' : resultFailed ? 'error' : 'done'
                   ),
                 });
               },

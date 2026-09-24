@@ -11,6 +11,7 @@ request-scoped session used only by the request-scoped methods).
 
 from __future__ import annotations
 
+import re
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -35,6 +36,53 @@ def _no_sleep():
         new=AsyncMock(),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _passing_citation_review():
+    async def _review(_db, content, documents):
+        cited_indices = sorted(
+            {int(match) for match in re.findall(r"\[Doc\s+(\d+)\]", content)}
+        )
+        verdicts = []
+        for doc_index in cited_indices:
+            document = documents[doc_index - 1]
+            verdicts.append(
+                {
+                    "doc_index": doc_index,
+                    "verdict": "exact",
+                    "evidence": document.content_summary,
+                    "page_number": None,
+                    "location": "document summary",
+                }
+            )
+        return {
+            "verdicts": verdicts,
+            "summary": {
+                "exact": len(verdicts),
+                "minor": 0,
+                "major": 0,
+                "unverified": 0,
+            },
+            "docs_checked": len(verdicts),
+            "docs_skipped": 0,
+        }
+
+    with patch.object(
+        DraftGenerationService,
+        "_review_citations",
+        new=AsyncMock(side_effect=_review),
+    ):
+        yield
+
+
+def _make_document(title: str) -> MagicMock:
+    return MagicMock(
+        id=uuid4(),
+        title=title,
+        content_summary=f"{title} source-grounded evidence.",
+        content_text=f"[Page 1]\n{title} source-grounded evidence.",
+    )
 
 
 def _make_bg_session(documents):
@@ -91,7 +139,7 @@ async def _run(service, task_id, project_id=None, user_id=None):
 @pytest.mark.asyncio
 async def test_background_task_never_touches_ctor_session():
     ctor_session = MagicMock()  # the caller's (already-closed) session
-    documents = [MagicMock(id=uuid4(), title="Doc A")]
+    documents = [_make_document("Doc A")]
     bg_session = _make_bg_session(documents)
 
     service = DraftGenerationService(ctor_session)
@@ -112,7 +160,7 @@ async def test_background_task_never_touches_ctor_session():
 
 @pytest.mark.asyncio
 async def test_happy_path_completes_through_patched_session():
-    documents = [MagicMock(id=uuid4(), title="Doc A")]
+    documents = [_make_document("Doc A")]
     bg_session = _make_bg_session(documents)
 
     service = DraftGenerationService(MagicMock())
@@ -134,8 +182,8 @@ async def test_happy_path_completes_through_patched_session():
 @pytest.mark.asyncio
 async def test_create_persists_visible_doc_two_index():
     documents = [
-        MagicMock(id=uuid4(), title="Doc A"),
-        MagicMock(id=uuid4(), title="Doc B"),
+        _make_document("Doc A"),
+        _make_document("Doc B"),
     ]
     bg_session = _make_bg_session(documents)
     service = DraftGenerationService(MagicMock())
@@ -164,7 +212,7 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
     _build_draft_content LLM call runs, and window 2 (reviewer/version/
     persist/commit) must open only after that call returns — a pooled
     connection must never sit idle across the LLM call."""
-    documents = [MagicMock(id=uuid4(), title="Doc A")]
+    documents = [_make_document("Doc A")]
     call_order: List[str] = []
 
     docs_result = MagicMock()
@@ -230,7 +278,7 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
 
 @pytest.mark.asyncio
 async def test_create_locks_project_row_before_version_allocation():
-    documents = [MagicMock(id=uuid4(), title="Doc A")]
+    documents = [_make_document("Doc A")]
     bg_session = _make_bg_session(documents)
     service = DraftGenerationService(MagicMock())
     service._build_draft_content = AsyncMock(return_value=("Body [Doc 1].", False))
@@ -278,7 +326,7 @@ async def test_long_themes_do_not_overflow_title_column():
     full sentences, so the `Literature Review - <themes>` join must be clamped
     or the insert dies at the FINALIZING phase and the draft never appears.
     """
-    documents = [MagicMock(id=uuid4(), title="Doc A")]
+    documents = [_make_document("Doc A")]
     bg_session = _make_bg_session(documents)
 
     service = DraftGenerationService(MagicMock())

@@ -19,6 +19,10 @@ from src.services.research_engine.verification import (
     run_source_grounding_check,
 )
 
+MAX_CONNECTOR_FANOUT = 4
+MAX_CONNECTOR_RESULTS = 50
+MAX_RENDERED_PROMPT_CHARS = 16 * 1024
+
 
 def _safe_render(template_str: str, context: Dict[str, Any]) -> str:
     """Render template strings safely.
@@ -101,9 +105,22 @@ class StepExecutor:
             isinstance(name, str) for name in sources
         ):
             raise ValueError("sources must be a list of provider names")
+        if len(sources) > MAX_CONNECTOR_FANOUT:
+            raise ValueError(
+                f"connector fanout exceeds the {MAX_CONNECTOR_FANOUT}-connector limit"
+            )
         query_template = params.get("query_template", "$query")
-        max_results = int(params.get("max_results", 50))
+        try:
+            max_results = int(params.get("max_results", MAX_CONNECTOR_RESULTS))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("max_results must be an integer") from exc
+        if max_results < 1 or max_results > MAX_CONNECTOR_RESULTS:
+            raise ValueError(
+                f"connector results exceed the {MAX_CONNECTOR_RESULTS}-result limit"
+            )
         query = _safe_render(query_template, context)
+        if len(query) > MAX_RENDERED_PROMPT_CHARS:
+            raise ValueError("rendered connector query exceeds the server limit")
 
         all_sources, coverage = await search_sources(
             self.connectors, sources, query, max_results
@@ -191,9 +208,15 @@ class StepExecutor:
             for snapshot in record.get("metadata", {}).get("provenance", []):
                 snapshot.pop("retrieved_at", None)
         system_prompt = _safe_render(system_prompt_template, prompt_context)
+        if len(system_prompt) > MAX_RENDERED_PROMPT_CHARS:
+            raise ValueError("rendered system prompt exceeds the server limit")
+
+        prompt = str(prompt_context)
+        if len(prompt.encode("utf-8")) > MAX_RENDERED_PROMPT_CHARS:
+            raise ValueError("rendered LLM prompt exceeds the server limit")
 
         request = LLMRequest(
-            prompt=str(prompt_context),
+            prompt=prompt,
             system_prompt=system_prompt,
             temperature=temperature,
             seed=seed,

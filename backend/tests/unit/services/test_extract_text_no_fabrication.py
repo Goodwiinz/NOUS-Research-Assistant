@@ -59,6 +59,23 @@ def test_spreadsheet_parse_failure_raises():
 
 
 @pytest.mark.unit
+def test_pdf_extraction_adds_stable_page_markers():
+    doc = SimpleNamespace(id="pdf-1", document_type=DocumentType.PDF)
+    reader = MagicMock()
+    reader.pages = [
+        MagicMock(extract_text=MagicMock(return_value="first")),
+        MagicMock(extract_text=MagicMock(return_value="second")),
+    ]
+    with (
+        patch("builtins.open", MagicMock()),
+        patch.object(fs_mod, "PdfReader", return_value=reader),
+    ):
+        result = _svc()._extract_text_from_path("/paper.pdf", doc)
+
+    assert result == "[Page 1]\nfirst\n\n[Page 2]\nsecond"
+
+
+@pytest.mark.unit
 def test_presentation_corrupt_raises(monkeypatch):
     """A corrupt presentation (ValueError/IOError) must raise → FAILED."""
     fake_pptx = types.ModuleType("pptx")

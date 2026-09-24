@@ -7,6 +7,7 @@ variables. Default values are only used for local development.
 
 import re
 from typing import Dict, List, Literal, Optional
+from uuid import UUID
 
 from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -439,6 +440,32 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_ATTEMPTS: int = 50  # Max auth attempts in window
     AUTH_RATE_LIMIT_WINDOW_MINUTES: int = 15  # Time window for rate limiting
 
+    # UUIDs of explicitly trusted platform operators.  This is intentionally
+    # separate from tenant roles: an organization ADMIN must not gain access
+    # to process-wide worker controls or global ingestion sinks.  The value is
+    # a comma-separated environment setting; parsing is fail-closed so a
+    # malformed deployment value authorizes nobody.
+    PLATFORM_OPERATOR_USER_IDS: str = ""
+
+    @property
+    def platform_operator_user_ids(self) -> frozenset[UUID]:
+        """Return the configured platform-operator UUIDs, or none on error."""
+        raw = self.PLATFORM_OPERATOR_USER_IDS.strip()
+        if not raw:
+            return frozenset()
+
+        values = [value.strip() for value in raw.split(",")]
+        if not values or any(not value for value in values):
+            return frozenset()
+
+        parsed: set[UUID] = set()
+        for value in values:
+            try:
+                parsed.add(UUID(value))
+            except (AttributeError, ValueError):
+                return frozenset()
+        return frozenset(parsed)
+
     # External APIs
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
@@ -618,13 +645,6 @@ class Settings(BaseSettings):
     PROJECT_SKILL_CATALOG_ENABLED: bool = False
     PROJECT_SKILL_RUNTIME_ENABLED: bool = False
     PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS: int = 30
-
-    # Citation-faithfulness reviewer pass in draft generation (WS1).
-    # Default off: merge inert, flip in values-dev after verify.
-    # When flipping on in dev, no secret is needed — boolean env only;
-    # if ever sourced from Infisical, add DRAFT_CITATION_REVIEW_ENABLED
-    # to the /do-kb path per project convention.
-    DRAFT_CITATION_REVIEW_ENABLED: bool = False
 
     # Option B server-side history rebuild. When True, the agent stream ignores
     # all but the newest user turn in the request and rebuilds conversation
