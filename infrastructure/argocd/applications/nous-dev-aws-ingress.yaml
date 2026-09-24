@@ -22,8 +22,7 @@ spec:
 
   source:
     repoURL: https://github.com/Goodwiinz/rag.git
-    # TODO(post-merge): switch to develop (together with aws-dev.yaml)
-    targetRevision: migration/aws
+    targetRevision: develop
     path: infrastructure/kubernetes/overlays/aws-dev
 
   destination:

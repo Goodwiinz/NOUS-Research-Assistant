@@ -5,19 +5,24 @@ that exact source SHA and opens a digest-pinned GitOps pull request using the
 built-in `GITHUB_TOKEN`. No GitHub App private key or personal token is needed.
 The workflow dispatches Test Pipeline, Secret Scan, and Helm Validate at the
 proposal branch because token-created PR events require workflow approval.
-Merge the proposal after those checks pass; after the AWS Argo CD apps switch
-to `develop`, they deploy the selected image.
+The workflow validates the AWS Helm candidate and enables squash auto-merge
+for the proposal's exact head. GitHub waits for required checks and an
+up-to-date branch, then Argo CD deploys the merged image from `develop`.
 Deployment-only commits are skipped to prevent a release loop.
 The proposed file is `values-aws.yaml`; `values-dev.yaml` is frozen for DO
-rollback. The AWS Argo CD apps still track `migration/aws` until their
-separately approved switch to `develop`, so merging a proposal alone does not
-deploy EKS before that switch.
+rollback. All three AWS Argo CD definitions (`aws-dev`, `nous-dev-aws`, and
+`nous-dev-aws-ingress`) track `develop` with automated sync. An existing root
+still watching `migration/aws` needs a one-time live switch after these
+definitions merge; it cannot discover that change on its old branch.
+The DigitalOcean root and application remain paused for rollback.
 
-Repository setup: enable **Actions > General > Workflow permissions > Allow
+Repository setup: enable **Allow auto-merge** and **Actions > General > Workflow permissions > Allow
 GitHub Actions to create and approve pull requests**. Keep default workflow
 permissions read-only. Only the promotion job requests contents, pull-request,
-and workflow-dispatch write permissions; it never approves or merges a PR,
-changes branch protection, or pushes to `develop`.
+and workflow-dispatch write permissions. It requests auto-merge only for its
+generated release proposal, without bypassing branch rules or approving PRs.
+AWS Helm lint/render runs before the request because Helm Validate is not
+currently a required repository check.
 
 Keep **Require branches to be up to date before merging** enabled on
 `develop`. The required Lint Backend job checks each generated release
@@ -30,7 +35,7 @@ not make its old image eligible again.
 | Workflow | Trigger | Responsibility |
 | --- | --- | --- |
 | `test-pipeline.yml` | Push and pull request | Run all required checks and publish the exact `Release Gate` result. |
-| `release-dev.yml` | Completed successful Test Pipeline run on `develop` | Build the tested SHA and open a checked `values-aws.yaml` promotion PR. |
+| `release-dev.yml` | Completed successful Test Pipeline run on `develop` | Build the tested SHA, validate AWS values, and auto-merge a checked `values-aws.yaml` promotion PR. |
 | `docker-build.yml` | Reusable call or manual dispatch | Check out an explicit full SHA, assert `HEAD`, push the full-SHA trace tag, and return its digest. Called by `release-dev.yml`. |
 | `gitops-image-update.yml` | Manual dispatch only | Retained legacy production image update; it has no dev role. |
 | `deploy.yml` | Manual dispatch only | Retained legacy staging/production Helm path; it has no dev role and requires an explicit image tag. |
