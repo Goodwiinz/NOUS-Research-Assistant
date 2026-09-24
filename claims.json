@@ -22,7 +22,7 @@
         "backend/tests/services/agent/test_tools_search_documents_redaction.py"
       ],
       "machine_id": "onubuntu",
-      "pr": null,
+      "pr": 1696,
       "renewed_at": "2026-09-24T20:38:54.434885+00:00",
       "run_id": "20260924T194334Z-codex-onubuntu-6c0861",
       "status": "active"
@@ -30,5 +30,5 @@
   ],
   "mode": "remote-required",
   "schema": 2,
-  "updated_at": "2026-09-24T20:38:54.434885+00:00"
+  "updated_at": "2026-09-24T23:01:45.996327+00:00"
 }

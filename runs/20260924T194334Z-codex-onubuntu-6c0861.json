@@ -33,9 +33,9 @@
   "milestones_truncated": false,
   "outcome": null,
   "parent_run_id": null,
-  "pr": null,
+  "pr": 1696,
   "run_id": "20260924T194334Z-codex-onubuntu-6c0861",
   "schema": 1,
   "state": "claimed",
-  "updated_at": "2026-09-24T20:38:54.434885+00:00"
+  "updated_at": "2026-09-24T23:01:45.996327+00:00"
 }
