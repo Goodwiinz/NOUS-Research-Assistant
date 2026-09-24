@@ -88,6 +88,24 @@ class TestClassifyError:
         assert "Do not retry arXiv this turn" in result["suggestion"]
         assert "secret" not in json.dumps(result)
 
+    def test_arxiv_406_is_distinct_safe_unavailability(self) -> None:
+        from src.services.agent.error_recovery import (
+            classify_error_from_payload,
+            tool_error_payload,
+        )
+
+        payload = tool_error_payload(
+            "search_arxiv",
+            RuntimeError("ArXiv search unavailable (HTTP 406): secret upstream body"),
+        )
+        result = classify_error_from_payload("search_arxiv", payload).to_payload()
+
+        assert result["error_type"] == "transient"
+        assert result["error"] == "ArXiv search is temporarily unavailable."
+        assert "rate limit" not in result["error"].lower()
+        assert "Do not retry arXiv this turn" in result["suggestion"]
+        assert "secret" not in json.dumps(result)
+
     def test_no_results_is_recoverable(self):
         from src.services.agent.error_recovery import classify_error_from_payload
 

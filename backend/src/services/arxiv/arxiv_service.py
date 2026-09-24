@@ -8,12 +8,16 @@ for testing and evaluating the multimodal RAG system.
 import asyncio
 import json
 import logging
+import math
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 from xml.etree.ElementTree import Element  # For type hints only
 
 import aiofiles
@@ -40,6 +44,19 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+class ArxivCoordinationUnavailableError(IngestionError):
+    """The shared request lease could not be obtained safely."""
+
+
+class ArxivUpstreamUnavailableError(IngestionError):
+    """arXiv rejected an API request with HTTP 406."""
+
+
+class ArxivRateLimitError(IngestionError):
+    """arXiv rejected an API request with HTTP 429."""
+
+
 # --- Query fielding ----------------------------------------------------------
 # Marks a query as already using arXiv search syntax: a field prefix (all:,
 # ti:, cat:…), quoted phrase, grouping parens, or a boolean operator.
@@ -61,100 +78,213 @@ def field_arxiv_query(q: str) -> str:
     return " AND ".join(f"all:{tok}" for tok in q.split())
 
 
-# --- Shared cross-pod arXiv rate gate ---------------------------------------
-# arXiv rate-limits per SOURCE IP. Each pod honoring only its own 3s gate means
-# N HPA replicas + the synthetic CronJob collectively exceed arXiv's window and
-# 429 (LangSmith thread 301d6031: a first-attempt 429). This gate reserves the
-# next request slot in Redis so ALL pods are serialized >= 3s apart against
-# arXiv's per-IP limit. Redis-down / unset degrades to the per-process gate.
-_ARXIV_RATE_KEY = "arxiv:rategate"
-_ARXIV_MIN_INTERVAL_MS = 3000  # arXiv's minimum 3s between requests
-# Deep enough for a real ingest batch to queue, bounded by the caller's budget.
-# At 15000 only ~5 slots fit, so a 10-paper ingest (the tool's own cap) sent
-# everything past request ~6 through with NO reservation — the gate became a
-# burst generator at exactly the batch size it was meant to smooth. 30s queues
-# the full batch while staying inside AGENT_LLM_TIMEOUT_SECONDS (50s); going
-# higher would trade a 429 for a guaranteed tool-call timeout.
+# --- Shared cross-pod arXiv request gate ------------------------------------
+# arXiv's legacy API permits one connection at a time and asks automated
+# clients to leave at least three seconds between requests. A timestamp-only
+# reservation cannot enforce the first rule: a response that lasts >3s overlaps
+# the next reserved start. Hold a tokenized Redis lease for the entire network
+# call, then persist the actual start time immediately before the request.
+_ARXIV_INFLIGHT_KEY = "arxiv:rategate:inflight"
+_ARXIV_LAST_START_KEY = "arxiv:rategate:last-start"
+# Compatibility name for metrics/tests that referred to the original key.
+_ARXIV_RATE_KEY = _ARXIV_LAST_START_KEY
+_ARXIV_406_COOLDOWN_KEY = "arxiv:cooldown:upstream-406"
+_ARXIV_429_COOLDOWN_KEY = "arxiv:cooldown:rate-limit-429"
+_ARXIV_MIN_INTERVAL_MS = 3000
 _ARXIV_MAX_WAIT_MS = 30000
-_ARXIV_GATE_TTL_MS = 20000  # key self-expires so a quiet period resets the gate
-# Atomically reserve the next slot: slot = max(now, last + interval); persist it
-# and return how long THIS caller must wait. -1 => queue too deep, don't reserve.
-_ARXIV_GATE_LUA = """
-local last = tonumber(redis.call('GET', KEYS[1]) or '0')
-local now = tonumber(ARGV[1])
-local interval = tonumber(ARGV[2])
-local maxwait = tonumber(ARGV[3])
-local ttl = tonumber(ARGV[4])
-local slot = math.max(now, last + interval)
-local wait = slot - now
-if wait > maxwait then
-  return -1
+_ARXIV_MAX_REQUEST_SECONDS = 30.0
+# The lease covers the longest queue budget and is longer than the maximum
+# admitted request's 3s pacing delay plus its absolute 30s deadline. httpx's
+# own timeout is per operation/inactivity, so the outer deadline below is what
+# makes this fixed lease a valid upper bound for redirects and slow streams.
+_ARXIV_GATE_TTL_MS = 65000
+_ARXIV_406_COOLDOWN_MS = 60000
+_ARXIV_LOCK_POLL_SECONDS = 0.1
+_ARXIV_RELEASE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
 end
-redis.call('SET', KEYS[1], slot, 'PX', ttl)
-return wait
+return 0
 """
 _arxiv_gate_redis: Any = None
 _arxiv_gate_disabled = False
 
 
-async def _acquire_arxiv_rate_slot() -> Optional[float]:
-    """Reserve the next shared arXiv request slot across all pods.
+@dataclass(frozen=True)
+class _ArxivRequestPermit:
+    redis: Any
+    token: str
+    wait_seconds: float
 
-    Returns the seconds to sleep before firing (0.0 = now), or ``None`` when the
-    shared gate is unavailable (no REDIS_URL, or a transient Redis error) so the
-    caller falls back to the per-process gate. Never raises.
+
+def _coordination_error() -> ArxivCoordinationUnavailableError:
+    return ArxivCoordinationUnavailableError(
+        "ArXiv request coordination is unavailable; search was not attempted."
+    )
+
+
+async def _arxiv_coordination_client() -> Any:
+    """Return the shared Redis client or fail closed.
+
+    A process-local fallback would allow each pod to open its own connection,
+    violating the upstream one-connection contract. Search availability is the
+    safer thing to lose when shared coordination is unavailable.
     """
     global _arxiv_gate_redis, _arxiv_gate_disabled
     if _arxiv_gate_disabled:
-        return None
+        raise _coordination_error()
     try:
         if _arxiv_gate_redis is None:
             from src.core.config import settings
 
             if not getattr(settings, "REDIS_URL", None):
-                _arxiv_gate_disabled = True  # never going to work; stop trying
-                return None
+                _arxiv_gate_disabled = True
+                raise _coordination_error()
             import redis.asyncio as _redis_async
 
             _arxiv_gate_redis = _redis_async.from_url(
-                settings.REDIS_URL, decode_responses=True
+                settings.REDIS_URL,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2,
             )
-        import time
+        return _arxiv_gate_redis
+    except ArxivCoordinationUnavailableError:
+        raise
+    except Exception as exc:
+        logger.warning("arXiv shared request coordination unavailable: %s", exc)
+        raise _coordination_error() from exc
 
-        now_ms = int(time.time() * 1000)
-        # NOTE: this is Redis' server-side Lua EVAL (not Python eval) — the
-        # script is a module constant and every ARGV is an int, so there is no
-        # code-injection surface.
-        res = await _arxiv_gate_redis.eval(
-            _ARXIV_GATE_LUA,
+
+async def _release_arxiv_rate_slot(permit: _ArxivRequestPermit) -> None:
+    """Release only the lease owned by *permit*."""
+    try:
+        await permit.redis.eval(
+            _ARXIV_RELEASE_LUA,
             1,
-            _ARXIV_RATE_KEY,
-            now_ms,
-            _ARXIV_MIN_INTERVAL_MS,
-            _ARXIV_MAX_WAIT_MS,
-            _ARXIV_GATE_TTL_MS,
+            _ARXIV_INFLIGHT_KEY,
+            permit.token,
         )
-        wait_ms = int(res)
-        # -1 (queue deeper than the cap) => proceed now rather than pile up.
-        # Deliberate, and pinned by test_deep_queue_proceeds_now: the caller
-        # sits inside AGENT_LLM_TIMEOUT_SECONDS (50s), so waiting the cap would
-        # spend the whole budget and time out — a worse failure than a 429,
-        # which at least surfaces a clean "rate limited, try again" to the user.
-        return 0.0 if wait_ms < 0 else wait_ms / 1000.0
     except Exception:
-        # Transient Redis error: fall back to the per-process gate THIS call
-        # (don't permanently disable — Redis may recover).
-        logger.debug("arXiv shared rate gate unavailable; per-process gate only")
-        return None
+        # The bounded lease remains the safety net if Redis disappears after
+        # the request. Do not replace the real upstream outcome with cleanup.
+        logger.warning("Failed to release arXiv request lease", exc_info=True)
 
 
-def _retry_after_seconds(headers: Any, *, default: float, cap: float = 15.0) -> float:
-    """Seconds to wait from a Retry-After header, clamped to ``cap``.
+async def _active_cooldown_ms(redis_client: Any, key: str) -> int:
+    try:
+        return max(0, int(await redis_client.pttl(key)))
+    except Exception as exc:
+        raise _coordination_error() from exc
 
-    Accepts the delta-seconds form (arXiv sends that). A date-form or absent
-    header falls back to ``default``. Clamped because the caller sits inside a
-    tool-call timeout — honouring a literal 60s would just move the failure.
+
+async def _acquire_arxiv_rate_slot() -> _ArxivRequestPermit:
+    """Acquire the exclusive cross-pod request lease and pacing delay.
+
+    The wait is bounded. Queue overflow and Redis failures raise a safe error;
+    neither path permits an uncoordinated request.
     """
+    redis_client = await _arxiv_coordination_client()
+    token = uuid4().hex
+    deadline = time.monotonic() + (_ARXIV_MAX_WAIT_MS / 1000.0)
+
+    while True:
+        try:
+            acquired = await redis_client.set(
+                _ARXIV_INFLIGHT_KEY,
+                token,
+                nx=True,
+                px=_ARXIV_GATE_TTL_MS,
+            )
+        except Exception as exc:
+            logger.warning("Failed to acquire arXiv request lease: %s", exc)
+            raise _coordination_error() from exc
+
+        if acquired:
+            permit = _ArxivRequestPermit(redis_client, token, 0.0)
+            try:
+                unavailable_ms = await _active_cooldown_ms(
+                    redis_client, _ARXIV_406_COOLDOWN_KEY
+                )
+                if unavailable_ms:
+                    raise ArxivUpstreamUnavailableError(
+                        "ArXiv search unavailable (HTTP 406); protective cooldown active."
+                    )
+
+                rate_limit_ms = await _active_cooldown_ms(
+                    redis_client, _ARXIV_429_COOLDOWN_KEY
+                )
+                if rate_limit_ms:
+                    retry_seconds = math.ceil(rate_limit_ms / 1000.0)
+                    raise ArxivRateLimitError(
+                        "ArXiv rate limited (HTTP 429). "
+                        f"Retry after {retry_seconds} seconds."
+                    )
+
+                seconds, microseconds = await redis_client.time()
+                now_ms = int(seconds) * 1000 + int(microseconds) // 1000
+                last_raw = await redis_client.get(_ARXIV_LAST_START_KEY)
+                last_ms = int(last_raw or 0)
+                wait_ms = max(0, last_ms + _ARXIV_MIN_INTERVAL_MS - now_ms)
+                return _ArxivRequestPermit(
+                    redis_client,
+                    token,
+                    wait_ms / 1000.0,
+                )
+            except Exception as exc:
+                await _release_arxiv_rate_slot(permit)
+                if isinstance(
+                    exc,
+                    (
+                        ArxivCoordinationUnavailableError,
+                        ArxivUpstreamUnavailableError,
+                        ArxivRateLimitError,
+                    ),
+                ):
+                    raise
+                raise _coordination_error() from exc
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ArxivCoordinationUnavailableError(
+                "ArXiv request coordination queue is full; search was not attempted."
+            )
+        await asyncio.sleep(min(_ARXIV_LOCK_POLL_SECONDS, remaining))
+
+
+async def _mark_arxiv_request_started(permit: _ArxivRequestPermit) -> None:
+    """Persist the actual request start while the exclusive lease is held."""
+    try:
+        seconds, microseconds = await permit.redis.time()
+        now_ms = int(seconds) * 1000 + int(microseconds) // 1000
+        await permit.redis.set(
+            _ARXIV_LAST_START_KEY,
+            now_ms,
+            px=_ARXIV_GATE_TTL_MS,
+        )
+    except Exception as exc:
+        raise _coordination_error() from exc
+
+
+async def _arm_arxiv_cooldown(key: str, seconds: float, reason: str) -> None:
+    """Publish a shared not-before marker for a known upstream response."""
+    redis_client = await _arxiv_coordination_client()
+    try:
+        await redis_client.set(
+            key,
+            reason,
+            px=max(1, math.ceil(max(0.0, seconds) * 1000)),
+        )
+    except Exception as exc:
+        raise _coordination_error() from exc
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _retry_after_seconds(headers: Any, *, default: float) -> float:
+    """Return the full delay requested by a valid Retry-After header."""
     raw = None
     try:
         raw = headers.get("Retry-After") or headers.get("retry-after")
@@ -163,21 +293,139 @@ def _retry_after_seconds(headers: Any, *, default: float, cap: float = 15.0) -> 
     if not raw:
         return default
     try:
-        return max(0.0, min(float(str(raw).strip()), cap))
+        return max(0.0, float(str(raw).strip()))
     except (TypeError, ValueError):
-        return default
+        try:
+            retry_at = parsedate_to_datetime(str(raw).strip())
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            return max(0.0, (retry_at - _utcnow()).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return default
 
 
-# arXiv's API gate does not cover PDF fetches, and ingest_papers gathers a
-# whole batch at once against a connector with limit=10 — so a 10-paper ingest
-# opened ten simultaneous connections to arxiv.org/pdf. That is the least
-# polite thing this service does, and it is invisible to the Redis slot gate.
-#
-# Deliberately a concurrency cap, NOT the 3s API gate: ten papers serialized at
-# 3s is ~27s of pure waiting inside the 50s tool budget
-# (AGENT_LLM_TIMEOUT_SECONDS), which would trade a burst for a guaranteed
-# timeout — the same trade test_deep_queue_proceeds_now rejects for the API
-# path. Three at a time removes the burst while a 10-paper batch still fits.
+async def request_arxiv_api(
+    url: str,
+    params: Dict[str, Any],
+    *,
+    timeout: float = 20.0,
+    max_attempts: int = 2,
+    client_factory: Any = None,
+) -> str:
+    """Run one coordinated arXiv API request path for every caller.
+
+    Every attempt reacquires the exclusive lease and re-applies start spacing.
+    HTTP 406 never retries and publishes a short protective cooldown. HTTP 429
+    publishes its full Retry-After as a shared not-before marker and sleeps the
+    full interval before the single retry.
+    """
+    factory = client_factory or httpx.AsyncClient
+    requested_timeout = float(timeout)
+    if not math.isfinite(requested_timeout) or requested_timeout <= 0:
+        raise ValueError("arXiv request timeout must be a positive finite number")
+    request_deadline = min(requested_timeout, _ARXIV_MAX_REQUEST_SECONDS)
+
+    async def _request_once() -> Any:
+        async with factory(timeout=request_deadline) as client:
+            return await client.get(
+                url,
+                params=params,
+                follow_redirects=True,
+            )
+
+    for attempt in range(max_attempts):
+        permit = await _acquire_arxiv_rate_slot()
+        retry_after: Optional[float] = None
+        retry_transport = False
+        try:
+            # Numeric permits are accepted only as a compatibility seam for
+            # unit tests and older internal mocks. Production acquisition
+            # always returns the tokenized permit above.
+            if isinstance(permit, _ArxivRequestPermit):
+                if permit.wait_seconds:
+                    await asyncio.sleep(permit.wait_seconds)
+                await _mark_arxiv_request_started(permit)
+            elif permit:
+                await asyncio.sleep(float(permit))
+
+            # Bound the complete client lifecycle and response download. An
+            # httpx timeout alone restarts for each network operation, allowing
+            # a trickling response to outlive the distributed lease.
+            response = await asyncio.wait_for(
+                _request_once(),
+                timeout=request_deadline,
+            )
+
+            if response.status_code == 406:
+                await _arm_arxiv_cooldown(
+                    _ARXIV_406_COOLDOWN_KEY,
+                    _ARXIV_406_COOLDOWN_MS / 1000.0,
+                    "upstream-unavailable",
+                )
+                raise ArxivUpstreamUnavailableError(
+                    "ArXiv search unavailable (HTTP 406)."
+                )
+
+            if response.status_code == 429:
+                retry_after = _retry_after_seconds(response.headers, default=3.0)
+                await _arm_arxiv_cooldown(
+                    _ARXIV_429_COOLDOWN_KEY,
+                    retry_after,
+                    "rate-limited",
+                )
+                if attempt == max_attempts - 1:
+                    raise ArxivRateLimitError(
+                        "ArXiv rate limited (HTTP 429). "
+                        f"Retry after {retry_after:g} seconds."
+                    )
+            else:
+                response.raise_for_status()
+                logger.info(
+                    "arXiv response status=%d length=%d",
+                    response.status_code,
+                    len(response.text),
+                )
+                return response.text
+        except (
+            ArxivCoordinationUnavailableError,
+            ArxivUpstreamUnavailableError,
+            ArxivRateLimitError,
+        ):
+            raise
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            logger.error(
+                "Request to arXiv API timed out after %s seconds", request_deadline
+            )
+            if attempt == max_attempts - 1:
+                raise IngestionError("ArXiv API request timed out") from exc
+            retry_transport = True
+        except httpx.HTTPStatusError:
+            raise
+        except Exception:
+            if attempt == max_attempts - 1:
+                raise
+            retry_transport = True
+        finally:
+            if isinstance(permit, _ArxivRequestPermit):
+                await _release_arxiv_rate_slot(permit)
+
+        if retry_after is not None:
+            logger.warning(
+                "arXiv rate limited (429), attempt %d/%d; retrying in %ss",
+                attempt + 1,
+                max_attempts,
+                retry_after,
+            )
+            await asyncio.sleep(retry_after)
+        elif retry_transport:
+            await asyncio.sleep(2.0)
+
+    raise IngestionError("ArXiv API request failed after retries")
+
+
+# PDF downloads use a separate endpoint and retain their existing bounded
+# concurrency. The exclusive, three-second request gate above applies to the
+# legacy Atom API calls centralized in ``request_arxiv_api``.
 _MAX_CONCURRENT_PDF_DOWNLOADS = 3
 
 # Audit R7-L11: the download was an uncapped response.read() against a URL
@@ -260,87 +508,10 @@ class ArXivIngestionService:
         self.download_dir = Path(self.config.get("arxiv_download_dir", "data/arxiv"))
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
-    # ArXiv requires >= 3 seconds between API requests.
-    _last_request_time: float = 0.0
-
     async def _make_async_request(self, url: str, params: Dict) -> str:
-        """Make asynchronous request using httpx with rate limiting and 429 retry"""
-        # Enforce arXiv's minimum 3-second gap between requests. Prefer the
-        # shared cross-pod gate; fall back to the per-process gate when Redis
-        # is unavailable (same behavior as before this change).
-        import time
-
-        slot_wait = await _acquire_arxiv_rate_slot()
-        if slot_wait is not None:
-            if slot_wait > 0:
-                await asyncio.sleep(slot_wait)
-        else:
-            now = time.monotonic()
-            elapsed = now - ArXivIngestionService._last_request_time
-            if elapsed < 3.0:
-                await asyncio.sleep(3.0 - elapsed)
-            ArXivIngestionService._last_request_time = time.monotonic()
-
-        logger.info(f"Async request to: {url}")
-
-        # Trace 019e1912 showed this loop's 10s/20s/30s/40s/50s 429 backoff
-        # blow past the outer 30s tool-call timeout, putting the agent in a
-        # cancelled state with no usable error. Fail fast on rate limit: at
-        # most one short retry, surface clean IngestionError, let the agent
-        # tell the user "rate-limited, try again shortly" instead of hanging.
-        max_attempts = 2
-        saw_rate_limit = False
-        for attempt in range(max_attempts):
-            try:
-                async with httpx.AsyncClient(follow_redirects=True) as client:
-                    response = await client.get(url, params=params, timeout=20.0)
-
-                    if response.status_code == 429:
-                        saw_rate_limit = True
-                        if attempt == max_attempts - 1:
-                            break
-                        # arXiv sends Retry-After on 429 (its own message says
-                        # "try again in 60 seconds"); retrying after a fixed 3s
-                        # guaranteed a second 429. Honour the header, clamped so
-                        # a large value cannot outlive the caller's timeout.
-                        wait = _retry_after_seconds(response.headers, default=3.0)
-                        logger.warning(
-                            "ArXiv rate limited (429), attempt %d/%d, retrying in %ss...",
-                            attempt + 1,
-                            max_attempts,
-                            wait,
-                        )
-                        await asyncio.sleep(wait)
-                        ArXivIngestionService._last_request_time = time.monotonic()
-                        continue
-
-                    response.raise_for_status()
-                    logger.info(
-                        "Response status: %d, length: %d",
-                        response.status_code,
-                        len(response.text),
-                    )
-                    return response.text
-
-            except httpx.TimeoutException:
-                logger.error("Request to arXiv API timed out after 20 seconds")
-                if attempt == max_attempts - 1:
-                    raise IngestionError("ArXiv API request timed out")
-                await asyncio.sleep(2)
-            except httpx.HTTPStatusError:
-                raise
-            except Exception as e:
-                logger.error("Error in _make_async_request: %s", e)
-                if attempt == max_attempts - 1:
-                    raise
-                await asyncio.sleep(2)
-
-        if saw_rate_limit:
-            raise IngestionError(
-                "ArXiv rate limited (HTTP 429). Try again in 60 seconds."
-            )
-
-        raise IngestionError("ArXiv API request failed after retries")
+        """Delegate all legacy API traffic to the shared request boundary."""
+        logger.info("Coordinated arXiv request to %s", url)
+        return await request_arxiv_api(url, params)
 
     async def __aenter__(self):
         """Async context manager entry"""
@@ -423,7 +594,7 @@ class ArXivIngestionService:
                     f"Making request to arXiv API... (offset={api_offset}, have {len(papers)} papers)"
                 )
 
-                # Use async httpx directly
+                # Every API page goes through the shared request boundary.
                 response_text = await self._make_async_request(
                     self.ARXIV_API_BASE, params
                 )
@@ -521,9 +692,18 @@ class ArXivIngestionService:
                     logger.info(f"No entries in batch, stopping")
                     break
 
+            except (
+                ArxivCoordinationUnavailableError,
+                ArxivRateLimitError,
+                ArxivUpstreamUnavailableError,
+            ):
+                # Preserve the distinct upstream/coordination category so the
+                # agent can serve stale cache data or emit a safe unavailable
+                # result instead of turning it into a generic fetch failure.
+                raise
             except Exception as e:
                 logger.error(f"Error fetching arXiv papers: {e}")
-                raise IngestionError(f"Failed to fetch papers from arXiv: {e}")
+                raise IngestionError(f"Failed to fetch papers from arXiv: {e}") from e
 
         logger.info(f"Fetched {len(papers)} papers from arXiv")
         return papers[:max_results]

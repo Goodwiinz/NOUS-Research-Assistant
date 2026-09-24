@@ -45,6 +45,12 @@ def _failed(exec_id: str, tool: str, args: dict) -> dict:
 ARGS = {"query": "retrieval-augmented generation", "max_results": 5}
 
 
+def _identity_traceable(*_args, **_kwargs):
+    """Keep circuit-breaker tests independent of LangSmith worker shutdown."""
+
+    return lambda function: function
+
+
 @pytest.mark.unit
 class TestFindRepeatedFailures:
     def test_no_cap_below_threshold(self):
@@ -182,8 +188,17 @@ class TestCappedBuilders:
 @pytest.mark.unit
 @pytest.mark.asyncio
 @pytest.mark.parametrize("specialist", [False, True])
+@pytest.mark.parametrize(
+    "upstream_error, expected_fragment",
+    [
+        ("ArXiv rate limited (HTTP 429)", "60 seconds"),
+        ("ArXiv search unavailable (HTTP 406)", "temporarily unavailable"),
+    ],
+)
 async def test_exhausted_arxiv_retry_is_blocked_until_next_user_turn(
     specialist: bool,
+    upstream_error: str,
+    expected_fragment: str,
 ) -> None:
     """Trace 47c93300: internal retries must not restart on the next model pass.
 
@@ -199,9 +214,7 @@ async def test_exhausted_arxiv_retry_is_blocked_until_next_user_turn(
         else _nodes_tools.tool_node
     )
     executor = AsyncMock(
-        return_value=tool_error_payload(
-            "search_arxiv", RuntimeError("ArXiv rate limited (HTTP 429)")
-        )
+        return_value=tool_error_payload("search_arxiv", RuntimeError(upstream_error))
     )
     state = {
         "messages": [HumanMessage(content="Find analytical method validation papers")],
@@ -210,7 +223,10 @@ async def test_exhausted_arxiv_retry_is_blocked_until_next_user_turn(
         "error_count": 0,
         "tool_loop_count": 0,
     }
-    with patch("src.services.agent.graph._get_execute_tool", return_value=executor):
+    with (
+        patch("src.services.agent.graph._get_execute_tool", return_value=executor),
+        patch("langsmith.traceable", new=_identity_traceable),
+    ):
         for attempt in range(2):
             state["messages"].append(
                 AIMessage(
@@ -232,7 +248,7 @@ async def test_exhausted_arxiv_retry_is_blocked_until_next_user_turn(
         message = state["messages"][-1]
         assert message.status == "error"
         assert "exhausted its retry budget" in message.content
-        assert "60 seconds" in message.content
+        assert expected_fragment in message.content
         assert state["tool_executions"][-1]["capped_from"] == "search-0"
 
         state["messages"].extend(
