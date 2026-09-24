@@ -113,7 +113,7 @@ pybtex==0.26.1
 # LangGraph agent
 langgraph>=0.4,<2.0
 langsmith>=0.2,<1.0
-langchain-openai>=1.0,<2.0
+langchain-openai>=1.6.2,<2.0
 langchain-core>=1.2,<2.0
 langgraph-checkpoint>=2.0,<5.0
 langgraph-checkpoint-postgres>=2.0,<5.0
