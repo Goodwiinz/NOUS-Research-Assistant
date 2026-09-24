@@ -1,0 +1,41 @@
+{
+  "agent": "codex-onubuntu",
+  "area": "arxiv upstream failure coordination and corpus fallback honesty",
+  "base_sha": "db15a27001c9f52479dcdc6e821c660c2886f16f",
+  "blocker": null,
+  "branch": "codex/arxiv-search-repair",
+  "candidate": null,
+  "claim_expires_at": "2026-09-24T22:43:34.967772+00:00",
+  "claim_id": "c-dedec08666dc",
+  "evidence_head_sha": "db15a27001c9f52479dcdc6e821c660c2886f16f",
+  "files": [
+    "backend/src/services/arxiv/arxiv_service.py",
+    "backend/src/services/agent/error_recovery.py",
+    "backend/src/services/research_engine/connectors/arxiv_connector.py",
+    "backend/src/services/agent/tools_impl.py",
+    "backend/tests/unit/services/test_arxiv_rate_gate.py",
+    "backend/tests/unit/services/test_arxiv_rate_limit_hardening.py",
+    "backend/tests/unit/services/test_arxiv_connector_rate_gate.py",
+    "backend/tests/unit/api/test_arxiv_search_cache.py",
+    "backend/tests/unit/services/test_agent_error_recovery.py",
+    "backend/tests/unit/agent/test_tool_retry_circuit_breaker.py",
+    "backend/tests/services/agent/test_tools_search_documents_redaction.py"
+  ],
+  "machine_id": "onubuntu",
+  "milestones": [
+    {
+      "at": "2026-09-24T19:43:34.967772+00:00",
+      "evidence_head_sha": "db15a27001c9f52479dcdc6e821c660c2886f16f",
+      "state": "claimed",
+      "tier": null
+    }
+  ],
+  "milestones_truncated": false,
+  "outcome": null,
+  "parent_run_id": null,
+  "pr": null,
+  "run_id": "20260924T194334Z-codex-onubuntu-6c0861",
+  "schema": 1,
+  "state": "claimed",
+  "updated_at": "2026-09-24T19:43:34.967772+00:00"
+}

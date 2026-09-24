@@ -1,25 +1,34 @@
 {
   "claims": [
     {
-      "agent": "codex-mac",
-      "area": "local-ci-portability",
-      "branch": "codex/nous-local-ci-space-path",
+      "agent": "codex-onubuntu",
+      "area": "arxiv upstream failure coordination and corpus fallback honesty",
+      "branch": "codex/arxiv-search-repair",
       "candidate": null,
-      "claim_id": "c-10ed56cb9989",
-      "claimed_at": "2026-09-01T19:53:54.642908+00:00",
-      "expires_at": "2026-09-01T23:14:44.063797+00:00",
+      "claim_id": "c-dedec08666dc",
+      "claimed_at": "2026-09-24T19:43:34.967772+00:00",
+      "expires_at": "2026-09-24T22:43:34.967772+00:00",
       "files": [
-        "scripts/ci/run_local_ci.sh",
-        "tests/unit/scripts/test_nous_loop_contract.py"
+        "backend/src/services/arxiv/arxiv_service.py",
+        "backend/src/services/agent/error_recovery.py",
+        "backend/src/services/research_engine/connectors/arxiv_connector.py",
+        "backend/src/services/agent/tools_impl.py",
+        "backend/tests/unit/services/test_arxiv_rate_gate.py",
+        "backend/tests/unit/services/test_arxiv_rate_limit_hardening.py",
+        "backend/tests/unit/services/test_arxiv_connector_rate_gate.py",
+        "backend/tests/unit/api/test_arxiv_search_cache.py",
+        "backend/tests/unit/services/test_agent_error_recovery.py",
+        "backend/tests/unit/agent/test_tool_retry_circuit_breaker.py",
+        "backend/tests/services/agent/test_tools_search_documents_redaction.py"
       ],
-      "machine_id": "mac-goodwiinz",
+      "machine_id": "onubuntu",
       "pr": null,
-      "renewed_at": "2026-09-01T20:14:44.063797+00:00",
-      "run_id": "20260901T195353Z-codex-mac-9bb522",
+      "renewed_at": null,
+      "run_id": "20260924T194334Z-codex-onubuntu-6c0861",
       "status": "active"
     }
   ],
   "mode": "remote-required",
   "schema": 2,
-  "updated_at": "2026-09-01T20:14:44.063797+00:00"
+  "updated_at": "2026-09-24T19:43:34.967772+00:00"
 }
