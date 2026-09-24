@@ -163,7 +163,7 @@ backend:
     - name: PYTHONPATH
       value: "/app"
     - name: LOG_LEVEL
-      value: "DEBUG"
+      value: "INFO"
     - name: WORKERS
       value: "1"
     - name: TIMEOUT
