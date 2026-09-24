@@ -1,6 +1,6 @@
 # CI build constraints for source-built packages.
 # openai-whisper's build backend imports pkg_resources, which is not
 # available in newer setuptools releases.
-setuptools<81
+setuptools<85
 qdrant-client==1.19.0
 numpy<2
