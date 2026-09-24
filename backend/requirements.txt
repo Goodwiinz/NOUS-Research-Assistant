@@ -123,7 +123,7 @@ pytest>=9.0.3
 pytest-asyncio>=1.4.0
 pytest-cov>=7.1.0
 testcontainers[postgres,redis]>=4.0.0
-aiosqlite>=0.19.0  # For async SQLite in tests
+aiosqlite>=0.22.1  # For async SQLite in tests
 PyJWT>=2.13.0  # CVE-2026-48526 (GHSA-xgmm-8j9v-c9wx)
 
 # External Database Connectors (optional)
