@@ -1,8 +1,7 @@
 # EKS dev child app (Task 5). Modeled on dev.yaml (the DOKS child) with:
 #   - values-aws.yaml instead of values-dev.yaml (ECR images, RDS/ElastiCache
 #     via Infisical, ALB ingress, gp3).
-#   - targetRevision pinned to migration/aws until it merges.
-#     TODO(post-merge): switch to develop (together with aws-dev-root.yaml).
+#   - targetRevision follows develop for automatic release promotion.
 #   - destination namespace multimodal-rag-system (the app manifests' ns).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -19,8 +18,7 @@ spec:
 
   source:
     repoURL: https://github.com/Goodwiinz/rag.git
-    # TODO(post-merge): switch to develop (together with aws-dev-root.yaml)
-    targetRevision: migration/aws
+    targetRevision: develop
     path: infrastructure/helm/knowledge-graph-analytics
     helm:
       valueFiles:

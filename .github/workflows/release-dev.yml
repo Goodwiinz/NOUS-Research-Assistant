@@ -1,10 +1,8 @@
 name: Release Dev
 
 # A green source commit produces a digest-pinned GitOps PR. GITHUB_TOKEN
-# cannot bypass develop's required checks; deployment follows a normal merge.
-# After the AWS branch merges, propose values-aws.yaml only; DO values-dev.yaml
-# stays frozen as the rollback source. Argo's AWS apps track migration/aws
-# until their separately approved targetRevision switch to develop.
+# cannot bypass develop's required checks; auto-merge waits for those checks.
+# Propose values-aws.yaml only; DO values-dev.yaml stays frozen for rollback.
 on:
   workflow_run:
     workflows: ["Test Pipeline"]
@@ -82,6 +80,11 @@ jobs:
           curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
 
+      - name: Install Helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v3.0.0
+        with:
+          version: "3.13.0"
+
       - name: Open checked GitOps pull request
         env:
           GH_TOKEN: ${{ github.token }}
@@ -111,22 +114,31 @@ jobs:
             exit 0
           fi
 
+          # Validate the actual AWS candidate before requesting auto-merge.
+          # Helm Validate is also dispatched below, but is not a required
+          # repository check, so auto-merge alone would not wait for it.
+          CHART="infrastructure/helm/knowledge-graph-analytics"
+          helm lint "$CHART" -f "$CHART/values.yaml" -f "$VALUES_FILE"
+          helm template nous-dev-aws "$CHART" -f "$CHART/values.yaml" -f "$VALUES_FILE" >/dev/null
+
           BRANCH="codex/release-dev-$SOURCE_SHA"
           if git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null; then
             git fetch origin "$BRANCH"
             # Reuse only an identical proposal; never overwrite branch edits.
             git diff --exit-code FETCH_HEAD
+            PROPOSAL_SHA="$(git rev-parse FETCH_HEAD)"
           else
             git checkout -b "$BRANCH"
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add "$VALUES_FILE"
             git commit -m "chore(gitops): propose dev image ${SOURCE_SHA:0:7}"
+            PROPOSAL_SHA="$(git rev-parse HEAD)"
             git push origin "HEAD:refs/heads/$BRANCH"
           fi
           PR_URL="$(gh pr list --base develop --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
           if [ -z "$PR_URL" ]; then
-            printf 'Deploy tested source %s at immutable digest %s.\n\nImage producer: %s\n\nMerge after Test Pipeline, Secret Scan, and Helm Validate pass. AWS Argo CD applies after its targetRevision switches to develop.\n' "$SOURCE_SHA" "$DIGEST" "$BUILD_URL" > "$RUNNER_TEMP/release-pr.md"
+            printf 'Deploy tested source %s at immutable digest %s.\n\nImage producer: %s\n\nAWS Helm values were validated before this proposal. Auto-merge waits for required checks; AWS Argo CD syncs the merged values from develop.\n' "$SOURCE_SHA" "$DIGEST" "$BUILD_URL" > "$RUNNER_TEMP/release-pr.md"
             PR_URL="$(gh pr create --base develop --head "$BRANCH" --title "chore(gitops): deploy dev image ${SOURCE_SHA:0:7}" --body-file "$RUNNER_TEMP/release-pr.md")"
           fi
           # Token-created PR events need approval. Explicit dispatch runs the
@@ -134,4 +146,10 @@ jobs:
           for workflow in test-pipeline.yml secret-scan.yml helm-validate.yml; do
             gh workflow run "$workflow" --ref "$BRANCH"
           done
-          printf '## Dev image proposed\n\n%s\n\nMerge after its checks pass; AWS Argo CD applies after its targetRevision switch.\n' "$PR_URL" >> "$GITHUB_STEP_SUMMARY"
+          git fetch origin develop
+          if [ "$(git rev-parse origin/develop)" != "$SOURCE_SHA" ]; then
+            echo "develop moved; do not enable auto-merge for this stale proposal"
+            exit 0
+          fi
+          gh pr merge "$PR_URL" --auto --squash --match-head-commit "$PROPOSAL_SHA"
+          printf '## Dev image auto-merge enabled\n\n%s\n\nGitHub merges after required checks pass; AWS Argo CD syncs develop.\n' "$PR_URL" >> "$GITHUB_STEP_SUMMARY"
