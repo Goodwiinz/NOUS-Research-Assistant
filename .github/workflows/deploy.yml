@@ -82,10 +82,10 @@ jobs:
     steps:
       - name: Checkout repository
         # v4.2.2 - pinned for security
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Configure AWS credentials via GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::267685730035:role/nous-github-eks-deploy
           aws-region: us-east-1
@@ -96,7 +96,7 @@ jobs:
 
       - name: Install Helm
         # v3.0.0 - pinned for security
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: "3.13.0"
 
@@ -159,10 +159,10 @@ jobs:
     steps:
       - name: Checkout repository
         # v4.2.2 - pinned for security
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Configure AWS credentials via GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::267685730035:role/nous-github-eks-deploy
           aws-region: us-east-1
@@ -173,7 +173,7 @@ jobs:
 
       - name: Install Helm
         # v3.0.0 - pinned for security
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: "3.13.0"
 
@@ -243,7 +243,7 @@ jobs:
 
     steps:
       - name: Configure AWS credentials via GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::267685730035:role/nous-github-eks-deploy
           aws-region: us-east-1
