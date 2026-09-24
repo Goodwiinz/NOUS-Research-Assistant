@@ -1,13 +1,14 @@
-# AWS overlay for NOUS on EKS us-east-1 — phased compute/database cutover
-# Cluster: nous-dev-cluster (lean EKS: 1x t3.large spot, ALB ingress, gp3)
-# Sibling of values-dev.yaml (DO dev) — same chart, phased AWS compute cutover.
+# AWS overlay for NOUS on EKS us-east-1
+# Cluster: nous-dev-cluster (EKS, ALB ingress, gp3)
+# Sibling of values-dev.yaml (DO dev) — same chart, AWS runtime cutover.
 # Schema notes (differs from the migration-plan sketch):
 #   - The chart has NO postgres.host / redis.host keys: Postgres (RDS) and
-#     Redis (ElastiCache) endpoints are injected via envFrom Secrets synced
-#     from Infisical (/database, /redis). Update those during cutover.
+#     RDS credentials are synced from Secrets Manager; Redis (ElastiCache)
+#     credentials are synced from Infisical (/redis).
 #   - Frontend is NOT in this chart (Vercel) — no frontend key.
-#   - DO Spaces and DO Knowledge Base remain the live document services in
-#     phase 1; the staged AWS S3 bucket is not the serving bucket.
+#   - Original DO credentials remain staged for rollback, but the backend
+#     reads/writes AWS RDS and S3; PostgreSQL hybrid search serves retrieval
+#     until Bedrock ingestion/deletion is wired end-to-end.
 #   - backend.image.repository is used verbatim by templates/_helpers.tpl
 #     (includes the registry host); worker/beat share it.
 # rationale/rollback levers for per-var values: see values-dev.yaml (identical values)
@@ -31,15 +32,15 @@ commonLabels:
 
 # ──────────────────────────────────────────────
 # Infisical secret sync — dev env
-# During cutover, point /database at the RDS endpoint and /redis at the
-# ElastiCache endpoint (master.nous-redis.ycuebr.use1.cache.amazonaws.com, terraform output Task 2).
+# /database is retained for DO rollback. AWS reads the separate rotating
+# aws-database-credentials Secret; /redis points at ElastiCache.
 # ──────────────────────────────────────────────
 infisical:
   enabled: true
   envSlug: "dev"
-  # The chart default /spaces sync is required while DO Spaces serves files.
+  # Keep /spaces and /do-kb materialized for rollback, not in backend envFrom.
 
-# Stage a separate rotating RDS credential without changing the live DB yet.
+# Use the RDS-managed credential, synced by External Secrets Operator.
 awsRdsSecret:
   enabled: true
   roleArn: "arn:aws:iam::267685730035:role/nous-development-rds-secret-reader"
@@ -57,13 +58,14 @@ backend:
   enabled: true
   # DO writers are frozen; PostgreSQL and Neo4j were verified on AWS.
   replicaCount: 1
+  postgresSecretName: aws-database-credentials
   image:
     # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # Immutable source tag and ECR digest for the AWS image build.
     repository: "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
-    tag: "1ded037c3de598f8dd9325ba3091bba294bfc453"
-    digest: "sha256:143544053d7ce8cf4527da09d646f4a0237f1144736ed1352e747f726c99f195"
-    sourceSha: "1ded037c3de598f8dd9325ba3091bba294bfc453"
+    tag: "9478ed6a89f18c86da0ef9bd90ae439ba920d961"
+    digest: "sha256:4298e919cb991fd02f3c82e8f31ed2afad3472a672b98a790f2ca20aa00b16c6"
+    sourceSha: "9478ed6a89f18c86da0ef9bd90ae439ba920d961"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -122,25 +124,26 @@ backend:
     enabled: false
   envFrom:
     - secretRef:
-        name: database-credentials
+        name: aws-database-credentials
     - secretRef:
         name: app-secrets
     - secretRef:
         name: supabase-credentials
     - secretRef:
-        name: spaces-credentials
-    - secretRef:
         name: langsmith-credentials
         optional: true
-    # DO Knowledge Base remains the primary retrieval service in phase 1.
-    - secretRef:
-        name: do-kb-credentials
-    # /do-kb also contains the old DO REDIS_URL; the last envFrom wins.
     - secretRef:
         name: redis-credentials
   env:
     - name: ENVIRONMENT
       value: "dev"
+    # The Supabase Secret still supplies JWT validation, never the SQL URL.
+    - name: SUPABASE_DB_URL
+      value: ""
+    - name: DO_KB_ENABLED
+      value: "false"
+    - name: DO_KB_PRIMARY_READ
+      value: "false"
     - name: TRUSTED_HOSTS
       value: "localhost,127.0.0.1,testserver,*.gen-text.app,*.svc.cluster.local,*.goodwiinz.tech"
     - name: AGENT_FAST_PATH_ENABLED
@@ -206,27 +209,13 @@ backend:
     - name: NEO4J_URI
       # In-cluster neo4j service: <release>-<chart>-neo4j (release nous-dev-aws)
       value: "bolt://nous-dev-aws-knowledge-graph-analytics-neo4j:7687"
-    # ── S3-compatible object storage: DO Spaces remains live in phase 1 ──
+    # ── Private AWS S3 via the application's IRSA role ──
     - name: STORAGE_BACKEND
       value: "s3"
-    - name: S3_ENDPOINT_URL
-      value: "https://nyc3.digitaloceanspaces.com"
     - name: S3_BUCKET_NAME
-      value: "rag-system-storage"
+      value: "nous-development-storage-3ilp9pj2"
     - name: S3_REGION
-      value: "nyc3"
-    - name: S3_CDN_ENDPOINT
-      value: "https://rag-system-storage.nyc3.cdn.digitaloceanspaces.com"
-    - name: S3_ACCESS_KEY
-      valueFrom:
-        secretKeyRef:
-          name: spaces-credentials
-          key: S3_ACCESS_KEY
-    - name: S3_SECRET_KEY
-      valueFrom:
-        secretKeyRef:
-          name: spaces-credentials
-          key: S3_SECRET_KEY
+      value: "us-east-1"
     # ── Azure OpenAI (Chat / Agent) — unchanged ──
     - name: AZURE_OPENAI_CHAT_ENDPOINT
       valueFrom:
@@ -394,8 +383,7 @@ podDisruptionBudget:
 
 serviceAccount:
   create: true
-  # IRSA role is retained for the staged AWS S3 bucket, but the phase 1 app
-  # serves files from DO Spaces via spaces-credentials, not this role.
+  # IRSA grants the app AWS S3 object access and scoped Bedrock retrieval.
   annotations:
     eks.amazonaws.com/role-arn: "arn:aws:iam::267685730035:role/nous-development-app-s3"
   name: ""
