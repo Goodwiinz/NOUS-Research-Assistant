@@ -111,7 +111,7 @@ setuptools>=70.0.0,<72.0.0  # pkg_resources removed in 72+, needed by pybtex  # 
 pybtex==0.26.1
 
 # LangGraph agent
-langgraph>=0.4,<2.0
+langgraph>=1.2.12,<2.0
 langsmith>=0.2,<1.0
 langchain-openai>=1.0,<2.0
 langchain-core>=1.2,<2.0
