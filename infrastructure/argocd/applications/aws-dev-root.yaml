@@ -1,0 +1,40 @@
+# EKS app-of-apps root (Task 5). Modeled on root.yaml (the DOKS root) with:
+#   - targetRevision pinned to migration/aws until it merges; switch BOTH this
+#     and aws-dev.yaml to develop post-merge (TODO below).
+#   - directory.exclude drops the DOKS-era apps (root.yaml -> nous-root,
+#     dev.yaml -> nous-dev with values-dev.yaml) so they are never
+#     instantiated on EKS. aws-dev.yaml below is the EKS child instead.
+# Self-reference is intentional: this file lives in the watched directory
+# (same pattern as root.yaml on DOKS).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aws-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: nous-platform
+    environment: aws-dev
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: nous-platform
+
+  source:
+    repoURL: https://github.com/Goodwiinz/rag.git
+    # TODO(post-merge): switch to develop (together with aws-dev.yaml)
+    targetRevision: migration/aws
+    path: infrastructure/argocd/applications
+    directory:
+      # Never instantiate the DOKS-era apps on EKS.
+      exclude: "{root.yaml,dev.yaml}"
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

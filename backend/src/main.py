@@ -265,20 +265,14 @@ async def lifespan(app: FastAPI):
     from src.core.config import settings as app_settings
 
     if app_settings.STORAGE_BACKEND == "s3":
-        missing = []
-        if not app_settings.S3_ENDPOINT_URL:
-            missing.append("S3_ENDPOINT_URL")
-        if not app_settings.S3_ACCESS_KEY:
-            missing.append("S3_ACCESS_KEY")
-        if not app_settings.S3_SECRET_KEY:
-            missing.append("S3_SECRET_KEY")
+        from src.core.s3_client import S3StorageHelper, missing_s3_credentials
+
+        missing = missing_s3_credentials()
         if missing:
             raise RuntimeError(
                 f"STORAGE_BACKEND=s3 but missing required env vars: {', '.join(missing)}"
             )
         try:
-            from src.core.s3_client import S3StorageHelper
-
             helper = S3StorageHelper()
             if not helper.check_health():
                 logger.warning("S3 storage health check failed — uploads may fail")

@@ -14,7 +14,7 @@ commonLabels:
   environment: staging
 # ──────────────────────────────────────────────
 # Frontend deployed via Vercel — no in-cluster manifests.
-# Host: staging-app.gen-text.app (DNS points at Vercel).
+# Host: staging-app.goodwiinz.tech (DNS points at Vercel).
 # ──────────────────────────────────────────────
 # Backend
 # ──────────────────────────────────────────────
@@ -42,14 +42,14 @@ backend:
       nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
       nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"
     hosts:
-      - host: staging-api.gen-text.app
+      - host: staging-api.goodwiinz.tech
         paths:
           - path: /
             pathType: Prefix
     tls:
       - secretName: rag-staging-api-tls
         hosts:
-          - staging-api.gen-text.app
+          - staging-api.goodwiinz.tech
   resources:
     limits:
       cpu: "1"
@@ -90,7 +90,7 @@ backend:
     - name: TIMEOUT
       value: "300"
     - name: CORS_ORIGINS
-      value: "https://staging-app.gen-text.app"
+      value: "https://staging-app.goodwiinz.tech"
     # CORS_ORIGIN_REGEX: defined in Infisical `/app` (env=staging) → synced
     # into `app-secrets` Secret, exposed via envFrom above. Set the regex
     # there to the project-specific Vercel slug. Empty disables.

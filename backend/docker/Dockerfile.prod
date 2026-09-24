@@ -59,13 +59,21 @@ ARG TORCH_CPU_ONLY=false
 # Copy requirements files
 COPY backend/requirements.txt backend/requirements-minimal.txt ./
 
-# Upgrade pip and install dependencies.  The CPU index is included in the
-# same resolver transaction so a later dependency cannot replace the CPU
-# wheel with a CUDA build.
+# Pin the CPU torch wheel before resolving the remaining requirements so a
+# transitive dependency cannot replace it with a CUDA build.
 RUN \
     pip install --upgrade pip wheel "setuptools<72" && \
     if [ "$TORCH_CPU_ONLY" = "true" ]; then \
-        pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt && \
+        grep -viE '^(torch|torchvision|torchaudio)' requirements.txt > requirements-no-torch.txt && \
+        pip install "torch==2.6.0+cpu" --index-url https://download.pytorch.org/whl/cpu && \
+        python -c 'import torch; print("torch==" + torch.__version__)' > torch-constraint.txt && \
+        pip install -c torch-constraint.txt -r requirements-no-torch.txt && \
+        rm requirements-no-torch.txt torch-constraint.txt && \
+        (pip uninstall -y nvidia-cublas-cu12 nvidia-cuda-cupti-cu12 nvidia-cuda-nvrtc-cu12 \
+            nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cufft-cu12 nvidia-cufile-cu12 \
+            nvidia-curand-cu12 nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-cusparselt-cu12 \
+            nvidia-nccl-cu12 nvidia-nvjitlink-cu12 nvidia-nvshmem-cu12 nvidia-nvtx-cu12 \
+            triton cuda-bindings cuda-pathfinder 2>/dev/null || true) && \
         python -c 'import torch; assert torch.version.cuda is None, f"CPU build resolved CUDA torch: {torch.__version__} ({torch.version.cuda})"'; \
     else \
         pip install -r requirements.txt; \

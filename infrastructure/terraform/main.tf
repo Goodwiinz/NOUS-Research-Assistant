@@ -32,13 +32,15 @@ terraform {
     }
   }
 
-  backend "s3" {
-    bucket = var.terraform_state_bucket
-    key    = "knowledge-graph-analytics/terraform.tfstate"
-    region = var.aws_region
-    encrypt = true
-    dynamodb_table = var.terraform_lock_table
-  }
+  # Backend values are passed via -backend-config flags (variables are not
+  # allowed in the backend block):
+  #   terraform init \
+  #     -backend-config="bucket=nous-tfstate-us-east-1" \
+  #     -backend-config="key=knowledge-graph-analytics/terraform.tfstate" \
+  #     -backend-config="region=us-east-1" \
+  #     -backend-config="encrypt=true" \
+  #     -backend-config="dynamodb_table=nous-tfstate-lock"
+  backend "s3" {}
 }
 
 # =============================================================================
@@ -136,26 +138,32 @@ module "vpc" {
   name = "${var.project_name}-vpc"
   cidr = var.vpc_cidr
 
-  azs             = data.aws_availability_zones.available.names
-  private_subnets = [for i in range(length(data.aws_availability_zones.available.names)) : cidrsubnet(var.vpc_cidr, 4, i)]
-  public_subnets  = [for i in range(length(data.aws_availability_zones.available.names)) : cidrsubnet(var.vpc_cidr, 8, i + 100)]
+  # Pinned to 3 AZs: EKS rejects us-east-1e for control planes, and
+  # multi-AZ NAT would triple NAT cost with the full zone list.
+  azs             = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  private_subnets = [for i in range(3) : cidrsubnet(var.vpc_cidr, 4, i)]
+  public_subnets  = [for i in range(3) : cidrsubnet(var.vpc_cidr, 8, i + 100)]
 
-  enable_nat_gateway   = true
-  single_nat_gateway   = false
-  one_nat_gateway_per_az = true
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+  enable_nat_gateway = true
+  # Lean dev choice: one NAT gateway shared across AZs (~$33/mo) instead of
+  # per-AZ gateways (~$100/mo). Revisit per-AZ for prod.
+  single_nat_gateway     = true
+  one_nat_gateway_per_az = false
+  enable_dns_hostnames   = true
+  enable_dns_support     = true
 
   public_subnet_tags = {
-    "kubernetes.io/cluster/${module.eks.cluster_name}" = "shared"
-    "kubernetes.io/role/elb"                           = "1"
-    Type                                               = "Public"
+    # var.cluster_name instead of module.eks.cluster_name: avoids
+    # vpc <-> eks dependency cycle (EKS subnets depend on VPC output)
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                    = "1"
+    Type                                        = "Public"
   }
 
   private_subnet_tags = {
-    "kubernetes.io/cluster/${module.eks.cluster_name}" = "shared"
-    "kubernetes.io/role/internal-elb"                  = "1"
-    Type                                               = "Private"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"           = "1"
+    Type                                        = "Private"
   }
 
   tags = {
@@ -191,6 +199,11 @@ module "eks" {
     }
     aws-ebs-csi-driver = {
       most_recent = true
+      # IRSA for the CSI controller (ebs-csi-irsa.tf). The live addon already
+      # has this role attached (was applied out-of-band); if state drifts to
+      # role="", re-read with:
+      #   terraform apply -refresh-only -target=module.eks.aws_eks_addon.this["aws-ebs-csi-driver"]
+      service_account_role_arn = aws_iam_role.ebs_csi.arn
     }
   }
 
@@ -198,9 +211,29 @@ module "eks" {
   create_node_security_group    = true
 
   manage_aws_auth_configmap = true
-  aws_auth_node_iam_role_arns = [
-    module.eks.eks_managed_node_groups["default"].iam_role_arn
-  ]
+  # Node role grants bootstrap/nodes; cluster admin role(s) from
+  # var.cluster_admin_role_arns get system:masters so the cluster creator is
+  # not locked out when the aws-auth ConfigMap is terraform-managed.
+  aws_auth_roles = concat(
+    [
+      {
+        # {{SessionName}} resolves to the instance ID (e.g. i-0abc...) — the
+        # kubelet registers under its private DNS name, so NodeAuthorizer
+        # rejects it ("node i-xxx is not allowed to modify node ip-10-...").
+        # {{EC2PrivateDNSName}} is the correct username template.
+        rolearn  = module.eks.eks_managed_node_groups["default"].iam_role_arn
+        username = "system:node:{{EC2PrivateDNSName}}"
+        groups   = ["system:bootstrappers", "system:nodes"]
+      }
+    ],
+    [
+      for arn in var.cluster_admin_role_arns : {
+        rolearn  = arn
+        username = "admin"
+        groups   = ["system:masters"]
+      }
+    ]
+  )
 
   eks_managed_node_groups = {
     default = {
@@ -210,63 +243,28 @@ module "eks" {
       max_size     = var.max_nodes
       desired_size = var.desired_nodes
 
-      capacity_type = "ON_DEMAND"
+      # Lean dev sizing: single SPOT node group (t3.large via var.node_instance_types)
+      capacity_type = "SPOT"
+
+      # EKS-managed launch template: custom LT rendered empty user-data (no
+      # bootstrap args) → instances launched but never joined the cluster.
+      # EKS-managed LT + default AMI bootstraps correctly.
+      use_custom_launch_template = false
+      disk_size                  = 100
 
       update_config = {
         max_unavailable_percentage = 33
       }
 
-      iam_role_arn = aws_iam_role.nodes.arn
-
-      block_device_mappings = {
-        xvda = {
-          device_name = "/dev/xvda"
-          ebs = {
-            volume_size = 100
-            volume_type = "gp3"
-            iops        = 3000
-            throughput  = 125
-          }
-        }
-      }
+      # Module-managed node role (aws-auth maps module.eks...iam_role_arn)
 
       tags = {
         Name = "${var.project_name}-node-group"
         Type = "EKS Managed Node Group"
-      }
-    }
 
-    # Spot instance node group for cost optimization
-    spot = {
-      instance_types = ["m5.large", "m5a.large", "m5d.large", "c5.large", "c5a.large"]
-
-      min_size     = 0
-      max_size     = 10
-      desired_size = 0
-
-      capacity_type = "SPOT"
-
-      block_device_mappings = {
-        xvda = {
-          device_name = "/dev/xvda"
-          ebs = {
-            volume_size = 50
-            volume_type = "gp3"
-          }
-        }
-      }
-
-      taints = {
-        spot = {
-          key    = "spot-instance"
-          value  = "true"
-          effect = "NO_SCHEDULE"
-        }
-      }
-
-      tags = {
-        Name = "${var.project_name}-spot-node-group"
-        Type = "EKS Spot Node Group"
+        # Cluster Autoscaler discovery tags (ASG autodiscovery)
+        "k8s.io/cluster-autoscaler/enabled"             = "true"
+        "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
       }
     }
   }
@@ -291,14 +289,9 @@ module "eks" {
       type        = "ingress"
       self        = true
     }
-    ingress_cluster_kublet_api = {
-      description                   = "Cluster API to Node kubelet API"
-      protocol                      = "tcp"
-      from_port                     = 10250
-      to_port                       = 10250
-      type                          = "ingress"
-      source_cluster_security_group = true
-    }
+    # NOTE: no cluster→node 10250 rule here — module's built-in
+    # ingress_cluster_kubelet already covers it; a duplicate definition
+    # collides with it (InvalidPermission.Duplicate).
   }
 
   tags = {
@@ -447,7 +440,7 @@ module "rds" {
   identifier = "${var.project_name}-postgres"
 
   engine         = "postgres"
-  engine_version = "15.4"
+  engine_version = "16.15"
   instance_class = var.db_instance_class
 
   allocated_storage     = var.db_allocated_storage
@@ -459,34 +452,38 @@ module "rds" {
   username = var.db_username
   password = random_password.db_password.result
 
-  port     = 5432
+  port                   = 5432
   vpc_security_group_ids = [aws_security_group.rds.id]
-  subnet_ids = module.vpc.private_subnets
+  subnet_ids             = module.vpc.private_subnets
+  create_db_subnet_group = true # default false — without it RDS lands in the default VPC
 
   maintenance_window = "Mon:03:00-Mon:04:00"
   backup_window      = "04:00-06:00"
 
-  backup_retention_period = 7
-  skip_final_snapshot     = var.environment == "development" ? true : false
-  final_snapshot_identifier = var.environment == "production" ? "${var.project_name}-final-snapshot" : null
+  backup_retention_period          = 7
+  skip_final_snapshot              = var.environment == "development" ? true : false
+  final_snapshot_identifier_prefix = "${var.project_name}-final-snapshot"
 
   deletion_protection = var.environment == "production" ? true : false
 
-  family = "postgres15"
-  major_engine_version = "15"
+  family               = "postgres16"
+  major_engine_version = "16"
 
   parameters = [
     {
-      name  = "shared_preload_libraries"
-      value = "pg_stat_statements"
+      name         = "shared_preload_libraries"
+      value        = "pg_stat_statements"
+      apply_method = "pending-reboot" # static parameter — immediate not allowed
     },
     {
-      name  = "log_statement"
-      value = "all"
+      name         = "log_statement"
+      value        = "all"
+      apply_method = "immediate"
     },
     {
-      name  = "log_min_duration_statement"
-      value = "1000"
+      name         = "log_min_duration_statement"
+      value        = "1000"
+      apply_method = "immediate"
     }
   ]
 
@@ -505,11 +502,11 @@ resource "aws_security_group" "rds" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
-    description = "PostgreSQL from EKS nodes"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    security_groups = [module.eks.cluster_security_group_id]
+    description     = "PostgreSQL from EKS managed nodes"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [module.eks.cluster_primary_security_group_id]
   }
 
   egress {
@@ -534,25 +531,33 @@ module "elasticache" {
 
   create_replication_group = true
   replication_group_id     = "${var.project_name}-redis"
-  replication_group_description = "Redis cluster for ${var.project_name}"
+  description              = "Redis cluster for ${var.project_name}"
 
-  node_type                = var.redis_node_type
-  number_cache_clusters    = var.redis_number_nodes
-  port                     = 6379
-  parameter_group_name     = "default.redis7"
-  auth_token               = random_password.redis_auth_token.result
+  node_type                  = var.redis_node_type
+  num_cache_clusters         = var.redis_number_nodes
+  port                       = 6379
+  parameter_group_name       = "default.redis7"
+  auth_token                 = random_password.redis_auth_token.result
   transit_encryption_enabled = true
   at_rest_encryption_enabled = true
 
-  subnet_group_name  = aws_elasticache_subnet_group.default.name
-  security_group_ids = [aws_security_group.redis.id]
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
 
-  automatic_failover_enabled = true
-  multi_az_enabled          = true
+  # Subnet group managed by root-level aws_elasticache_subnet_group.default
+  # (below) — module must not create its own duplicate.
+  create_subnet_group = false
+  subnet_group_name   = aws_elasticache_subnet_group.default.name
+  security_group_ids  = [aws_security_group.redis.id]
+
+  # Single-node lean dev cache: ElastiCache requires >= 2 nodes for automatic
+  # failover / multi-AZ, so both must be disabled when redis_number_nodes == 1.
+  automatic_failover_enabled = false
+  multi_az_enabled           = false
 
   snapshot_retention_limit = 7
-  snapshot_window         = "03:00-05:00"
-  maintenance_window      = "sun:05:00-sun:06:00"
+  snapshot_window          = "03:00-05:00"
+  maintenance_window       = "sun:05:00-sun:06:00"
 
   tags = {
     Name = "${var.project_name}-redis"
@@ -574,11 +579,11 @@ resource "aws_security_group" "redis" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
-    description = "Redis from EKS nodes"
-    from_port   = 6379
-    to_port     = 6379
-    protocol    = "tcp"
-    security_groups = [module.eks.cluster_security_group_id]
+    description     = "Redis from EKS managed nodes"
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [module.eks.cluster_primary_security_group_id]
   }
 
   egress {
@@ -594,50 +599,5 @@ resource "aws_security_group" "redis" {
 }
 
 # =============================================================================
-# Outputs
+# Outputs are defined in outputs.tf
 # =============================================================================
-
-output "cluster_endpoint" {
-  description = "Endpoint for EKS control plane"
-  value       = module.eks.cluster_endpoint
-}
-
-output "cluster_name" {
-  description = "Kubernetes Cluster Name"
-  value       = module.eks.cluster_name
-}
-
-output "cluster_certificate_authority_data" {
-  description = "Kubernetes Cluster Certificate Authority Data"
-  value       = module.eks.cluster_certificate_authority_data
-}
-
-output "region" {
-  description = "AWS region"
-  value       = var.aws_region
-}
-
-output "vpc_id" {
-  description = "VPC ID"
-  value       = module.vpc.vpc_id
-}
-
-output "database_endpoint" {
-  description = "RDS endpoint"
-  value       = module.rds.db_instance_endpoint
-}
-
-output "database_port" {
-  description = "RDS port"
-  value       = module.rds.db_instance_port
-}
-
-output "redis_endpoint" {
-  description = "ElastiCache endpoint"
-  value       = module.elasticache.replication_group_primary_endpoint_address
-}
-
-output "storage_bucket_name" {
-  description = "S3 bucket for application storage"
-  value       = aws_s3_bucket.application_storage.bucket
-}

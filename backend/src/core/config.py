@@ -273,6 +273,7 @@ class Settings(BaseSettings):
     # Public Preview — API may churn. One KB per organization.
     DO_KB_ENABLED: bool = False
     DO_KB_PRIMARY_READ: bool = False  # Phase 4b: DO KB serves reads
+    BEDROCK_KB_ID: str = ""  # Shared AWS KB; every read filters by organization_id
     DO_API_TOKEN: Optional[str] = None
     DO_KB_REGION: Optional[str] = None  # e.g. "tor1", "nyc3"
     DO_KB_PROJECT_ID: Optional[str] = None

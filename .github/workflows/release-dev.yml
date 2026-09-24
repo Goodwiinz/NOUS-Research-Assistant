@@ -2,6 +2,9 @@ name: Release Dev
 
 # A green source commit produces a digest-pinned GitOps PR. GITHUB_TOKEN
 # cannot bypass develop's required checks; deployment follows a normal merge.
+# After the AWS branch merges, propose values-aws.yaml only; DO values-dev.yaml
+# stays frozen as the rollback source. Argo's AWS apps track migration/aws
+# until their separately approved targetRevision switch to develop.
 on:
   workflow_run:
     workflows: ["Test Pipeline"]
@@ -14,6 +17,9 @@ concurrency:
 
 permissions:
   contents: read
+  # Caller permissions cap the reusable docker-build workflow; id-token is
+  # required there for GitHub OIDC -> AWS (ECR push).
+  id-token: write
 
 jobs:
   prepare:
@@ -40,7 +46,7 @@ jobs:
             echo "develop moved; the newer source run owns release preparation"
             exit 0
           fi
-          if git diff --quiet HEAD^ HEAD -- . ':!infrastructure/helm/knowledge-graph-analytics/values-dev.yaml'; then
+          if git diff --quiet HEAD^ HEAD -- . ':!infrastructure/helm/knowledge-graph-analytics/values-aws.yaml'; then
             echo "Only deployment values changed; do not create a release loop"
             exit 0
           fi
@@ -93,7 +99,10 @@ jobs:
             echo "develop moved; the newer source run owns promotion"
             exit 0
           fi
-          VALUES_FILE="infrastructure/helm/knowledge-graph-analytics/values-dev.yaml"
+          # AWS/EKS dev lane: bump the ECR-pinned identity in values-aws.yaml.
+          # The chart renders repository@sha256:<digest> when digest is set
+          # (templates/_helpers.tpl backendImage), falling back to :tag.
+          VALUES_FILE="infrastructure/helm/knowledge-graph-analytics/values-aws.yaml"
           yq -i '.backend.image.digest = strenv(DIGEST)' "$VALUES_FILE"
           yq -i '.backend.image.tag = strenv(SOURCE_SHA)' "$VALUES_FILE"
           yq -i '.backend.image.sourceSha = strenv(SOURCE_SHA)' "$VALUES_FILE"
@@ -117,7 +126,7 @@ jobs:
           fi
           PR_URL="$(gh pr list --base develop --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
           if [ -z "$PR_URL" ]; then
-            printf 'Deploy tested source %s at immutable digest %s.\n\nImage producer: %s\n\nMerge after Test Pipeline, Secret Scan, and Helm Validate pass. Argo CD applies the merged values.\n' "$SOURCE_SHA" "$DIGEST" "$BUILD_URL" > "$RUNNER_TEMP/release-pr.md"
+            printf 'Deploy tested source %s at immutable digest %s.\n\nImage producer: %s\n\nMerge after Test Pipeline, Secret Scan, and Helm Validate pass. AWS Argo CD applies after its targetRevision switches to develop.\n' "$SOURCE_SHA" "$DIGEST" "$BUILD_URL" > "$RUNNER_TEMP/release-pr.md"
             PR_URL="$(gh pr create --base develop --head "$BRANCH" --title "chore(gitops): deploy dev image ${SOURCE_SHA:0:7}" --body-file "$RUNNER_TEMP/release-pr.md")"
           fi
           # Token-created PR events need approval. Explicit dispatch runs the
@@ -125,4 +134,4 @@ jobs:
           for workflow in test-pipeline.yml secret-scan.yml helm-validate.yml; do
             gh workflow run "$workflow" --ref "$BRANCH"
           done
-          printf '## Dev image proposed\n\n%s\n\nMerge after its checks pass to deploy.\n' "$PR_URL" >> "$GITHUB_STEP_SUMMARY"
+          printf '## Dev image proposed\n\n%s\n\nMerge after its checks pass; AWS Argo CD applies after its targetRevision switch.\n' "$PR_URL" >> "$GITHUB_STEP_SUMMARY"

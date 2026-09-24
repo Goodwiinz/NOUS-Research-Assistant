@@ -1,0 +1,22 @@
+# gp3 StorageClass for EKS (Task 5 rerun). The aws-ebs-csi-driver addon is
+# installed by Terraform, but the addon does NOT create StorageClasses — EKS
+# only ships a legacy gp2 default. values-aws.yaml pins global.storageClass=gp3,
+# so without this manifest the neo4j PVC sits Pending ("storageclass gp3 not
+# found") and the StatefulSet never schedules.
+#
+# Bootstrap resource, applied out-of-band (like the CSI addon itself): the
+# nous-platform AppProject whitelist does not include storage.k8s.io, so this
+# is intentionally NOT managed by the aws-dev ArgoCD app.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  labels:
+    app.kubernetes.io/part-of: nous-platform
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

@@ -1,65 +1,49 @@
-# Example Terraform Variables Configuration
-# Copy this file to terraform.tfvars and update with your values
+# Example Terraform Variables Configuration (lean dev sizing)
+# Copy this file to terraform.tfvars and update with your values.
+# NOTE: only variables declared in variables.tf may appear here.
 
 # AWS Configuration
-aws_region = "us-west-2"
-environment = "staging"
-owner = "rag-team"
-domain_name = "rag-staging.yourdomain.com"
+project_name = "nous"
+environment = "development"
+aws_region = "us-east-1"
+owner_email = "devops@example.com" # fill before apply
 
-# Cloudflare
-cloudflare_api_token = "your_cloudflare_api_token_here"
+# EKS Configuration
+cluster_name = "nous-dev-cluster"
+eks_cluster_version = "1.31"
 
 # Network Configuration
-vpc_cidr_block = "10.0.0.0/16"
-public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
-private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24", "10.0.13.0/24"]
-database_subnet_cidrs = ["10.0.21.0/24", "10.0.22.0/24", "10.0.23.0/24"]
+vpc_cidr = "10.0.0.0/16"
 
-enable_nat_gateway = true
-one_nat_gateway_per_az = false
-enable_vpn_gateway = false
+# Node Group (single lean SPOT node group)
+min_nodes = 1
+max_nodes = 3
+desired_nodes = 1
+node_instance_types = ["t3.large"]
 
-# Kubernetes Configuration
-kubernetes_version = "1.28"
+# EKS aws-auth admins (REQUIRED before apply to avoid lockout: fill with the
+# ARN(s) of the IAM role you assume, e.g. arn:aws:iam::<account>:role/<admin>)
+cluster_admin_role_arns = []
 
-# Application Node Group
-application_node_count = 3
-application_node_min_count = 2
-application_node_max_count = 10
-application_instance_types = ["m5.xlarge", "m5.2xlarge"]
+# Database Configuration (RDS PostgreSQL)
+db_instance_class = "db.t4g.small"
+db_allocated_storage = 20
+db_max_allocated_storage = 100
+db_name = "multimodal_rag"
+db_username = "raguser"
 
-# Worker Node Group
-worker_node_count = 4
-worker_node_min_count = 2
-worker_node_max_count = 8
-worker_instance_types = ["m5.2xlarge", "m5.4xlarge"]
+# Redis Configuration (ElastiCache, single node — failover disabled in main.tf)
+redis_node_type = "cache.t4g.small"
+redis_number_nodes = 1
 
-# System Node Group
-system_node_count = 2
-system_node_min_count = 1
-system_node_max_count = 3
-system_instance_types = ["m5.large", "m5.xlarge"]
+# Terraform State (provision these before first apply)
+terraform_state_bucket = "nous-tfstate-us-east-1"
+terraform_lock_table = "nous-tfstate-lock"
 
-# Database Configuration
-database_instance_class = "db.r5.xlarge"
-database_storage_size = 100
-database_max_storage_size = 1000
-backup_retention_period = 7
-backup_window = "03:00-04:00"
-maintenance_window = "sun:04:00-sun:05:00"
-
-# Redis Configuration
-redis_node_type = "cache.r5.large"
-redis_node_count = 1
-
-# Monitoring and Logging
+# Monitoring and Alerting
 enable_monitoring = true
-enable_logging = true
-
-# Additional Tags
-tags = {
-  CostCenter = "engineering"
-  Project = "multimodal-rag"
-  Environment = "staging"
-}
+log_retention_days = 30
+enable_cross_region_backup = false # lean dev: skip DR bucket
+enable_alerts = false
+alert_email = "" # fill before apply if enable_alerts = true
+slack_webhook_url = ""

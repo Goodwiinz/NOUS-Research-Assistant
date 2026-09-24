@@ -29,9 +29,16 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
 
-from .models import RetrieveResult
+from .models import Chunk, RetrieveResult
 
 logger = logging.getLogger(__name__)
+
+
+def _bedrock_kb_id() -> Optional[str]:
+    from src.core.config import settings
+
+    value = getattr(settings, "BEDROCK_KB_ID", "")
+    return value if isinstance(value, str) and value else None
 
 
 class DOKBRetrieveStatus(str, Enum):
@@ -66,6 +73,8 @@ async def resolve_org_kb_uuid(session: Any, org_id: Any) -> Optional[str]:
     """
     if not org_id:
         return None
+    if bedrock_kb_id := _bedrock_kb_id():
+        return bedrock_kb_id
     from src.models.organization import Organization
 
     org = await session.get(Organization, org_id)
@@ -98,6 +107,22 @@ async def retrieve_kb_chunks(
         non-timeout exceptions are *not* swallowed — they propagate to the
         caller's own error handling.
     """
+    if bedrock_kb_id := _bedrock_kb_id():
+        if kb_uuid != bedrock_kb_id:
+            raise ValueError("Configured Bedrock KB does not match requested KB")
+        from src.services.bedrock_retrieval import retrieve_chunks
+
+        try:
+            call = asyncio.to_thread(
+                retrieve_chunks, kb_uuid, query, org_id, top_k or 8, filters
+            )
+            rows = await asyncio.wait_for(call, timeout) if timeout else await call
+        except asyncio.TimeoutError:
+            logger.warning("bedrock_kb retrieve timed out (org_id=%s)", org_id)
+            return DOKBRetrieveOutcome(status=DOKBRetrieveStatus.TIMEOUT)
+        result = RetrieveResult(chunks=[Chunk(**row) for row in rows], total=len(rows))
+        return DOKBRetrieveOutcome(status=DOKBRetrieveStatus.SUCCESS, result=result)
+
     from src.services.do_kb import DOKnowledgeBaseError, get_do_kb_client
 
     client = get_do_kb_client()

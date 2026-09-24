@@ -5,8 +5,13 @@ that exact source SHA and opens a digest-pinned GitOps pull request using the
 built-in `GITHUB_TOKEN`. No GitHub App private key or personal token is needed.
 The workflow dispatches Test Pipeline, Secret Scan, and Helm Validate at the
 proposal branch because token-created PR events require workflow approval.
-Merge the proposal after those checks pass; Argo CD then deploys the image.
+Merge the proposal after those checks pass; after the AWS Argo CD apps switch
+to `develop`, they deploy the selected image.
 Deployment-only commits are skipped to prevent a release loop.
+The proposed file is `values-aws.yaml`; `values-dev.yaml` is frozen for DO
+rollback. The AWS Argo CD apps still track `migration/aws` until their
+separately approved switch to `develop`, so merging a proposal alone does not
+deploy EKS before that switch.
 
 Repository setup: enable **Actions > General > Workflow permissions > Allow
 GitHub Actions to create and approve pull requests**. Keep default workflow
@@ -25,7 +30,7 @@ not make its old image eligible again.
 | Workflow | Trigger | Responsibility |
 | --- | --- | --- |
 | `test-pipeline.yml` | Push and pull request | Run all required checks and publish the exact `Release Gate` result. |
-| `release-dev.yml` | Completed successful Test Pipeline run on `develop` | Build the tested SHA and open a checked `values-dev.yaml` promotion PR. |
+| `release-dev.yml` | Completed successful Test Pipeline run on `develop` | Build the tested SHA and open a checked `values-aws.yaml` promotion PR. |
 | `docker-build.yml` | Reusable call or manual dispatch | Check out an explicit full SHA, assert `HEAD`, push the full-SHA trace tag, and return its digest. Called by `release-dev.yml`. |
 | `gitops-image-update.yml` | Manual dispatch only | Retained legacy production image update; it has no dev role. |
 | `deploy.yml` | Manual dispatch only | Retained legacy staging/production Helm path; it has no dev role and requires an explicit image tag. |

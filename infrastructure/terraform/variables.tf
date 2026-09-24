@@ -40,7 +40,7 @@ variable "cluster_name" {
 variable "eks_cluster_version" {
   description = "Kubernetes version for EKS cluster"
   type        = string
-  default     = "1.28"
+  default     = "1.31"
 }
 
 variable "vpc_cidr" {
@@ -72,6 +72,12 @@ variable "node_instance_types" {
   description = "EC2 instance types for EKS nodes"
   type        = list(string)
   default     = ["m5.large", "m5a.large", "m5d.large"]
+}
+
+variable "cluster_admin_role_arns" {
+  description = "IAM role ARNs granted system:masters on the EKS cluster via aws-auth. Set to your admin role ARN(s) before apply to avoid lockout when manage_aws_auth_configmap = true."
+  type        = list(string)
+  default     = []
 }
 
 # Database Configuration
