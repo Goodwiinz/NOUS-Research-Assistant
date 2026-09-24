@@ -132,4 +132,4 @@ bioservices>=1.11.0  # Bridge to 70+ biological web services
 # Code Execution Sandbox
 e2b-code-interpreter==2.10.0
 idna>=3.15
-Pygments>=2.20.0
+Pygments>=2.21.0
