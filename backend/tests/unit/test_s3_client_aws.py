@@ -10,7 +10,9 @@ from src.core import s3_client
 pytestmark = pytest.mark.unit
 
 
-def test_explicit_keys_required_only_for_custom_endpoints(monkeypatch):
+def test_explicit_keys_required_only_for_custom_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(s3_client.settings, "S3_ENDPOINT_URL", None)
     monkeypatch.setattr(s3_client.settings, "S3_ACCESS_KEY", None)
     monkeypatch.setattr(s3_client.settings, "S3_SECRET_KEY", None)
@@ -20,7 +22,7 @@ def test_explicit_keys_required_only_for_custom_endpoints(monkeypatch):
     assert s3_client.missing_s3_credentials() == ["S3_ACCESS_KEY", "S3_SECRET_KEY"]
 
 
-def test_aws_s3_uses_iam_and_omits_acls(monkeypatch):
+def test_aws_s3_uses_iam_and_omits_acls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(s3_client, "_s3_client", None)
     monkeypatch.setattr(s3_client.settings, "S3_ENDPOINT_URL", None)
     monkeypatch.setattr(s3_client.settings, "S3_ACCESS_KEY", "unused-spaces-key")
@@ -45,7 +47,9 @@ def test_aws_s3_uses_iam_and_omits_acls(monkeypatch):
     assert all("ACL" not in call.kwargs for call in client.put_object.call_args_list)
 
 
-def test_spaces_keeps_explicit_credentials_and_private_acl(monkeypatch):
+def test_spaces_keeps_explicit_credentials_and_private_acl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(s3_client, "_s3_client", None)
     monkeypatch.setattr(
         s3_client.settings, "S3_ENDPOINT_URL", "https://nyc3.digitaloceanspaces.com"
