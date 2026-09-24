@@ -32,6 +32,13 @@ data "aws_iam_policy_document" "app_s3_assume_role" {
 
 data "aws_iam_policy_document" "app_s3" {
   statement {
+    sid       = "AppBedrockRetrieve"
+    effect    = "Allow"
+    actions   = ["bedrock:Retrieve"]
+    resources = ["arn:aws:bedrock:us-east-1:${data.aws_caller_identity.current.account_id}:knowledge-base/GGYNMOGZAH"]
+  }
+
+  statement {
     sid    = "AppS3Objects"
     effect = "Allow"
     actions = [

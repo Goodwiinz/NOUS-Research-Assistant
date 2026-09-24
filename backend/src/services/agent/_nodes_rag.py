@@ -691,7 +691,9 @@ async def _try_primary_do_kb_read_impl(
     try:
         from src.core.config import settings as _kb_cfg
 
-        if not getattr(_kb_cfg, "DO_KB_PRIMARY_READ", False):
+        bedrock_kb_id = getattr(_kb_cfg, "BEDROCK_KB_ID", "")
+        bedrock_enabled = isinstance(bedrock_kb_id, str) and bool(bedrock_kb_id)
+        if not (getattr(_kb_cfg, "DO_KB_PRIMARY_READ", False) or bedrock_enabled):
             return None
         # Normalise to a UUID so downstream org-scoped queries bind the same
         # type the ORM User's organization_id used to provide.
@@ -785,6 +787,14 @@ async def _try_primary_do_kb_read_impl(
                 session=session,
                 project_id=scoped_project_id,
             )
+            # A shared KB must never emit an unresolvable document, even if
+            # provider-side metadata filtering was bypassed or misconfigured.
+            if bedrock_enabled:
+                chunks_to_emit = [
+                    chunk
+                    for chunk in chunks_to_emit
+                    if chunk.document_id in title_by_key
+                ]
 
             # Two distinct empty-result paths that trigger the hybrid fallback:
             if scoped_project_id and not title_by_key and result.chunks:
