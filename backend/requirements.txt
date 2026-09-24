@@ -55,7 +55,7 @@ weasyprint==70.0
 pytesseract==0.3.13
 pillow>=12.2.0
 opencv-python==4.13.0.92
-setuptools>=70.0.0,<72.0.0  # pkg_resources removed in 72+, needed by pybtex
+setuptools>=84.0.0,<85.0.0  # pkg_resources removed in 72+, needed by pybtex
 camelot-py[cv]>=0.11.0
 tabula-py>=2.9.0
 
@@ -105,7 +105,7 @@ python-magic==0.4.27
 email-validator==2.3.0
 sse-starlette==1.6.1
 kagglehub[hf-datasets]>=0.3.0,<1.0.0
-setuptools>=70.0.0,<72.0.0  # pkg_resources removed in 72+, needed by pybtex  # Required for openai-whisper build
+setuptools>=84.0.0,<85.0.0  # pkg_resources removed in 72+, needed by pybtex  # Required for openai-whisper build
 
 # Research Assistant - Citation Management
 pybtex==0.26.1
