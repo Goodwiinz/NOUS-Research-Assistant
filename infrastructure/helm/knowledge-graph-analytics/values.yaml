@@ -44,6 +44,15 @@ infisical:
     langsmith-credentials: "/langsmith"
     do-kb-credentials: "/do-kb"
 
+# Optional AWS Secrets Manager sync for the RDS candidate. The DO rollback
+# credential remains in the separate Infisical-managed database-credentials.
+awsRdsSecret:
+  enabled: false
+  roleArn: ""
+  secretArn: ""
+  host: ""
+  database: ""
+
 # Frontend is deployed externally via Vercel — no in-cluster manifests.
 
 # Backend Configuration

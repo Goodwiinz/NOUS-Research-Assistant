@@ -39,6 +39,14 @@ infisical:
   envSlug: "dev"
   # The chart default /spaces sync is required while DO Spaces serves files.
 
+# Stage a separate rotating RDS credential without changing the live DB yet.
+awsRdsSecret:
+  enabled: true
+  roleArn: "arn:aws:iam::267685730035:role/nous-development-rds-secret-reader"
+  secretArn: "arn:aws:secretsmanager:us-east-1:267685730035:secret:rds!db-a32f02a3-cc8b-46b9-a67f-a7002405df5c-Jf82DC"
+  host: "nous-postgres.cqvm2i08i6qf.us-east-1.rds.amazonaws.com"
+  database: "nous_merged_preflight"
+
 # ──────────────────────────────────────────────
 # Frontend deployed via Vercel — no in-cluster manifests; rebuild with AWS API/WS URLs in cutover Step 7.
 # ──────────────────────────────────────────────

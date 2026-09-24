@@ -147,8 +147,18 @@ helm upgrade --install external-secrets external-secrets/external-secrets \
   -n external-secrets --create-namespace
 ```
 
-SecretStores/ClusterStores are configured per-app later; no AWS IRSA is
-wired for ESO yet (add one when the first SecretStore needs it).
+The controller itself has no AWS role. The AWS dev chart creates a dedicated
+`aws-rds-secret-reader` ServiceAccount, SecretStore, and ExternalSecret;
+Terraform grants that ServiceAccount read access only to the RDS-managed
+master secret (`external-secrets-rds-irsa.tf`). The resulting
+`aws-database-credentials` Secret is staged separately from Infisical's live
+`database-credentials`, so DO rollback credentials are unchanged.
+
+The ExternalSecret refreshes every 5 minutes. Kubernetes does not update
+environment variables in already-running pods when a Secret rotates: once the
+backend is switched to this Secret, restart backend/worker/beat after each
+rotation (or install a Secret-change rollout controller). Do not treat a Ready
+ExternalSecret alone as rotation-safe for the application.
 
 ## external-dns (chart 1.22.0 / app v0.22.0)
 
