@@ -7,7 +7,7 @@
       "candidate": null,
       "claim_id": "c-dedec08666dc",
       "claimed_at": "2026-09-24T19:43:34.967772+00:00",
-      "expires_at": "2026-09-24T22:43:34.967772+00:00",
+      "expires_at": "2026-09-24T23:38:54.434885+00:00",
       "files": [
         "backend/src/services/arxiv/arxiv_service.py",
         "backend/src/services/agent/error_recovery.py",
@@ -23,12 +23,12 @@
       ],
       "machine_id": "onubuntu",
       "pr": null,
-      "renewed_at": null,
+      "renewed_at": "2026-09-24T20:38:54.434885+00:00",
       "run_id": "20260924T194334Z-codex-onubuntu-6c0861",
       "status": "active"
     }
   ],
   "mode": "remote-required",
   "schema": 2,
-  "updated_at": "2026-09-24T19:43:34.967772+00:00"
+  "updated_at": "2026-09-24T20:38:54.434885+00:00"
 }

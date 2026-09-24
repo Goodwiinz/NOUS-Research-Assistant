@@ -5,7 +5,7 @@
   "blocker": null,
   "branch": "codex/arxiv-search-repair",
   "candidate": null,
-  "claim_expires_at": "2026-09-24T22:43:34.967772+00:00",
+  "claim_expires_at": "2026-09-24T23:38:54.434885+00:00",
   "claim_id": "c-dedec08666dc",
   "evidence_head_sha": "db15a27001c9f52479dcdc6e821c660c2886f16f",
   "files": [
@@ -37,5 +37,5 @@
   "run_id": "20260924T194334Z-codex-onubuntu-6c0861",
   "schema": 1,
   "state": "claimed",
-  "updated_at": "2026-09-24T19:43:34.967772+00:00"
+  "updated_at": "2026-09-24T20:38:54.434885+00:00"
 }
