@@ -73,11 +73,15 @@ test.describe(`live agent Q&A dataset v${dataset.version}`, () => {
         const welcome = page.getByRole('heading', {
           name: 'What would you like to find out?',
         });
+        const restoredThread = page
+          .getByRole('complementary', { name: 'Chat context rail' })
+          .getByText(/^thread · [0-9a-f]{8}$/);
         await expect
           .poll(
             async () =>
               new URL(page.url()).searchParams.has('thread') ||
-              (await welcome.isVisible()),
+              (await welcome.isVisible()) ||
+              (await restoredThread.isVisible()),
             { timeout: 30_000 }
           )
           .toBe(true);

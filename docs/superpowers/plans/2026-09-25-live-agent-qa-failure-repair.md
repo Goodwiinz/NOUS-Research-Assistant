@@ -10,7 +10,7 @@
 
 **Spec:** `frontend/e2e/agent-qa/README.md` and its 30-case `frontend/e2e/fixtures/agent-qa.v1.json` dataset.
 
-**Implementation status (2026-09-25):** Tasks 1–3 and the local portion of Task 4 are implemented in the worktree. Astra reviewed the plan and final code; its two Important code findings were reproduced with failing regressions and fixed. The final frontend suite passed 2,297 tests across 310 files, and offline Chromium probes passed. The historical report is unchanged. The targeted and full live Q&A reruns remain a release gate for the exact deployed build; broader backend CI is pending dependencies missing from this checkout.
+**Implementation status (2026-09-25):** The first repair PR was merged and deployed. Subsequent full production runs completed all thirty questions and exposed additional valid paraphrases, one repeated unsupported project description, and a New chat route race. A follow-up worktree fix now uses Next-aware native history synchronization for the default route, adds a bounded concept pattern for larger follow-up studies, and preserves each live run's raw report. The latest full run of rubric 1.2.5 scored 27/30: two phrase misses and the unsupported project description. The two phrase misses have local regressions; the larger-study case passed a targeted live rerun with the stricter rubric 1.2.8. A post-deployment full run remains the release gate for the route fix. Broader backend CI is pending dependencies missing from this checkout.
 
 ## Global Constraints
 

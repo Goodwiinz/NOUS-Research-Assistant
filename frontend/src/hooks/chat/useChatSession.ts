@@ -482,7 +482,13 @@ export function useChatSession(): UseChatSessionReturn {
     }
     const liveParams = new URLSearchParams(window.location.search);
     if (liveParams.get('new') === '1' || liveParams.has('thread')) return;
-    routerRef.current.replace(getSelectedThreadUrl(activeThreadId));
+    // This is only a same-page URL reconciliation. A router navigation starts
+    // an RSC request that can finish after the user clicks New chat and put the
+    // previous thread back in the address bar. Next syncs native history edits
+    // with useSearchParams without starting that competing navigation. Pass
+    // fresh state: reusing history.state carries Next's __NA marker and skips
+    // its router sync. Next copies its internal state into the new entry.
+    window.history.replaceState({}, '', getSelectedThreadUrl(activeThreadId));
   }, [
     activeThreadId,
     hasNewChatIntent,

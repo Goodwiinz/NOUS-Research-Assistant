@@ -52,7 +52,7 @@ corepack pnpm@10.18.2 --dir tools/nous-playwright auth --headless
 AGENT_QA_LIVE=1 \
 AGENT_QA_BASE_URL=https://goodwiinz.tech \
 AGENT_QA_AUTH_STATE=../tools/nous-playwright/.auth/nous.json \
-AGENT_QA_RUN_LABEL=2026-09-25-full-v122 \
+AGENT_QA_RUN_LABEL=example-full-v128 \
 corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa
 ```
 
@@ -146,6 +146,50 @@ phrase check is likewise not proof of grounding. Review the full answer.
 The original 25/30 raw result remains the record of that run; the new rubric
 needs its own live result before comparing scores.
 
+Version 1.2.3 accepts the observed "bigger and more diverse participant group"
+wording. It also treats a visible restored thread in the context rail as ready
+to leave, even when the app has not reflected that selection in the URL. The
+2026-09-25 v1.2.2 production run scored 19/30: nine cases were not sent because
+the earlier URL-based readiness check timed out, one valid larger-group answer
+missed the rubric, and the project description added topics absent from its
+brief. Those results remain separate from this revision's rerun.
+
+Version 1.2.4 accepts two more observed wording variants: "does not include
+their results" and plural "old tools." The v1.2.3 production run scored 25/30:
+two complete answers missed those phrases, one New chat navigation returned to
+the previous thread before submission, one submitted turn did not commit an
+answer within four minutes, and the project description added evaluation topics
+absent from the brief. An isolated retry of the stalled turn also failed while
+the test machine was out of disk space; after reclaiming space, it passed in
+ten seconds. That supports an environmental explanation for the stall but does
+not prove the earlier attempt's cause. Keep each run's raw score and phases
+separate; regrading old answers with a new rubric is not a new live run.
+
+Version 1.2.5 adds three complete, grounded answers from the v1.2.4 full live
+run as regressions. The phrases "does not include the results," "sample size
+was small," and "old one" now match their respective concepts. That run
+scored 26/30: all thirty questions were sent and committed; three valid
+answers missed phrase alternatives, and the project description again added
+evaluation topics absent from the brief. Its raw result remains 26/30.
+
+Version 1.2.6 adds two valid answer variants from the v1.2.5 full live run:
+"does not report the results" and "larger-scale evaluation." That run scored
+27/30 with all thirty questions sent and committed. These two answers missed
+the phrase rubric; the project description again added unsupported criteria.
+The raw v1.2.5 score remains 27/30. The local chat-route fix still requires
+verification after deployment; live runs against the merged production build
+do not exercise it.
+
+Version 1.2.7 adds a bounded pattern for the larger-follow-up-study concept.
+The v1.2.6 two-case production rerun passed `missing-results` but missed
+"larger, well-powered follow-up study" because modifiers split the exact
+phrase. A targeted v1.2.7 live rerun of `next-research-step` passed, but review
+found that its arbitrary-word gap could also accept a larger database with the
+same study group. Version 1.2.8 limits the intervening words to relevant study
+modifiers and adds those false positives as regression tests. It remains a
+lexical check, so a full-answer grounding review is still needed. A targeted
+v1.2.8 live rerun of `next-research-step` passed.
+
 - Keep prompts short, self-contained, and independent of current events or tenant data.
 - Accept normal wording variants without requiring arbitrary answer length.
 - Update the semantic version when a case or rubric changes.
@@ -165,7 +209,7 @@ locations preserve the original v1.2.1 result.
 AGENT_QA_LIVE=1 \
 AGENT_QA_BASE_URL=https://goodwiinz.tech \
 AGENT_QA_AUTH_STATE=../tools/nous-playwright/.auth/nous.json \
-AGENT_QA_RUN_LABEL=2026-09-25-citation-v122 \
+AGENT_QA_RUN_LABEL=example-citation-v128 \
 corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa \
   --grep incomplete-citation
 ```
