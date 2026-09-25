@@ -33,6 +33,8 @@ from ._errors import client_safe_error, extract_interrupt_confirmation
 
 logger = logging.getLogger(__name__)
 
+_CANCELLATION_POLL_SECONDS = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Job storage — in-memory L1 + Redis L2
@@ -47,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 from src.services.agent import job_store as _job_store
 from src.services.agent._builders import RECURSION_LIMIT
-from src.services.agent._sanitize import sanitize_page_context
+from src.services.agent._sanitize import current_turn_final_text, sanitize_page_context
 from src.services.agent.agent_run_service import get_run
 from src.services.agent.job_store import _is_newer_or_equal
 from src.services.agent.job_store import _l1 as _jobs
@@ -2253,6 +2255,83 @@ async def _run_heartbeat(job_id: str, *, interval_seconds: Optional[float] = Non
             await beat_task
 
 
+async def _invoke_graph_with_cancellation_monitor(
+    graph: Any,
+    graph_input: Any,
+    config: dict[str, Any],
+    job_id: str,
+    current_user: User,
+) -> dict[str, Any]:
+    """Run a graph turn while polling its durable owner-scoped stop marker.
+
+    Each read uses a short-lived session so it observes the committed marker
+    independently of the runner's persistence session. The monitor owns graph
+    cancellation and joins the child before returning.
+    """
+    from src.services.agent.agent_run_service import is_run_cancellation_requested
+
+    organization_id = getattr(current_user, "organization_id", None)
+    user_id = str(current_user.id)
+
+    async def cancellation_requested() -> bool:
+        try:
+            async with AsyncSessionLocal() as cancellation_db:
+                return await is_run_cancellation_requested(
+                    cancellation_db,
+                    job_id,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Unable to read agent-run cancellation marker",
+                extra={"job_id": job_id},
+            )
+            raise
+
+    if await cancellation_requested():
+        raise asyncio.CancelledError
+
+    graph_task = asyncio.create_task(graph.ainvoke(graph_input, config=config))
+
+    async def monitor() -> None:
+        while not graph_task.done():
+            await asyncio.sleep(_CANCELLATION_POLL_SECONDS)
+            if graph_task.done():
+                return
+            if await cancellation_requested():
+                graph_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await graph_task
+                return
+
+    monitor_task = asyncio.create_task(monitor())
+    try:
+        done, _pending = await asyncio.wait(
+            {graph_task, monitor_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if monitor_task in done:
+            monitor_task.result()
+
+        final_state = await graph_task
+        # Close the race where Stop commits as the graph returns, just before
+        # the polling task's next interval.
+        if await cancellation_requested():
+            raise asyncio.CancelledError
+        return final_state
+    finally:
+        if not monitor_task.done():
+            monitor_task.cancel()
+        if not graph_task.done():
+            graph_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await monitor_task
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await graph_task
+
+
 async def _run_agent_graph(
     job_id: str,
     request: Any,  # AgentExecuteRequest
@@ -2491,7 +2570,9 @@ async def _run_agent_graph(
                 # S2-M15: heartbeat updated_at while the graph runs so the
                 # staleness sweeper can never mistake a live run for dead.
                 async with _run_heartbeat(job_id), asyncio.timeout(360):
-                    final_state = await graph.ainvoke(initial_state, config=config)
+                    final_state = await _invoke_graph_with_cancellation_monitor(
+                        graph, initial_state, config, job_id, current_user
+                    )
 
                 # Primary interrupt detection — see _extract_pending_interrupt.
                 # ainvoke() returning without raising does NOT mean the turn
@@ -2526,12 +2607,11 @@ async def _run_agent_graph(
                 )
                 return
 
-            # Extract assistant content from the last AI message
-            assistant_content = ""
-            for msg in reversed(final_state["messages"]):
-                if hasattr(msg, "type") and msg.type == "ai" and msg.content:
-                    assistant_content = msg.content
-                    break
+            # Checkpoint state includes previous turns; never use an older
+            # answer when this turn has no content-bearing assistant message.
+            assistant_content = (
+                current_turn_final_text(final_state.get("messages", [])) or ""
+            )
 
             # User row was already persisted up-front (before the graph ran).
             # Only write the assistant row here — Task 4 of
@@ -2893,9 +2973,12 @@ async def _resume_agent_graph(
             # Same heartbeat as the fresh-run path (S2-M15): a confirm resume
             # is equally live and equally silent between status writes.
             async with _run_heartbeat(job_id), asyncio.timeout(360):
-                final_state = await graph.ainvoke(
+                final_state = await _invoke_graph_with_cancellation_monitor(
+                    graph,
                     Command(resume={"confirmed": confirmed}),
-                    config=config,
+                    config,
+                    job_id,
+                    current_user,
                 )
 
             # Primary interrupt detection (mirrors _run_agent_graph and the
@@ -2921,12 +3004,9 @@ async def _resume_agent_graph(
                 )
                 return
 
-            # Extract assistant content
-            assistant_content = ""
-            for msg in reversed(final_state["messages"]):
-                if hasattr(msg, "type") and msg.type == "ai" and msg.content:
-                    assistant_content = msg.content
-                    break
+            assistant_content = (
+                current_turn_final_text(final_state.get("messages", [])) or ""
+            )
 
             # Token cost on the HITL resume path (parity with the initial run).
             # Computed once here and reused for the assistant-row token_usage,

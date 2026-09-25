@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_LEASE_SECONDS = 300
 _ACTIVE_RUN_STATUSES = tuple(
     status.value for status in JobStatus if not status.is_terminal
+)
+_PRE_STOP_RUN_STATUSES = tuple(
+    status for status in _ACTIVE_RUN_STATUSES if status != JobStatus.STOPPING.value
 )
 
 
@@ -114,103 +117,87 @@ async def upsert_run(
     # the non-uuid job-id fallback) — drop what cannot bind.
     thread_uuid = _coerce_uuid(thread_id)
 
-    run = await db.get(AgentRun, job_id)
-    if run is None:
-        if user_uuid is None:
-            logger.warning(
-                "agent_runs: no row for job %s and no user_id in payload; "
-                "skipping insert",
-                job_id,
-            )
+    # The update itself is the transition claim. Reading an ORM object first
+    # and writing it later lets a stale producer replace a completion or Stop
+    # acknowledgement between those two operations.
+    run = await _transition_existing_run(
+        db,
+        job_id=job_id,
+        normalized=normalized,
+        organization_id=org_uuid,
+        user_id=user_uuid,
+        thread_id=thread_uuid,
+        error=error,
+        idempotency_key=idempotency_key,
+        backfill_metadata=True,
+    )
+    if run is not None:
+        return run
+
+    # A zero-row update can mean either a missing row or an existing row that
+    # rejected this transition / owner. Reload before attempting an insert.
+    existing = await _reload_run(db, job_id)
+    if existing is not None:
+        if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
+            # A mismatched payload cannot backfill tenant or correlation data
+            # on another owner's partially scoped legacy row.
             return None
-        run = AgentRun(
-            job_id=job_id,
-            organization_id=org_uuid,
-            user_id=user_uuid,
-            thread_id=thread_uuid,
-            status=normalized.value,
-            error=error,
-            idempotency_key=idempotency_key,
+        return existing
+
+    if user_uuid is None:
+        logger.warning(
+            "agent_runs: no row for job %s and no user_id in payload; "
+            "skipping insert",
+            job_id,
         )
-        db.add(run)
-        try:
-            await db.commit()
-        except IntegrityError:
-            # A concurrent creator may have won the job-id/idempotency race, or
-            # another run may already own this thread's partial-unique slot.
-            # Only a genuinely dangling legacy thread id may retry uncorrelated;
-            # dropping thread_id for an active-run collision would let two graph
-            # writers race the same LangGraph checkpoint.
-            await db.rollback()
-            run = await db.get(AgentRun, job_id)
-            if run is None:
-                if idempotency_key is not None:
-                    existing = await get_run_by_idempotency_key(
-                        db,
-                        idempotency_key,
-                        organization_id=org_uuid,
-                        user_id=user_uuid,
-                    )
-                    if existing is not None:
-                        return None
-                if thread_uuid is not None:
-                    active = (
-                        await db.execute(
-                            select(AgentRun).where(
-                                AgentRun.thread_id == thread_uuid,
-                                AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if active is not None:
-                        raise ActiveRunConflict(
-                            "A response is already in progress for this thread."
-                        )
-                if thread_uuid is None:  # pragma: no cover — PK race implies row
-                    return None
-                run = AgentRun(
-                    job_id=job_id,
-                    organization_id=org_uuid,
-                    user_id=user_uuid,
-                    thread_id=None,
-                    status=normalized.value,
-                    error=error,
-                    idempotency_key=idempotency_key,
-                )
-                db.add(run)
-                try:
-                    await db.commit()
-                except IntegrityError:  # pragma: no cover — PK race on retry
-                    await db.rollback()
-                    run = await db.get(AgentRun, job_id)
-                    if run is None:
-                        return None
-                else:
-                    return run
-        else:
-            return run
+        return None
 
-    current = _coerce_status(run.status)
-    if current is not None and current.is_terminal and normalized != current:
-        return run  # absorbing terminal state — drop the stale transition
-
-    run.status = normalized.value
-    run.error = error
-    run.updated_at = _utcnow()
-    if run.organization_id is None and org_uuid is not None:
-        run.organization_id = org_uuid
-    if run.user_id is None and user_uuid is not None:
-        run.user_id = user_uuid
-    if run.thread_id is None and thread_uuid is not None:
-        run.thread_id = thread_uuid
-    if run.idempotency_key is None and idempotency_key:
-        run.idempotency_key = idempotency_key
+    run = AgentRun(
+        job_id=job_id,
+        organization_id=org_uuid,
+        user_id=user_uuid,
+        thread_id=thread_uuid,
+        status=normalized.value,
+        error=error,
+        idempotency_key=idempotency_key,
+    )
+    db.add(run)
     try:
         await db.commit()
     except IntegrityError:
-        # A backfill can collide with another run's active-thread slot. Do not
-        # silently drop correlation and keep both writers alive.
+        # A competing insert may have won either the job-id or active-thread
+        # uniqueness claim. Never let a loser mutate a row owned by someone
+        # else. A different active job on this thread remains a hard conflict.
         await db.rollback()
+        existing = await _reload_run(db, job_id)
+        if existing is not None:
+            if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
+                return None
+            return (
+                await _transition_existing_run(
+                    db,
+                    job_id=job_id,
+                    normalized=normalized,
+                    organization_id=org_uuid,
+                    user_id=user_uuid,
+                    thread_id=thread_uuid,
+                    error=error,
+                    idempotency_key=idempotency_key,
+                    backfill_metadata=True,
+                )
+                or existing
+            )
+
+        if idempotency_key is not None:
+            duplicate = await get_run_by_idempotency_key(
+                db,
+                idempotency_key,
+                organization_id=org_uuid,
+                user_id=user_uuid,
+            )
+            if duplicate is not None:
+                return None
+
         if thread_uuid is not None:
             active = (
                 await db.execute(
@@ -224,16 +211,174 @@ async def upsert_run(
                 raise ActiveRunConflict(
                     "A response is already in progress for this thread."
                 )
-        # Otherwise this is the legacy dangling-thread path: keep the status
-        # transition and leave correlation unchanged.
-        run = await db.get(AgentRun, job_id)
-        if run is None:  # pragma: no cover
+
+        # With no active writer left, retain the legacy recovery for a
+        # dangling thread FK: persist the run without correlation.
+        if thread_uuid is None:
             return None
-        run.status = normalized.value
-        run.error = error
-        run.updated_at = _utcnow()
-        await db.commit()
+        run = AgentRun(
+            job_id=job_id,
+            organization_id=org_uuid,
+            user_id=user_uuid,
+            thread_id=None,
+            status=normalized.value,
+            error=error,
+            idempotency_key=idempotency_key,
+        )
+        db.add(run)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            existing = await _reload_run(db, job_id)
+            if existing is None:
+                return None
+            if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
+                return None
+            return await _transition_existing_run(
+                db,
+                job_id=job_id,
+                normalized=normalized,
+                organization_id=org_uuid,
+                user_id=user_uuid,
+                thread_id=None,
+                error=error,
+                idempotency_key=idempotency_key,
+                backfill_metadata=True,
+            )
+        return run
     return run
+
+
+def _transition_predicate(status: JobStatus):
+    """SQL predicate for a status transition, evaluated at the write point."""
+    if status == JobStatus.CANCELLED:
+        # A producer may acknowledge cancellation from any active state. This
+        # also covers task-level cancellation without a prior HTTP Stop claim.
+        return AgentRun.status.in_(_ACTIVE_RUN_STATUSES) | (
+            AgentRun.status == JobStatus.CANCELLED.value
+        )
+    if status == JobStatus.STOPPING:
+        return AgentRun.status.in_(_PRE_STOP_RUN_STATUSES) | (
+            AgentRun.status == JobStatus.STOPPING.value
+        )
+    if status.is_terminal:
+        # Same-terminal writes are idempotent. Other terminal writes require a
+        # non-stopping, uncancelled active row.
+        return (AgentRun.status == status.value) | and_(
+            AgentRun.status.in_(_PRE_STOP_RUN_STATUSES),
+            AgentRun.cancel_requested_at.is_(None),
+        )
+    return and_(
+        AgentRun.status.in_(_PRE_STOP_RUN_STATUSES),
+        AgentRun.cancel_requested_at.is_(None),
+    )
+
+
+def _belongs_to_upsert_owner(
+    run: AgentRun, organization_id: Optional[UUID], user_id: Optional[UUID]
+) -> bool:
+    return (user_id is None or run.user_id in (None, user_id)) and (
+        organization_id is None or run.organization_id in (None, organization_id)
+    )
+
+
+async def _reload_run(db: AsyncSession, job_id: str) -> Optional[AgentRun]:
+    return (
+        await db.execute(
+            select(AgentRun)
+            .where(AgentRun.job_id == job_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+
+
+async def _transition_existing_run(
+    db: AsyncSession,
+    *,
+    job_id: str,
+    normalized: JobStatus,
+    organization_id: Optional[UUID],
+    user_id: Optional[UUID],
+    thread_id: Optional[UUID],
+    error: Optional[str],
+    idempotency_key: Optional[str],
+    backfill_metadata: bool,
+) -> Optional[AgentRun]:
+    predicates = [AgentRun.job_id == job_id, _transition_predicate(normalized)]
+    if organization_id is not None:
+        predicates.append(
+            or_(
+                AgentRun.organization_id.is_(None),
+                AgentRun.organization_id == organization_id,
+            )
+        )
+    if user_id is not None:
+        predicates.append(or_(AgentRun.user_id.is_(None), AgentRun.user_id == user_id))
+
+    values: dict[str, Any] = {
+        "status": normalized.value,
+        "error": error,
+        "updated_at": _utcnow(),
+    }
+    if backfill_metadata:
+        if organization_id is not None:
+            values["organization_id"] = func.coalesce(
+                AgentRun.organization_id, organization_id
+            )
+        if user_id is not None:
+            values["user_id"] = func.coalesce(AgentRun.user_id, user_id)
+        if thread_id is not None:
+            values["thread_id"] = func.coalesce(AgentRun.thread_id, thread_id)
+        if idempotency_key:
+            values["idempotency_key"] = func.coalesce(
+                AgentRun.idempotency_key, idempotency_key
+            )
+
+    try:
+        result = await db.execute(
+            update(AgentRun)
+            .where(*predicates)
+            .values(**values)
+            .returning(AgentRun.job_id)
+            .execution_options(synchronize_session=False)
+        )
+        transitioned = result.scalar_one_or_none() is not None
+        await db.commit()
+    except IntegrityError:
+        # A correlation backfill may collide with the active-thread index or a
+        # dangling legacy FK. Preserve the transition guard in the fallback.
+        await db.rollback()
+        if thread_id is not None:
+            active = (
+                await db.execute(
+                    select(AgentRun).where(
+                        AgentRun.thread_id == thread_id,
+                        AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
+                    )
+                )
+            ).scalar_one_or_none()
+            if active is not None and active.job_id != job_id:
+                raise ActiveRunConflict(
+                    "A response is already in progress for this thread."
+                )
+        result = await db.execute(
+            update(AgentRun)
+            .where(*predicates)
+            .values(
+                status=normalized.value,
+                error=error,
+                updated_at=_utcnow(),
+            )
+            .returning(AgentRun.job_id)
+            .execution_options(synchronize_session=False)
+        )
+        transitioned = result.scalar_one_or_none() is not None
+        await db.commit()
+
+    if not transitioned:
+        return None
+    return await _reload_run(db, job_id)
 
 
 async def get_run(

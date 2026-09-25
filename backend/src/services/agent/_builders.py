@@ -23,8 +23,10 @@ What lives here:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.types import RetryPolicy
 
@@ -32,6 +34,11 @@ from src.services.agent._nodes_classify import preprocessing_node, route_by_inte
 from src.services.agent._nodes_llm import llm_node
 from src.services.agent._nodes_memory import memory_save_node
 from src.services.agent._nodes_tools import interrupt_node, tool_node
+from src.services.agent._sanitize import (
+    _TOOL_ERROR_DEGRADED_ANSWER,
+    normalize_terminal_messages,
+    terminal_message_additions,
+)
 from src.services.agent.compactor import make_compactor_node
 from src.services.agent.planner import make_planner_node
 from src.services.agent.reflection import make_reflection_gate
@@ -170,6 +177,23 @@ def build_agent_graph() -> StateGraph:
     compactor_node_fn = make_compactor_node()
     reflection_node_fn, reflection_route_fn = make_reflection_gate()
 
+    async def terminal_reflection_node(
+        state: AgentState, config: RunnableConfig
+    ) -> dict[str, Any]:
+        """Repair abandoned calls and keep reflection scoped to this turn."""
+        messages = state.get("messages", [])
+        reason = (
+            _TOOL_ERROR_DEGRADED_ANSWER
+            if state.get("error_count", 0) >= MAX_ERRORS
+            else "I could not complete this request. Please try again or adjust your request."
+        )
+        normalized = normalize_terminal_messages(messages, reason)
+        additions = terminal_message_additions(messages, normalized)
+        updates = await reflection_node_fn({**state, "messages": normalized}, config)
+        if additions:
+            updates = {**updates, "messages": additions}
+        return updates
+
     graph = StateGraph(AgentState)
 
     from src.services.agent._nodes_llm import force_synthesis_node
@@ -181,7 +205,7 @@ def build_agent_graph() -> StateGraph:
     graph.add_node("compactor_node", compactor_node_fn)
     graph.add_node("interrupt_node", interrupt_node)
     graph.add_node("force_synthesis_node", force_synthesis_node)
-    graph.add_node("reflection_gate", reflection_node_fn)
+    graph.add_node("reflection_gate", terminal_reflection_node)
     graph.add_node("memory_save_node", memory_save_node, retry=_RETRY_POLICY)
 
     # Sub-graphs compiled as nodes (they have internal planner/compactor/reflection)

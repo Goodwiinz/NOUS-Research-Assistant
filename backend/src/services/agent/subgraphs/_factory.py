@@ -37,8 +37,14 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
+from src.services.agent._sanitize import (
+    _TOOL_ERROR_DEGRADED_ANSWER,
+    _TOOL_PLACEHOLDER_CONTENT,
+    normalize_terminal_messages,
+    terminal_message_additions,
+)
 from src.services.agent.compactor import make_compactor_node
-from src.services.agent.graph import _TOOL_PLACEHOLDER_CONTENT, _sanitize_messages
+from src.services.agent.graph import MAX_ERRORS, _sanitize_messages
 from src.services.agent.observability import track_node_execution
 from src.services.agent.planner import make_planner_node
 from src.services.agent.reflection import make_reflection_gate
@@ -126,10 +132,7 @@ def _is_execution_evidence(message: ToolMessage) -> bool:
 # SOME content-bearing AIMessage to persist as this turn's answer; without
 # it, the walk falls through to whatever content-bearing AIMessage precedes
 # this turn (a stale prior-turn answer, or nothing at all on turn one).
-_BREAKER_DEGRADED_ANSWER = (
-    "I hit repeated tool errors and I'm stopping here without finishing the "
-    "remaining steps. Let me know how you'd like to proceed."
-)
+_BREAKER_DEGRADED_ANSWER = _TOOL_ERROR_DEGRADED_ANSWER
 
 
 def _placeholder_tool_messages(tool_calls: list, content: str) -> list[ToolMessage]:
@@ -480,34 +483,19 @@ def make_specialist_subgraph(
     )
 
     async def reflection_entry_node(state: AgentState, config: RunnableConfig) -> dict:
-        """Answer dangling tool_calls before delegating to the reflection gate.
+        """Normalize terminal history before handing it to reflection."""
+        messages = state.get("messages", [])
+        reason = (
+            _BREAKER_DEGRADED_ANSWER
+            if state.get("error_count", 0) >= MAX_ERRORS
+            else "I could not complete this request. Please try again or adjust your request."
+        )
+        normalized = normalize_terminal_messages(messages, reason)
+        additions = terminal_message_additions(messages, normalized)
 
-        should_continue's error-ceiling branch (checked BEFORE the
-        tool_calls check — see should_continue) routes straight here
-        without ever visiting the tool node, so the trailing AIMessage can
-        still carry unanswered tool_calls. Every OTHER edge into this node
-        already leaves tool_calls answered or absent — force_synthesis
-        never emits tool_calls (no bind_tools) and the interrupt-deny
-        branch answers them itself (interrupt_node_fn) — so "last message
-        is an AIMessage with tool_calls" unambiguously identifies the
-        breaker path; no separate flag needs threading through state.
-        Left unrepaired, the dangling call would survive to
-        agent_execution_service._run_agent_graph's extraction walk, which
-        skips content-less AIMessages and would persist a STALE prior-turn
-        answer as this turn's result.
-        """
-        last = state["messages"][-1] if state.get("messages") else None
-        extra_messages: list = []
-        if isinstance(last, AIMessage) and last.tool_calls:
-            extra_messages = _placeholder_tool_messages(
-                last.tool_calls, _TOOL_PLACEHOLDER_CONTENT
-            )
-            if not (isinstance(last.content, str) and last.content.strip()):
-                extra_messages.append(AIMessage(content=_BREAKER_DEGRADED_ANSWER))
-
-        updates = await _raw_reflection_node(state, config)
-        if extra_messages:
-            updates = {**updates, "messages": extra_messages}
+        updates = await _raw_reflection_node({**state, "messages": normalized}, config)
+        if additions:
+            updates = {**updates, "messages": additions}
         return updates
 
     _rename(reflection_entry_node, reflection)
