@@ -6,6 +6,15 @@ opens a new chat, waits for an answer, and checks a small concept rubric.
 Every answer should use only the note included in its question. The checks
 assess chat content; they do not create or inspect saved research notes.
 
+The separate multi-turn mode sends the same thirty questions with five
+context-dependent follow-ups from `e2e/fixtures/agent-qa.multi-turn.v1.json`
+inserted near their source turns, all in one chat. The follow-ups test recall
+of supplied records, adherence to a project brief, and an explicit correction
+to a paper author. Follow-up version 1.1.0 checks the requested "Year" label
+and anchors those questions within the agent's recent-history window.
+Version 1.1.1 accepts a concise answer naming the two things compared without
+repeating "compare," while still rejecting a direct negation of the brief.
+
 | Question             | Expected answer                                                     |
 | -------------------- | ------------------------------------------------------------------- |
 | Paper summary        | A search tool helped 20 students find papers faster.                |
@@ -88,6 +97,69 @@ gets a fresh browser context and submits one turn to the live agent; the agent
 may make several model or tool calls for that turn. The resulting chat threads
 remain in the test account.
 
+## Run the multi-turn conversation
+
+Use a fresh run label and the same saved authentication state as the independent
+suite:
+
+```sh
+AGENT_QA_LIVE=1 \
+AGENT_QA_BASE_URL=https://goodwiinz.tech \
+AGENT_QA_AUTH_STATE=../tools/nous-playwright/.auth/nous.json \
+AGENT_QA_RUN_LABEL=example-multi-turn-1 \
+corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa:multi-turn
+```
+
+This command creates one new chat and sends all 35 turns sequentially in that
+chat. Each turn waits for a new committed assistant message, verifies that the
+thread URL stays the same, and attaches its prompt, answer, phase, grade, and
+elapsed time. A rubric failure is recorded while the remaining turns continue;
+an unsent or uncommitted turn stops the sequence. The final
+`agent-qa-multi-turn-results` attachment contains every attempted turn. Compare
+its baseline score with an independent run only as a different conversation
+condition, not as a rerun of the same test.
+
+The first full multi-turn run with follow-ups at the end answered all 30
+baseline questions but missed three of five follow-ups about records from
+turns 11–12. The backend retains a recent 20-user-turn checkpoint window, so
+those records had fallen outside it by turns 31–32. The raw 32/35 result is
+preserved under run label `multi-turn-v129-20260925-1`; version 1.1.0 tests
+nearby follow-ups while still exercising a full 35-turn conversation. That
+interleaved v1.1.0 run answered all five follow-ups correctly; its raw rubric
+score was 32/35 because three complete answers missed phrase checks. Baseline
+version 1.2.10 and follow-up version 1.1.1 add those observed wording variants
+without changing either historical raw score.
+
+The next v1.2.10/1.1.1 full live run completed all 35 turns in one thread and
+passed every follow-up. Its raw rubric score was 34/35: the citation answer
+said to leave unverified authors, title, venue, and identifier unknown, but
+the phrase check still required an explicit "do not invent" variant. Baseline
+version 1.2.11 accepts that bounded uncertainty wording; the raw 34/35 report
+remains unchanged.
+
+The next full v1.2.11/1.1.1 run also completed 35 turns in one thread and
+passed all five follow-ups. Its raw 34/35 score reflects one valid
+"impossible to identify" answer missed by the `missing-results` wording
+check. Baseline version 1.2.12 accepts that phrase, with the captured full
+answer retained as a regression; the historical score is not recalculated.
+
+Review of versions 1.2.12 and 1.1.1 found two possible false positives: a
+negated "leave authors unknown" phrase could accompany an invented author,
+and a project-brief answer could substitute evaluation or recommendation for
+comparison. Baseline version 1.2.13 rejects the negated uncertainty phrase;
+follow-up version 1.1.2 requires comparison language except for the observed
+concise object-only answer, and rejects ranking or recommendation. Adversarial
+examples cover both checks.
+
+Baseline version 1.2.14 narrows the citation negation check to a direct
+instruction to leave a metadata field unknown, so a warning against guessed
+metadata does not fail. Follow-up version 1.1.3 also catches contractions and
+wording such as "did not ask you to compare" when a project-brief recall
+negates the comparison. These grading changes do not alter earlier raw reports.
+
+To inspect the scenario without sending messages, omit `AGENT_QA_LIVE` and run
+`corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa:multi-turn --list`.
+
 Each case attaches a phase: `not-sent` if the question was not submitted,
 `sent` if submission occurred but a committed answer was not validated,
 `rendered-empty` if a committed answer contains no text, or `graded` with a
@@ -96,7 +168,10 @@ actual answer, rubric result, elapsed time, and thread URL. Browser failures
 retain a trace and screenshot. The rubric checks
 explicit concepts and forbidden phrases. It is repeatable and easy to audit,
 but it cannot detect every factual contradiction or substitute for human or
-model-based semantic review.
+model-based semantic review. In particular, an answer could say to leave
+authors unknown and later assign an invented author; the citation phrase check
+would pass. Inspect the attached answer before treating a passing citation
+grade as evidence that no metadata was invented.
 
 Concept checks ignore case and punctuation. They catch straightforward omissions and wrong answers, but cannot establish full factual correctness. The separate `tools/nous-playwright` workflow tests project creation, attachments, approval, and persistence in the actual NOUS workflow; this chat suite does not test those actions.
 
@@ -189,6 +264,14 @@ same study group. Version 1.2.8 limits the intervening words to relevant study
 modifiers and adds those false positives as regression tests. It remains a
 lexical check, so a full-answer grounding review is still needed. A targeted
 v1.2.8 live rerun of `next-research-step` passed.
+
+Version 1.2.9 accepts two complete answers from the first multi-turn run:
+"provisional" with verification against the "original paper" for an
+incomplete citation, and "old search tool" for the missing comparison group.
+That run graded 20 turns before the browser crashed when the test machine ran
+out of disk space; two otherwise valid answers missed the v1.2.8 wording
+checks. Its partial raw result remains unchanged and does not establish the
+outcome for the remaining fifteen turns.
 
 - Keep prompts short, self-contained, and independent of current events or tenant data.
 - Accept normal wording variants without requiring arbitrary answer length.
