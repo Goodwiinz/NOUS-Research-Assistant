@@ -127,6 +127,12 @@ describe('chat initialization route ownership', () => {
   });
 
   it('routes to the workspace-wide first thread when layout hydration resolves first', async () => {
+    window.history.replaceState(
+      { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: ['chat'] },
+      '',
+      '/chat'
+    );
+    const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
     const layout = renderHook(() => useChatPersistence());
     await waitFor(() =>
       expect(serviceMocks.listThreads).toHaveBeenCalledWith('conversation-1')
@@ -136,10 +142,36 @@ describe('chat initialization route ownership', () => {
     await waitFor(() => expect(chat.result.current.isInitializing).toBe(false));
 
     expect(useChatStore.getState().currentThreadId).toBe('thread-new');
-    expect(navigationMocks.replace).toHaveBeenCalledExactlyOnceWith(
+    expect(window.location.search).toBe('?thread=thread-new');
+    expect(replaceStateSpy).toHaveBeenCalledWith(
+      {},
+      '',
       '/chat?thread=thread-new'
     );
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
+    replaceStateSpy.mockRestore();
     layout.unmount();
+  });
+
+  it('keeps a new-chat intent when an earlier default-route sync finishes late', async () => {
+    const pendingRouteReplacements: string[] = [];
+    navigationMocks.replace.mockImplementation((url: string) => {
+      pendingRouteReplacements.push(url);
+    });
+    const chat = renderHook(() => useChatSession());
+
+    await waitFor(() => expect(chat.result.current.isInitializing).toBe(false));
+    expect(useChatStore.getState().currentThreadId).toBe('thread-new');
+
+    act(() => {
+      useChatStore.getState().setCurrentThread(null);
+      window.history.pushState({}, '', '/chat?new=1');
+    });
+    for (const url of pendingRouteReplacements) {
+      window.history.replaceState({}, '', url);
+    }
+
+    expect(window.location.search).toBe('?new=1');
   });
 
   it('waits for layout hydration before requesting workspace threads', async () => {
@@ -169,9 +201,8 @@ describe('chat initialization route ownership', () => {
       { page: 1, limit: 50 }
     );
     expect(useChatStore.getState().currentThreadId).toBe('thread-new');
-    expect(navigationMocks.replace).toHaveBeenCalledExactlyOnceWith(
-      '/chat?thread=thread-new'
-    );
+    expect(window.location.search).toBe('?thread=thread-new');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
     layout.unmount();
   });
 
@@ -206,9 +237,8 @@ describe('chat initialization route ownership', () => {
 
     await waitFor(() => expect(chat.result.current.isInitializing).toBe(false));
     expect(useChatStore.getState().currentThreadId).toBe('thread-selected');
-    expect(navigationMocks.replace).toHaveBeenCalledExactlyOnceWith(
-      '/chat?thread=thread-selected'
-    );
+    expect(window.location.search).toBe('?thread=thread-selected');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
   });
 
   it('keeps explicit new-chat intent despite cached threads', async () => {

@@ -305,9 +305,8 @@ describe('useChatSession bounded restoration', () => {
       hasMore: true,
       loadedCount: 50,
     });
-    expect(navigationMocks.replace).toHaveBeenCalledWith(
-      '/chat?thread=thread-old'
-    );
+    expect(window.location.search).toBe('?thread=thread-old');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
     expect(result.current.initError).toBeNull();
   });
 
@@ -399,9 +398,8 @@ describe('useChatSession bounded restoration', () => {
     await waitFor(() => expect(result.current.isInitializing).toBe(false));
     expect(result.current.initError).toBeNull();
     expect(chatStoreMocks.state.currentThreadId).toBe('thread-newer-selection');
-    expect(navigationMocks.replace).toHaveBeenCalledExactlyOnceWith(
-      '/chat?thread=thread-newer-selection'
-    );
+    expect(window.location.search).toBe('?thread=thread-newer-selection');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
   });
 
   it('does not wipe a newer turn when an initial deep link fails late', async () => {
@@ -488,8 +486,7 @@ describe('useChatSession bounded restoration', () => {
       'thread-off-page',
       'thread-newest',
     ]);
-    expect(navigationMocks.replace).toHaveBeenCalledWith(
-      '/chat?thread=thread-off-page'
-    );
+    expect(window.location.search).toBe('?thread=thread-off-page');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
   });
 });

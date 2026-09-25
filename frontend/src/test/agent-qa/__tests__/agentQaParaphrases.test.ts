@@ -394,6 +394,103 @@ describe('captured next-research-step regression from the 1.2.1 live run', () =>
   });
 });
 
+describe('captured next-research-step regression from the 1.2.2 live run', () => {
+  const testCase = dataset.cases.find(
+    (entry) => entry.id === 'next-research-step'
+  );
+  if (!testCase) throw new Error('Missing next-research-step case');
+
+  it.each([
+    'Conduct a larger-scale follow-up study with a substantially bigger and more diverse participant group to test whether the search tool’s apparent effectiveness generalizes beyond the initial small study.',
+    'Researchers should conduct a larger-scale evaluation of the search tool with a substantially bigger and more diverse participant group, using predefined measures of effectiveness and comparing results with an appropriate baseline. This would test whether the positive findings from the small study generalize beyond its limited sample.',
+  ])('accepts the observed larger-group follow-up: %s', (answer) => {
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+});
+
+describe('captured wording regressions from the 1.2.3 live run', () => {
+  it.each([
+    {
+      id: 'missing-results',
+      answer:
+        'It cannot be determined. The note says that researchers compared two search methods, but does not include their results, so there is no evidence that either method worked better.',
+    },
+    {
+      id: 'missing-comparison-group',
+      answer:
+        'The note is missing a comparison of how well the new and old tools performed—for example, accuracy, speed, satisfaction, or task success—not merely whether participants used them.',
+    },
+  ])('accepts the observed $id answer', ({ id, answer }) => {
+    const testCase = dataset.cases.find((entry) => entry.id === id);
+    if (!testCase) throw new Error(`Missing dataset case: ${id}`);
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+});
+
+describe('captured wording regressions from the 1.2.4 full live run', () => {
+  it.each([
+    {
+      id: 'missing-results',
+      answer:
+        'It cannot be determined. The note says that two search methods were compared, but it does not include the results needed to identify which one worked better.',
+    },
+    {
+      id: 'draft-research-note',
+      answer:
+        'Research Note\nFinding: In a study involving ten students, a search tool identified more relevant papers.\nLimitation: The sample size was small, so the finding may not generalize to broader student populations or other users.',
+    },
+    {
+      id: 'missing-comparison-group',
+      answer:
+        'The missing comparison is effectiveness or outcomes: it shows adoption of the new tool versus the old one, but not whether the new tool produced better results.',
+    },
+  ])('accepts the observed $id answer', ({ id, answer }) => {
+    const testCase = dataset.cases.find((entry) => entry.id === id);
+    if (!testCase) throw new Error(`Missing dataset case: ${id}`);
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+});
+
+describe('captured wording regressions from the 1.2.5 full live run', () => {
+  it.each([
+    {
+      id: 'missing-results',
+      answer:
+        'It cannot be determined. The note says researchers compared two search methods, but it does not report the results, so neither method can be identified as better.',
+    },
+    {
+      id: 'next-research-step',
+      answer:
+        'Researchers should conduct a larger-scale evaluation of the search tool with a more diverse group of participants to test whether its effectiveness holds beyond the initial small study.',
+    },
+  ])('accepts the observed $id answer', ({ id, answer }) => {
+    const testCase = dataset.cases.find((entry) => entry.id === id);
+    if (!testCase) throw new Error(`Missing dataset case: ${id}`);
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+});
+
+describe('captured larger-study wording from the 1.2.6 targeted live run', () => {
+  const testCase = dataset.cases.find(
+    (entry) => entry.id === 'next-research-step'
+  );
+  if (!testCase) throw new Error('Missing next-research-step case');
+
+  it('accepts modifiers between larger and follow-up study', () => {
+    const answer =
+      'Researchers should conduct a larger, well-powered follow-up study to test whether the search tool’s effectiveness generalizes beyond the initial small study.';
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+
+  it.each([
+    'Researchers should test a larger database with the same group.',
+    'Researchers should test a larger database using the original participants.',
+    'Researchers should test a larger database. The study is complete.',
+  ])('does not accept an unrelated larger item: %s', (answer) => {
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(false);
+  });
+});
+
 // Complete answers captured in the 2026-09-25 live run of dataset 1.2.1.
 describe('captured live paraphrases from the 2026-09-25 run', () => {
   it.each([

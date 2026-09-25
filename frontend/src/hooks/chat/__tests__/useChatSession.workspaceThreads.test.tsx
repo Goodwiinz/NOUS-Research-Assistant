@@ -195,7 +195,8 @@ describe('useChatSession workspace-wide thread pages', () => {
       page: 1,
       limit: 50,
     });
-    expect(navigationMocks.replace).toHaveBeenCalledTimes(1);
+    expect(window.location.search).toBe('?thread=thread-new');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
     expect(workspaceMocks.listThreads).not.toHaveBeenCalled();
     expect(
       result.current.conversations.map((item) => item.conversationId)
@@ -237,9 +238,8 @@ describe('useChatSession workspace-wide thread pages', () => {
     });
 
     await waitFor(() => expect(result.current.isInitializing).toBe(false));
-    expect(navigationMocks.replace).toHaveBeenCalledWith(
-      '/chat?thread=thread-layout'
-    );
+    expect(window.location.search).toBe('?thread=thread-layout');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
   });
 
   it('syncs a thread selected after bare chat initialization into the URL once', async () => {
@@ -247,15 +247,17 @@ describe('useChatSession workspace-wide thread pages', () => {
 
     await waitFor(() => expect(result.current.isInitializing).toBe(false));
     expect(navigationMocks.replace).not.toHaveBeenCalled();
+    const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
 
     act(() => {
       chatStoreMocks.state.currentThreadId = 'thread-layout';
       rerender();
     });
 
-    expect(navigationMocks.replace).toHaveBeenCalledExactlyOnceWith(
-      '/chat?thread=thread-layout'
-    );
+    expect(window.location.search).toBe('?thread=thread-layout');
+    expect(replaceStateSpy).toHaveBeenCalledOnce();
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
+    replaceStateSpy.mockRestore();
   });
 
   it('upserts an overlapping next page by thread id without duplicating rows', async () => {

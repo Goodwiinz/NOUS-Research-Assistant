@@ -1,5 +1,5 @@
 {
-  "version": "1.2.2",
+  "version": "1.2.8",
   "description": "Short, self-contained research-note questions for the NOUS chat workflow.",
   "cases": [
     {
@@ -129,6 +129,9 @@
             "results are missing",
             "results are not included",
             "does not include results",
+            "does not include the results",
+            "does not include their results",
+            "does not report the results",
             "doesn't include results",
             "results are absent",
             "results are not provided",
@@ -204,6 +207,7 @@
           [
             "small sample",
             "sample was small",
+            "sample size was small",
             "sample of ten students was small",
             "only ten students",
             "only 10 students"
@@ -227,9 +231,11 @@
             "larger participant group",
             "larger study",
             "larger scale study",
+            "larger scale evaluation",
             "larger cohort",
             "bigger group",
             "bigger and diverse participant group",
+            "bigger and more diverse participant group",
             "bigger sample",
             "more people",
             "larger trial",
@@ -237,6 +243,11 @@
             "more students"
           ],
           ["test", "study", "check", "evaluate", "replicate"]
+        ],
+        "requiredConceptPatterns": [
+          [
+            "\\b(?:larger|bigger)(?:\\s+(?:well|powered|follow|up|scale|more|diverse|and|participant)){0,4}\\s+(?:group|sample|study|evaluation|trial|cohort|participants?|people|students?)\\b"
+          ]
         ],
         "forbiddenPhrases": ["already tested with a larger group"]
       }
@@ -354,7 +365,9 @@
       "question": "Paper note: 'Everyone used the new search tool. Nobody used the old tool.' What comparison is missing?",
       "referenceAnswer": "A comparison with the old tool.",
       "criteria": {
-        "requiredConcepts": [["old tool", "previous tool", "original tool"]],
+        "requiredConcepts": [
+          ["old tool", "old tools", "old one", "previous tool", "original tool"]
+        ],
         "forbiddenPhrases": []
       }
     },
