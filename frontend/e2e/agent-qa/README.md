@@ -52,6 +52,7 @@ corepack pnpm@10.18.2 --dir tools/nous-playwright auth --headless
 AGENT_QA_LIVE=1 \
 AGENT_QA_BASE_URL=https://goodwiinz.tech \
 AGENT_QA_AUTH_STATE=../tools/nous-playwright/.auth/nous.json \
+AGENT_QA_RUN_LABEL=2026-09-25-full-v122 \
 corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa
 ```
 
@@ -70,6 +71,7 @@ AGENT_QA_LIVE=1 \
 AGENT_QA_BASE_URL=https://example.test \
 AGENT_QA_EMAIL=user@example.test \
 AGENT_QA_PASSWORD=secret \
+AGENT_QA_RUN_LABEL=example-run-1 \
 corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa
 ```
 
@@ -77,16 +79,21 @@ Without `AGENT_QA_LIVE=1`, the suite skips. With it enabled, a missing target,
 missing credentials, or unreadable state file fails immediately with a setup
 error. Existing `SMOKE_BASE_URL`, `SMOKE_USER_EMAIL`, and
 `SMOKE_USER_PASSWORD` settings also work. Credentials are never mixed between
-the Q&A and smoke namespaces.
+the Q&A and smoke namespaces. Live runs also require a new
+`AGENT_QA_RUN_LABEL` consisting of lowercase letters, digits, and single
+hyphens. Reusing a label with existing artifacts fails before the run begins.
 
 The password login runs once outside recorded test contexts. Each case then
 gets a fresh browser context and submits one turn to the live agent; the agent
 may make several model or tool calls for that turn. The resulting chat threads
 remain in the test account.
 
-Each completed turn attaches the prompt, reference answer, actual answer,
-rubric result, elapsed time, and thread URL to the Playwright report. Browser
-failures retain a trace and screenshot. The rubric checks
+Each case attaches a phase: `not-sent` if the question was not submitted,
+`sent` if submission occurred but a committed answer was not validated,
+`rendered-empty` if a committed answer contains no text, or `graded` with a
+separate pass/fail result. Graded turns attach the prompt, reference answer,
+actual answer, rubric result, elapsed time, and thread URL. Browser failures
+retain a trace and screenshot. The rubric checks
 explicit concepts and forbidden phrases. It is repeatable and easy to audit,
 but it cannot detect every factual contradiction or substitute for human or
 model-based semantic review.
@@ -95,6 +102,14 @@ Concept checks ignore case and punctuation. They catch straightforward omissions
 
 To inspect cases without making model calls, leave `AGENT_QA_LIVE` unset and
 run `corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa --list`.
+To verify report creation through a real Playwright worker without signing in
+or sending a question, run the offline report probe with a fresh label:
+
+```sh
+AGENT_QA_RUN_LABEL=offline-report-probe-1 \
+corepack pnpm@10.18.2 --dir frontend exec playwright test \
+  --config=playwright.agent-qa-report-probe.config.ts
+```
 
 ## Maintain the dataset
 
@@ -119,6 +134,18 @@ historical 26/30 score has not been recomputed or rewritten. These lexical
 checks still have limits: passing them does not prove that every statement in
 an answer is supported by the note.
 
+Version 1.2.2 keeps the same thirty prompts and accepts the equivalent wording
+observed in the 2026-09-25 live run. The captured project description used a
+valid form of "compare" but also introduced evaluation topics absent from the
+brief; that case now flags those observed additions. Phrase checks cannot
+exhaustively detect invented project scope. They can also flag a harmless
+negated caveat such as "the brief does not specify features or usability."
+Treat a project-scope phrase failure as a request for human review of the
+complete answer, not proof that the answer invented those topics. A passing
+phrase check is likewise not proof of grounding. Review the full answer.
+The original 25/30 raw result remains the record of that run; the new rubric
+needs its own live result before comparing scores.
+
 - Keep prompts short, self-contained, and independent of current events or tenant data.
 - Accept normal wording variants without requiring arbitrary answer length.
 - Update the semantic version when a case or rubric changes.
@@ -126,20 +153,21 @@ an answer is supported by the note.
 
 ## Rerun the citation case
 
-Use the saved session to rerun the citation case against the target deployment.
-This command keeps prior full-run artifacts by using separate output and report
-directories:
+Run against a build that contains these chat and rubric changes. Use the saved
+session to rerun the citation case, or select the five 2026-09-25 failures with
+`--grep 'incomplete-citation|next-research-step|draft-project-description|extract-paper-year|citation-author-year'`.
+Each run label writes JSON to `frontend/test-results/agent-qa-runs/<label>/results.json`,
+the HTML report to `frontend/playwright-agent-qa-report/runs/<label>/`, and
+traces/screenshots under the corresponding test-results directory. These
+locations preserve the original v1.2.1 result.
 
 ```sh
 AGENT_QA_LIVE=1 \
 AGENT_QA_BASE_URL=https://goodwiinz.tech \
 AGENT_QA_AUTH_STATE=../tools/nous-playwright/.auth/nous.json \
-PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-agent-qa-report/citation-fix \
-PLAYWRIGHT_HTML_OPEN=never \
+AGENT_QA_RUN_LABEL=2026-09-25-citation-v122 \
 corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa \
-  --grep incomplete-citation \
-  --output=test-results/agent-qa-citation \
-  --reporter=list,html
+  --grep incomplete-citation
 ```
 
 Inspect the actual answer as well as the rubric result. A valid answer must

@@ -393,3 +393,58 @@ describe('captured next-research-step regression from the 1.2.1 live run', () =>
     expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
   });
 });
+
+// Complete answers captured in the 2026-09-25 live run of dataset 1.2.1.
+describe('captured live paraphrases from the 2026-09-25 run', () => {
+  it.each([
+    {
+      id: 'incomplete-citation',
+      answer:
+        'Treat it as an incomplete, unverified reference. Check the original note or source for the authors, exact title, publication venue, date, and DOI/URL; verify these against a reliable bibliographic database. Until then, use a provisional label such as [incomplete reference; metadata unverified] and do not infer its publication type or missing details.',
+    },
+    {
+      id: 'next-research-step',
+      answer:
+        'Conduct a larger-scale follow-up study with a substantially bigger and diverse participant group to test whether the search tool’s effectiveness generalizes beyond the initial small study.',
+    },
+  ])('accepts the complete $id answer', ({ id, answer }) => {
+    const testCase = dataset.cases.find((entry) => entry.id === id);
+    if (!testCase) throw new Error(`Missing dataset case: ${id}`);
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+
+  it('accepts compares in a description limited to the brief', () => {
+    const testCase = dataset.cases.find(
+      (entry) => entry.id === 'draft-project-description'
+    );
+    if (!testCase) throw new Error('Missing project-description case');
+    expect(
+      gradeAgentAnswer(
+        'This project compares search tools used by librarians.',
+        testCase.criteria
+      ).passed
+    ).toBe(true);
+  });
+
+  it('flags the captured project description for topics absent from the brief', () => {
+    const testCase = dataset.cases.find(
+      (entry) => entry.id === 'draft-project-description'
+    );
+    if (!testCase) throw new Error('Missing project-description case');
+    const answer =
+      'This project compares search tools used by librarians, examining their features, usability, search effectiveness, and suitability for different research needs.';
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(false);
+  });
+
+  it('exposes the scope phrase check as a manual-review signal for negated caveats', () => {
+    const testCase = dataset.cases.find(
+      (entry) => entry.id === 'draft-project-description'
+    );
+    if (!testCase) throw new Error('Missing project-description case');
+    const answer =
+      'This project compares search tools used by librarians. The brief does not specify features or usability.';
+    const grade = gradeAgentAnswer(answer, testCase.criteria);
+    expect(grade.failures).toContain('contains forbidden phrase "features"');
+    expect(grade.failures).toContain('contains forbidden phrase "usability"');
+  });
+});

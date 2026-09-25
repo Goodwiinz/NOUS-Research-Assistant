@@ -75,7 +75,7 @@ interface UseChatPersistenceReturn {
   messages: UIMessage[];
 
   // Actions
-  initialize: () => Promise<void>;
+  initialize: (options?: { throwOnError?: boolean }) => Promise<void>;
   createNewChat: () => Promise<string | null>;
   selectConversation: (id: string) => void;
   sendMessage: (content: string) => Promise<UIMessage | null>;
@@ -392,272 +392,258 @@ export function useChatPersistence(): UseChatPersistenceReturn {
   }, [currentThreadId, storeMessages]);
 
   // Initialize workspace and conversation
-  const initialize = useCallback(async () => {
-    if (!isAuthenticated) {
-      debugLog(
-        '[useChatPersistence] Not authenticated, skipping initialization'
-      );
-      return;
-    }
+  const initialize = useCallback(
+    async (options?: { throwOnError?: boolean }) => {
+      if (!isAuthenticated) {
+        debugLog(
+          '[useChatPersistence] Not authenticated, skipping initialization'
+        );
+        return;
+      }
 
-    // Fast path: another consumer already finished init.
-    if (_initCompleted) {
-      initializationRef.current = { started: true, completed: true };
-      return;
-    }
+      // Fast path: another consumer already finished init.
+      if (_initCompleted) {
+        initializationRef.current = { started: true, completed: true };
+        return;
+      }
 
-    // First consumer through creates the shared promise. The assignment must
-    // happen synchronously (no `await` between the null-check and the
-    // assignment) so subsequent concurrent callers observe the same promise.
-    if (!_initInFlight) {
-      initializationRef.current.started = true;
+      // First consumer through creates the shared promise. The assignment must
+      // happen synchronously (no `await` between the null-check and the
+      // assignment) so subsequent concurrent callers observe the same promise.
+      if (!_initInFlight) {
+        initializationRef.current.started = true;
 
-      _initInFlight = (async () => {
-        // Keep the selection that existed when this shared initialization run
-        // began. A sidebar click can select a different thread while the
-        // conversation page is pending; that newer choice must survive the
-        // downstream reset performed by setCurrentConversation.
-        const threadSelectionAtInitializationStart =
-          useChatStore.getState().currentThreadId;
-        debugLog('[useChatPersistence] Starting initialization...');
-        let initialized = false;
-        let initializationError: unknown;
-        for (let attempt = 0; attempt < MAX_REINIT_RETRIES; attempt += 1) {
-          try {
-            await initializeDefaultWorkspace();
-            initialized = true;
-            break;
-          } catch (error) {
-            initializationError = error;
+        _initInFlight = (async () => {
+          // Keep the selection that existed when this shared initialization run
+          // began. A sidebar click can select a different thread while the
+          // conversation page is pending; that newer choice must survive the
+          // downstream reset performed by setCurrentConversation.
+          const threadSelectionAtInitializationStart =
+            useChatStore.getState().currentThreadId;
+          debugLog('[useChatPersistence] Starting initialization...');
+          let initialized = false;
+          let initializationError: unknown;
+          for (let attempt = 0; attempt < MAX_REINIT_RETRIES; attempt += 1) {
+            try {
+              await initializeDefaultWorkspace();
+              initialized = true;
+              break;
+            } catch (error) {
+              initializationError = error;
+            }
           }
-        }
 
-        if (!initialized) {
-          throw (
-            initializationError ?? new Error('Failed to initialize workspace')
-          );
-        }
+          if (!initialized) {
+            throw (
+              initializationError ?? new Error('Failed to initialize workspace')
+            );
+          }
 
-        const state = useChatStore.getState();
-        debugLog(
-          '[useChatPersistence] After initializeDefaultWorkspace, workspaceId:',
-          state.currentWorkspaceId
-        );
-
-        if (!state.currentWorkspaceId) {
-          throw new Error('Workspace initialization returned no workspace');
-        }
-
-        if (useChatStore.getState().error === 'Failed to load conversations') {
-          throw new Error('Failed to load conversations');
-        }
-
-        const updatedState = useChatStore.getState();
-        const workspaceConversations =
-          updatedState.conversations[state.currentWorkspaceId] || [];
-        debugLog(
-          '[useChatPersistence] Loaded conversations:',
-          workspaceConversations.length
-        );
-
-        let conversationId = updatedState.currentConversationId;
-        debugLog(
-          '[useChatPersistence] Current conversationId:',
-          conversationId
-        );
-
-        if (workspaceConversations.length > 0 && !conversationId) {
-          conversationId = workspaceConversations[0].id;
+          const state = useChatStore.getState();
           debugLog(
-            '[useChatPersistence] Setting first conversation:',
-            conversationId
-          );
-        } else if (workspaceConversations.length === 0) {
-          debugLog(
-            '[useChatPersistence] No conversations, creating new one...'
-          );
-          // Go through the deduped helper: useChatSession bootstraps the same
-          // default conversation concurrently, and an unguarded create here
-          // produced a second "New Chat" for every fresh user.
-          const newConv = await workspaceService.getOrCreateDefaultConversation(
+            '[useChatPersistence] After initializeDefaultWorkspace, workspaceId:',
             state.currentWorkspaceId
           );
-          if (!newConv) {
-            // Surface this as a real failure instead of silently locking in
-            // `_initCompleted = false` with no retry path for other waiters.
-            throw new Error('Failed to create default conversation');
+
+          if (!state.currentWorkspaceId) {
+            throw new Error('Workspace initialization returned no workspace');
           }
-          // The helper talks to the API directly, bypassing the store's
-          // createConversation — index it so the sidebar and the reverse
-          // lookup see it, exactly as a store-side create would have.
-          registerConversation(newConv, state.currentWorkspaceId);
-          conversationId = newConv.id;
-        }
 
-        if (!conversationId) {
-          throw new Error(
-            'Conversation initialization returned no conversation'
-          );
-        }
+          if (
+            useChatStore.getState().error === 'Failed to load conversations'
+          ) {
+            throw new Error('Failed to load conversations');
+          }
 
-        const urlParamsAtInitialization =
-          typeof window !== 'undefined'
-            ? new URLSearchParams(window.location.search)
-            : null;
-        const isNewChatAtInitialization =
-          urlParamsAtInitialization?.get('new') === '1';
-        const requestedThreadIdAtInitialization =
-          urlParamsAtInitialization?.get('thread');
-        // The chat route restores an explicit deep link in parallel with this
-        // layout initializer. `setCurrentConversation` normally clears the
-        // downstream thread selection, so remember a URL-owned selection that
-        // landed while the conversation read was in flight and restore it
-        // after that reset completes.
-        const selectedThreadBeforeConversationLoad =
-          requestedThreadIdAtInitialization
-            ? useChatStore.getState().currentThreadId
-            : null;
-        const selectionChangedDuringInitialization =
-          selectedThreadBeforeConversationLoad !== null &&
-          selectedThreadBeforeConversationLoad !==
-            threadSelectionAtInitializationStart;
-
-        await setCurrentConversation(conversationId);
-
-        debugLog(
-          '[useChatPersistence] Loaded threads for conversation:',
-          conversationId
-        );
-        if (useChatStore.getState().error === 'Failed to load threads') {
-          throw new Error('Failed to load threads');
-        }
-
-        const threadsState = useChatStore.getState();
-        const conversationThreads = threadsState.threads[conversationId] || [];
-        // A sidebar click or route change can land while the conversation's
-        // thread read is in flight. Re-read the URL and selection at the
-        // commit point so an old deep link cannot take ownership from that
-        // newer navigation, and so ?new=1 remains authoritative even when a
-        // stale thread query is still present beside it.
-        const liveUrlParams =
-          typeof window !== 'undefined'
-            ? new URLSearchParams(window.location.search)
-            : null;
-        const liveRequestedThreadId = liveUrlParams?.get('thread');
-        const liveIsNewChat = liveUrlParams?.get('new') === '1';
-        const selectedThreadAfterConversationLoad =
-          threadsState.currentThreadId;
-        const selectionStillOwned =
-          selectedThreadAfterConversationLoad === null ||
-          selectedThreadAfterConversationLoad ===
-            requestedThreadIdAtInitialization;
-        const newerSelectionBeforeConversationReset =
-          selectionChangedDuringInitialization &&
-          selectedThreadBeforeConversationLoad !==
-            requestedThreadIdAtInitialization
-            ? selectedThreadBeforeConversationLoad
-            : null;
-        const liveRouteStillOwnsSelection =
-          liveRequestedThreadId === requestedThreadIdAtInitialization ||
-          liveRequestedThreadId === newerSelectionBeforeConversationReset;
-        const shouldRestoreNewerSelection =
-          newerSelectionBeforeConversationReset !== null &&
-          !isNewChatAtInitialization &&
-          !liveIsNewChat &&
-          liveRouteStillOwnsSelection &&
-          selectedThreadAfterConversationLoad === null;
-        if (shouldRestoreNewerSelection) {
+          const updatedState = useChatStore.getState();
+          const workspaceConversations =
+            updatedState.conversations[state.currentWorkspaceId] || [];
           debugLog(
-            '[useChatPersistence] Restoring newer thread selection after conversation init:',
-            newerSelectionBeforeConversationReset
+            '[useChatPersistence] Loaded conversations:',
+            workspaceConversations.length
           );
-          setCurrentThread(newerSelectionBeforeConversationReset);
-        } else if (
-          requestedThreadIdAtInitialization &&
-          !isNewChatAtInitialization &&
-          liveRequestedThreadId === requestedThreadIdAtInitialization &&
-          !liveIsNewChat &&
-          selectedThreadBeforeConversationLoad ===
+
+          let conversationId = updatedState.currentConversationId;
+          debugLog(
+            '[useChatPersistence] Current conversationId:',
+            conversationId
+          );
+
+          if (workspaceConversations.length > 0 && !conversationId) {
+            conversationId = workspaceConversations[0].id;
+            debugLog(
+              '[useChatPersistence] Setting first conversation:',
+              conversationId
+            );
+          } else if (workspaceConversations.length === 0) {
+            debugLog(
+              '[useChatPersistence] No conversations, creating new one...'
+            );
+            // Go through the deduped helper: useChatSession bootstraps the same
+            // default conversation concurrently, and an unguarded create here
+            // produced a second "New Chat" for every fresh user.
+            const newConv =
+              await workspaceService.getOrCreateDefaultConversation(
+                state.currentWorkspaceId
+              );
+            if (!newConv) {
+              // Surface this as a real failure instead of silently locking in
+              // `_initCompleted = false` with no retry path for other waiters.
+              throw new Error('Failed to create default conversation');
+            }
+            // The helper talks to the API directly, bypassing the store's
+            // createConversation — index it so the sidebar and the reverse
+            // lookup see it, exactly as a store-side create would have.
+            registerConversation(newConv, state.currentWorkspaceId);
+            conversationId = newConv.id;
+          }
+
+          if (!conversationId) {
+            throw new Error(
+              'Conversation initialization returned no conversation'
+            );
+          }
+
+          const urlParamsAtInitialization =
+            typeof window !== 'undefined'
+              ? new URLSearchParams(window.location.search)
+              : null;
+          const isNewChatAtInitialization =
+            urlParamsAtInitialization?.get('new') === '1';
+          const requestedThreadIdAtInitialization =
+            urlParamsAtInitialization?.get('thread');
+          // `setCurrentConversation` normally clears the downstream thread
+          // selection. Remember a newer sidebar or deep-link selection that
+          // landed while the conversation read was in flight so it can survive
+          // that reset.
+          const selectedThreadBeforeConversationLoad =
+            useChatStore.getState().currentThreadId;
+          const selectionChangedDuringInitialization =
+            selectedThreadBeforeConversationLoad !== null &&
+            selectedThreadBeforeConversationLoad !==
+              threadSelectionAtInitializationStart;
+
+          await setCurrentConversation(conversationId);
+
+          debugLog(
+            '[useChatPersistence] Loaded threads for conversation:',
+            conversationId
+          );
+          if (useChatStore.getState().error === 'Failed to load threads') {
+            throw new Error('Failed to load threads');
+          }
+
+          const threadsState = useChatStore.getState();
+          // A sidebar click or route change can land while the conversation's
+          // thread read is in flight. Re-read the URL and selection at the
+          // commit point so an old deep link cannot take ownership from that
+          // newer navigation, and so ?new=1 remains authoritative even when a
+          // stale thread query is still present beside it.
+          const liveUrlParams =
+            typeof window !== 'undefined'
+              ? new URLSearchParams(window.location.search)
+              : null;
+          const liveRequestedThreadId = liveUrlParams?.get('thread');
+          const liveIsNewChat = liveUrlParams?.get('new') === '1';
+          const selectedThreadAfterConversationLoad =
+            threadsState.currentThreadId;
+          const selectionStillOwned =
+            selectedThreadAfterConversationLoad === null ||
+            selectedThreadAfterConversationLoad ===
+              requestedThreadIdAtInitialization;
+          const newerSelectionBeforeConversationReset =
+            selectionChangedDuringInitialization &&
+            selectedThreadBeforeConversationLoad !==
+              requestedThreadIdAtInitialization
+              ? selectedThreadBeforeConversationLoad
+              : null;
+          const liveRouteStillOwnsSelection =
+            liveRequestedThreadId === requestedThreadIdAtInitialization ||
+            liveRequestedThreadId === newerSelectionBeforeConversationReset;
+          const shouldRestoreNewerSelection =
+            newerSelectionBeforeConversationReset !== null &&
+            !isNewChatAtInitialization &&
+            !liveIsNewChat &&
+            liveRouteStillOwnsSelection &&
+            selectedThreadAfterConversationLoad === null;
+          if (shouldRestoreNewerSelection) {
+            debugLog(
+              '[useChatPersistence] Restoring newer thread selection after conversation init:',
+              newerSelectionBeforeConversationReset
+            );
+            setCurrentThread(newerSelectionBeforeConversationReset);
+          } else if (
             requestedThreadIdAtInitialization &&
-          selectionStillOwned &&
-          selectedThreadAfterConversationLoad !==
-            requestedThreadIdAtInitialization
-        ) {
-          debugLog(
-            '[useChatPersistence] Restoring deep-linked thread after conversation init:',
-            requestedThreadIdAtInitialization
-          );
-          setCurrentThread(requestedThreadIdAtInitialization);
-        }
-        // An explicit "new chat" (?new=1) must land on a blank composer.
-        // useChatSession already honors this; without the same check here
-        // this hook writes a stale thread id into the store, and the next
-        // send appends to that previous thread instead of starting a new
-        // one (and the URL never becomes ?thread=).
-        const hasExplicitThreadIntent = Boolean(liveRequestedThreadId);
-        if (
-          conversationThreads.length > 0 &&
-          !threadsState.currentThreadId &&
-          !liveIsNewChat &&
-          !hasExplicitThreadIntent
-        ) {
-          const firstThread = conversationThreads[0];
-          debugLog(
-            '[useChatPersistence] Selecting first thread:',
-            firstThread.id
-          );
-          setCurrentThread(firstThread.id); // This triggers loadMessages
-        }
-      })();
-
-      // Attach terminal handlers once. All awaiting consumers observe the
-      // same resolution; on failure we clear `_initInFlight` so a fresh mount
-      // can retry, but only after the failure has propagated to every
-      // current awaiter.
-      _initInFlight
-        .then(() => {
-          _initCompleted = true;
-          debugLog('[useChatPersistence] Initialization complete');
-        })
-        .catch((error) => {
-          console.error('[useChatPersistence] Initialization failed:', error);
-          const message =
-            error instanceof Error
-              ? error.message
-              : 'Failed to initialize workspace';
-          toast.error(message);
-        })
-        .finally(() => {
-          if (!_initCompleted) {
-            _initInFlight = null;
+            !isNewChatAtInitialization &&
+            liveRequestedThreadId === requestedThreadIdAtInitialization &&
+            !liveIsNewChat &&
+            selectedThreadBeforeConversationLoad ===
+              requestedThreadIdAtInitialization &&
+            selectionStillOwned &&
+            selectedThreadAfterConversationLoad !==
+              requestedThreadIdAtInitialization
+          ) {
+            debugLog(
+              '[useChatPersistence] Restoring deep-linked thread after conversation init:',
+              requestedThreadIdAtInitialization
+            );
+            setCurrentThread(requestedThreadIdAtInitialization);
           }
-        });
-    }
+          // The chat page owns default thread selection across the workspace.
+          // This conversation-scoped read only hydrates its cache.
+        })();
 
-    // Every consumer (including the one that just created the promise) awaits
-    // the same outcome so `initializationRef.current.completed` reflects real
-    // state. Errors are already surfaced by the owning `.catch` above, so
-    // swallow here to avoid double-reporting.
-    initializationRef.current.started = true;
-    try {
-      await _initInFlight;
-      if (_initCompleted) {
-        initializationRef.current.completed = true;
-      } else {
-        // Init resolved without completing (e.g., no workspaceId) or was
-        // aborted; allow a later explicit retry.
-        initializationRef.current.started = false;
+        // Attach terminal handlers once. All awaiting consumers observe the
+        // same resolution; on failure we clear `_initInFlight` so a fresh mount
+        // can retry, but only after the failure has propagated to every
+        // current awaiter.
+        _initInFlight
+          .then(() => {
+            _initCompleted = true;
+            debugLog('[useChatPersistence] Initialization complete');
+          })
+          .catch((error) => {
+            console.error('[useChatPersistence] Initialization failed:', error);
+            const message =
+              error instanceof Error
+                ? error.message
+                : 'Failed to initialize workspace';
+            toast.error(message);
+          })
+          .finally(() => {
+            if (!_initCompleted) {
+              _initInFlight = null;
+            }
+          });
       }
-    } catch {
-      initializationRef.current.started = false;
-    }
-  }, [
-    isAuthenticated,
-    initializeDefaultWorkspace,
-    setCurrentConversation,
-    setCurrentThread,
-    registerConversation,
-  ]);
+
+      // Every consumer (including the one that just created the promise) awaits
+      // the same outcome so `initializationRef.current.completed` reflects real
+      // state. Errors are already surfaced by the owning `.catch` above, so
+      // swallow here to avoid double-reporting.
+      initializationRef.current.started = true;
+      try {
+        await _initInFlight;
+        if (_initCompleted) {
+          initializationRef.current.completed = true;
+        } else {
+          // Init resolved without completing (e.g., no workspaceId) or was
+          // aborted; allow a later explicit retry.
+          initializationRef.current.started = false;
+        }
+      } catch (error) {
+        initializationRef.current.started = false;
+        if (options?.throwOnError) throw error;
+      }
+    },
+    [
+      isAuthenticated,
+      initializeDefaultWorkspace,
+      setCurrentConversation,
+      setCurrentThread,
+      registerConversation,
+    ]
+  );
 
   // Create new chat (thread)
   const createNewChat = useCallback(async (): Promise<string | null> => {
