@@ -392,34 +392,29 @@ test.describe('Sidebar Navigation', () => {
   });
 
   /**
-   * Wait for the sidebar to be ready.
+   * Wait for the primary rail to be ready.
    * The dashboard page has an 800ms artificial loading spinner.
-   * We wait for a known nav link (/documents) to appear, which exists in both
-   * expanded and collapsed (icon-only) sidebar states.
+   * A labelled Documents link is present in the knowledge section once the
+   * rail has mounted.
    */
   async function waitForSidebar(page: Page) {
-    // Any visible link to /documents signals the sidebar is mounted
-    await page.waitForSelector('a[href="/documents"]', { timeout: 15000 });
+    await page.waitForSelector(
+      'aside[aria-label="Primary"] a[aria-label="Documents"]',
+      { timeout: 15000 }
+    );
     await page.waitForTimeout(200);
   }
 
-  test('sidebar shows all four nav sections', async ({ page }) => {
+  test('sidebar shows the three ordered nav sections', async ({ page }) => {
     await page.goto(`${BASE_URL}/dashboard`);
     await waitForSidebar(page);
 
-    // Use getByText with exact string to avoid regex flag issues with "//"
+    const primary = page.getByRole('complementary', { name: 'Primary' });
+    await expect(primary.getByRole('group', { name: 'Main' })).toBeVisible();
     await expect(
-      page.getByText('// MAIN', { exact: true }).first()
+      primary.getByRole('group', { name: 'Knowledge' })
     ).toBeVisible();
-    await expect(
-      page.getByText('// DOCUMENTS', { exact: true }).first()
-    ).toBeVisible();
-    await expect(
-      page.getByText('// RESEARCH', { exact: true }).first()
-    ).toBeVisible();
-    await expect(
-      page.getByText('// SYSTEM', { exact: true }).first()
-    ).toBeVisible();
+    await expect(primary.getByRole('group', { name: 'System' })).toBeVisible();
 
     await page.screenshot({
       path: 'test-results/screenshots/05-sidebar-sections.png',
@@ -460,39 +455,16 @@ test.describe('Sidebar Navigation', () => {
     });
   });
 
-  test('clicks through DOCUMENTS nav items and verifies page load', async ({
+  test('clicks through KNOWLEDGE nav items and verifies page load', async ({
     page,
   }) => {
     const navItems = [
-      { label: 'All Documents', url: /\/documents$/ },
+      { label: 'Documents', url: /\/documents$/ },
       { label: 'Upload', url: /\/documents\/upload/ },
-      { label: 'Entities', url: /\/entities/ },
-    ];
-
-    for (const item of navItems) {
-      await page.goto(`${BASE_URL}/dashboard`);
-      await waitForSidebar(page);
-
-      await page
-        .getByRole('link', { name: item.label, exact: true })
-        .first()
-        .click();
-      await page.waitForURL(item.url, { timeout: 15000 });
-      await expect(page).toHaveURL(item.url);
-
-      await page.screenshot({
-        path: `test-results/screenshots/05-nav-${item.label.replace(/\s+/g, '-').toLowerCase()}.png`,
-        fullPage: false,
-      });
-    }
-  });
-
-  test('clicks through RESEARCH nav items and verifies page load', async ({
-    page,
-  }) => {
-    const navItems = [
       { label: 'ArXiv Papers', url: /\/arxiv/ },
+      { label: 'Entities', url: /\/entities/ },
       { label: 'Research', url: /\/research/ },
+      { label: 'Research Engine', url: /\/research-engine/ },
     ];
 
     for (const item of navItems) {
