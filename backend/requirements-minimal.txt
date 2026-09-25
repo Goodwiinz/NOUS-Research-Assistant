@@ -23,11 +23,11 @@ PyJWT>=2.13.0  # CVE-2026-48526 (GHSA-xgmm-8j9v-c9wx)
 
 # Background Processing
 celery==5.6.3
-redis==5.0.1
+redis==8.1.0
 
 # Vector Database (using compatible versions with pre-built wheels)
 qdrant-client==1.19.0
-numpy<2
+numpy<3
 
 # Knowledge Graph
 neo4j==6.3.0
@@ -36,7 +36,7 @@ neo4j==6.3.0
 PyMuPDF==1.28.2
 Pillow>=12.2.0
 python-magic==0.4.27
-aiofiles==23.2.1
+aiofiles==25.1.0
 
 # HTTP Client
 httpx==0.28.1
@@ -49,16 +49,16 @@ python-dotenv==1.2.3
 pytest>=9.0.3
 pytest-asyncio==1.4.0
 black==26.5.1
-isort==5.12.0
+isort==9.0.1
 
 # Monitoring
 prometheus-client==0.26.0
 
 # Utilities
 click==8.5.0
-rich==13.7.0
+rich==15.0.0
 typer==0.27.2
 
 # Testing
 pytest-cov==7.1.0
-faker==20.1.0
+faker==40.39.0
