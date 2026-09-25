@@ -1,10 +1,14 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { resolveAgentQaConfig } from '../agentQaConfig';
+import {
+  assertAgentQaRunLocationAvailable,
+  resolveAgentQaConfig,
+  resolveAgentQaReportPaths,
+} from '../agentQaConfig';
 
 const temporaryDirectories: string[] = [];
 function stateDirectory(): string {
@@ -134,5 +138,79 @@ describe('resolveAgentQaConfig', () => {
     ).toThrow(
       'AGENT_QA_BASE_URL must be an HTTP(S) origin without embedded credentials'
     );
+  });
+});
+
+describe('resolveAgentQaReportPaths', () => {
+  it('requires a separate, named output location for live runs', () => {
+    expect(() => resolveAgentQaReportPaths({ AGENT_QA_LIVE: '1' })).toThrow(
+      'AGENT_QA_RUN_LABEL'
+    );
+  });
+
+  it('keeps all report files outside the historical result paths', () => {
+    expect(
+      resolveAgentQaReportPaths({
+        AGENT_QA_LIVE: '1',
+        AGENT_QA_RUN_LABEL: '2026-09-25-targeted-v122',
+      })
+    ).toEqual({
+      outputDir: './test-results/agent-qa-runs/2026-09-25-targeted-v122',
+      htmlOutputFolder:
+        'playwright-agent-qa-report/runs/2026-09-25-targeted-v122',
+      jsonOutputFile:
+        'test-results/agent-qa-runs/2026-09-25-targeted-v122/results.json',
+    });
+  });
+
+  it.each(['../old', 'same/name', '-bad', 'BAD', '', 'offline-list'])(
+    'rejects an unsafe or unlabelled live output: %s',
+    (label) => {
+      expect(() =>
+        resolveAgentQaReportPaths({
+          AGENT_QA_LIVE: '1',
+          AGENT_QA_RUN_LABEL: label,
+        })
+      ).toThrow('AGENT_QA_RUN_LABEL');
+    }
+  );
+
+  it('uses disposable offline paths when just listing cases', () => {
+    expect(resolveAgentQaReportPaths({})).toEqual({
+      outputDir: './test-results/agent-qa-runs/offline-list',
+      htmlOutputFolder: 'playwright-agent-qa-report/runs/offline-list',
+      jsonOutputFile: 'test-results/agent-qa-runs/offline-list/results.json',
+    });
+  });
+
+  it('refuses to overwrite artifacts from a previous live run', () => {
+    const directory = stateDirectory();
+    mkdirSync(join(directory, 'test-results/agent-qa-runs/previous'), {
+      recursive: true,
+    });
+    const environment = {
+      AGENT_QA_LIVE: '1',
+      AGENT_QA_RUN_LABEL: 'previous',
+    };
+    const paths = resolveAgentQaReportPaths(environment);
+    expect(() =>
+      assertAgentQaRunLocationAvailable(paths, environment, directory)
+    ).toThrow('AGENT_QA_RUN_LABEL already has artifacts');
+  });
+
+  it('allows a worker to reuse its coordinator-created output directory', () => {
+    const directory = stateDirectory();
+    const environment = {
+      AGENT_QA_LIVE: '1',
+      AGENT_QA_RUN_LABEL: 'worker-run',
+    };
+    const paths = resolveAgentQaReportPaths(environment);
+    mkdirSync(join(directory, paths.outputDir), { recursive: true });
+
+    const workerEnvironment = { ...environment, TEST_WORKER_INDEX: '0' };
+    expect(resolveAgentQaReportPaths(workerEnvironment)).toEqual(paths);
+    expect(() =>
+      assertAgentQaRunLocationAvailable(paths, workerEnvironment, directory)
+    ).not.toThrow();
   });
 });

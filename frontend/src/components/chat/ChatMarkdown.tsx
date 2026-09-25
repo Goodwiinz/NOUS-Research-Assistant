@@ -199,21 +199,27 @@ export function ChatMarkdown({
   remarkPlugins,
   components,
 }: ChatMarkdownProps): React.ReactElement {
+  // CommonMark treats a bare "2022." as an ordered list with an empty item.
+  // The year then appears only as a CSS marker, so it cannot be copied,
+  // quoted, or found by text-based browser checks.
+  const renderContent = /^\s*\d+\.\s*$/.test(content)
+    ? content.replace(/(\d+)\./, '$1\\.')
+    : content;
   const plain = (
     <PlainMarkdown
-      content={content}
+      content={renderContent}
       inline={inline}
       freshTail={freshTail}
       remarkPlugins={remarkPlugins}
       components={components}
     />
   );
-  if (!MATH_DELIMITERS.test(content)) return plain;
+  if (!MATH_DELIMITERS.test(renderContent)) return plain;
 
   return (
     <React.Suspense fallback={plain}>
       <ChatMarkdownMath
-        content={content}
+        content={renderContent}
         inline={inline}
         freshTail={freshTail}
         remarkPlugins={remarkPlugins}

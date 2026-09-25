@@ -1,5 +1,5 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Short, self-contained research-note questions for the NOUS chat workflow.",
   "cases": [
     {
@@ -157,12 +157,14 @@
             "should not fabricate",
             "should not invent",
             "do not assign",
+            "do not infer",
             "rather than guessing",
             "without inventing"
           ],
           ["incomplete", "insufficient"],
           [
             "original source",
+            "check the original note or source",
             "locate the source",
             "find the source",
             "request",
@@ -227,6 +229,7 @@
             "larger scale study",
             "larger cohort",
             "bigger group",
+            "bigger and diverse participant group",
             "bigger sample",
             "more people",
             "larger trial",
@@ -455,11 +458,16 @@
       "referenceAnswer": "Compare the search tools librarians use.",
       "criteria": {
         "requiredConcepts": [
-          ["compare", "comparison", "comparing"],
+          ["compare", "compares", "comparison", "comparing"],
           ["search tools", "search tool"],
           ["librarians", "librarian"]
         ],
-        "forbiddenPhrases": []
+        "forbiddenPhrases": [
+          "features",
+          "usability",
+          "search effectiveness",
+          "suitability"
+        ]
       }
     },
     {

@@ -9,8 +9,14 @@ const workspaceMocks = vi.hoisted(() => ({
   getThread: vi.fn(),
 }));
 
+const persistenceMocks = vi.hoisted(() => ({
+  initialize: vi.fn().mockResolvedValue(undefined),
+}));
+
 const chatStoreMocks = vi.hoisted(() => {
   const state = {
+    currentWorkspaceId: 'workspace-1',
+    currentConversationId: 'conv-1',
     currentThreadId: null as string | null,
     messages: {} as Record<string, []>,
     addMessageToStore: vi.fn(),
@@ -46,6 +52,10 @@ vi.mock('@/services/workspaceService', () => ({
   workspaceService: workspaceMocks,
 }));
 
+vi.mock('@/hooks/useChatPersistence', () => ({
+  useChatPersistence: () => ({ initialize: persistenceMocks.initialize }),
+}));
+
 vi.mock('@/store/chat-store', () => ({
   useChatStore: chatStoreMocks.useStore,
 }));
@@ -59,6 +69,10 @@ import { useChatSession } from '@/hooks/chat/useChatSession';
 describe('useChatSession watchdog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    window.history.replaceState({}, '', '/chat');
+    chatStoreMocks.state.currentWorkspaceId = 'workspace-1';
+    chatStoreMocks.state.currentConversationId = 'conv-1';
+    chatStoreMocks.state.error = null;
     chatStoreMocks.state.currentThreadId = null;
     chatStoreMocks.state.setCurrentThread.mockImplementation(
       (threadId: string | null) => {

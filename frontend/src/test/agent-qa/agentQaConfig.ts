@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export type AgentQaConfig =
@@ -8,6 +8,62 @@ export type AgentQaConfig =
       baseURL: string;
       auth: { storageState: string } | { email: string; password: string };
     };
+
+export interface AgentQaReportPaths {
+  outputDir: string;
+  htmlOutputFolder: string;
+  jsonOutputFile: string;
+}
+
+/** Keep live run artifacts separate from each other and the historical report. */
+export function resolveAgentQaReportPaths(
+  environment: NodeJS.ProcessEnv = process.env
+): AgentQaReportPaths {
+  const live = environment.AGENT_QA_LIVE === '1';
+  const runLabel = live
+    ? (environment.AGENT_QA_RUN_LABEL ?? '').trim()
+    : 'offline-list';
+  if (
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(runLabel) ||
+    runLabel.length > 80 ||
+    (live && runLabel === 'offline-list')
+  ) {
+    throw new Error(
+      'Set AGENT_QA_RUN_LABEL to a new lowercase, hyphen-separated run name.'
+    );
+  }
+
+  const outputDir = `./test-results/agent-qa-runs/${runLabel}`;
+  const htmlOutputFolder = `playwright-agent-qa-report/runs/${runLabel}`;
+  return {
+    outputDir,
+    htmlOutputFolder,
+    jsonOutputFile: `test-results/agent-qa-runs/${runLabel}/results.json`,
+  };
+}
+
+/** Check collisions only in Playwright's coordinator, before it creates outputDir. */
+export function assertAgentQaRunLocationAvailable(
+  paths: AgentQaReportPaths,
+  environment: NodeJS.ProcessEnv = process.env,
+  baseDirectory = process.cwd()
+): void {
+  if (
+    environment.AGENT_QA_LIVE !== '1' ||
+    environment.TEST_WORKER_INDEX !== undefined
+  ) {
+    return;
+  }
+  if (
+    [paths.outputDir, paths.htmlOutputFolder].some((directory) =>
+      existsSync(resolve(baseDirectory, directory))
+    )
+  ) {
+    throw new Error(
+      'AGENT_QA_RUN_LABEL already has artifacts. Choose a new run name.'
+    );
+  }
+}
 
 /** Resolve the same configuration in the Playwright runner and its workers. */
 export function resolveAgentQaConfig(

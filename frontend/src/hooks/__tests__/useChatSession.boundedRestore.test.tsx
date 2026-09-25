@@ -11,6 +11,10 @@ const navigationMocks = vi.hoisted(() => ({
   isNew: false,
 }));
 
+const persistenceMocks = vi.hoisted(() => ({
+  initialize: vi.fn().mockResolvedValue(undefined),
+}));
+
 const workspaceMocks = vi.hoisted(() => ({
   getOrCreateDefaultWorkspace: vi.fn(),
   getOrCreateDefaultConversation: vi.fn(),
@@ -22,6 +26,8 @@ const workspaceMocks = vi.hoisted(() => ({
 
 const chatStoreMocks = vi.hoisted(() => {
   const state = {
+    currentWorkspaceId: 'workspace-1',
+    currentConversationId: 'conv-1',
     currentThreadId: null as string | null,
     messages: {} as Record<string, ChatMessage[]>,
     addMessageToStore: vi.fn(),
@@ -68,6 +74,10 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/services/workspaceService', () => ({
   workspaceService: workspaceMocks,
+}));
+
+vi.mock('@/hooks/useChatPersistence', () => ({
+  useChatPersistence: () => ({ initialize: persistenceMocks.initialize }),
 }));
 
 vi.mock('@/store/chat-store', () => ({
@@ -148,6 +158,9 @@ describe('useChatSession bounded restoration', () => {
     localStorage.clear();
     navigationMocks.threadId = null;
     navigationMocks.isNew = false;
+    window.history.replaceState({}, '', '/chat');
+    chatStoreMocks.state.currentWorkspaceId = 'workspace-1';
+    chatStoreMocks.state.currentConversationId = 'conv-1';
     chatStoreMocks.state.currentThreadId = null;
     chatStoreMocks.state.setCurrentThread.mockImplementation(
       (threadId: string | null) => {
@@ -386,7 +399,9 @@ describe('useChatSession bounded restoration', () => {
     await waitFor(() => expect(result.current.isInitializing).toBe(false));
     expect(result.current.initError).toBeNull();
     expect(chatStoreMocks.state.currentThreadId).toBe('thread-newer-selection');
-    expect(navigationMocks.replace).not.toHaveBeenCalled();
+    expect(navigationMocks.replace).toHaveBeenCalledExactlyOnceWith(
+      '/chat?thread=thread-newer-selection'
+    );
   });
 
   it('does not wipe a newer turn when an initial deep link fails late', async () => {
