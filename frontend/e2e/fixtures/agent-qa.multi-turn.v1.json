@@ -1,0 +1,83 @@
+{
+  "version": "1.1.3",
+  "description": "Follow-up questions anchored to records supplied earlier in the same chat.",
+  "cases": [
+    {
+      "id": "recall-search-paper-author",
+      "category": "context-recall",
+      "afterCaseId": "extract-paper-author",
+      "question": "Earlier in this conversation I gave a paper record titled 'Finding Useful Papers'. Who was its author? Use only that supplied record.",
+      "referenceAnswer": "Maya Chen.",
+      "criteria": {
+        "requiredConcepts": [["Maya Chen"]],
+        "forbiddenPhrases": ["Alex Rivera", "Jordan Lee"]
+      }
+    },
+    {
+      "id": "recall-summary-paper-year",
+      "category": "context-recall",
+      "afterCaseId": "extract-paper-year",
+      "question": "Earlier I gave a paper record titled 'Reading with Summaries'. What year was listed for it? Include the word 'Year' in your answer, and use only that record.",
+      "referenceAnswer": "Year: 2022.",
+      "criteria": {
+        "requiredConcepts": [["2022"], ["Year"]],
+        "forbiddenPhrases": ["2020", "2023", "2024"]
+      }
+    },
+    {
+      "id": "recall-project-brief",
+      "category": "context-recall",
+      "afterCaseId": "draft-project-description",
+      "question": "What did my earlier project brief ask me to compare? Keep to the brief's scope.",
+      "referenceAnswer": "Compare search tools used by librarians.",
+      "criteria": {
+        "requiredConcepts": [
+          ["compare", "compares", "comparison", "comparing"],
+          ["search tools", "search tool"],
+          ["librarians", "librarian"]
+        ],
+        "requiredConceptPatterns": [
+          ["^(?:the )?search tools used by librarians$"]
+        ],
+        "forbiddenPhrases": [
+          "features",
+          "usability",
+          "search effectiveness",
+          "suitability",
+          "not compare",
+          "not ask to compare",
+          "rank",
+          "recommend"
+        ],
+        "forbiddenPatterns": [
+          {
+            "pattern": "\\b(?:do|does|did|should|must)\\s+not\\s+(?:ask\\s+(?:you\\s+)?to\\s+)?compar(?:e|es|ing)\\b|\\b(?:don['’]t|doesn['’]t|didn['’]t)\\s+(?:ask\\s+(?:you\\s+)?to\\s+)?compar(?:e|es|ing)\\b|\\bask(?:ed|s)?\\s+(?:you\\s+)?not\\s+to\\s+compar(?:e|es|ing)\\b",
+            "reason": "negates the comparison requested by the project brief"
+          }
+        ]
+      }
+    },
+    {
+      "id": "correct-search-paper-author",
+      "category": "context-correction",
+      "afterCaseId": "extract-paper-author",
+      "question": "Correction to my earlier record for 'Finding Useful Papers': the author is Jordan Lee. Who should we list as its author now? Answer with only the current name.",
+      "referenceAnswer": "Jordan Lee.",
+      "criteria": {
+        "requiredConcepts": [["Jordan Lee"]],
+        "forbiddenPhrases": ["Maya Chen", "Alex Rivera"]
+      }
+    },
+    {
+      "id": "recall-corrected-record",
+      "category": "context-correction",
+      "afterCaseId": "extract-study-duration",
+      "question": "For 'Finding Useful Papers', give the current author and year from this conversation. Use the correction and answer with only the current details.",
+      "referenceAnswer": "Jordan Lee, 2023.",
+      "criteria": {
+        "requiredConcepts": [["Jordan Lee"], ["2023"]],
+        "forbiddenPhrases": ["Maya Chen", "Alex Rivera", "2022", "2024"]
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "version": "1.2.8",
+  "version": "1.2.14",
   "description": "Short, self-contained research-note questions for the NOUS chat workflow.",
   "cases": [
     {
@@ -114,6 +114,7 @@
             "cannot determine",
             "impossible to determine",
             "cannot identify",
+            "impossible to identify",
             "can't determine",
             "cannot be determined",
             "can't be determined",
@@ -123,7 +124,8 @@
             "does not say",
             "doesn't say",
             "not enough information",
-            "unknown"
+            "unknown",
+            "cannot establish"
           ],
           [
             "results are missing",
@@ -162,11 +164,13 @@
             "do not assign",
             "do not infer",
             "rather than guessing",
-            "without inventing"
+            "without inventing",
+            "unknown until confirmed"
           ],
-          ["incomplete", "insufficient"],
+          ["incomplete", "insufficient", "provisional"],
           [
             "original source",
+            "original paper",
             "check the original note or source",
             "locate the source",
             "find the source",
@@ -183,8 +187,17 @@
           ["author", "authors"],
           ["doi", "identifier", "journal", "venue"]
         ],
+        "requiredConceptPatterns": [
+          [
+            "\\b(?:leave|keep) (?:the )?(?:authors?|title|venue|doi|identifier|publication status)(?: [a-z0-9]+){0,18} unknown\\b"
+          ]
+        ],
         "forbiddenPhrases": ["smith et al.", "nature 2021"],
         "forbiddenPatterns": [
+          {
+            "pattern": "\\b(?:do\\s+not|don['’]t|should\\s+not|must\\s+not|never)\\s+(?:leave|keep)\\s+(?:the\\s+)?(?:authors?|doi|identifier|title|venue|publication\\s+status|metadata)(?:\\s*(?:,|and|or)\\s*(?:the\\s+)?(?:authors?|doi|identifier|title|venue|publication\\s+status|metadata))*\\s+unknown\\b",
+            "reason": "instructs filling unverified citation details"
+          },
           {
             "pattern": "(?:^|\\n)\\s*(?:(?:[-*+]\\s+|\\d+[.)]\\s+|>\\s*))?(?:(?:reference(?: list)?|citation)\\s*:\\s*)?(?:deep learning survey[.,]?\\s*\\(2021\\)[.,]?\\s*)?\\[?unpublished\\s+(?:manuscript(?:/note)?|note)\\b",
             "reason": "unverified publication status in the proposed citation"
@@ -366,7 +379,14 @@
       "referenceAnswer": "A comparison with the old tool.",
       "criteria": {
         "requiredConcepts": [
-          ["old tool", "old tools", "old one", "previous tool", "original tool"]
+          [
+            "old tool",
+            "old tools",
+            "old one",
+            "previous tool",
+            "original tool",
+            "old search tool"
+          ]
         ],
         "forbiddenPhrases": []
       }
