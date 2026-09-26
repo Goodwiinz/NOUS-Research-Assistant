@@ -13,7 +13,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, cast
 from uuid import UUID
 
 # Matches the trailing ``vN`` revision suffix arXiv appends to paper IDs
@@ -1729,20 +1729,15 @@ def _operation_error(message: str, category: str, **fields: Any) -> Dict[str, An
 
 
 def _tool_error_content(tool_error: Any, source: Dict[str, Any] | None = None) -> str:
-    """Serialize a classified error while retaining safe durable outcome data."""
-    payload = tool_error.to_payload()
-    for key in (
-        "error_category",
-        "status",
-        "automatic_retry_allowed",
-        "retry_guidance",
-        "restart_with_new_turn",
-        "operation_id",
-    ):
-        value = (source or {}).get(key)
-        if isinstance(value, (str, bool, int)):
-            payload[key] = value[:512] if isinstance(value, str) else value
-    return json.dumps(payload)
+    """Serialize the authoritative bounded observation without reshaping it.
+
+    Graph error classification is carried separately in ``error_info``. The
+    observation itself may contain protected task/artifact IDs and coverage
+    metadata needed by downstream status recovery, so replacing it with a
+    second error envelope would destroy the only saved evidence.
+    """
+    payload = source if isinstance(source, dict) else tool_error.to_payload()
+    return json.dumps(_cap_tool_result(payload), ensure_ascii=False)
 
 
 async def _execute_local_operation(
@@ -1839,21 +1834,49 @@ async def _execute_external_operation(
             if recovered.get("_terminal_status"):
                 result = dict(recovered)
                 result.pop("_terminal_status", None)
-                if claim.owner_token is not None:
+                bounded_result = cast(Dict[str, Any], _cap_tool_result(result))
+                if claim.owner_token is None:
+                    return _uncertain_draft_recovery_result(
+                        bounded_result, claim.result
+                    )
+                try:
+                    async with tool_session() as session:
+                        async with session.begin():
+                            await complete_operation(
+                                session, key, claim.owner_token, bounded_result
+                            )
+                except Exception:
+                    logger.error(
+                        "recovered draft status could not be recorded",
+                        exc_info=True,
+                    )
+                    # A concurrent recovery may have committed successfully
+                    # even though our owner-token CAS lost. Read through the
+                    # normal scoped claim path and only return a same-identity
+                    # committed winner.
                     try:
                         async with tool_session() as session:
                             async with session.begin():
-                                await complete_operation(
-                                    session, key, claim.owner_token, result
+                                winner = await claim_operation(
+                                    session, key, external=True
                                 )
+                        if (
+                            winner.status == "completed"
+                            and winner.same_identity
+                            and winner.result is not None
+                        ):
+                            return winner.result
                     except Exception:
                         logger.error(
-                            "recovered draft status could not be recorded",
+                            "committed draft recovery winner could not be read",
                             exc_info=True,
                         )
-                return result
+                    return _uncertain_draft_recovery_result(
+                        bounded_result, claim.result
+                    )
+                return bounded_result
             recovered.pop("_terminal_status", None)
-            return recovered
+            return cast(Dict[str, Any], _cap_tool_result(recovered))
         return claim.result or _operation_error(
             "This operation is still in progress or its dispatch is not yet known.",
             "operation_pending",
@@ -1873,11 +1896,15 @@ async def _execute_external_operation(
             "The operation claim has no dispatch owner.", "operation_claim_invalid"
         )
 
+    dispatch_recorded = False
+
     async def _record_draft_dispatch(payload: Dict[str, Any]) -> None:
+        nonlocal dispatch_recorded
         bounded_payload = _cap_tool_result(payload)
         async with tool_session() as session:
             async with session.begin():
                 await record_dispatch(session, key, claim.owner_token, bounded_payload)
+        dispatch_recorded = True
 
     try:
         result = await _dispatch_tool(
@@ -1895,6 +1922,10 @@ async def _execute_external_operation(
             ),
         )
     except BaseException:
+        if dispatch_recorded:
+            # A committed task identity remains recoverable after cancellation
+            # of the subsequent status wait. Never erase it as unknown.
+            raise
 
         async def _mark() -> None:
             async with tool_session() as session:
@@ -1910,7 +1941,7 @@ async def _execute_external_operation(
             )
         raise
 
-    bounded_result = _cap_tool_result(result)
+    bounded_result = cast(Dict[str, Any], _cap_tool_result(result))
     if (
         tool_name == "create_draft"
         and isinstance(bounded_result, dict)
@@ -1959,6 +1990,32 @@ def _claim_response(claim: Any, tool_name: str) -> Dict[str, Any]:
     )
 
 
+def _uncertain_draft_recovery_result(
+    recovered_result: Dict[str, Any], dispatched_result: Dict[str, Any] | None
+) -> Dict[str, Any]:
+    """Return explicit bounded uncertainty while retaining safe known IDs."""
+    result = _operation_error(
+        "The draft status is terminal, but its recovered result could not be recorded; inspect scoped status and do not retry.",
+        "operation_result_uncertain",
+        status="pending",
+    )
+    safe_identity_fields = (
+        "task_id",
+        "project_id",
+        "project_name",
+        "user_id",
+        "draft_id",
+        "document_id",
+        "note_id",
+    )
+    for observation in (dispatched_result or {}, recovered_result):
+        for field_name in safe_identity_fields:
+            value = observation.get(field_name)
+            if isinstance(value, str) and value and len(value) <= 128:
+                result[field_name] = value
+    return cast(Dict[str, Any], _cap_tool_result(result))
+
+
 async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, Any]:
     from src.services.research.draft_generation_service import DraftGenerationService
 
@@ -1991,9 +2048,6 @@ async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, 
                 "_terminal_status": False,
             }
             return pending
-        waited = await DraftGenerationService.wait_for_terminal_status(
-            task_id, timeout_seconds=105.0
-        )
     except Exception:
         logger.warning("draft status recovery failed closed", exc_info=True)
         pending = {
@@ -2004,11 +2058,11 @@ async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, 
             "_terminal_status": False,
         }
         return pending
-    if not DraftGenerationService._status_matches_scope(
-        waited, parsed_project_id, parsed_user_id
-    ):
-        waited = status
-    result = _draft_status_result(dispatched_result, waited)
+    # Recovery can run on another worker after a process restart. Use the
+    # scoped shared snapshot directly; wait_for_terminal_status consults only
+    # process-local memory and can block for its full timeout or return stale
+    # pending state after the shared status has already become terminal.
+    result = _draft_status_result(dispatched_result, status)
     result["_terminal_status"] = str(result.get("status")) in {
         "completed",
         "failed",
@@ -4371,6 +4425,8 @@ async def _tool_create_draft(
     class _DraftDispatchRecordingFailed(Exception):
         pass
 
+    recorded_dispatch: Dict[str, Any] | None = None
+
     if not db or not current_user:
         return {"error": "Authentication required"}
 
@@ -4438,6 +4494,7 @@ async def _tool_create_draft(
                 raise _DraftDispatchRecordingFailed(
                     "The draft task started but its recovery identity was not recorded."
                 ) from exc
+            recorded_dispatch = dispatched
 
         terminal = await DraftGenerationService.wait_for_terminal_status(
             task_id, timeout_seconds=105.0
@@ -4446,6 +4503,21 @@ async def _tool_create_draft(
     except _DraftDispatchRecordingFailed:
         raise
     except Exception as e:
+        if recorded_dispatch is not None:
+            logger.warning(
+                "create_draft status polling failed; committed task identity remains recoverable",
+                exc_info=e,
+            )
+            return {
+                **recorded_dispatch,
+                "status": "pending",
+                "message": "The draft task was accepted, but its current status could not be read.",
+                "error_category": "draft_status_unavailable",
+                "automatic_retry_allowed": False,
+                "retry_guidance": (
+                    "Use scoped draft status for the saved task; do not start a second generation."
+                ),
+            }
         logger.error("create_draft tool failed", exc_info=e)
         return tool_error_payload("create_draft", e)
 

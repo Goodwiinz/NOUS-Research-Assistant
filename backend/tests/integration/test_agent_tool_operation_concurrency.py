@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Coroutine, cast
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from langchain_core.runnables import RunnableConfig
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -249,6 +252,55 @@ def _execute_scalar_tool(
         thread_id=operation_key.thread_id,
         operation_key=operation_key,
     )
+
+
+async def _create_pg_project(database: _ToolDatabase, call_id: str) -> str:
+    """Create a real project row for draft recovery integration cases."""
+    from src.services.agent import tools_impl
+
+    arguments = {
+        "name": f"Task 2 draft project {call_id}",
+        "workspace_id": str(database.workspace_id),
+    }
+    key = _operation_key(
+        database=database,
+        tool_name="create_project",
+        arguments=arguments,
+        call_id=call_id,
+    )
+    with patch(
+        "src.services.agent.tool_session.tool_session",
+        _tool_session_scope(database.session_factory),
+    ):
+        result = await tools_impl.execute_tool(
+            "create_project",
+            arguments,
+            user_id=str(database.user_id),
+            organization_id=str(database.organization_id),
+            thread_id=key.thread_id,
+            operation_key=key,
+        )
+    return str(result["project_id"])
+
+
+async def _seed_dispatched_operation(
+    database: _ToolDatabase,
+    key: ToolOperationKey,
+    result: dict[str, Any],
+) -> None:
+    """Persist a realistic external dispatch using the production claim API."""
+    from src.services.agent.tool_operations import claim_operation, record_dispatch
+
+    async with database.session_factory() as session:
+        async with session.begin():
+            claim = await claim_operation(session, key, external=True)
+            assert claim.status == "claimed"
+            assert claim.owner_token is not None
+            await record_dispatch(session, key, claim.owner_token, result)
+
+
+def _encoded_result_size(result: Any) -> int:
+    return len(json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"))
 
 
 async def test_postgres_local_effects_commit_with_results_and_replay_ids() -> None:
@@ -1163,7 +1215,7 @@ async def test_postgres_draft_identity_is_committed_before_status_wait(
             assert operation.result == result
 
 
-async def test_postgres_draft_replay_polls_pending_task_then_saves_terminal_result(
+async def test_postgres_draft_replay_uses_shared_status_and_bounds_saved_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A saved draft task resumes by status lookup and generation runs once."""
@@ -1219,6 +1271,7 @@ async def test_postgres_draft_replay_polls_pending_task_then_saves_terminal_resu
         task_id = "draft-recovery-task-17"
         draft_id = str(uuid.uuid4())
         generation_calls = 0
+        recovery_wait_calls = 0
         status_phase = "pending"
 
         def _init(self: Any, db: AsyncSession) -> None:
@@ -1271,22 +1324,48 @@ async def test_postgres_draft_replay_polls_pending_task_then_saves_terminal_resu
                 "current_step": "Still generating",
             }
 
-        async def _get_shared_status(
-            _cls: type[Any], requested_task_id: str
-        ) -> dict[str, Any]:
-            assert requested_task_id == task_id
-            assert all(not session.in_transaction() for session in opened_sessions)
-            return {
-                "task_id": task_id,
-                "status": status_phase,
-                "project_id": project_id,
-                "user_id": str(database.user_id),
-                "current_step": (
-                    "Draft completed"
-                    if status_phase == "completed"
-                    else "Still generating"
-                ),
-            }
+        class _SharedStatusStore:
+            def __init__(self) -> None:
+                self.reads = 0
+                self.observed_statuses: list[str] = []
+
+            async def get(self, redis_key: str) -> bytes:
+                assert redis_key == f"research:draft-status:{task_id}"
+                assert all(not session.in_transaction() for session in opened_sessions)
+                self.reads += 1
+                status: dict[str, Any] = {
+                    "task_id": task_id,
+                    "status": status_phase,
+                    "project_id": project_id,
+                    "user_id": str(database.user_id),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "current_step": "研究生成中 📚 " * 9000,
+                    "documents": [
+                        {
+                            "id": str(uuid.uuid4()),
+                            "title": f"Recovered source {index}",
+                            "status": (
+                                "ready" if status_phase == "completed" else "pending"
+                            ),
+                            "project_id": project_id,
+                        }
+                        for index in range(80)
+                    ],
+                }
+                if status_phase == "completed":
+                    status["draft_id"] = draft_id
+                self.observed_statuses.append(status_phase)
+                return json.dumps(status).encode("utf-8")
+
+        shared_store = _SharedStatusStore()
+
+        async def _get_test_redis() -> _SharedStatusStore:
+            return shared_store
+
+        # The real get_status_shared() implementation must find this key in
+        # the fake shared store while the process-local task cache stays empty.
+        assert draft_generation_service._generation_status.get(task_id) is None
+        monkeypatch.setattr(draft_generation_service, "get_redis", _get_test_redis)
 
         async def _recovery_wait(
             _cls: type[Any],
@@ -1294,23 +1373,12 @@ async def test_postgres_draft_replay_polls_pending_task_then_saves_terminal_resu
             *,
             timeout_seconds: float = 120.0,
         ) -> dict[str, Any]:
+            nonlocal recovery_wait_calls
+            recovery_wait_calls += 1
             assert requested_task_id == task_id
             assert timeout_seconds == 105.0
             assert all(not session.in_transaction() for session in opened_sessions)
-            status: dict[str, Any] = {
-                "task_id": task_id,
-                "status": status_phase,
-                "project_id": project_id,
-                "user_id": str(database.user_id),
-                "current_step": (
-                    "Draft completed"
-                    if status_phase == "completed"
-                    else "Still generating"
-                ),
-            }
-            if status_phase == "completed":
-                status["draft_id"] = draft_id
-            return status
+            raise AssertionError("recovery must use the shared status snapshot")
 
         monkeypatch.setattr(
             draft_generation_service.DraftGenerationService, "__init__", _init
@@ -1345,11 +1413,6 @@ async def test_postgres_draft_replay_polls_pending_task_then_saves_terminal_resu
 
         monkeypatch.setattr(
             draft_generation_service.DraftGenerationService,
-            "get_status_shared",
-            classmethod(_get_shared_status),
-        )
-        monkeypatch.setattr(
-            draft_generation_service.DraftGenerationService,
             "wait_for_terminal_status",
             classmethod(_recovery_wait),
         )
@@ -1365,6 +1428,21 @@ async def test_postgres_draft_replay_polls_pending_task_then_saves_terminal_resu
 
         assert pending_replay["status"] == "pending"
         assert pending_replay["task_id"] == task_id
+        assert _encoded_result_size(pending_replay) <= _MAX_TOOL_RESULT_BYTES
+        assert pending_replay["project_id"] == project_id
+        assert (
+            pending_replay["_tool_result_bounds"]["identity_coverage"]["incomplete"]
+            is True
+        )
+        assert (
+            pending_replay["_tool_result_bounds"]["identity_coverage"][
+                "omitted_entries"
+            ]
+            > 0
+        )
+        assert recovery_wait_calls == 0
+        assert shared_store.reads == 1
+        assert shared_store.observed_statuses == ["pending"]
         async with database.session_factory() as verify:
             operation = await verify.get(AgentToolOperation, key.operation_id)
             assert operation is not None
@@ -1385,11 +1463,729 @@ async def test_postgres_draft_replay_polls_pending_task_then_saves_terminal_resu
         assert terminal_replay["status"] == "completed"
         assert terminal_replay["task_id"] == task_id
         assert terminal_replay["draft_id"] == draft_id
+        assert terminal_replay["project_id"] == project_id
+        assert _encoded_result_size(terminal_replay) <= _MAX_TOOL_RESULT_BYTES
+        assert (
+            terminal_replay["_tool_result_bounds"]["identity_coverage"]["incomplete"]
+            is True
+        )
+        assert recovery_wait_calls == 0
+        assert shared_store.reads == 2
+        assert shared_store.observed_statuses == ["pending", "completed"]
         async with database.session_factory() as verify:
             operation = await verify.get(AgentToolOperation, key.operation_id)
             assert operation is not None
             assert operation.state == "completed"
             assert operation.result == terminal_replay
+
+        with patch("src.services.agent.tool_session.tool_session", _tracked_scope):
+            completed_replay = await tools_impl.execute_tool(
+                "create_draft",
+                arguments,
+                user_id=str(database.user_id),
+                organization_id=str(database.organization_id),
+                thread_id=key.thread_id,
+                operation_key=key,
+            )
+        assert completed_replay == terminal_replay
+        assert _encoded_result_size(completed_replay) <= _MAX_TOOL_RESULT_BYTES
+
+
+async def test_postgres_draft_cancellation_preserves_dispatched_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation after record_dispatch keeps the task recoverable."""
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    from src.services.agent import tools_impl
+    from src.services.research import draft_generation_service
+
+    async with _postgres_tool_schema(dsn) as database:
+        project_id = await _create_pg_project(database, "round2-cancel-project")
+        arguments = {
+            "project_id": project_id,
+            "themes": ["preserve identity after cancellation"],
+            "style": "summary",
+        }
+        key = _operation_key(
+            database=database,
+            tool_name="create_draft",
+            arguments=arguments,
+            call_id="draft-cancel-after-recorder",
+            turn_id="draft-cancel-round2",
+        )
+        task_id = "cancelled-wait-task-17"
+        draft_id = str(uuid.uuid4())
+        generation_calls = 0
+        wait_calls = 0
+
+        def _init(self: Any, db: AsyncSession) -> None:
+            self.db = db
+
+        async def _generate(
+            self: Any,
+            *,
+            project_id: uuid.UUID,
+            user_id: uuid.UUID,
+            themes: list[str],
+            style: str,
+        ) -> dict[str, Any]:
+            nonlocal generation_calls
+            generation_calls += 1
+            assert self.db.in_transaction() is False
+            assert project_id == uuid.UUID(cast(str, arguments["project_id"]))
+            assert user_id == database.user_id
+            assert themes == arguments["themes"]
+            assert style == arguments["style"]
+            return {"task_id": task_id, "status": "pending"}
+
+        async def _wait(
+            _cls: type[Any],
+            requested_task_id: str,
+            *,
+            timeout_seconds: float = 120.0,
+        ) -> dict[str, Any]:
+            nonlocal wait_calls
+            wait_calls += 1
+            assert requested_task_id == task_id
+            assert timeout_seconds == 105.0
+            if wait_calls == 1:
+                async with database.session_factory() as verify:
+                    row = await verify.get(AgentToolOperation, key.operation_id)
+                    assert row is not None
+                    assert row.state == "dispatched"
+                    assert row.result["task_id"] == task_id
+            raise asyncio.CancelledError()
+
+        async def _shared_status(
+            _cls: type[Any], requested_task_id: str
+        ) -> dict[str, Any]:
+            assert requested_task_id == task_id
+            return {
+                "task_id": task_id,
+                "project_id": project_id,
+                "user_id": str(database.user_id),
+                "status": "completed",
+                "draft_id": draft_id,
+                "current_step": "Draft completed",
+            }
+
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService, "__init__", _init
+        )
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService,
+            "generate_draft",
+            _generate,
+        )
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService,
+            "wait_for_terminal_status",
+            classmethod(_wait),
+        )
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService,
+            "get_status_shared",
+            classmethod(_shared_status),
+        )
+        with patch(
+            "src.services.agent.tool_session.tool_session",
+            _tool_session_scope(database.session_factory),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await tools_impl.execute_tool(
+                    "create_draft",
+                    arguments,
+                    user_id=str(database.user_id),
+                    organization_id=str(database.organization_id),
+                    thread_id=key.thread_id,
+                    operation_key=key,
+                )
+
+            async with database.session_factory() as verify:
+                row = await verify.get(AgentToolOperation, key.operation_id)
+                assert row is not None
+                assert row.state == "dispatched"
+                assert row.result["task_id"] == task_id
+                assert row.result["project_id"] == project_id
+                assert row.result["user_id"] == str(database.user_id)
+
+            recovered = await tools_impl.execute_tool(
+                "create_draft",
+                arguments,
+                user_id=str(database.user_id),
+                organization_id=str(database.organization_id),
+                thread_id=key.thread_id,
+                operation_key=key,
+            )
+
+        assert generation_calls == 1
+        assert wait_calls == 1
+        assert recovered["status"] == "completed"
+        assert recovered["task_id"] == task_id
+        assert recovered["draft_id"] == draft_id
+        assert recovered["project_id"] == project_id
+        async with database.session_factory() as verify:
+            row = await verify.get(AgentToolOperation, key.operation_id)
+            assert row is not None
+            assert row.state == "completed"
+            assert row.result == recovered
+
+
+async def test_postgres_draft_status_poll_exception_returns_recoverable_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poll exception after dispatch does not replace the task identity."""
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    from src.services.agent import tools_impl
+    from src.services.research import draft_generation_service
+
+    async with _postgres_tool_schema(dsn) as database:
+        project_id = await _create_pg_project(database, "round2-poll-error-project")
+        arguments = {
+            "project_id": project_id,
+            "themes": ["recover after ordinary wait error"],
+            "style": "summary",
+        }
+        key = _operation_key(
+            database=database,
+            tool_name="create_draft",
+            arguments=arguments,
+            call_id="draft-poll-exception",
+            turn_id="draft-poll-exception-turn",
+        )
+        task_id = "poll-exception-task-19"
+        generation_calls = 0
+
+        def _init(self: Any, db: AsyncSession) -> None:
+            self.db = db
+
+        async def _generate(
+            self: Any,
+            *,
+            project_id: uuid.UUID,
+            user_id: uuid.UUID,
+            themes: list[str],
+            style: str,
+        ) -> dict[str, Any]:
+            nonlocal generation_calls
+            generation_calls += 1
+            return {"task_id": task_id, "status": "pending"}
+
+        async def _wait(
+            _cls: type[Any],
+            requested_task_id: str,
+            *,
+            timeout_seconds: float = 120.0,
+        ) -> dict[str, Any]:
+            assert requested_task_id == task_id
+            assert timeout_seconds == 105.0
+            async with database.session_factory() as verify:
+                row = await verify.get(AgentToolOperation, key.operation_id)
+                assert row is not None
+                assert row.state == "dispatched"
+                assert row.result["task_id"] == task_id
+            raise RuntimeError("shared status poll interrupted")
+
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService, "__init__", _init
+        )
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService,
+            "generate_draft",
+            _generate,
+        )
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService,
+            "wait_for_terminal_status",
+            classmethod(_wait),
+        )
+        with patch(
+            "src.services.agent.tool_session.tool_session",
+            _tool_session_scope(database.session_factory),
+        ):
+            result = await tools_impl.execute_tool(
+                "create_draft",
+                arguments,
+                user_id=str(database.user_id),
+                organization_id=str(database.organization_id),
+                thread_id=key.thread_id,
+                operation_key=key,
+            )
+
+        assert generation_calls == 1
+        assert result["status"] == "pending"
+        assert result["task_id"] == task_id
+        assert result["project_id"] == project_id
+        assert result["error_category"] == "draft_status_unavailable"
+        assert result["automatic_retry_allowed"] is False
+        async with database.session_factory() as verify:
+            row = await verify.get(AgentToolOperation, key.operation_id)
+            assert row is not None
+            assert row.state == "dispatched"
+            assert row.result["task_id"] == task_id
+
+
+async def test_postgres_mark_unknown_cannot_erase_recorded_dispatch() -> None:
+    """The store rejects any attempt to clear an already dispatched identity."""
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    from src.services.agent.tool_operations import mark_unknown
+
+    async with _postgres_tool_schema(dsn) as database:
+        arguments = {
+            "project_id": str(uuid.uuid4()),
+            "themes": ["direct state guard"],
+            "style": "summary",
+        }
+        key = _operation_key(
+            database=database,
+            tool_name="create_draft",
+            arguments=arguments,
+            call_id="mark-unknown-dispatched-guard",
+            turn_id="mark-unknown-dispatched-turn",
+        )
+        dispatched = {
+            "task_id": "must-survive-mark-unknown",
+            "project_id": arguments["project_id"],
+            "user_id": str(database.user_id),
+            "status": "pending",
+        }
+        await _seed_dispatched_operation(database, key, dispatched)
+        async with database.session_factory() as verify:
+            row = await verify.get(AgentToolOperation, key.operation_id)
+            assert row is not None
+            owner_token = cast(uuid.UUID | None, row.owner_token)
+            assert owner_token is not None
+
+        with pytest.raises(RuntimeError, match="lost its claim or fingerprint"):
+            async with database.session_factory() as session:
+                async with session.begin():
+                    await mark_unknown(session, key, owner_token)
+
+        async with database.session_factory() as verify:
+            row = await verify.get(AgentToolOperation, key.operation_id)
+            assert row is not None
+            assert row.state == "dispatched"
+            assert row.result == dispatched
+
+
+async def test_postgres_draft_pre_recorder_cancellation_and_record_failure_stay_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unrecorded external dispatches stay non-replayable after failures."""
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    from src.services.agent import tool_operations, tools_impl
+    from src.services.research import draft_generation_service
+
+    async with _postgres_tool_schema(dsn) as database:
+        project_id = await _create_pg_project(database, "round2-unknown-project")
+        arguments = {
+            "project_id": project_id,
+            "themes": ["unknown before recorder"],
+            "style": "summary",
+        }
+        cancel_key = _operation_key(
+            database=database,
+            tool_name="create_draft",
+            arguments=arguments,
+            call_id="draft-before-recorder-cancel",
+            turn_id="draft-before-recorder-turn",
+        )
+        original_dispatch = tools_impl._dispatch_tool
+
+        async def _cancel_before_recorder(*_args: Any, **_kwargs: Any) -> Any:
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(tools_impl, "_dispatch_tool", _cancel_before_recorder)
+        with patch(
+            "src.services.agent.tool_session.tool_session",
+            _tool_session_scope(database.session_factory),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await tools_impl.execute_tool(
+                    "create_draft",
+                    arguments,
+                    user_id=str(database.user_id),
+                    organization_id=str(database.organization_id),
+                    thread_id=cancel_key.thread_id,
+                    operation_key=cancel_key,
+                )
+        async with database.session_factory() as verify:
+            cancelled = await verify.get(AgentToolOperation, cancel_key.operation_id)
+            assert cancelled is not None
+            assert cancelled.state == "unknown"
+            assert cancelled.result is None
+
+        recording_key = _operation_key(
+            database=database,
+            tool_name="create_draft",
+            arguments=arguments,
+            call_id="draft-recorder-store-failure",
+            turn_id="draft-recorder-failure-turn",
+        )
+
+        def _init(self: Any, db: AsyncSession) -> None:
+            self.db = db
+
+        async def _generate(
+            self: Any,
+            *,
+            project_id: uuid.UUID,
+            user_id: uuid.UUID,
+            themes: list[str],
+            style: str,
+        ) -> dict[str, Any]:
+            return {"task_id": "started-but-not-recorded", "status": "pending"}
+
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService, "__init__", _init
+        )
+        monkeypatch.setattr(
+            draft_generation_service.DraftGenerationService,
+            "generate_draft",
+            _generate,
+        )
+        monkeypatch.setattr(tools_impl, "_dispatch_tool", original_dispatch)
+
+        async def _fail_record(*_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("injected dispatch recorder failure")
+
+        monkeypatch.setattr(tool_operations, "record_dispatch", _fail_record)
+        with patch(
+            "src.services.agent.tool_session.tool_session",
+            _tool_session_scope(database.session_factory),
+        ):
+            with pytest.raises(Exception, match="recovery identity was not recorded"):
+                await tools_impl.execute_tool(
+                    "create_draft",
+                    arguments,
+                    user_id=str(database.user_id),
+                    organization_id=str(database.organization_id),
+                    thread_id=recording_key.thread_id,
+                    operation_key=recording_key,
+                )
+
+        async with database.session_factory() as verify:
+            failed_record = await verify.get(
+                AgentToolOperation, recording_key.operation_id
+            )
+            assert failed_record is not None
+            assert failed_record.state == "unknown"
+            assert failed_record.result is None
+
+
+async def test_postgres_graph_keeps_bounded_failed_observation_on_fresh_and_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Graph messages retain the exact protected error observation on replay."""
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    from src.services.agent import _nodes_tools, graph, tools_impl
+
+    async with _postgres_tool_schema(dsn) as database:
+        project_id = await _create_pg_project(database, "round2-graph-project")
+        arguments = {
+            "project_id": project_id,
+            "themes": ["preserve graph failure identity"],
+            "style": "summary",
+        }
+        call_id = "graph-draft-partial-result"
+        key = _operation_key(
+            database=database,
+            tool_name="create_draft",
+            arguments=arguments,
+            call_id=call_id,
+            turn_id="graph-round2-turn",
+            thread_id="graph-round2-thread",
+        )
+        dispatch_calls = 0
+        observation: dict[str, Any] = {
+            "status": "failed",
+            "error": "Draft persisted but some sources failed.",
+            "error_category": "draft_generation_partial_failure",
+            "automatic_retry_allowed": False,
+            "task_id": "graph-recoverable-task-22",
+            "project_id": project_id,
+            "user_id": str(database.user_id),
+            "draft_id": str(uuid.uuid4()),
+            "documents": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "title": f"Retained source {index}",
+                    "status": "partial",
+                    "project_id": project_id,
+                }
+                for index in range(80)
+            ],
+            "detail": "部分的な結果 📚 " * 9000,
+        }
+
+        async def _dispatch(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            nonlocal dispatch_calls
+            dispatch_calls += 1
+            return observation
+
+        monkeypatch.setattr(tools_impl, "_dispatch_tool", _dispatch)
+        monkeypatch.setattr(graph, "_get_execute_tool", lambda: tools_impl.execute_tool)
+        config = cast(
+            RunnableConfig,
+            {
+                "configurable": {
+                    "user_id": str(database.user_id),
+                    "organization_id": str(database.organization_id),
+                    "thread_id": key.thread_id,
+                }
+            },
+        )
+        operation_context = {
+            "tool_operation_protocol_version": 1,
+            "tool_operation_turn_id": key.turn_id,
+        }
+        tool_call = {"name": "create_draft", "id": call_id, "args": arguments}
+
+        with patch(
+            "src.services.agent.tool_session.tool_session",
+            _tool_session_scope(database.session_factory),
+        ):
+            fresh = await _nodes_tools._execute_single_tool(
+                tool_call, config, {}, operation_context
+            )
+            replay = await _nodes_tools._execute_single_tool(
+                tool_call, config, {}, operation_context
+            )
+
+        async with database.session_factory() as verify:
+            row = await verify.get(AgentToolOperation, key.operation_id)
+            assert row is not None
+            assert row.state == "completed"
+            assert row.result is not None
+            saved_result = row.result
+
+        assert dispatch_calls == 1
+        assert fresh["execution"]["status"] == "failed"
+        assert fresh["message"].status == "error"
+        assert fresh["error_info"]["category"] != ""
+        assert fresh["execution"]["result"] == saved_result
+        assert json.loads(fresh["message"].content) == saved_result
+        assert replay["execution"]["status"] == "failed"
+        assert replay["execution"]["result"] == saved_result
+        assert json.loads(replay["message"].content) == saved_result
+        assert saved_result["status"] == "failed"
+        assert saved_result["task_id"] == "graph-recoverable-task-22"
+        assert saved_result["project_id"] == project_id
+        assert saved_result["draft_id"] == observation["draft_id"]
+        assert _encoded_result_size(saved_result) <= _MAX_TOOL_RESULT_BYTES
+        assert (
+            saved_result["_tool_result_bounds"]["identity_coverage"]["incomplete"]
+            is True
+        )
+
+
+async def test_postgres_draft_recovery_store_failure_is_uncertain_and_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed recovered-result write reports uncertainty and retains dispatch."""
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    from src.services.agent import tool_operations, tools_impl
+
+    async with _postgres_tool_schema(dsn) as database:
+        project_id = await _create_pg_project(database, "round2-store-failure-project")
+        arguments = {
+            "project_id": project_id,
+            "themes": ["recover safely after storage error"],
+            "style": "summary",
+        }
+        key = _operation_key(
+            database=database,
+            tool_name="create_draft",
+            arguments=arguments,
+            call_id="draft-recovery-store-failure",
+            turn_id="draft-recovery-store-failure-turn",
+        )
+        task_id = "saved-dispatch-task-77"
+        dispatched = {
+            "task_id": task_id,
+            "project_id": project_id,
+            "project_name": "Storage recovery project",
+            "user_id": str(database.user_id),
+            "status": "pending",
+            "message": "Draft generation started",
+        }
+        await _seed_dispatched_operation(database, key, dispatched)
+        terminal = {
+            **dispatched,
+            "status": "completed",
+            "draft_id": str(uuid.uuid4()),
+            "_terminal_status": True,
+        }
+        original_complete = tool_operations.complete_operation
+        monkeypatch.setattr(
+            tools_impl, "_recover_draft_status", AsyncMock(return_value=terminal)
+        )
+
+        async def _fail_complete(*_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("injected recovered result storage failure")
+
+        monkeypatch.setattr(tool_operations, "complete_operation", _fail_complete)
+        with patch(
+            "src.services.agent.tool_session.tool_session",
+            _tool_session_scope(database.session_factory),
+        ):
+            uncertain = await tools_impl.execute_tool(
+                "create_draft",
+                arguments,
+                user_id=str(database.user_id),
+                organization_id=str(database.organization_id),
+                thread_id=key.thread_id,
+                operation_key=key,
+            )
+
+        assert uncertain["error_category"] == "operation_result_uncertain"
+        assert uncertain["automatic_retry_allowed"] is False
+        assert uncertain["task_id"] == task_id
+        assert uncertain["project_id"] == project_id
+        assert uncertain["draft_id"] == terminal["draft_id"]
+        assert _encoded_result_size(uncertain) <= _MAX_TOOL_RESULT_BYTES
+        async with database.session_factory() as verify:
+            row = await verify.get(AgentToolOperation, key.operation_id)
+            assert row is not None
+            assert row.state == "dispatched"
+            assert row.result == dispatched
+
+        monkeypatch.setattr(tool_operations, "complete_operation", original_complete)
+        monkeypatch.setattr(
+            tools_impl, "_recover_draft_status", AsyncMock(return_value=terminal)
+        )
+        with patch(
+            "src.services.agent.tool_session.tool_session",
+            _tool_session_scope(database.session_factory),
+        ):
+            recovered = await tools_impl.execute_tool(
+                "create_draft",
+                arguments,
+                user_id=str(database.user_id),
+                organization_id=str(database.organization_id),
+                thread_id=key.thread_id,
+                operation_key=key,
+            )
+
+        expected = dict(terminal)
+        expected.pop("_terminal_status")
+        assert recovered == expected
+        async with database.session_factory() as verify:
+            row = await verify.get(AgentToolOperation, key.operation_id)
+            assert row is not None
+            assert row.state == "completed"
+            assert row.result == recovered
+
+
+async def test_postgres_concurrent_draft_recovery_returns_committed_winner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completion CAS loser returns the exact committed database winner."""
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    from src.services.agent import tools_impl
+
+    async with _postgres_tool_schema(dsn) as database:
+        project_id = await _create_pg_project(database, "round2-race-project")
+        arguments = {
+            "project_id": project_id,
+            "themes": ["concurrent status recovery"],
+            "style": "summary",
+        }
+        key = _operation_key(
+            database=database,
+            tool_name="create_draft",
+            arguments=arguments,
+            call_id="draft-recovery-concurrent-cas",
+            turn_id="draft-recovery-concurrent-turn",
+        )
+        task_id = "concurrent-shared-task-81"
+        await _seed_dispatched_operation(
+            database,
+            key,
+            {
+                "task_id": task_id,
+                "project_id": project_id,
+                "project_name": "Concurrent recovery project",
+                "user_id": str(database.user_id),
+                "status": "pending",
+            },
+        )
+        both_recovered = asyncio.Event()
+        recovery_calls = 0
+
+        async def _terminal_recovery(
+            _dispatched: dict[str, Any],
+        ) -> dict[str, Any]:
+            nonlocal recovery_calls
+            recovery_calls += 1
+            current = recovery_calls
+            if recovery_calls == 2:
+                both_recovered.set()
+            await both_recovered.wait()
+            return {
+                "task_id": task_id,
+                "project_id": project_id,
+                "user_id": str(database.user_id),
+                "status": "completed",
+                "draft_id": str(uuid.uuid5(uuid.NAMESPACE_DNS, f"winner-{current}")),
+                "recovery_observation": f"candidate-{current}",
+                "_terminal_status": True,
+            }
+
+        monkeypatch.setattr(tools_impl, "_recover_draft_status", _terminal_recovery)
+        scope = _tool_session_scope(database.session_factory)
+        with patch("src.services.agent.tool_session.tool_session", scope):
+            first, second = await asyncio.gather(
+                tools_impl.execute_tool(
+                    "create_draft",
+                    arguments,
+                    user_id=str(database.user_id),
+                    organization_id=str(database.organization_id),
+                    thread_id=key.thread_id,
+                    operation_key=key,
+                ),
+                tools_impl.execute_tool(
+                    "create_draft",
+                    arguments,
+                    user_id=str(database.user_id),
+                    organization_id=str(database.organization_id),
+                    thread_id=key.thread_id,
+                    operation_key=key,
+                ),
+            )
+
+        async with database.session_factory() as verify:
+            row = await verify.get(AgentToolOperation, key.operation_id)
+            assert row is not None
+            assert row.state == "completed"
+            assert row.result is not None
+            winner = row.result
+        assert recovery_calls == 2
+        assert first == winner
+        assert second == winner
+        assert winner["status"] == "completed"
+        assert winner["task_id"] == task_id
 
 
 async def test_postgres_uncertain_external_effect_blocks_new_call_id_replay(

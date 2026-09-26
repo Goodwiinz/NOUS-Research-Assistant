@@ -258,6 +258,7 @@ Logs are retained in `/tmp/task1-mutation-*.log`.
 Evidence dated 2026-09-26 against review base
 `7ef93001c82f8062bf3934b3a85d9ed4f9112cde`; restored final source SHA-256 is
 `236eca83ab196f5aa421f2b5671874741518236476b43cda2f3fa0b8959cd29a`.
+
 The fix-round-1 delayed-writer mutation above tested the earlier Lua writer and
 is historical evidence only. The final writer is the shared Python
 WATCH/MULTI guard in `backend/src/services/agent/job_store.py:385-432`; all
@@ -577,3 +578,56 @@ calls now also require an authenticated checkpointed operation key. The only
 production executor caller is the graph `_nodes_tools` path; tests verify an
 unscoped injected mutation fails closed. `ProjectService` REST commit defaults
 remain unchanged.
+
+## Task 2 review repair round — 2026-09-26
+
+This evidence records the Task 2 response to the scoped Astra review at code
+base `fdd736e02a31c8d4bf8254e8616f2470965d2611`. The repository's current
+backend and testing contracts remain in [`backend.md`](../engineering/backend.md)
+and [`testing.md`](../engineering/testing.md). The final Task 2 application
+hashes after the wording-only status-message correction are:
+
+- `backend/src/services/agent/tools_impl.py`:
+  `27ce9a67082f88aed7075dcf01bfd86e906400beaad388d8fde5ee87ca516d46`
+- `backend/src/services/agent/tool_operations.py`:
+  `3fc0f894a10f8392b86e28e92a703eaaff6b54f0b4b22e97192591ce4c66db1b`
+- `backend/tests/integration/test_agent_tool_operation_concurrency.py`:
+  `dc0a015188f688f98e887673bd72f340bd8744777ec91db1bf3b426c1b4aad9c`
+
+### Required regression results
+
+| Review item | Owning behavior and proof | Mutant failure and restored evidence |
+| --- | --- | --- |
+| R1: keep a committed draft task identity across cancellation | The actual-PostgreSQL `test_postgres_draft_cancellation_preserves_dispatched_identity` cancels after the task ID is committed, verifies the dispatched row and identity survive, then replays to completed with one generation call. `test_postgres_mark_unknown_cannot_erase_recorded_dispatch` verifies the store predicate itself. | The combined mutant disabled the executor's dispatched-state cancellation guard and allowed `mark_unknown` to update a dispatched row. It failed because the durable row became `unknown` instead of `dispatched` (`task-2-round2-mutation-r1-combined-red.log`). The independent `mark_unknown` mutant failed because the expected CAS error was not raised (`task-2-round2-mutation-retention-red-v2.log`). Restored store-guard test passed (`task-2-round2-mark-unknown-green.log`); the restored full PostgreSQL file passed 18 cases (`task-2-round2-integration-final.log`). The combined mutant was restored to the saved pre-mutation copies; those copies hash to `598b8d5fd47ada8913308a293e7025d6d7c98f28bd5dc682ac475d8b4a279279` and `3fc0f894a10f8392b86e28e92a703eaaff6b54f0b4b22e97192591ce4c66db1b`. |
+| R2: retain bounded failed/partial observations at the graph boundary | `test_postgres_graph_keeps_bounded_failed_observation_on_fresh_and_replay` asserts the actual saved observation and both graph messages preserve status plus task, project, and draft identities under the authoritative result cap. | Removing protected observation retention made the fresh graph result differ from the saved bounded observation (`task-2-round2-mutation-error-shaping-final-red.log`). Restoring the guard returned the same protected observation on fresh execution and replay (`task-2-round2-mutation-error-shaping-final-green.log`). Restored source hash before later status wording was `59bc7e2dca1bc046cb6760f2e5958f9463294da08ee94bcbc743ecab2d72df12`. |
+| R3: cap pending and terminal recovered results | `test_postgres_draft_replay_uses_shared_status_and_bounds_saved_results` uses a multibyte, many-row shared status snapshot and checks both saved and returned pending and terminal results, completion replay equality, IDs, and omission metadata. | Bypassing pending-result rebounding produced 201,772 encoded bytes against the 32,768-byte cap (`task-2-round2-mutation-pending-cap-final-red.log`). Bypassing terminal-result rebounding produced 201,648 bytes (`task-2-round2-mutation-terminal-cap-final-red.log`). Both restored focused runs passed (`task-2-round2-mutation-pending-cap-final-green.log`, `task-2-round2-mutation-terminal-cap-final-green.log`). Restored source hash for these mutations was `59bc7e2dca1bc046cb6760f2e5958f9463294da08ee94bcbc743ecab2d72df12`. |
+| R4: fail closed on recovery-store faults and return the committed CAS winner | `test_postgres_draft_recovery_store_failure_is_uncertain_and_retryable` forces a result-write failure, checks bounded uncertainty and preserved task/project/draft IDs, then retries after storage recovers. `test_postgres_concurrent_draft_recovery_returns_committed_winner` races real PostgreSQL completion updates and compares both callers with the fresh-session winner. | Returning the candidate result after storage failure removed `error_category` and failed the uncertainty assertion (`task-2-round2-mutation-store-failure-final-red.log`). Returning local uncertainty after a CAS loss diverged from the real committed winner (`task-2-round2-mutation-cas-winner-final-red.log`). Restored focused tests passed (`task-2-round2-mutation-store-failure-final-green.log`, `task-2-round2-mutation-cas-winner-final-green.log`). Restored source hash was `59bc7e2dca1bc046cb6760f2e5958f9463294da08ee94bcbc743ecab2d72df12`. |
+| R5: use shared status recovery without a process-local waiter | The same PostgreSQL replay test starts with an empty process-local generation cache, exercises the real shared-status lookup against a fake Redis status store, observes pending then terminal status from a cold worker without sleeping or starting generation a second time, and checks saved/returned caps. | Replacing the shared snapshot lookup with the 105-second process-local waiter triggered the test's explicit forbidden-wait assertion and lost the result-bounds metadata (`task-2-round2-mutation-r5-local-wait-final-red.log`). Restored shared-status run passed (`task-2-round2-mutation-r5-local-wait-final-green.log`). Restored source hash was `59bc7e2dca1bc046cb6760f2e5958f9463294da08ee94bcbc743ecab2d72df12`. |
+
+The focused command template below uses externally supplied disposable service
+URLs. The owning integration file passed with 18 tests on local PostgreSQL;
+generation and provider calls were offline fakes, while shared Redis status
+was a fake backing store. Tracing was disabled. No live provider/model call was
+made.
+
+```sh
+PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false --tb=short backend/tests/integration/test_agent_tool_operation_concurrency.py
+```
+
+The separate restored quality selections were 81 owning unit tests, 88 direct
+compatibility tests, and 9 operation-result tests. New operation/integration
+files passed mypy with no issues in two source files. A root-side normalized
+comparison of `tools_impl.py` diagnostics against the review base reported 48
+baseline messages and 47 current messages, with no new message or increased
+multiplicity; one pre-existing `no-any-return` message was removed. The earlier
+combined 55-error attempt remains only a failed diagnostic attempt and is not
+recorded as a passing check. Full local logs are preserved under the ignored
+`.superpowers/sdd/2026-09-25-agent-orchestration-repairs/` scratch directory.
+
+The accepted unsaved-dispatch window remains a recovery limit: if draft
+generation accepts work but task identity persistence fails or cancellation
+occurs before the recorder commits, the row remains non-replayable `unknown`.
+The code cannot prove whether that unrecorded external task was accepted, so it
+does not dispatch it again automatically. Post-dispatch cancellation and status
+read failures preserve the committed identity and return a bounded,
+non-retryable pending observation.

@@ -412,7 +412,10 @@ async def mark_unknown(
         owner_token,
         state="unknown",
         result=None,
-        allowed_states=("claimed", "dispatched"),
+        # A committed dispatch contains the only durable provider task
+        # identity available for recovery. Cancellation or a later status
+        # wait failure must never erase that recoverable anchor.
+        allowed_states=("claimed",),
     )
 
 
