@@ -1,58 +1,76 @@
 """Regression tests for atomic L2 terminal/freshness guarding.
 
-``_redis_write_if_newer`` uses one Lua eval to compare status/freshness and
+``_redis_write_if_newer`` uses WATCH/MULTI to compare status/freshness and
 publish atomically, so a delayed writer cannot stomp a durable terminal winner.
 """
 
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
+from redis.exceptions import WatchError
 
 from src.shared.enums import JobStatus
 
 
 class _FakeRedis:
-    """Minimal atomic-eval Redis stub backing a single job key."""
+    """Minimal WATCH/MULTI Redis stub backing a single job key."""
 
-    def __init__(self, existing=None):
+    def __init__(self, existing: dict[str, Any] | None = None) -> None:
         self.value = json.dumps(existing) if existing is not None else None
-        self.eval_calls = []
+        self.version = 0
+        self.pipeline_calls: list[_FakePipeline] = []
 
-    async def eval(self, script, numkeys, key, payload, ttl, authorized, correction):
-        self.eval_calls.append(
-            (script, numkeys, key, payload, ttl, authorized, correction)
-        )
-        candidate = json.loads(payload)
-        existing = json.loads(self.value) if self.value is not None else None
-        terminal = {"completed", "failed", "cancelled"}
-        if candidate.get("status") in terminal and candidate["status"] != authorized:
-            return 0
-        if candidate.get("status") == "stopping" and authorized != "stopping":
-            return 0
-        if existing is not None:
-            old_status = existing.get("status")
-            if old_status in terminal:
-                if candidate.get("status") != old_status and not (
-                    correction == "1" and candidate.get("status") in terminal
-                ):
-                    return 0
-            elif old_status == "stopping":
-                if candidate.get("status") not in terminal | {"stopping"}:
-                    return 0
-            elif (candidate.get("created_at", 0), candidate.get("_seq", 0)) < (
-                existing.get("created_at", 0),
-                existing.get("_seq", 0),
-            ):
-                return 0
-        self.value = json.dumps(candidate)
-        return 1
+    def pipeline(self, *, transaction: bool) -> _FakePipeline:
+        assert transaction
+        pipeline = _FakePipeline(self)
+        self.pipeline_calls.append(pipeline)
+        return pipeline
+
+
+class _FakePipeline:
+    def __init__(self, redis: _FakeRedis) -> None:
+        self.redis = redis
+        self.watched_version: int | None = None
+        self.queued_value: str | None = None
+
+    async def __aenter__(self) -> _FakePipeline:
+        return self
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        await self.reset()
+
+    async def watch(self, _key: str) -> None:
+        self.watched_version = self.redis.version
+
+    async def get(self, _key: str) -> str | None:
+        return self.redis.value
+
+    def multi(self) -> None:
+        return None
+
+    def setex(self, _key: str, _ttl: int, value: str) -> _FakePipeline:
+        self.queued_value = value
+        return self
+
+    async def execute(self) -> None:
+        if self.watched_version != self.redis.version:
+            raise WatchError
+        if self.queued_value is not None:
+            self.redis.value = self.queued_value
+            self.redis.version += 1
+        self.queued_value = None
+
+    async def reset(self) -> None:
+        self.watched_version = None
+        self.queued_value = None
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_redis_write_skipped_when_existing_is_newer():
+async def test_redis_write_skipped_when_existing_is_newer() -> None:
     """A stale (older) write must not overwrite a newer stored state."""
     from src.services.agent.job_store import _redis_write_if_newer
 
@@ -60,13 +78,13 @@ async def test_redis_write_skipped_when_existing_is_newer():
     await _redis_write_if_newer(
         redis, "job-1", {"status": "running", "created_at": 50.0}
     )
-    assert len(redis.eval_calls) == 1
+    assert len(redis.pipeline_calls) == 1
     assert redis.value == json.dumps({"status": "completed", "created_at": 100.0})
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_redis_write_applied_when_newer():
+async def test_redis_write_applied_when_newer() -> None:
     """A newer write proceeds and replaces the older stored state."""
     from src.services.agent.job_store import _redis_write_if_newer
 
@@ -77,13 +95,13 @@ async def test_redis_write_applied_when_newer():
         {"status": "completed", "created_at": 100.0},
         authorized_status=JobStatus.COMPLETED,
     )
-    assert len(redis.eval_calls) == 1
+    assert len(redis.pipeline_calls) == 1
     assert json.loads(redis.value)["status"] == "completed"
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_redis_write_applied_when_absent():
+async def test_redis_write_applied_when_absent() -> None:
     """First write for a job (no existing value) proceeds."""
     from src.services.agent.job_store import _redis_write_if_newer
 
@@ -91,5 +109,26 @@ async def test_redis_write_applied_when_absent():
     await _redis_write_if_newer(
         redis, "job-1", {"status": "running", "created_at": 1.0}
     )
-    assert len(redis.eval_calls) == 1
+    assert len(redis.pipeline_calls) == 1
     assert json.loads(redis.value)["status"] == "running"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "status", [JobStatus.COMPLETED.value, JobStatus.STOPPING.value]
+)
+@pytest.mark.asyncio
+async def test_redis_write_with_unknown_status_cannot_replace_absorbing_winner(
+    status: str,
+) -> None:
+    """An unknown status keeps the old Lua refusal for terminal/STOPPING keys."""
+    from src.services.agent.job_store import _redis_write_if_newer
+
+    existing = {"status": status, "created_at": 1.0, "_seq": 1}
+    redis = _FakeRedis(existing=existing)
+    await _redis_write_if_newer(
+        redis,
+        "job-unknown-status",
+        {"created_at": 2.0, "_seq": 2},
+    )
+    assert json.loads(redis.value or "null") == existing

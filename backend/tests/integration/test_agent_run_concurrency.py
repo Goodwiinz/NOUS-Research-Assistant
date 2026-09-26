@@ -268,8 +268,50 @@ class _PostMonitorGraph:
         return None
 
 
-class _DelayRunningRedisEval:
-    """Pause one nonterminal Redis publication before its atomic Lua write."""
+class _DelayRunningRedisPipeline:
+    """Pause one Redis publication after WATCH/GET and before MULTI."""
+
+    def __init__(
+        self,
+        pipeline: Any,
+        owner: _DelayRunningRedis,
+    ) -> None:
+        self.pipeline = pipeline
+        self.owner = owner
+
+    async def __aenter__(self) -> _DelayRunningRedisPipeline:
+        await self.pipeline.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> Any:
+        return await self.pipeline.__aexit__(*exc_info)
+
+    async def watch(self, *keys: str) -> Any:
+        return await self.pipeline.watch(*keys)
+
+    async def get(self, key: str) -> Any:
+        value = await self.pipeline.get(key)
+        if key == self.owner.job_key and not self.owner.paused:
+            self.owner.paused = True
+            self.owner.reached.set()
+            await self.owner.release.wait()
+        return value
+
+    def multi(self) -> Any:
+        return self.pipeline.multi()
+
+    def setex(self, *args: Any, **kwargs: Any) -> Any:
+        return self.pipeline.setex(*args, **kwargs)
+
+    async def execute(self) -> Any:
+        return await self.pipeline.execute()
+
+    async def reset(self) -> Any:
+        return await self.pipeline.reset()
+
+
+class _DelayRunningRedis:
+    """Redis client proxy pausing its first WATCH/GET for the target key."""
 
     def __init__(self, redis_client: Any, job_key: str) -> None:
         self.redis_client = redis_client
@@ -278,36 +320,13 @@ class _DelayRunningRedisEval:
         self.release = asyncio.Event()
         self.paused = False
 
-    async def get(self, key: str) -> Any:
-        return await self.redis_client.get(key)
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.redis_client, name)
 
-    async def eval(
-        self,
-        script: str,
-        numkeys: int,
-        key: str,
-        payload: str,
-        ttl: int,
-        authorized_status: str,
-        allow_correction: str,
-    ) -> Any:
-        candidate = json.loads(payload)
-        if (
-            key == self.job_key
-            and candidate.get("status") == JobStatus.RUNNING.value
-            and not self.paused
-        ):
-            self.paused = True
-            self.reached.set()
-            await self.release.wait()
-        return await self.redis_client.eval(
-            script,
-            numkeys,
-            key,
-            payload,
-            ttl,
-            authorized_status,
-            allow_correction,
+    def pipeline(self, *args: Any, **kwargs: Any) -> _DelayRunningRedisPipeline:
+        return _DelayRunningRedisPipeline(
+            self.redis_client.pipeline(*args, **kwargs),
+            self,
         )
 
 
@@ -623,6 +642,7 @@ async def test_post_monitor_completion_wins_against_late_stop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires_redis
 async def test_delayed_real_redis_running_writer_cannot_replace_cancelled_winner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -683,7 +703,7 @@ async def test_delayed_real_redis_running_writer_cannot_replace_cancelled_winner
         await redis_client.setex(
             redis_key, job_store._JOB_TTL_SECONDS, json.dumps(prior)
         )
-        delayed_redis = _DelayRunningRedisEval(redis_client, redis_key)
+        delayed_redis = _DelayRunningRedis(redis_client, redis_key)
         monkeypatch.setattr(database, "AsyncSessionLocal", factory)
         monkeypatch.setattr(
             job_store, "_get_redis", AsyncMock(return_value=delayed_redis)

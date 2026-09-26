@@ -22,7 +22,7 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 from typing import Any, Iterator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -119,6 +119,38 @@ def test_sync_set_job_rejects_terminal_publication() -> None:
 # ---------------------------------------------------------------------------
 # H2 — terminal status must survive a failed strict projection
 # ---------------------------------------------------------------------------
+
+
+class _FailingRedisPipeline:
+    """WATCH/MULTI double whose EXEC fails after durable publication."""
+
+    def __init__(self) -> None:
+        self.execute_attempted = False
+
+    async def __aenter__(self) -> _FailingRedisPipeline:
+        return self
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        return None
+
+    async def watch(self, *_keys: str) -> None:
+        return None
+
+    async def get(self, _key: str) -> None:
+        return None
+
+    def multi(self) -> None:
+        return None
+
+    def setex(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def execute(self) -> None:
+        self.execute_attempted = True
+        raise OSError("redis unavailable")
+
+    async def reset(self) -> None:
+        return None
 
 
 @pytest.mark.unit
@@ -224,9 +256,8 @@ async def test_committed_terminal_decision_survives_redis_cache_outage(
         updated_at="2026-09-26T00:00:00+00:00",
     )
     projection = AsyncMock(return_value=decision)
-    redis_client = SimpleNamespace(
-        eval=AsyncMock(side_effect=OSError("redis unavailable"))
-    )
+    failing_pipeline = _FailingRedisPipeline()
+    redis_client = SimpleNamespace(pipeline=Mock(return_value=failing_pipeline))
     monkeypatch.setattr(js, "_get_redis", AsyncMock(return_value=redis_client))
 
     with patch(
@@ -247,7 +278,8 @@ async def test_committed_terminal_decision_survives_redis_cache_outage(
     assert js._l1["job-cache-outage"]["status"] is JobStatus.COMPLETED
     assert js._l1["job-cache-outage"]["result"] == {"answer": "committed"}
     projection.assert_awaited_once()
-    redis_client.eval.assert_awaited_once()
+    redis_client.pipeline.assert_called_once_with(transaction=True)
+    assert failing_pipeline.execute_attempted
 
 
 # ---------------------------------------------------------------------------

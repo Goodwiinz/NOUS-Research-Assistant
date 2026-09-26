@@ -103,7 +103,14 @@ def _cache_transition_allowed(
     """Guard cache writes against terminal regression and stale freshness."""
     candidate_status = _status_value(candidate)
     if candidate_status is None:
-        return existing is None or _is_newer_or_equal(candidate, existing)
+        if existing is None:
+            return True
+        existing_status = _status_value(existing)
+        if existing_status is None:
+            return _is_newer_or_equal(candidate, existing)
+        if existing_status.is_terminal or existing_status == JobStatus.STOPPING:
+            return False
+        return _is_newer_or_equal(candidate, existing)
     if candidate_status.is_terminal and authorized_status != candidate_status:
         return False
     if existing is None:
@@ -353,64 +360,7 @@ def schedule_run_projection(job_id: str, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-_REDIS_GUARDED_WRITE_SCRIPT = """
-local raw = redis.call('GET', KEYS[1])
-local candidate = cjson.decode(ARGV[1])
-local ttl = tonumber(ARGV[2])
-local authorized_status = ARGV[3]
-local allow_correction = ARGV[4] == '1'
-local function terminal(status)
-  return status == 'completed' or status == 'failed' or status == 'cancelled'
-end
-if terminal(candidate.status) and candidate.status ~= authorized_status then
-  return 0
-end
-if candidate.status == 'stopping' and authorized_status ~= 'stopping' then
-  return 0
-end
-if raw then
-  local existing = cjson.decode(raw)
-  local old_status = existing.status
-  if terminal(old_status) then
-    if candidate.status ~= old_status and not (allow_correction and terminal(candidate.status)) then
-      return 0
-    end
-    if candidate.status == old_status then
-      local same_owner =
-        (existing.user_id == nil or existing.user_id == cjson.null or candidate.user_id == existing.user_id) and
-        (existing.organization_id == nil or existing.organization_id == cjson.null or candidate.organization_id == existing.organization_id) and
-        (existing.thread_id == nil or existing.thread_id == cjson.null or candidate.thread_id == existing.thread_id)
-      if same_owner then
-        if (candidate.result == nil or candidate.result == cjson.null) and existing.result ~= nil and existing.result ~= cjson.null then
-          candidate.result = existing.result
-        end
-        if (candidate.confirmation == nil or candidate.confirmation == cjson.null) and existing.confirmation ~= nil and existing.confirmation ~= cjson.null then
-          candidate.confirmation = existing.confirmation
-        end
-      end
-    end
-  elseif old_status == 'stopping' then
-    if candidate.status ~= 'stopping' and not terminal(candidate.status) then
-      return 0
-    end
-    if terminal(candidate.status) and candidate.status ~= authorized_status then
-      return 0
-    end
-  elseif candidate.status == 'stopping' and authorized_status ~= 'stopping' then
-    return 0
-  else
-    local candidate_time = tonumber(candidate.created_at or 0)
-    local existing_time = tonumber(existing.created_at or 0)
-    local candidate_seq = tonumber(candidate._seq or 0)
-    local existing_seq = tonumber(existing._seq or 0)
-    if candidate_time < existing_time or (candidate_time == existing_time and candidate_seq < existing_seq) then
-      return 0
-    end
-  end
-end
-redis.call('SETEX', KEYS[1], ttl, cjson.encode(candidate))
-return 1
-"""
+_REDIS_WRITE_MAX_ATTEMPTS = 5
 
 
 async def _redis_write_if_newer(
@@ -421,18 +371,67 @@ async def _redis_write_if_newer(
     authorized_status: Optional[JobStatus] = None,
     allow_terminal_correction: bool = False,
 ) -> None:
-    """Atomically apply freshness and terminal-transition guards in Redis."""
+    """Atomically guard Redis publication while preserving Python JSON shape.
+
+    WATCH/MULTI keeps the status/freshness decision and write atomic. JSON is
+    decoded and merged in Python because Redis cjson encodes empty arrays as
+    objects, which changes the public job payload shape.
+    """
     key = f"{_JOB_KEY_PREFIX}{job_id}"
+    from redis.exceptions import WatchError
+
     try:
-        await redis_client.eval(
-            _REDIS_GUARDED_WRITE_SCRIPT,
-            1,
-            key,
-            _json.dumps(data, default=str),
-            _JOB_TTL_SECONDS,
-            authorized_status.value if authorized_status is not None else "",
-            "1" if allow_terminal_correction else "0",
-        )
+        candidate_json = _json.dumps(data, default=str)
+        async with redis_client.pipeline(transaction=True) as pipe:
+            for attempt in range(_REDIS_WRITE_MAX_ATTEMPTS):
+                try:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)
+                    existing = _json.loads(raw) if raw is not None else None
+                    candidate = _json.loads(candidate_json)
+                    candidate_status = _status_value(candidate)
+                    if (
+                        candidate_status == JobStatus.STOPPING
+                        and authorized_status != JobStatus.STOPPING
+                    ) or not _cache_transition_allowed(
+                        candidate,
+                        existing,
+                        authorized_status=authorized_status,
+                        allow_terminal_correction=allow_terminal_correction,
+                    ):
+                        await pipe.reset()
+                        return
+
+                    scope_compatible = existing is None or _scope_compatible(
+                        candidate, existing
+                    )
+                    _preserve_terminal_payload(
+                        candidate, existing, scope_compatible=scope_compatible
+                    )
+                    if existing is not None and scope_compatible:
+                        for field in ("user_id", "organization_id", "thread_id"):
+                            if (
+                                candidate.get(field) is None
+                                and existing.get(field) is not None
+                            ):
+                                candidate[field] = existing[field]
+
+                    pipe.multi()
+                    pipe.setex(
+                        key,
+                        _JOB_TTL_SECONDS,
+                        _json.dumps(candidate, default=str),
+                    )
+                    await pipe.execute()
+                    return
+                except WatchError:
+                    await pipe.reset()
+                    if attempt + 1 == _REDIS_WRITE_MAX_ATTEMPTS:
+                        logger.warning(
+                            "Redis job publication retries exhausted for job %s",
+                            job_id,
+                        )
+                        return
     except Exception:
         logger.exception("Failed to write job %s to Redis", job_id)
 

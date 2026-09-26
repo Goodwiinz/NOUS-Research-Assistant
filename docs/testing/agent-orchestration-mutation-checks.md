@@ -242,3 +242,139 @@ Logs are retained in `/tmp/task1-mutation-*.log`.
   `57cc7579cb27cd54d160a9b94f7490916f0caed256591dee57c29a4209be6d14`.
 - **Restored result:** same command, exit 0; `4 passed, 5 deselected`. Output:
   `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-sync-l1-guard-restored-green.log`.
+
+## Fix round 2 — Redis payload shape and winner preservation
+
+Evidence dated 2026-09-26 against review base
+`7ef93001c82f8062bf3934b3a85d9ed4f9112cde`; restored final source SHA-256 is
+`236eca83ab196f5aa421f2b5671874741518236476b43cda2f3fa0b8959cd29a`.
+The fix-round-1 delayed-writer mutation above tested the earlier Lua writer and
+is historical evidence only. The final writer is the shared Python
+WATCH/MULTI guard in `backend/src/services/agent/job_store.py:385-432`; all
+status/freshness comparison, safe winner merging, JSON encoding, and SETEX now
+occur within the watched transaction. Python JSON preserves nested empty
+arrays and objects. Watch conflicts have five bounded attempts, and the async
+pipeline context is closed on return or cancellation.
+
+The focused commands below ran with this environment (the displayed values
+are the disposable test services):
+`PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false
+ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15
+ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15`; the delayed-writer
+test also used
+`ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test`.
+
+### Redis JSON shape survives cold reads and merges
+
+- **Owning tests:**
+  `backend/tests/integration/test_job_store_redis_publication.py::test_cold_l1_job_poll_preserves_nested_json_shapes`,
+  `::test_repeated_completed_publication_preserves_winner_payload_and_enriches_scope`,
+  and `::test_stale_completed_publication_keeps_concurrent_redis_winner`.
+  The cold-L1 test calls the real polling endpoint and checks nested empty
+  arrays/objects in the decoded Redis bytes and response model.
+- **Behavioral RED command:**
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_job_store_redis_publication.py
+  ```
+
+- **Observed failures:** `3 failed`; Redis turned `tool_executions: []` and
+  nested arrays into objects, and repeated/stale COMPLETED publications exposed
+  the later answer. After moving the poll assertion ahead of raw-byte checks,
+  the actual endpoint produced `JobStatusResponse` validation error
+  `tool_executions: Input should be a valid list` (`input_value={}`). Its
+  focused output is
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-api-red.log`;
+  the three-case RED is
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-redis-red.log`.
+- **Restored focused result:** the original three Redis cases passed after the
+  WATCH/MULTI implementation (`3 passed`), recorded in
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-redis-green-initial.log`.
+  The final expanded cases and all
+  owning tests are included in the final `173 passed` combined run recorded in
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-affected-final.log`.
+
+### Same-terminal COMPLETED publication retains its result
+
+- **Source and guard:** `backend/src/services/agent/job_store.py:155-164`,
+  `_preserve_terminal_payload`. A compatible existing COMPLETED result must
+  survive a repeated COMPLETED candidate even when the candidate carries a
+  different result. CANCELLED and FAILED candidates continue to remove both
+  result and confirmation.
+- **Mutation:** neutralize the existing-COMPLETED preservation condition by
+  replacing `and _status_value(existing) == JobStatus.COMPLETED` with
+  `and False`.
+- **Command:** the shared focused environment above with
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_job_store_redis_publication.py::test_repeated_completed_publication_preserves_winner_payload_and_enriches_scope
+  ```
+- **Observed mutant failure:** exit 1; the real two-client Redis test saw
+  `different later answer` instead of the existing `first completed answer`
+  (`1 failed`). Output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-preservation-condition-red.log`.
+- **Restore proof:** copied `/tmp/task1-round2-job_store-r2.py` back;
+  `sha256sum` of the saved and restored source matched exactly at
+  `236eca83ab196f5aa421f2b5671874741518236476b43cda2f3fa0b8959cd29a`.
+- **Restored result:** the same test passed (`1 passed`), recorded in
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-preservation-condition-green.log`.
+
+### Missing status cannot replace COMPLETED or STOPPING
+
+- **Source and guard:** `backend/src/services/agent/job_store.py:105-113`,
+  `_cache_transition_allowed`. Preserve Lua's prior refusal of a candidate
+  whose status is unknown when the existing payload is terminal or STOPPING;
+  ordinary valid nonterminal freshness remains unchanged.
+- **Owning tests:**
+  `backend/tests/unit/services/test_job_store_redis_guard.py::test_redis_write_with_unknown_status_cannot_replace_absorbing_winner`
+  and
+  `backend/tests/integration/test_job_store_redis_publication.py::test_real_redis_unknown_status_cannot_replace_absorbing_winner`,
+  each parameterized over COMPLETED and STOPPING.
+- **Mutation:** replace the unknown-status branch with its former freshness-only
+  behavior, `return existing is None or _is_newer_or_equal(candidate, existing)`.
+- **Command:**
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/unit/services/test_job_store_redis_guard.py::test_redis_write_with_unknown_status_cannot_replace_absorbing_winner backend/tests/integration/test_job_store_redis_publication.py::test_real_redis_unknown_status_cannot_replace_absorbing_winner
+  ```
+- **Observed mutant failure:** exit 1; all four cases overwrote the terminal or
+  STOPPING payload with the newer missing-status candidate (`4 failed`). Output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-unknown-status-red.log`.
+- **Restore proof:** restored `/tmp/task1-round2-job_store-unknown-guard.py`;
+  the saved and restored source both hashed to
+  `236eca83ab196f5aa421f2b5671874741518236476b43cda2f3fa0b8959cd29a`.
+- **Restored result:** the same cases passed (`4 passed`), recorded in
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-unknown-status-green.log`.
+
+### Final WATCH guard protects a delayed real-Redis writer
+
+- **Source and guard:** `backend/src/services/agent/job_store.py:393-401`,
+  the `_cache_transition_allowed` decision inside the WATCH/MULTI transaction.
+  This prevents a delayed RUNNING candidate from replacing an accepted,
+  PostgreSQL-authoritative CANCELLED winner.
+- **Owning test:**
+  `backend/tests/integration/test_agent_run_concurrency.py::test_delayed_real_redis_running_writer_cannot_replace_cancelled_winner`.
+  It uses a real PostgreSQL cancellation decision and real Redis, pausing the
+  stale writer after WATCH/GET until the terminal publication commits.
+- **Mutation:** neutralize only the shared transition decision in the writer's
+  conditional (`or not _cache_transition_allowed(...)` becomes `or False`);
+  the separate authorization check for a STOPPING candidate remains intact.
+- **Command:** run from the Task 1 worktree with the shared focused environment
+  above:
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_agent_run_concurrency.py::test_delayed_real_redis_running_writer_cannot_replace_cancelled_winner
+  ```
+- **Observed mutant failure:** the clean repeated mutant failed at the Redis
+  winner assertion (`running` instead of `cancelled`, `1 failed`). Output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-watch-guard-red-final.log`.
+  The first attempt is preserved in
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-watch-guard-red.log`;
+  it showed the same Redis winner failure plus a test-proxy `get` logging
+  error. The proxy was updated to forward ordinary Redis client methods, and
+  the mutation was repeated cleanly.
+- **Restore proof:** restored `/tmp/task1-round2-job_store-watch-guard.py`;
+  saved and restored source hashes matched at
+  `236eca83ab196f5aa421f2b5671874741518236476b43cda2f3fa0b8959cd29a`.
+- **Restored result:** the same real-Postgres/Redis test passed (`1 passed`),
+  output
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-watch-guard-green.log`.

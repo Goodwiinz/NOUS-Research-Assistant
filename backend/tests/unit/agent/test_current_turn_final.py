@@ -299,6 +299,22 @@ async def test_compiled_specialist_graph_repairs_three_failed_tool_rounds(
     assert answer is not None
     assert answer != "STALE PRIOR TURN ANSWER"
     assert not getattr(result["messages"][-1], "tool_calls", [])
+    pending_tool_call_ids: list[str] = []
+    for message in result["messages"]:
+        if isinstance(message, AIMessage):
+            for call in message.tool_calls:
+                call_id = call["id"]
+                assert call_id is not None
+                pending_tool_call_ids.append(call_id)
+    completed_tool_call_ids: list[str] = []
+    for message in result["messages"]:
+        if isinstance(message, ToolMessage):
+            assert message.tool_call_id is not None
+            completed_tool_call_ids.append(message.tool_call_id)
+    assert sorted(completed_tool_call_ids) == sorted(pending_tool_call_ids), (
+        f"pending tool calls {pending_tool_call_ids!r} do not match ToolMessages "
+        f"{completed_tool_call_ids!r}"
+    )
 
 
 @pytest.mark.parametrize("runner", ["initial", "resume"])
