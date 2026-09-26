@@ -29,6 +29,21 @@ MEMORY_FALLBACK_ENVIRONMENTS = frozenset(
 )
 
 
+def _is_strict_environment(env: Optional[str]) -> bool:
+    """Strict = anything not explicitly a throwaway local/CI environment.
+
+    Replaces the old exact-match ``env in ("production", "staging")`` guard
+    (audit I24): unknown spellings like "prod", "prod-eu", "Production" or
+    custom shared-env names now fail closed instead of receiving the
+    repo-public fallback secrets (audit I1). An empty value is NOT unset —
+    it is an unknown environment name, so it is strict too; only a true
+    None/missing field defaults to the throwaway "development".
+    """
+    value = "development" if env is None else env
+    value = value.strip().lower()
+    return value not in MEMORY_FALLBACK_ENVIRONMENTS
+
+
 def _longest_literal_hostname_run(pattern: str) -> int:
     """Longest contiguous literal hostname segment (project slug specificity)."""
     pattern = re.sub(r"\[[^\]]+\](?:[+*?]|\{[^}]+\})?", "", pattern)
@@ -359,9 +374,9 @@ class Settings(BaseSettings):
 
         if is_weak:
             env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _is_strict_environment(env):
                 raise ValueError(
-                    "SECRET_KEY must be set to a strong value in production/staging"
+                    "SECRET_KEY must be set to a strong value in non-throwaway environments"
                 )
             return _LOCAL_SECRET_KEY
         if len(v) < 32:
@@ -385,9 +400,9 @@ class Settings(BaseSettings):
 
         if is_weak:
             env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _is_strict_environment(env):
                 raise ValueError(
-                    "JWT_SECRET_KEY must be set to a strong value in production/staging. "
+                    "JWT_SECRET_KEY must be set to a strong value in non-throwaway environments. "
                     "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
                 )
             return _LOCAL_JWT_SECRET_KEY
@@ -401,9 +416,9 @@ class Settings(BaseSettings):
         """Validate NEO4J_PASSWORD - require in production."""
         if not v or v == "neo4jpassword":
             env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _is_strict_environment(env):
                 raise ValueError(
-                    "NEO4J_PASSWORD must be set via environment variable in production/staging"
+                    "NEO4J_PASSWORD must be set via environment variable in non-throwaway environments"
                 )
             return "neo4jpassword"  # Default for local development
         return v
