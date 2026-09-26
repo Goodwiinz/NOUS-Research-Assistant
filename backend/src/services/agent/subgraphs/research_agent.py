@@ -98,6 +98,10 @@ _DIRECT_ARXIV_BLOCKED_WORDS = frozenset(
         "earliest",
         "oldest",
         "current",
+        "today",
+        "yesterday",
+        "tomorrow",
+        "tonight",
         "since",
         "during",
         "within",
@@ -116,7 +120,11 @@ _DIRECT_ARXIV_BLOCKED_WORDS = frozenset(
 )
 _DIRECT_ARXIV_BLOCKED_MODIFIER_RE = re.compile(
     r"\b(?:19|20)\d{2}\b"
-    r"|\b\d+\s+(?:papers?|results?|studies|articles?)\b"
+    r"|\b(?:\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
+    r"nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"hundred|thousand)\b(?:[ -]+[\w]+){0,4}[ -]+"
+    r"(?:papers?|results?|studies|articles?)\b"
     r"|\b(?:up\s+to|at\s+least|no\s+more\s+than|more\s+than|"
     r"fewer\s+than|less\s+than)\s+\d+\b",
     re.IGNORECASE,

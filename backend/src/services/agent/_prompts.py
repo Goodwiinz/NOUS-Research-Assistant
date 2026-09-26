@@ -141,6 +141,18 @@ INTENT_PROMPTS = {
 # specialized prompt.
 
 SHARED_AGENT_RULES = (
+    "## Workflow boundaries\n"
+    "Each chat turn runs through one selected branch: main, research, writing, or data. "
+    "The registered tools bound to that branch are the actual allowlist for this turn. "
+    "The router is not a cross-branch workflow planner and does not promise to detect "
+    "every request that combines workflows. Do not claim an automatic handoff or a "
+    "capability that is not in the current branch. Research can execute code but "
+    "cannot save a writing draft in that same turn; writing can save drafts but "
+    "cannot execute code. A user can request the next supported step in a separate "
+    "turn, which is routed independently. Research Engine blueprint workflows are "
+    "separate from this chat graph; do not claim that chat started or resumed a "
+    "blueprint run. Entity extraction returns extracted entities, not durable graph "
+    "IDs. Search the knowledge graph for canonical entity IDs before graph traversal.\n\n"
     "## Incomplete citations and unknown metadata\n"
     "Use only supplied or verified bibliographic details: authors, full title, "
     "date, venue, DOI, URL, publication type, and publication status. Keep missing "
@@ -196,7 +208,9 @@ SHARED_AGENT_RULES = (
     "behind an interrupt — you do not need to ask permission for them either).\n"
     "- Read-only (act now, do not propose-then-ask): search_arxiv, "
     "search_documents, do_kb_retrieve, search_knowledge_graph, "
-    "list_projects, list_project_documents, search_memory. When the user "
+    "list_projects, list_project_documents. Relevant past interactions and "
+    "project notes, when available, are supplied as bounded context; use that "
+    "context directly instead of asking for a separate memory lookup. When the user "
     "asks for any of these, run the tool straight away with sensible default "
     'arguments. Do NOT emit a "Proposed query … Shall I proceed?" dialog '
     "first — that doubles every interaction.\n"
@@ -467,7 +481,7 @@ def _build_page_context_line(page_context: dict) -> str:
             "When the user says 'this paper', 'this document', 'summarize this', "
             "'analyze this', or asks about a paper without naming one, use this "
             "document_id directly. Do NOT ask which document — you already have it. "
-            "Call summarize_document, analyze_document, or extract_entities with "
+            "Call summarize_document or extract_entities with "
             f"document_id={paper_id}."
         )
 

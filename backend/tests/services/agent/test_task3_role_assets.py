@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -21,6 +22,83 @@ from src.services.agent.tools import TOOL_REGISTRY
 BACKEND_ROOT = Path(__file__).parents[3]
 ASSET_ROOT = BACKEND_ROOT / "src/services/agent/subgraphs"
 ASSET_NAMES = ("research", "writing", "data")
+
+
+def _assert_supported_workflow_limits(text: str) -> None:
+    assert "one selected branch: main, research, writing, or data" in text
+    assert "does not promise to detect every request that combines workflows" in text
+    assert "Research can execute code but cannot save a writing draft" in text
+    assert "writing can save drafts but cannot execute code" in text
+    assert "blueprint workflows are separate from this chat graph" in text
+    assert "Entity extraction returns extracted entities, not durable graph IDs" in text
+    assert "Search the knowledge graph for canonical entity IDs" in text
+
+
+@pytest.mark.unit
+def test_supported_workflow_limits_match_live_prompts_and_operations_guide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The current guide and every live/fallback prompt state real branch limits."""
+    from src.services.agent import _prompts
+    from src.services.agent.subgraphs import (
+        agents_md_loader,
+        data_agent,
+        research_agent,
+        writing_agent,
+    )
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    normal_prompts = (
+        _prompts._LLM_NODE_STATIC_PROMPT,
+        research_agent._build_research_system_prompt(),
+        writing_agent._build_writing_system_prompt(),
+        data_agent._build_data_system_prompt(),
+    )
+    for prompt in normal_prompts:
+        _assert_supported_workflow_limits(prompt)
+
+    monkeypatch.setattr(agents_md_loader, "load_agents_md", lambda _branch: "")
+    fallback_prompts = (
+        research_agent._build_research_system_prompt(),
+        writing_agent._build_writing_system_prompt(),
+        data_agent._build_data_system_prompt(),
+    )
+    for prompt in fallback_prompts:
+        _assert_supported_workflow_limits(prompt)
+
+    research_tools = {
+        descriptor.name
+        for descriptor in TOOL_REGISTRY.descriptors_for_subgraph("research")
+    }
+    writing_tools = {
+        descriptor.name
+        for descriptor in TOOL_REGISTRY.descriptors_for_subgraph("writing")
+    }
+    data_tools = {
+        descriptor.name for descriptor in TOOL_REGISTRY.descriptors_for_subgraph("data")
+    }
+    assert "execute_code" in research_tools and "create_draft" not in research_tools
+    assert "create_draft" in writing_tools and "execute_code" not in writing_tools
+    assert {"extract_entities", "search_knowledge_graph"} <= data_tools
+
+    guide_path = BACKEND_ROOT.parent / "docs/operations/agent-supported-workflows.md"
+    guide = guide_path.read_text(encoding="utf-8")
+    normalized_guide = " ".join(guide.split())
+    for phrase in (
+        "one routed branch per user turn",
+        "Research cannot save a writing draft in the same turn",
+        "Writing cannot execute code",
+        "not durable graph IDs",
+        "separate from agent chat",
+        "do not promise that arbitrary natural-language requests",
+    ):
+        assert phrase in normalized_guide
+
+    relative_links = re.findall(r"\[[^\]]+\]\(([^)]+)\)", guide)
+    for target in relative_links:
+        if target.startswith(("http://", "https://", "#")):
+            continue
+        assert (guide_path.parent / target.split("#", 1)[0]).resolve().is_file(), target
 
 
 def _json_examples(asset: str, key: str) -> list[dict[str, Any]]:
@@ -364,6 +442,16 @@ def test_role_assets_match_existing_tool_names_and_loop_budget() -> None:
     assert "ingested_count" in research
     assert "search_memory" not in research + writing + data
     assert "analyze_document" not in research + writing + data
+
+    hard_rule = writing.split(
+        "## Hard rule — resolve the requested source before writing", 1
+    )[1].split("## Constraints", 1)[0]
+    assert "accessible document library" in hard_rule
+    assert "matching local source" in hard_rule
+    assert (
+        "run the `search_arxiv`/`ingest_arxiv_papers` resolution steps first anyway"
+        not in hard_rule
+    )
 
     from src.services.agent.subgraphs.data_agent import MAX_DATA_TOOL_LOOPS
 

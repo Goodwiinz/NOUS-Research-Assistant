@@ -691,3 +691,87 @@ pass because of an unrelated missing-scope guard.
   `db2b6534b61e2b9cae4d7c88eda5ff98c0128a859e7925d1dbb4e72f7d61b00c`.
 - **Restored result:** same command, exit 0; `1 passed`. Output:
   `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task-3-filtered-guard-mutation-v2-green.log`.
+
+## Task 3 review repair round — 2026-09-26
+
+These focused mutation checks cover the Task 3 round-2 candidate delta from
+`9efd2f58248d0d86d70a6fcbbc662f4ed1e90851`. They exercise the specialist
+whole-batch routing order, caller-scope rejection for ephemeral snapshots, and
+the post-provider soft-delete filter. The provider/model calls are offline
+fakes. Each source file was copied before mutation, restored from that copy,
+compared byte-for-byte with `cmp -s`, and retested using the same selection.
+
+### Specialist rejection precedes approval and terminal routes
+
+- **Source and guard:**
+  `backend/src/services/agent/subgraphs/_factory.py`, `should_continue`; the
+  `unavailable_tool_calls(...)` preflight must precede approval, error-circuit,
+  and loop-ceiling routing.
+- **Owning selection:** direct router checks plus the compiled writing,
+  research, and data parent-graph checks for under-budget, ceiling, and
+  error-limit states:
+  `tests/unit/agent/test_task3_runtime_projection.py` filtered by
+  `specialist_router_sends_unavailable_batch_to_preflight_first or
+  compiled_specialist_rejects_unavailable_batch_before_terminal_branches`.
+- **Mutation:** temporarily changed the preflight condition to
+  `if False and unavailable_tool_calls(...)`.
+- **Observed mutant failure:** exit 1; 11 failed and 1 passed. The direct
+  writing router selected interrupt, forced synthesis, or reflection under
+  pressure, and compiled parent tests observed forbidden interrupt/forced/
+  reflection routes instead of paired batch errors. The retained compiled
+  assertions include zero executor/operation claims, no further model call,
+  and one parent memory-save final.
+- **Restore proof:** restored from `/tmp/task3-factory.pre-mutation.py`;
+  `cmp -s` succeeded and the restored source SHA-256 was
+  `c2e2ea80f0c6a8d74ad11c405e88a0e4cf4716b7908104bace0e26414c8fe0d5`.
+- **Restored result:** same selection, exit 0; 12 passed. Red and green logs:
+  `task-3-r2-r1-router-mutation-red.log` and
+  `task-3-r2-r1-router-mutation-restored-green.log`.
+
+### Ephemeral hydration rejects an explicitly anchored caller
+
+- **Source and guard:**
+  `backend/src/services/agent/runtime_snapshot.py`, the threadless/jobless
+  ephemeral `identity_matches` exception. The fallback is permitted only when
+  the supplied and checkpoint caller state has no thread or job anchor.
+- **Owning selection:** the four explicit thread/job argument/state cases and
+  the unanchored ephemeral control in
+  `tests/unit/agent/test_task3_runtime_projection.py` filtered by
+  `threadless_ephemeral`.
+- **Mutation:** temporarily removed the checks for
+  `expected_thread_id is None` and `not expected_job_id`.
+- **Observed mutant failure:** exit 1; 3 explicit-anchor cases failed and 2
+  controls passed. Caller-supplied thread and job anchors incorrectly hydrated
+  the anchorless row.
+- **Restore proof:** restored from `/tmp/task3-runtime_snapshot.pre-mutation.py`;
+  `cmp -s` succeeded and the restored source SHA-256 was
+  `6a3df195ef459dd5133ba245ba245f6e1f3bfb7854bf70e3a6b50d8a31fac386`.
+- **Restored result:** same selection, exit 0; 5 passed. Red and green logs:
+  `task-3-r2-r4-ephemeral-guard-mutation-red.log` and
+  `task-3-r2-r4-ephemeral-guard-restored-green.log`.
+
+### DO resolution excludes a source deleted after provider dispatch
+
+- **Source and guard:** `backend/src/services/do_kb/resolve.py`, the
+  `Document.is_deleted == False` predicate on post-provider resolution.
+- **Owning selection:** actual compiled writing search-by-title → exact
+  selected-ID retrieval → DO provider fake → post-provider resolution, filtered
+  by `compiled_writing_resolves_named_local_source_before_retrieval and
+  do-deleted` in `tests/unit/agent/test_task3_compiled_context.py`. The fixture
+  models the selected document becoming soft-deleted after dispatch and returns
+  its stale chunk only if the query predicate is absent.
+- **Mutation:** temporarily removed `.where(Document.is_deleted == False)`.
+- **Observed mutant failure:** exit 1; the compiled flow accepted the stale
+  result and returned the deleted document's chunk instead of the expected
+  `no_scoped_chunks` response.
+- **Restore proof:** restored from `/tmp/task3-resolve.pre-mutation.py`;
+  `cmp -s` succeeded and the restored source SHA-256 was
+  `102d65f39db9d3647e54233b8b64ec89321a45de16b478578bd0d4e463fc26ee`.
+- **Restored result:** same selection, exit 0; 1 passed. Red and green logs:
+  `task-3-r2-r4-deleted-guard-mutation-red.log` and
+  `task-3-r2-r4-deleted-guard-restored-green.log`.
+
+The three commands above ran from `backend/` using `../.venv/bin/pytest` and
+saved complete output under the ignored `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/`
+directory. The restored hashes are the exact pre-mutation files, not hashes
+of normalized text.

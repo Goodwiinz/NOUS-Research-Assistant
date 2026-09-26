@@ -197,9 +197,19 @@ def make_specialist_subgraph(
 
     def should_continue(state: AgentState) -> str:
         """Decide whether to continue tool execution in this sub-graph."""
+        last = state["messages"][-1] if state["messages"] else None
+        if isinstance(last, AIMessage) and last.tool_calls:
+            from src.services.agent._nodes_tools import unavailable_tool_calls
+
+            # Route a mixed/unsupported batch to the paired whole-batch
+            # rejection before approval, error-circuit, or loop-ceiling
+            # handling. That execution boundary records errors for every call
+            # and performs no operation claim or effect.
+            if unavailable_tool_calls(last.tool_calls, state, branch=name):
+                return tool
+
         if state.get("error_count", 0) >= 3:
             return reflection
-        last = state["messages"][-1] if state["messages"] else None
         if isinstance(last, AIMessage) and last.tool_calls:
             if state.get("tool_loop_count", 0) < max_tool_loops:
                 if has_interrupt and any(

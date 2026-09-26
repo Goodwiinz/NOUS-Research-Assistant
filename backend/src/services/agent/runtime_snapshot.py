@@ -376,6 +376,8 @@ async def hydrate_runtime_state_from_snapshot(
         and not row_job_id
         and values.get("thread_persistence") == "ephemeral"
         and not values.get("thread_id")
+        and expected_thread_id is None
+        and not expected_job_id
     ):
         identity_matches = True
     # A threadless durable run must be anchored by its exact job id. A

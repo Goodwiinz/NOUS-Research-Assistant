@@ -76,6 +76,8 @@ def test_explicit_time_window_skips_fast_path(content: str) -> None:
         "find papers on arxiv about RAG",
         "please search arxiv for retrieval augmented generation.",
         "search arxiv for graph neural networks",
+        "search arxiv for 15-layer transformer architectures",
+        "search arxiv for eleven-dimensional transformer embeddings",
     ],
 )
 def test_narrow_standalone_forms_take_fast_path(content: str) -> None:
@@ -102,6 +104,9 @@ def test_narrow_standalone_forms_take_fast_path(content: str) -> None:
         "search arxiv for the top 10 transformer papers",
         "search arxiv for up to 5 transformer papers",
         "search arxiv for transformers at least 5 papers",
+        "search arxiv for 15 transformer papers",
+        "search arxiv for eleven transformer papers",
+        "search arxiv for transformer papers published yesterday",
         "search arxiv for those papers",
         "search arxiv for the same topic",
         "search arxiv for transformers?",
@@ -175,7 +180,16 @@ def test_prior_tool_result_after_current_human_disables_shortcut() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_declined_shortcut_uses_ordinary_research_model(monkeypatch):
+@pytest.mark.parametrize(
+    "content",
+    [
+        "search arxiv for transformers and save a draft",
+        "search arxiv for 15 transformer papers",
+        "search arxiv for eleven transformer papers",
+        "search arxiv for transformer papers published yesterday",
+    ],
+)
+async def test_declined_shortcut_uses_ordinary_research_model(monkeypatch, content):
     from langchain_core.messages import AIMessage
 
     import src.services.agent.graph as graph
@@ -198,9 +212,7 @@ async def test_declined_shortcut_uses_ordinary_research_model(monkeypatch):
 
     result = await research_llm_node(
         {
-            "messages": [
-                HumanMessage(content="search arxiv for transformers and save a draft")
-            ],
+            "messages": [HumanMessage(content=content)],
             "plan": [],
             "capability_limitation": {},
             "tool_loop_count": 0,
@@ -212,3 +224,7 @@ async def test_declined_shortcut_uses_ordinary_research_model(monkeypatch):
 
     assert result["messages"][0].content == "I will search for that topic."
     assert "search_arxiv" in observed["tools"]
+    assert any(
+        isinstance(message, HumanMessage) and message.content == content
+        for message in observed["messages"]
+    )
