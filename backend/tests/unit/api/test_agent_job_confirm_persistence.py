@@ -12,10 +12,12 @@ mirroring the SSE confirm path (streaming.py ``_resume_assistant_cmid``).
 import uuid as _uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import AsyncContextManager, AsyncIterator
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from tests.utils.agent_thread_access import editable_thread_getter
 
@@ -51,7 +53,10 @@ class _FakeGraph:
 @pytest.mark.asyncio
 async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid():
     from src.api.agent.execute import AgentExecuteRequest, _set_job
+    from src.services.agent import agent_execution_service
     from src.services.agent.agent_execution_service import _resume_agent_graph
+    from src.services.agent.agent_run_service import RunStatusDecision
+    from src.shared.enums import JobStatus
 
     user = Mock()
     user.id = "user-confirm-1"
@@ -61,19 +66,21 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid():
     conversation_id = str(uuid4())
     job_id = str(uuid4())
 
-    _set_job(
-        job_id,
-        {
-            "status": "awaiting_confirmation",
-            "tool_executions": [],
-            "user_id": str(user.id),
-            "request": AgentExecuteRequest(
-                messages=[{"role": "user", "content": "ingest this paper"}],
-                thread_id=thread_id,
-                model="model-router",
-            ).model_dump(),
-        },
-    )
+    with patch.object(agent_execution_service, "_write_to_redis_only", new=AsyncMock()):
+        _set_job(
+            job_id,
+            {
+                "status": "awaiting_confirmation",
+                "tool_executions": [],
+                "user_id": str(user.id),
+                "request": AgentExecuteRequest(
+                    messages=[{"role": "user", "content": "ingest this paper"}],
+                    thread_id=thread_id,
+                    model="model-router",
+                ).model_dump(),
+            },
+            project=False,
+        )
 
     pre_snapshot = SimpleNamespace(
         values={"user_id": str(user.id)},
@@ -87,10 +94,13 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid():
     )
     final_state = {
         "messages": [
-            SimpleNamespace(
-                type="ai",
+            AIMessage(
                 content="Done - the paper was ingested.",
-                usage_metadata={"input_tokens": 11, "output_tokens": 7},
+                usage_metadata={
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "total_tokens": 18,
+                },
             )
         ],
         "tool_executions": [],
@@ -100,12 +110,47 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid():
     graph = _FakeGraph(pre_snapshot, post_snapshot, final_state)
 
     thread_row = SimpleNamespace(id=thread_id, conversation_id=conversation_id)
-    db = AsyncMock()
-    db.get = AsyncMock(return_value=thread_row)
+    durable_run = SimpleNamespace(
+        job_id=job_id,
+        thread_id=thread_id,
+        client_message_id="original-user-turn-cmid",
+        user_message_id="original-user-message",
+    )
+    sessions: list[AsyncMock] = []
 
     @asynccontextmanager
-    async def _session_cm():
-        yield db
+    async def _session_cm(db: AsyncMock) -> AsyncIterator[AsyncMock]:
+        try:
+            yield db
+        finally:
+            await db.close()
+
+    def _new_session() -> AsyncContextManager[AsyncMock]:
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=thread_row)
+        db.execute = AsyncMock(
+            return_value=SimpleNamespace(
+                scalar_one_or_none=lambda: durable_run,
+                one_or_none=lambda: None,
+            )
+        )
+        sessions.append(db)
+        return _session_cm(db)
+
+    decision = RunStatusDecision(
+        job_id=job_id,
+        requested_status=JobStatus.COMPLETED,
+        effective_status=JobStatus.COMPLETED,
+        user_id=str(user.id),
+        organization_id=str(user.organization_id),
+        thread_id=thread_id,
+        error=None,
+        cancel_requested_at=None,
+        updated_at="2026-09-26T00:00:00+00:00",
+    )
+    record_job_status = AsyncMock(return_value=decision)
+    redis_client = AsyncMock()
+    redis_client.eval = AsyncMock(return_value=1)
 
     persist_assistant = AsyncMock(return_value="assistant-row-1")
     persist_user = AsyncMock()
@@ -125,11 +170,15 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_session_cm(),
+            side_effect=_new_session,
         ),
         patch(
             "src.services.agent.agent_run_service.record_job_status",
-            new_callable=AsyncMock,
+            new=record_job_status,
+        ),
+        patch(
+            "src.services.agent.job_store._get_redis",
+            new=AsyncMock(return_value=redis_client),
         ),
         patch(
             "src.services.agent.agent_execution_service._persist_assistant_message_safe",
@@ -164,3 +213,11 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid():
     assert kwargs["model_name"] == "model-router"
     assert kwargs["plan"] == final_state["plan"]
     assert kwargs["token_usage"] == {"input_tokens": 11, "output_tokens": 7}
+    record_job_status.assert_awaited_once()
+    assert record_job_status.await_args.args[0] == job_id
+    assert record_job_status.await_args.kwargs["raise_on_error"] is True
+    redis_client.eval.assert_awaited_once()
+    assert len(sessions) >= 2
+    assert sessions[0] is not sessions[1]
+    for session in sessions:
+        session.close.assert_awaited_once()
