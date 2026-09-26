@@ -400,15 +400,18 @@ async def test_compiled_branch_runtime_matrix_uses_one_frozen_projection(
 async def test_compiled_resume_uses_original_snapshot_after_live_skill_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A real active-version change cannot expand a hydrated compiled run."""
-    from datetime import datetime, timedelta, timezone
+    """A later live catalog activation cannot alter an old compiled run."""
     from hashlib import sha256
 
     from src.core.config import settings
-    from src.models import AgentRuntimeSnapshot, ProjectSkill, ProjectSkillVersion
+    from src.models import (
+        AgentRuntimeSnapshot,
+        ProjectSkill,
+        ProjectSkillVersion,
+        ProjectSkillVersionScan,
+    )
+    from src.services.agent import runtime_snapshot as runtime_snapshot_module
     from src.services.agent import tool_session as tool_session_module
-    from src.services.agent.runtime_snapshot import hydrate_runtime_state_from_snapshot
-    from src.services.agent.tools import TOOL_REGISTRY
 
     user_id = UUID("00000000-0000-4000-8000-000000000701")
     organization_id = UUID("00000000-0000-4000-8000-000000000702")
@@ -449,63 +452,134 @@ async def test_compiled_resume_uses_original_snapshot_after_live_skill_activatio
         created_by_id=user_id,
         active_version=frozen_version,
     )
-    registry_metadata = TOOL_REGISTRY.metadata_snapshot()
-    snapshot = AgentRuntimeSnapshot(
-        id=snapshot_id,
-        project_id=project_id,
+    user = SimpleNamespace(id=user_id, organization_id=organization_id)
+
+    class QueryAwareSkillSession:
+        """Return the same live ORM row through the production catalog query."""
+
+        def __init__(self) -> None:
+            self.snapshot: AgentRuntimeSnapshot | None = None
+            self.catalog_rows: list[Any] = []
+            self.scanned_version_ids: list[UUID] = []
+            self.scan_results: list[tuple[UUID, str]] = []
+            self.project_version_lookups: list[UUID] = []
+
+        async def scalars(self, statement: Any) -> Any:
+            assert statement.column_descriptions[0]["entity"] is ProjectSkill
+            assert statement.compile().params["project_id_1"] == project_id
+            self.catalog_rows.append(live_skill)
+            return SimpleNamespace(all=lambda: [live_skill])
+
+        async def scalar(self, statement: Any) -> Any:
+            description = statement.column_descriptions[0]
+            if description["entity"] is ProjectSkillVersionScan:
+                scanned_version_id = UUID(
+                    str(statement.compile().params["version_id_1"])
+                )
+                self.scanned_version_ids.append(scanned_version_id)
+                if scanned_version_id in {frozen_version_id, live_version_id}:
+                    self.scan_results.append((scanned_version_id, "passed"))
+                    return SimpleNamespace(scan_state="passed")
+                return None
+            if description["expr"] is ProjectSkill.project_id:
+                version_id = UUID(str(statement.compile().params["id_1"]))
+                self.project_version_lookups.append(version_id)
+                return project_id
+            raise AssertionError(f"unexpected production scalar query: {statement}")
+
+        async def get(self, model: Any, identity: Any, **_kwargs: Any) -> Any:
+            requested_id = UUID(str(identity))
+            if (
+                model is AgentRuntimeSnapshot
+                and self.snapshot is not None
+                and requested_id == snapshot_id
+            ):
+                return self.snapshot
+            if model is ProjectSkillVersion:
+                return {
+                    frozen_version_id: frozen_version,
+                    live_version_id: live_version,
+                }.get(requested_id)
+            return None
+
+        def add(self, row: Any) -> None:
+            assert isinstance(row, AgentRuntimeSnapshot)
+            setattr(row, "id", snapshot_id)
+            self.snapshot = row
+
+        async def commit(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            return None
+
+    db: Any = QueryAwareSkillSession()
+    snapshot_settings = SimpleNamespace(
+        PROJECT_SKILL_CATALOG_ENABLED=True,
+        PROJECT_SKILL_RUNTIME_ENABLED=True,
+        PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS=1,
+    )
+    monkeypatch.setattr(
+        runtime_snapshot_module, "get_settings", lambda: snapshot_settings
+    )
+    monkeypatch.setattr(
+        runtime_snapshot_module,
+        "get_authorized_project",
+        AsyncMock(return_value=SimpleNamespace(id=project_id)),
+    )
+    frozen_runtime = await runtime_snapshot_module.create_runtime_snapshot(
+        db,
         user_id=user_id,
-        thread_id=None,
-        job_id=None,
-        tool_registry_hash=registry_metadata["hash"],
-        tool_registry_version=registry_metadata["version"],
-        tool_metadata={
-            "descriptors": TOOL_REGISTRY.frozen_descriptor_metadata(
-                conditions={"project_skill_catalog"}
-            )
+        project_id=project_id,
+    )
+    frozen_runtime_id = frozen_runtime.id
+    assert frozen_runtime_id is not None
+    snapshot = db.snapshot
+    assert snapshot is not None
+    assert frozen_runtime_id == str(snapshot_id)
+    assert db.catalog_rows == [live_skill]
+    assert db.catalog_rows[0] is live_skill
+    assert db.scanned_version_ids == [frozen_version_id]
+    assert db.scan_results == [(frozen_version_id, "passed")]
+    assert snapshot.skill_catalog[0]["version_id"] == str(frozen_version_id)
+    assert frozen_runtime.project_skill_catalog == (
+        {
+            "name": "frozen-review",
+            "version": 1,
+            "description": "Version captured by the run.",
+            "content_hash": frozen_hash,
         },
-        skill_catalog=[
-            {
-                "version_id": str(frozen_version_id),
-                "name": "frozen-review",
-                "description": "Version captured by the run.",
-                "version": 1,
-                "content_hash": frozen_hash,
-            }
-        ],
-        loaded_skill_versions=[],
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
     )
 
-    # Freeze the snapshot at version 1, then advance the actual live project
-    # skill pointer before checkpoint hydration and graph resume.
+    # The same ORM object returned by the real catalog query now points at v2.
     setattr(live_skill, "active_version_id", live_version_id)
-    live_skill.active_version = live_version
+    setattr(live_skill, "active_version", live_version)
     assert live_skill.active_version_id == live_version_id
-
-    user = SimpleNamespace(id=user_id, organization_id=organization_id)
-    db = MagicMock()
-    db.commit = AsyncMock()
-    db.rollback = AsyncMock()
-    db.add = MagicMock()
-
-    async def db_get(model: Any, identity: Any, **_kwargs: Any) -> Any:
-        if model is AgentRuntimeSnapshot and UUID(str(identity)) == snapshot_id:
-            return snapshot
-        if model is ProjectSkillVersion:
-            requested_version = UUID(str(identity))
-            return {
-                frozen_version_id: frozen_version,
-                live_version_id: live_version,
-            }.get(requested_version)
-        return None
-
-    db.get = AsyncMock(side_effect=db_get)
-    db.scalar = AsyncMock(return_value=project_id)
+    fresh_catalog = await runtime_snapshot_module._eligible_catalog(
+        db, project_id=project_id
+    )
+    assert fresh_catalog == [
+        {
+            "version_id": str(live_version_id),
+            "name": "frozen-review",
+            "description": "Later active version.",
+            "version": 2,
+            "content_hash": live_hash,
+        }
+    ]
+    assert db.catalog_rows == [live_skill, live_skill]
+    assert db.catalog_rows[1] is db.catalog_rows[0]
+    assert db.scanned_version_ids == [frozen_version_id, live_version_id]
+    assert db.scan_results == [
+        (frozen_version_id, "passed"),
+        (live_version_id, "passed"),
+    ]
+    assert snapshot.skill_catalog[0]["version_id"] == str(frozen_version_id)
 
     legacy_state = _compiled_driver_state()
     legacy_state.update(
         {
-            "runtime_snapshot_id": str(snapshot_id),
+            "runtime_snapshot_id": frozen_runtime_id,
             "current_project_id": str(project_id),
             "thread_persistence": "ephemeral",
             "thread_id": "",
@@ -523,7 +597,7 @@ async def test_compiled_resume_uses_original_snapshot_after_live_skill_activatio
     legacy_state.pop("runtime_tool_names")
     legacy_state.pop("tool_registry_hash")
     legacy_state.pop("tool_registry_version")
-    hydrated = await hydrate_runtime_state_from_snapshot(
+    hydrated = await runtime_snapshot_module.hydrate_runtime_state_from_snapshot(
         db,
         legacy_state,
         user_id=user_id,
@@ -538,8 +612,6 @@ async def test_compiled_resume_uses_original_snapshot_after_live_skill_activatio
             "content_hash": frozen_hash,
         }
     ]
-
-    from contextlib import asynccontextmanager
 
     @asynccontextmanager
     async def fake_tool_session() -> AsyncIterator[Any]:
@@ -602,6 +674,7 @@ async def test_compiled_resume_uses_original_snapshot_after_live_skill_activatio
     assert frozen_instructions in str(loaded_message.content)
     assert live_instructions not in str(loaded_message.content)
     assert snapshot.loaded_skill_versions[0]["version_id"] == str(frozen_version_id)
+    assert db.project_version_lookups == [frozen_version_id]
 
 
 @pytest.mark.parametrize(

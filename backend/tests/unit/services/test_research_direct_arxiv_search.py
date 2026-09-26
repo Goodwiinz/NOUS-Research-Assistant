@@ -106,6 +106,9 @@ def test_narrow_standalone_forms_take_fast_path(content: str) -> None:
         "search arxiv for transformers at least 5 papers",
         "search arxiv for 15 transformer papers",
         "search arxiv for eleven transformer papers",
+        "search arxiv for 15 transformer based language model optimization papers",
+        "search arxiv for eleven transformer based language model optimization papers",
+        "search arxiv for 15 a b c d e f g h i j k l m n o p q r papers",
         "search arxiv for transformer papers published yesterday",
         "search arxiv for those papers",
         "search arxiv for the same topic",
@@ -186,6 +189,8 @@ def test_prior_tool_result_after_current_human_disables_shortcut() -> None:
         "search arxiv for transformers and save a draft",
         "search arxiv for 15 transformer papers",
         "search arxiv for eleven transformer papers",
+        "search arxiv for 15 transformer based language model optimization papers",
+        "search arxiv for eleven transformer based language model optimization papers",
         "search arxiv for transformer papers published yesterday",
     ],
 )
@@ -204,6 +209,7 @@ async def test_declined_shortcut_uses_ordinary_research_model(monkeypatch, conte
             return self
 
         async def ainvoke(self, messages, **_kwargs):
+            observed["ainvoke_calls"] = int(observed.get("ainvoke_calls", 0)) + 1
             observed["messages"] = messages
             return AIMessage(content="I will search for that topic.")
 
@@ -222,9 +228,12 @@ async def test_declined_shortcut_uses_ordinary_research_model(monkeypatch, conte
         {},
     )
 
-    assert result["messages"][0].content == "I will search for that topic."
+    assert not result["messages"][0].tool_calls
+    assert observed["ainvoke_calls"] == 1
     assert "search_arxiv" in observed["tools"]
+    model_messages = observed["messages"]
+    assert isinstance(model_messages, list)
     assert any(
         isinstance(message, HumanMessage) and message.content == content
-        for message in observed["messages"]
+        for message in model_messages
     )
