@@ -124,3 +124,37 @@ async def test_create_draft_tool_returns_readable_terminal_failure() -> None:
     service_cls.wait_for_terminal_status.assert_awaited_once_with(
         "task-2", timeout_seconds=105.0
     )
+
+
+async def test_create_draft_tool_preserves_generation_conflict_without_waiting() -> (
+    None
+):
+    project = SimpleNamespace(id=uuid4(), name="Transformers")
+    user = cast(User, SimpleNamespace(id=uuid4()))
+    db, _request_transaction_open = _request_session()
+    service = MagicMock()
+    service.generate_draft = AsyncMock(
+        return_value={
+            "error": "A different draft generation is already in progress for this project.",
+            "error_category": "draft_generation_conflict",
+        }
+    )
+
+    with (
+        patch(
+            "src.services.agent.tools_impl._verify_project_ownership",
+            new=AsyncMock(return_value=project),
+        ),
+        patch(
+            "src.services.research.draft_generation_service.DraftGenerationService",
+        ) as service_cls,
+    ):
+        service_cls.return_value = service
+        service_cls.wait_for_terminal_status = AsyncMock()
+        result = await _tool_create_draft(
+            {"project_id": str(project.id), "themes": ["attention"]}, db, user
+        )
+
+    assert result["error_category"] == "draft_generation_conflict"
+    assert "task_id" not in result
+    service_cls.wait_for_terminal_status.assert_not_awaited()

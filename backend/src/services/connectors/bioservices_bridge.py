@@ -71,17 +71,29 @@ def _bioservices_available() -> bool:
 
 
 class BioServicesBridgeConnector(ExternalDBConnector):
-    """Bridge that exposes ~70 BioServices databases through one connector."""
+    """Bridge for the five BioServices integrations configured here."""
+
+    supported_filter_keys = frozenset({"service"})
+
+    def validate_search_filters(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        validated = super().validate_search_filters(filters)
+        service = validated.get("service")
+        if service is not None and not isinstance(service, str):
+            raise ValueError("filter 'service' must be a string")
+        if service is not None and service not in _SUPPORTED_SERVICES:
+            raise ValueError("filter 'service' is not a supported BioServices service")
+        return validated
 
     @property
     def info(self) -> ConnectorInfo:
         return ConnectorInfo(
             name="bioservices",
-            display_name="BioServices (70+ databases)",
+            display_name="BioServices (5 supported services)",
             description=(
-                "Bridge to the BioServices Python library providing access to "
-                "KEGG, ChEBI, Reactome, BioModels, WikiPathways, and ~65 more "
-                "biological web services."
+                "Bridge to five configured BioServices integrations: KEGG, ChEBI, "
+                "Reactome, BioModels, and WikiPathways."
             ),
             domains=[
                 ConnectorDomain.BIOMEDICAL,

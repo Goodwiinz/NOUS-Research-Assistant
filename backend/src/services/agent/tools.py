@@ -748,6 +748,8 @@ async def create_draft(
     themes: List[str],
     project_id: Optional[str] = None,
     style: str = "academic",
+    document_ids: Optional[List[str]] = None,
+    instructions: Optional[str] = None,
     config: RunnableConfig = None,  # type: ignore[assignment]
 ) -> Dict[str, Any]:
     """Generate a literature review draft for a project based on themes.
@@ -765,7 +767,13 @@ async def create_draft(
         if not resolved_pid:
             return _missing_project_error("create_draft")
         return await _tool_create_draft(
-            {"project_id": resolved_pid, "themes": themes, "style": safe_style},
+            {
+                "project_id": resolved_pid,
+                "themes": themes,
+                "style": safe_style,
+                "document_ids": document_ids,
+                "instructions": instructions,
+            },
             db,
             current_user,
         )
@@ -895,8 +903,8 @@ async def search_external_database(
 ) -> Dict[str, Any]:
     """Search external databases (PubMed, UniProt, ChEMBL, PubChem, FRED, SEC EDGAR, etc.).
 
-    Provides a single entry point to 250+ external scientific and financial
-    data sources. Supply ``connector`` to target one (e.g. ``"pubmed"``),
+    Provides a single entry point to the registered scientific and financial
+    connector adapters. Supply ``connector`` to target one (e.g. ``"pubmed"``),
     ``domain`` to fan out across a category (``biomedical``, ``chemistry``,
     ``finance``, ``clinical``, ``genomics``, ``economic``, ``literature``),
     or omit both to search every available connector concurrently.
@@ -924,16 +932,8 @@ async def search_external_database(
     safe_domain = _validate_connector_name(domain)
     if safe_domain:
         args["domain"] = safe_domain
-    # Filters are an opaque mapping; only pass through scalar values to
-    # keep the dispatch surface small and prevent nested-payload abuse.
-    if filters and isinstance(filters, dict):
-        scalar_filters = {
-            k: v
-            for k, v in filters.items()
-            if isinstance(k, str) and isinstance(v, (str, int, float, bool))
-        }
-        if scalar_filters:
-            args["filters"] = scalar_filters
+    if filters is not None:
+        args["filters"] = filters
     return await _tool_search_external_database(args)
 
 

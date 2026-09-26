@@ -61,7 +61,14 @@ def _make_bg_session(documents, add_sink: list):
     update_result = MagicMock()
 
     session.execute = AsyncMock(
-        side_effect=[docs_result, lock_result, version_result, update_result]
+        side_effect=[
+            docs_result,
+            docs_result,
+            lock_result,
+            docs_result,
+            version_result,
+            update_result,
+        ]
     )
     session.add = MagicMock(side_effect=add_sink.append)
     session.flush = AsyncMock()

@@ -32,6 +32,12 @@ from langchain_core.runnables import RunnableConfig
 
 from src.services.agent._nodes_memory import memory_retrieval_node
 from src.services.agent._nodes_rag import _coerce_text, rag_node
+from src.services.agent.identity_ledger import (
+    MAX_HARVEST_MESSAGES,
+    MAX_REFERENCE_TEXT_CHARS,
+    harvest_legacy_tool_messages,
+    identity_references_from_text,
+)
 from src.services.agent.observability import (
     record_node_duration,
     tag_trace_intent,
@@ -213,7 +219,7 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
     latest_human = next(
         (
             message
-            for message in reversed(messages)
+            for message in reversed(messages[-MAX_HARVEST_MESSAGES:])
             if isinstance(message, HumanMessage)
         ),
         None,
@@ -228,6 +234,23 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
             checkpointed_messages = [latest_human]
         if len(message_id) <= 128:
             operation_turn_id = message_id
+
+    latest_user_text = (
+        latest_human.content[:MAX_REFERENCE_TEXT_CHARS]
+        if latest_human is not None and isinstance(latest_human.content, str)
+        else ""
+    )
+    identity_references = identity_references_from_text(
+        latest_user_text, state.get("current_project_id")
+    )
+    # Recover before any downstream LLM node trims the legacy message history.
+    # This is also run on resumed checkpoints, whose older ToolMessages may
+    # predate the ledger field.
+    recovered_identity_ledger = harvest_legacy_tool_messages(
+        messages,
+        state.get("identity_ledger"),
+        identity_references,
+    )
 
     results = await asyncio.gather(
         _timed_subtask("rag", rag_node(state, config)),
@@ -267,6 +290,8 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         # checkpointed HumanMessage has a stable id.
         "tool_operation_protocol_version": 0,
         "tool_operation_turn_id": "",
+        "identity_ledger": recovered_identity_ledger,
+        "identity_current_references": identity_references,
     }
     if operation_turn_id is not None:
         merged["tool_operation_protocol_version"] = 1

@@ -44,6 +44,10 @@ from src.services.agent.error_recovery import (
     classify_error_from_payload,
     retry_transient,
 )
+from src.services.agent.identity_ledger import (
+    extract_tool_identities,
+    merge_identity_ledger,
+)
 from src.services.agent.observability import track_node_execution
 from src.services.agent.retrieval_provenance import merge_retrieved_contexts
 from src.services.agent.state import AgentState
@@ -490,6 +494,43 @@ SIDE_EFFECT_TOOLS = frozenset(
 )
 
 
+def _identity_ledger_update(state: AgentState, observations: list[tuple]) -> dict:
+    """Merge exact bounded tool-result identities into checkpoint state."""
+    references = state.get("identity_current_references", [])
+    ledger = merge_identity_ledger(state.get("identity_ledger"), None, references)
+    for tool_name, call_id, status, payload in observations[:128]:
+        if not isinstance(payload, dict):
+            continue
+        if "status" not in payload and isinstance(status, str):
+            payload = {**payload, "status": status}
+        incoming = extract_tool_identities(
+            str(tool_name),
+            payload,
+            str(call_id),
+            str(state.get("tool_operation_turn_id", "") or "unknown_turn"),
+        )
+        ledger = merge_identity_ledger(ledger, incoming, references)
+    if len(observations) > 128:
+        ledger["overflow"]["dropped_count"] = min(
+            2**31 - 1, ledger["overflow"]["dropped_count"] + len(observations) - 128
+        )
+        ledger["overflow"]["incomplete"] = True
+    return {"identity_ledger": ledger}
+
+
+def _identity_observation(
+    tool_name: str, call_id: str, execution: object
+) -> tuple | None:
+    if not isinstance(execution, dict):
+        return None
+    return (
+        tool_name,
+        call_id,
+        execution.get("status"),
+        execution.get("result"),
+    )
+
+
 async def _execute_single_tool(
     tc: dict,
     config: RunnableConfig,
@@ -829,6 +870,7 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
 
     tool_messages: List[ToolMessage] = []
     batch_executions: List[dict] = []
+    identity_observations: list[tuple] = []
     any_failure = False
     all_success = True
     # Iterate in the original tool_calls order so ToolMessage ids line up
@@ -838,6 +880,9 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
             prior = cached[tc["id"]]
             tool_messages.append(build_deduped_tool_message(tc["id"], prior))
             tool_executions.append(build_deduped_execution_entry(tc["id"], tc, prior))
+            observation = _identity_observation(tc["name"], tc["id"], prior)
+            if observation is not None:
+                identity_observations.append(observation)
             continue
         if tc["id"] in capped:
             prior = capped[tc["id"]]
@@ -855,6 +900,9 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
             tool_executions.append(
                 build_failure_capped_execution_entry(tc["id"], tc, prior)
             )
+            observation = _identity_observation(tc["name"], tc["id"], prior)
+            if observation is not None:
+                identity_observations.append(observation)
             continue
         r = fresh_by_id.get(tc["id"])
         if r is None:
@@ -897,6 +945,9 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
         tool_messages.append(r["message"])
         tool_executions.append(r["execution"])
         batch_executions.append(r["execution"])
+        observation = _identity_observation(tc["name"], tc["id"], r["execution"])
+        if observation is not None:
+            identity_observations.append(observation)
         error_count += r["error_increment"]
         if r["error_text"]:
             last_error = r["error_text"]
@@ -953,6 +1004,7 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
         "tool_loop_count": state.get("tool_loop_count", 0) + 1,
         "tools_all_deduped": tools_all_deduped,
         "loaded_skill_versions": loaded_skill_versions,
+        **_identity_ledger_update(state, identity_observations),
     }
 
 
@@ -1117,6 +1169,7 @@ def make_filtered_tool_node(
         skipped_by_id = {message.tool_call_id: message for message in skipped_messages}
         tool_messages = list(skipped_messages)
         batch_executions: List[dict] = []
+        identity_observations: list[tuple] = []
         any_failure = False
         all_success = True
         for tc in allowed_calls:
@@ -1126,6 +1179,9 @@ def make_filtered_tool_node(
                 tool_executions.append(
                     build_deduped_execution_entry(tc["id"], tc, prior)
                 )
+                observation = _identity_observation(tc["name"], tc["id"], prior)
+                if observation is not None:
+                    identity_observations.append(observation)
                 continue
             if tc["id"] in capped:
                 prior = capped[tc["id"]]
@@ -1141,6 +1197,9 @@ def make_filtered_tool_node(
                 tool_executions.append(
                     build_failure_capped_execution_entry(tc["id"], tc, prior)
                 )
+                observation = _identity_observation(tc["name"], tc["id"], prior)
+                if observation is not None:
+                    identity_observations.append(observation)
                 continue
             r = fresh_by_id.get(tc["id"])
             if r is None:
@@ -1180,6 +1239,9 @@ def make_filtered_tool_node(
             tool_messages.append(r["message"])
             tool_executions.append(r["execution"])
             batch_executions.append(r["execution"])
+            observation = _identity_observation(tc["name"], tc["id"], r["execution"])
+            if observation is not None:
+                identity_observations.append(observation)
             error_count += r["error_increment"]
             if r["error_text"]:
                 last_error = r["error_text"]
@@ -1230,6 +1292,7 @@ def make_filtered_tool_node(
             "last_error_info": last_error_info,
             "tool_loop_count": state.get("tool_loop_count", 0) + 1,
             "tools_all_deduped": tools_all_deduped,
+            **_identity_ledger_update(state, identity_observations),
         }
 
     return filtered_tool_node

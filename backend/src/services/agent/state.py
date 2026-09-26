@@ -88,3 +88,7 @@ class AgentState(TypedDict):
     # checkpointed in preprocessing before any mutation can reach tool_node.
     tool_operation_protocol_version: NotRequired[int]
     tool_operation_turn_id: NotRequired[str]
+    # Optional so historical checkpoints deserialize unchanged. The ledger is
+    # bounded, checkpoint-safe observed identity evidence, never authorization.
+    identity_ledger: NotRequired[dict[str, Any]]
+    identity_current_references: NotRequired[list[str]]

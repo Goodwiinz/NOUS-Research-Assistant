@@ -82,6 +82,33 @@ def test_result_cap_preserves_bounded_identity_subset_and_is_idempotent() -> Non
     assert repeated["_tool_result_bounds"]["identity_entries"] == entries
 
 
+def test_result_cap_retains_external_connector_namespace_for_duplicate_ids() -> None:
+    from src.services.agent.tools_impl import _cap_tool_result
+
+    bounded = _cap_tool_result(
+        {
+            "results": [
+                {"id": "shared-accession-7", "title": "SEC", "source": "sec_edgar"},
+                {"id": "shared-accession-7", "title": "UniProt", "source": "uniprot"},
+            ],
+            "connectors_searched": ["sec_edgar", "uniprot"],
+            "message": "large ordinary result " * 3000,
+        }
+    )
+
+    entries = bounded["_tool_result_bounds"]["identity_entries"]
+    external = {
+        (entry["kind"], entry["namespace"], entry["id"], entry["label"])
+        for entry in entries
+        if entry["kind"] == "external"
+    }
+    assert external == {
+        ("external", "sec_edgar", "shared-accession-7", "SEC"),
+        ("external", "uniprot", "shared-accession-7", "UniProt"),
+    }
+    assert _cap_tool_result(bounded) == bounded
+
+
 def test_result_cap_retains_pending_and_error_classification_with_large_collections() -> (
     None
 ):
@@ -413,13 +440,15 @@ async def test_filtered_mixed_batch_preserves_all_emitted_tool_result_order(
         {"list_projects", "create_project_note", "list_project_documents"}
     )(state, {})
 
-    assert executed == ["read-1", "write", "read-2"]
+    assert executed == []
     assert [message.tool_call_id for message in result["messages"]] == [
         "read-1",
         "skipped",
         "write",
         "read-2",
     ]
+    assert all(message.status == "error" for message in result["messages"])
+    assert result["capability_limitation"]["unavailable_tools"] == ["search_arxiv"]
 
 
 async def test_injected_mutation_without_operation_scope_fails_closed(

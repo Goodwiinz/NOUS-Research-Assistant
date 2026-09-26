@@ -72,6 +72,20 @@ def _parse_entry(entry: Dict[str, Any]) -> ConnectorResult:
 class UniProtConnector(ExternalDBConnector):
     """UniProt protein sequence and functional information."""
 
+    supported_filter_keys = frozenset({"organism"})
+
+    def validate_search_filters(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        validated = super().validate_search_filters(filters)
+        organism = validated.get("organism")
+        if organism is not None and (
+            not isinstance(organism, str)
+            or not all(char.isalnum() or char in " _.-" for char in organism)
+        ):
+            raise ValueError("filter 'organism' contains unsupported query syntax")
+        return validated
+
     @property
     def info(self) -> ConnectorInfo:
         return ConnectorInfo(
