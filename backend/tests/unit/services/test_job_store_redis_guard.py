@@ -1,8 +1,7 @@
-"""Regression tests for the L2 (Redis) monotonic write guard (audit fix #5).
+"""Regression tests for atomic L2 terminal/freshness guarding.
 
-``_redis_write_if_newer`` must skip a write when Redis already holds a strictly
-newer job state, so a delayed fire-and-forget write cannot stomp a job that has
-since completed.
+``_redis_write_if_newer`` uses one Lua eval to compare status/freshness and
+publish atomically, so a delayed writer cannot stomp a durable terminal winner.
 """
 
 from __future__ import annotations
@@ -11,20 +10,44 @@ import json
 
 import pytest
 
+from src.shared.enums import JobStatus
+
 
 class _FakeRedis:
-    """Minimal async Redis stub backing a single job key."""
+    """Minimal atomic-eval Redis stub backing a single job key."""
 
     def __init__(self, existing=None):
         self.value = json.dumps(existing) if existing is not None else None
-        self.setex_calls = []
+        self.eval_calls = []
 
-    async def get(self, key):
-        return self.value
-
-    async def setex(self, key, ttl, payload):
-        self.setex_calls.append((key, ttl, payload))
-        self.value = payload
+    async def eval(self, script, numkeys, key, payload, ttl, authorized, correction):
+        self.eval_calls.append(
+            (script, numkeys, key, payload, ttl, authorized, correction)
+        )
+        candidate = json.loads(payload)
+        existing = json.loads(self.value) if self.value is not None else None
+        terminal = {"completed", "failed", "cancelled"}
+        if candidate.get("status") in terminal and candidate["status"] != authorized:
+            return 0
+        if candidate.get("status") == "stopping" and authorized != "stopping":
+            return 0
+        if existing is not None:
+            old_status = existing.get("status")
+            if old_status in terminal:
+                if candidate.get("status") != old_status and not (
+                    correction == "1" and candidate.get("status") in terminal
+                ):
+                    return 0
+            elif old_status == "stopping":
+                if candidate.get("status") not in terminal | {"stopping"}:
+                    return 0
+            elif (candidate.get("created_at", 0), candidate.get("_seq", 0)) < (
+                existing.get("created_at", 0),
+                existing.get("_seq", 0),
+            ):
+                return 0
+        self.value = json.dumps(candidate)
+        return 1
 
 
 @pytest.mark.unit
@@ -37,7 +60,8 @@ async def test_redis_write_skipped_when_existing_is_newer():
     await _redis_write_if_newer(
         redis, "job-1", {"status": "running", "created_at": 50.0}
     )
-    assert redis.setex_calls == []
+    assert len(redis.eval_calls) == 1
+    assert redis.value == json.dumps({"status": "completed", "created_at": 100.0})
 
 
 @pytest.mark.unit
@@ -48,10 +72,13 @@ async def test_redis_write_applied_when_newer():
 
     redis = _FakeRedis(existing={"status": "running", "created_at": 50.0})
     await _redis_write_if_newer(
-        redis, "job-1", {"status": "completed", "created_at": 100.0}
+        redis,
+        "job-1",
+        {"status": "completed", "created_at": 100.0},
+        authorized_status=JobStatus.COMPLETED,
     )
-    assert len(redis.setex_calls) == 1
-    assert json.loads(redis.setex_calls[0][2])["status"] == "completed"
+    assert len(redis.eval_calls) == 1
+    assert json.loads(redis.value)["status"] == "completed"
 
 
 @pytest.mark.unit
@@ -64,4 +91,5 @@ async def test_redis_write_applied_when_absent():
     await _redis_write_if_newer(
         redis, "job-1", {"status": "running", "created_at": 1.0}
     )
-    assert len(redis.setex_calls) == 1
+    assert len(redis.eval_calls) == 1
+    assert json.loads(redis.value)["status"] == "running"

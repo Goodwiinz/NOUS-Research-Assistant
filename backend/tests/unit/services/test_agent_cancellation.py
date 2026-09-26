@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Callable
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -33,6 +34,37 @@ def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "src.services.threads.workspace_access.get_thread",
         editable_thread_getter(),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_status_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return a unit-test decision without connecting to the database."""
+    from src.services.agent.agent_run_service import RunStatusDecision
+    from src.shared.enums import JobStatus
+
+    async def record_job_status(
+        job_id: str,
+        data: dict[str, Any],
+        *,
+        raise_on_error: bool = False,
+    ) -> RunStatusDecision:
+        del raise_on_error
+        status = JobStatus(data["status"])
+        return RunStatusDecision(
+            job_id=job_id,
+            requested_status=status,
+            effective_status=status,
+            user_id=data.get("user_id"),
+            organization_id=data.get("organization_id"),
+            thread_id=data.get("thread_id"),
+            error=data.get("error"),
+            cancel_requested_at=None,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    monkeypatch.setattr(
+        "src.services.agent.agent_run_service.record_job_status", record_job_status
     )
 
 
@@ -479,10 +511,33 @@ async def _start_test_runner(
         sessions.append(db)
         yield db
 
-    async def record_job(job_key: str, data: dict[str, Any]) -> None:
+    async def record_job(
+        job_key: str,
+        data: dict[str, Any],
+        *,
+        require_durable_decision: bool = False,
+        **_kwargs: Any,
+    ) -> Any:
         terminal_writes.append(data)
         with service._jobs_lock:
             service._jobs[job_key] = {**service._jobs.get(job_key, {}), **data}
+        if not require_durable_decision:
+            return None
+        from src.services.agent.agent_run_service import RunStatusDecision
+        from src.shared.enums import JobStatus
+
+        status = JobStatus(data["status"])
+        return RunStatusDecision(
+            job_id=job_key,
+            requested_status=status,
+            effective_status=status,
+            user_id=data.get("user_id"),
+            organization_id=data.get("organization_id"),
+            thread_id=data.get("thread_id"),
+            error=data.get("error"),
+            cancel_requested_at=None,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
 
     async def cancellation_check(
         db: Any, job_key: str, organization_id: str, user_id: str

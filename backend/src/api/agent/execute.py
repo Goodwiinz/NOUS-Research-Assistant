@@ -74,6 +74,7 @@ from src.services.agent.agent_submission_service import (
     abandon_awaiting_submission,
     request_run_cancellation,
 )
+from src.services.agent.job_store import set_job as _set_job_async
 
 # Wire models moved to the service layer (audit B5) so the graph runner can
 # build them without importing src.api. Re-exported here so every existing
@@ -431,21 +432,16 @@ async def _celery_dispatch(
             "celery dispatch: enqueue failed for job %s — marking failed", job_id
         )
         error = "Agent dispatch failed (task queue unavailable). Please retry."
-        _set_job(
+        await _set_job_async(
             job_id,
             {
                 "status": JobStatus.FAILED,
                 "error": error,
                 "tool_executions": [],
+                "thread_id": str(request.thread_id) if request.thread_id else None,
                 **_actor_fields(current_user),
             },
-        )
-        # Durable projection write (await — the fire-and-forget projection
-        # scheduled by _set_job is best-effort; this one must land so the
-        # sweeper never resurrects the orphan as "stale running").
-        await agent_run_service.record_job_status(
-            job_id,
-            {"status": JobStatus.FAILED, "error": error, **_actor_fields(current_user)},
+            require_durable_decision=True,
         )
         return "failed", job_id
 

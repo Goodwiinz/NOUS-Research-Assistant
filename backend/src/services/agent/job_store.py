@@ -7,13 +7,9 @@ The in-memory ``OrderedDict`` is kept as an L1 read cache (write-through)
 so the hot path (polling) avoids a Redis round-trip.
 
 Every status write is additionally projected into the durable ``agent_runs``
-Postgres table. Non-terminal writes remain fire-and-forget; thread-scoped
-terminal writes land before L1/Redis publication on the happy path, so
-completion does not hold the database's single-writer slot longer than
-necessary. A failed strict write does not cost the terminal status itself: it
-falls back to the same best-effort re-projection non-terminal writes use, so
-a Postgres blip at completion narrows durability instead of losing the
-result (see ``set_job``).
+Postgres table. Non-terminal writes remain fire-and-forget. Producer terminal
+writes wait for the database's effective decision before publishing to L1 or
+Redis; a failed decision never exposes an uncommitted terminal result.
 """
 
 from __future__ import annotations
@@ -37,7 +33,14 @@ if TYPE_CHECKING:
     # setup can't interfere with other async libraries during app startup.
     import redis.asyncio as aioredis
 
+    from src.services.agent.agent_run_service import RunStatusDecision
+
 logger = logging.getLogger(__name__)
+
+
+class JobStatusPublicationError(RuntimeError):
+    """A requested job state could not be authorized by durable storage."""
+
 
 # ---------------------------------------------------------------------------
 # Key naming
@@ -81,6 +84,77 @@ def _is_newer_or_equal(data: dict, existing: dict) -> bool:
         existing.get("created_at", 0),
         existing.get("_seq", 0),
     )
+
+
+def _status_value(data: dict) -> Optional[JobStatus]:
+    try:
+        return JobStatus(data.get("status"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _cache_transition_allowed(
+    candidate: dict,
+    existing: Optional[dict],
+    *,
+    authorized_status: Optional[JobStatus] = None,
+    allow_terminal_correction: bool = False,
+) -> bool:
+    """Guard cache writes against terminal regression and stale freshness."""
+    candidate_status = _status_value(candidate)
+    if candidate_status is None:
+        return existing is None or _is_newer_or_equal(candidate, existing)
+    if candidate_status.is_terminal and authorized_status != candidate_status:
+        return False
+    if existing is None:
+        return True
+
+    existing_status = _status_value(existing)
+    if existing_status is None:
+        return _is_newer_or_equal(candidate, existing)
+    if existing_status.is_terminal:
+        return (
+            candidate_status == existing_status
+            and _is_newer_or_equal(candidate, existing)
+        ) or (allow_terminal_correction and candidate_status.is_terminal)
+    if existing_status == JobStatus.STOPPING:
+        if candidate_status.is_terminal:
+            return authorized_status == candidate_status
+        return candidate_status == JobStatus.STOPPING and _is_newer_or_equal(
+            candidate, existing
+        )
+    if candidate_status == JobStatus.STOPPING:
+        return authorized_status == JobStatus.STOPPING
+    return _is_newer_or_equal(candidate, existing)
+
+
+def _scope_compatible(candidate: dict, existing: dict) -> bool:
+    for key in ("user_id", "organization_id", "thread_id"):
+        left, right = candidate.get(key), existing.get(key)
+        if left is not None and right is not None and str(left) != str(right):
+            return False
+    return True
+
+
+def _preserve_terminal_payload(
+    candidate: dict, existing: Optional[dict], *, scope_compatible: bool = True
+) -> None:
+    """Keep terminal winners' result fields and strip non-success losers."""
+    status = _status_value(candidate)
+    if status in {JobStatus.STOPPING, JobStatus.CANCELLED, JobStatus.FAILED}:
+        candidate.pop("result", None)
+        candidate.pop("confirmation", None)
+        return
+    if (
+        status == JobStatus.COMPLETED
+        and existing is not None
+        and scope_compatible
+        and _status_value(existing) == JobStatus.COMPLETED
+    ):
+        if "result" in existing:
+            candidate["result"] = existing["result"]
+        if "confirmation" in existing:
+            candidate.pop("confirmation", None)
 
 
 def _l1_cleanup() -> None:
@@ -279,24 +353,86 @@ def schedule_run_projection(job_id: str, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _redis_write_if_newer(redis_client: Any, job_id: str, data: dict) -> None:
-    """``setex`` *data* only if Redis does not already hold a newer job state.
+_REDIS_GUARDED_WRITE_SCRIPT = """
+local raw = redis.call('GET', KEYS[1])
+local candidate = cjson.decode(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local authorized_status = ARGV[3]
+local allow_correction = ARGV[4] == '1'
+local function terminal(status)
+  return status == 'completed' or status == 'failed' or status == 'cancelled'
+end
+if terminal(candidate.status) and candidate.status ~= authorized_status then
+  return 0
+end
+if candidate.status == 'stopping' and authorized_status ~= 'stopping' then
+  return 0
+end
+if raw then
+  local existing = cjson.decode(raw)
+  local old_status = existing.status
+  if terminal(old_status) then
+    if candidate.status ~= old_status and not (allow_correction and terminal(candidate.status)) then
+      return 0
+    end
+    if candidate.status == old_status then
+      local same_owner =
+        (existing.user_id == nil or existing.user_id == cjson.null or candidate.user_id == existing.user_id) and
+        (existing.organization_id == nil or existing.organization_id == cjson.null or candidate.organization_id == existing.organization_id) and
+        (existing.thread_id == nil or existing.thread_id == cjson.null or candidate.thread_id == existing.thread_id)
+      if same_owner then
+        if (candidate.result == nil or candidate.result == cjson.null) and existing.result ~= nil and existing.result ~= cjson.null then
+          candidate.result = existing.result
+        end
+        if (candidate.confirmation == nil or candidate.confirmation == cjson.null) and existing.confirmation ~= nil and existing.confirmation ~= cjson.null then
+          candidate.confirmation = existing.confirmation
+        end
+      end
+    end
+  elseif old_status == 'stopping' then
+    if candidate.status ~= 'stopping' and not terminal(candidate.status) then
+      return 0
+    end
+    if terminal(candidate.status) and candidate.status ~= authorized_status then
+      return 0
+    end
+  elseif candidate.status == 'stopping' and authorized_status ~= 'stopping' then
+    return 0
+  else
+    local candidate_time = tonumber(candidate.created_at or 0)
+    local existing_time = tonumber(existing.created_at or 0)
+    local candidate_seq = tonumber(candidate._seq or 0)
+    local existing_seq = tonumber(existing._seq or 0)
+    if candidate_time < existing_time or (candidate_time == existing_time and candidate_seq < existing_seq) then
+      return 0
+    end
+  end
+end
+redis.call('SETEX', KEYS[1], ttl, cjson.encode(candidate))
+return 1
+"""
 
-    Monotonic guard for the L2 (Redis) layer: a delayed fire-and-forget write
-    must not stomp a newer authoritative state that landed after it. Reads the
-    stored ``created_at`` and skips the write when it is strictly newer.
 
-    Not fully atomic (GET then SET) — closes the dominant delayed-write race;
-    a same-tick concurrent SET is still theoretically possible.
-    """
+async def _redis_write_if_newer(
+    redis_client: Any,
+    job_id: str,
+    data: dict,
+    *,
+    authorized_status: Optional[JobStatus] = None,
+    allow_terminal_correction: bool = False,
+) -> None:
+    """Atomically apply freshness and terminal-transition guards in Redis."""
     key = f"{_JOB_KEY_PREFIX}{job_id}"
     try:
-        existing_raw = await redis_client.get(key)
-        if existing_raw is not None:
-            existing = _json.loads(existing_raw)
-            if existing.get("created_at", 0) > data.get("created_at", 0):
-                return
-        await redis_client.setex(key, _JOB_TTL_SECONDS, _json.dumps(data, default=str))
+        await redis_client.eval(
+            _REDIS_GUARDED_WRITE_SCRIPT,
+            1,
+            key,
+            _json.dumps(data, default=str),
+            _JOB_TTL_SECONDS,
+            authorized_status.value if authorized_status is not None else "",
+            "1" if allow_terminal_correction else "0",
+        )
     except Exception:
         logger.exception("Failed to write job %s to Redis", job_id)
 
@@ -313,18 +449,89 @@ async def _write_to_redis_only(job_id: str, data: dict) -> None:
         await _redis_write_if_newer(redis_client, job_id, data)
 
 
-async def set_job(job_id: str, data: dict, *, project: bool = True) -> None:
+def _decision_status(decision: Any) -> Optional[JobStatus]:
+    try:
+        return JobStatus(decision.effective_status)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _decision_authorizes(
+    job_id: str, data: dict, decision: Optional[RunStatusDecision]
+) -> Optional[JobStatus]:
+    if decision is None or getattr(decision, "job_id", None) != job_id:
+        return None
+    status = _decision_status(decision)
+    if status is None or _status_value(data) != status:
+        return None
+    for field in ("user_id", "organization_id", "thread_id"):
+        decided = getattr(decision, field, None)
+        supplied = data.get(field)
+        if (
+            decided is not None
+            and supplied is not None
+            and str(supplied) != str(decided)
+        ):
+            return None
+    return status
+
+
+def _apply_durable_decision(
+    job_id: str,
+    data: dict,
+    decision: Optional[RunStatusDecision],
+    requested_status: Optional[JobStatus],
+) -> tuple[JobStatus, bool]:
+    authorized_status = _decision_status(decision) if decision is not None else None
+    if (
+        decision is None
+        or authorized_status is None
+        or getattr(decision, "job_id", None) != job_id
+    ):
+        raise JobStatusPublicationError(
+            f"Durable status decision is missing or mismatched for job {job_id}"
+        )
+    for field in ("user_id", "organization_id", "thread_id"):
+        value = getattr(decision, field, None)
+        supplied = data.get(field)
+        if value is not None and supplied is not None and str(supplied) != str(value):
+            raise JobStatusPublicationError(
+                f"Durable status scope mismatched for job {job_id}"
+            )
+        if value is None:
+            data.pop(field, None)
+        else:
+            data[field] = value
+    data["status"] = authorized_status
+    error = getattr(decision, "error", None)
+    if error is None:
+        data.pop("error", None)
+    else:
+        data["error"] = error
+
+    if requested_status is not None and requested_status != authorized_status:
+        data.pop("result", None)
+        data.pop("confirmation", None)
+    _preserve_terminal_payload(data, None)
+    return authorized_status, authorized_status.is_terminal
+
+
+async def set_job(
+    job_id: str,
+    data: dict,
+    *,
+    project: bool = True,
+    require_durable_decision: bool = False,
+    decision: Optional[RunStatusDecision] = None,
+) -> Optional[RunStatusDecision]:
     """Persist a job to Redis (L2) + in-memory L1 cache (write-through).
 
-    L1 overwrite is guarded by ``created_at`` so a delayed fire-and-forget
-    write cannot stomp a newer authoritative state written after it.
-
-    ``project=False`` is for live-store mirrors of a durable transition that
-    already committed synchronously. Scheduling a duplicate projection there
-    could land after a later state transition and regress the durable row.
+    Every terminal request and explicitly guarded producer-exit status waits
+    for the durable row's effective decision before it may touch either cache.
+    ``project=False`` skips a duplicate database projection; a terminal mirror
+    still requires the immutable decision produced by the committed write.
     """
     global _seq
-    data["created_at"] = time.time()
 
     # Carry ownership forward and capture the prior request/result before the
     # replacement write. Terminal updates often contain only status + actor.
@@ -347,91 +554,86 @@ async def set_job(job_id: str, data: dict, *, project: bool = True) -> None:
         ):
             data["organization_id"] = existing["organization_id"]
 
-    projection_payload = _projection_payload(data, existing)
-    try:
-        status = JobStatus(data.get("status"))
-    except (TypeError, ValueError):
-        status = None
-    strict_terminal_projection = bool(
-        project
-        and status is not None
-        and status.is_terminal
-        and projection_payload.get("thread_id")
+    requested_status = _status_value(data)
+    strict_projection = require_durable_decision or bool(
+        requested_status is not None and requested_status.is_terminal
     )
-    projection_failed = False
-    if strict_terminal_projection:
-        # Release the durable single-writer slot before L1/Redis can expose a
-        # terminal result to the client — but that ordering must not cost the
-        # terminal status itself. Every caller of set_job for a terminal write
-        # sits directly in an except-handler body with no try/except of its
-        # own (agent_execution_service._run_agent_graph's COMPLETED/FAILED
-        # branches); letting record_job_status's exception escape here kills
-        # the background task with L1/Redis stuck on "running" until the
-        # sweeper's stale window, which then overwrites the real error with a
-        # generic "swept as stale" message. Fall through instead: the
-        # single-writer slot is released late rather than the result being
-        # lost, and the best-effort seam below (shared with non-terminal
-        # writes) retries the durable row — the sweeper also repairs the
-        # projection from the live store on its next pass regardless.
+    durable_decision = decision
+    if strict_projection and project:
         from src.services.agent.agent_run_service import record_job_status
 
         try:
-            await record_job_status(job_id, projection_payload, raise_on_error=True)
-        except Exception:
-            logger.exception(
-                "Terminal agent_runs projection failed for job %s; exposing "
-                "L1/Redis anyway and rescheduling a best-effort re-projection",
+            durable_decision = await record_job_status(
                 job_id,
+                _projection_payload(data, existing),
+                raise_on_error=True,
             )
-            projection_failed = True
+        except Exception as exc:
+            raise JobStatusPublicationError(
+                f"Could not decide status for job {job_id}: {exc}"
+            ) from exc
+        if durable_decision is None:
+            raise JobStatusPublicationError(
+                f"Durable status projection returned no decision for job {job_id}"
+            )
+    elif strict_projection and durable_decision is None:
+        raise JobStatusPublicationError(
+            f"A committed status decision is required to mirror job {job_id}"
+        )
 
-    # L1: in-memory cache (monotonic guard — never overwrite newer data).
-    # Re-read `existing` here rather than reusing the pre-projection snapshot
-    # above: the strict projection just awaited a Postgres round-trip, and a
-    # newer write (e.g. get_job_fresh folding in a fresher Redis read, or a
-    # concurrent set_job) may have landed in L1 during that window. Comparing
-    # against the stale snapshot would let this write stomp it; the lock is
-    # the only place the comparison is valid. (The pre-await snapshot above
-    # is still correct for the owner/org carry-forward — that races nothing.)
+    authorized_status: Optional[JobStatus] = None
+    allow_terminal_correction = False
+    projected_synchronously = False
+    if strict_projection:
+        authorized_status, allow_terminal_correction = _apply_durable_decision(
+            job_id, data, durable_decision, requested_status
+        )
+        projected_synchronously = project
+
+    data["created_at"] = time.time()
     with _l1_lock:
         _seq += 1
         data["_seq"] = _seq
         existing = _l1.get(job_id)
-        if existing is None or _is_newer_or_equal(data, existing):
+        scope_compatible = existing is None or _scope_compatible(data, existing)
+        if _cache_transition_allowed(
+            data,
+            existing,
+            authorized_status=authorized_status,
+            allow_terminal_correction=allow_terminal_correction,
+        ):
+            _preserve_terminal_payload(
+                data, existing, scope_compatible=scope_compatible
+            )
             _l1[job_id] = data
         _l1_maybe_cleanup()
 
-    # Non-terminal and threadless writes retain the rollout's best-effort
-    # projection behavior. Thread-scoped terminal writes landed above, unless
-    # the strict projection failed — that case falls back here too.
-    if project and (not strict_terminal_projection or projection_failed):
+    if project and not projected_synchronously:
         schedule_run_projection(job_id, data)
 
-    # L2: Redis
-    await set_job_redis_only(job_id, data)
+    await set_job_redis_only(job_id, data, decision=durable_decision)
+    return durable_decision
 
 
-async def set_job_redis_only(job_id: str, data: dict) -> None:
-    """Persist a job to Redis only — does not touch L1.
-
-    This is the *inline authoritative* write (called from ``set_job`` on the
-    async run path). It writes directly with ``setex`` and intentionally skips
-    the GET-before-SET monotonic guard: a job's status transitions are written
-    in order on a single task, so there is no newer state to stomp here, and
-    the per-turn hot path shouldn't pay an extra Redis round-trip per write.
-    The guard lives on ``_write_to_redis_only`` — the *delayed* fire-and-forget
-    path, where an out-of-order stomp can actually happen.
-    """
+async def set_job_redis_only(
+    job_id: str,
+    data: dict,
+    *,
+    decision: Optional[RunStatusDecision] = None,
+) -> None:
+    """Atomically write an authorized payload to Redis without touching L1."""
     redis_client = await _get_redis()
     if redis_client is not None:
-        try:
-            await redis_client.setex(
-                f"{_JOB_KEY_PREFIX}{job_id}",
-                _JOB_TTL_SECONDS,
-                _json.dumps(data, default=str),
-            )
-        except Exception:
-            logger.exception("Failed to write job %s to Redis", job_id)
+        authorized_status = _decision_authorizes(job_id, data, decision)
+        await _redis_write_if_newer(
+            redis_client,
+            job_id,
+            data,
+            authorized_status=authorized_status,
+            allow_terminal_correction=(
+                authorized_status is not None and authorized_status.is_terminal
+            ),
+        )
 
 
 async def _cas_in_memory(

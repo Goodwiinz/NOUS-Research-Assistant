@@ -15,6 +15,7 @@ types elsewhere, so never ``create_all`` the full metadata):
 
 import asyncio
 import uuid
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import patch
@@ -58,6 +59,13 @@ class _ScalarResult:
 
     def scalar_one_or_none(self) -> Any:
         return self._value
+
+
+class _ThreadForeignKeyViolation(Exception):
+    """Driver-shaped evidence for a missing thread FK in the wrapper test."""
+
+    sqlstate = "23503"
+    constraint_name = "agent_runs_thread_id_fkey"
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +559,7 @@ async def test_dangling_thread_fallback_does_not_resurrect_completed(
             async def commit(self) -> None:
                 if self._fail_first_commit:
                     self._fail_first_commit = False
-                    raise IntegrityError("UPDATE", {}, RuntimeError("dangling thread"))
+                    raise IntegrityError("UPDATE", {}, _ThreadForeignKeyViolation())
                 await self._db.commit()
 
         delayed = asyncio.create_task(
@@ -798,7 +806,16 @@ async def test_record_job_status_projects_job_store_payload(session_factory):
         "error": None,
     }
     with patch("src.core.database.AsyncSessionLocal", session_factory):
-        await svc.record_job_status(job_id, payload)
+        decision = await svc.record_job_status(job_id, payload)
+
+    assert decision is not None
+    assert decision.job_id == job_id
+    assert decision.requested_status is JobStatus.COMPLETED
+    assert decision.effective_status is JobStatus.COMPLETED
+    assert decision.requested_status_won is True
+    assert decision.thread_id == str(nested_thread)
+    with pytest.raises(FrozenInstanceError):
+        setattr(decision, "effective_status", JobStatus.FAILED)
 
     async with session_factory() as db:
         run = await db.get(AgentRun, job_id)

@@ -50,8 +50,7 @@ _CANCELLATION_POLL_SECONDS = 0.5
 from src.services.agent import job_store as _job_store
 from src.services.agent._builders import RECURSION_LIMIT
 from src.services.agent._sanitize import current_turn_final_text, sanitize_page_context
-from src.services.agent.agent_run_service import get_run
-from src.services.agent.job_store import _is_newer_or_equal
+from src.services.agent.agent_run_service import RunStatusDecision, get_run
 from src.services.agent.job_store import _l1 as _jobs
 from src.services.agent.job_store import _l1_lock as _jobs_lock
 from src.services.agent.job_store import _write_to_redis_only
@@ -137,6 +136,17 @@ def _set_job(job_id: str, data: dict, *, project: bool = True):
     """
     import asyncio as _asyncio
 
+    try:
+        sync_status = JobStatus(data.get("status"))
+    except (TypeError, ValueError):
+        sync_status = None
+    if sync_status is not None and (
+        sync_status.is_terminal or sync_status == JobStatus.STOPPING
+    ):
+        raise _job_store.JobStatusPublicationError(
+            "Terminal and STOPPING job writes require awaited durable publication"
+        )
+
     data["created_at"] = time.time()
     with _jobs_lock:
         # Same owner carry-forward as job_store.set_job: replacement writes
@@ -164,7 +174,7 @@ def _set_job(job_id: str, data: dict, *, project: bool = True):
         # one order.
         _job_store._seq += 1
         data["_seq"] = _job_store._seq
-        if existing is None or _is_newer_or_equal(data, existing):
+        if _job_store._cache_transition_allowed(data, existing):
             _jobs[job_id] = data
 
     # Durable projection (fire-and-forget; Redis stays authoritative). The
@@ -211,6 +221,67 @@ def _actor_fields(current_user: User) -> dict:
         "user_id": str(current_user.id),
         "organization_id": str(org) if org else None,
     }
+
+
+async def _publish_producer_status(
+    job_id: str,
+    payload: dict,
+    current_user: User,
+    *,
+    thread_id: Optional[str] = None,
+) -> RunStatusDecision:
+    """Publish a producer exit only after its durable status decision.
+
+    A late Stop can win after the cancellation monitor's final read. The row
+    transition returned by ``set_job`` is the arbitration point: when it says
+    STOPPING (or reports an active run with a committed cancellation marker),
+    this producer acknowledges the request once as CANCELLED before returning.
+    """
+    scoped_payload = {**payload, **_actor_fields(current_user)}
+    if thread_id is not None:
+        scoped_payload["thread_id"] = str(thread_id)
+    decision = await _set_job_async(
+        job_id,
+        scoped_payload,
+        require_durable_decision=True,
+    )
+    if decision is None:
+        raise _job_store.JobStatusPublicationError(
+            f"Durable status decision returned no outcome for job {job_id}"
+        )
+
+    effective_status = JobStatus(decision.effective_status)
+    cancellation_requested = effective_status == JobStatus.STOPPING or (
+        not effective_status.is_terminal and decision.cancel_requested_at is not None
+    )
+    if not cancellation_requested:
+        return decision
+
+    cancellation_payload = {
+        "status": JobStatus.CANCELLED,
+        "error": "execution cancelled",
+        **_actor_fields(current_user),
+    }
+    if thread_id is not None:
+        cancellation_payload["thread_id"] = str(thread_id)
+    acknowledged = await _set_job_async(
+        job_id,
+        cancellation_payload,
+        require_durable_decision=True,
+    )
+    if acknowledged is None:
+        raise _job_store.JobStatusPublicationError(
+            f"Cancellation acknowledgement returned no outcome for job {job_id}"
+        )
+    acknowledged_status = JobStatus(acknowledged.effective_status)
+    if acknowledged_status == JobStatus.STOPPING or (
+        not acknowledged_status.is_terminal
+        and acknowledged.cancel_requested_at is not None
+    ):
+        raise _job_store.JobStatusPublicationError(
+            f"Cancellation acknowledgement left job {job_id} active"
+        )
+    return acknowledged
 
 
 def _get_job(job_id: str) -> dict | None:
@@ -2581,29 +2652,31 @@ async def _run_agent_graph(
                     await graph.aget_state(config)
                 )
                 if confirmation_details is not None:
-                    await _set_job_async(
+                    await _publish_producer_status(
                         job_id,
                         {
                             "status": JobStatus.AWAITING_CONFIRMATION,
                             "confirmation": confirmation_details,
                             "tool_executions": [],
-                            **_actor_fields(current_user),
                             "request": request.model_dump(mode="json"),
                         },
+                        current_user,
+                        thread_id=resolved_thread_id,
                     )
                     return
             except GraphInterrupt as exc:
                 # Defensive fallback — see _extract_pending_interrupt docstring.
                 confirmation_details = extract_interrupt_confirmation(exc)
-                await _set_job_async(
+                await _publish_producer_status(
                     job_id,
                     {
                         "status": JobStatus.AWAITING_CONFIRMATION,
                         "confirmation": confirmation_details,
                         "tool_executions": [],
-                        **_actor_fields(current_user),
                         "request": request.model_dump(mode="json"),
                     },
+                    current_user,
+                    thread_id=resolved_thread_id,
                 )
                 return
 
@@ -2703,14 +2776,15 @@ async def _run_agent_graph(
                 conversation_id=conversation_id,
             )
 
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.COMPLETED,
                     "result": result.model_dump(),
                     "tool_executions": list(final_state.get("tool_executions", [])),
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=resolved_thread_id,
             )
         except asyncio.CancelledError:
             # CancelledError inherits from BaseException (since Python 3.8),
@@ -2718,37 +2792,39 @@ async def _run_agent_graph(
             # and the job would stay stuck in ``"running"`` forever. Mark it
             # cancelled first, then re-raise so the task tears down cleanly.
             logger.warning("Agent graph execution cancelled", extra={"job_id": job_id})
-            try:
-                await _set_job_async(
-                    job_id,
-                    {
-                        "status": JobStatus.CANCELLED,
-                        "error": "execution cancelled",
-                        **_actor_fields(current_user),
-                    },
-                )
-            except Exception:
-                logger.exception("Failed to mark cancelled job %s", job_id)
+            await _publish_producer_status(
+                job_id,
+                {"status": JobStatus.CANCELLED, "error": "execution cancelled"},
+                current_user,
+                thread_id=resolved_thread_id,
+            )
+            raise
+        except _job_store.JobStatusPublicationError:
+            logger.exception(
+                "Durable status publication failed for agent graph %s", job_id
+            )
             raise
         except asyncio.TimeoutError:
             logger.error("Agent graph execution timed out", extra={"job_id": job_id})
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.FAILED,
                     "error": "Agent execution timed out after 360s",
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=resolved_thread_id,
             )
         except Exception as e:
             logger.error("Agent graph execution failed", exc_info=e)
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.FAILED,
                     "error": client_safe_error(e),
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=resolved_thread_id,
             )
 
 
@@ -2773,6 +2849,7 @@ async def _resume_agent_graph(
 
     async with AsyncSessionLocal() as db:
         try:
+            verified_thread_id: Optional[str] = None
             # L1 first, then Redis: in Celery dispatch mode (or behind a
             # multi-replica API) the pod resuming the confirm may not be the
             # pod that dispatched, so the request payload only exists in
@@ -2800,7 +2877,7 @@ async def _resume_agent_graph(
                 logger.warning(
                     "Resume aborted for %s: no job payload (expired)", job_id
                 )
-                await _set_job_async(
+                await _publish_producer_status(
                     job_id,
                     {
                         "status": JobStatus.FAILED,
@@ -2808,8 +2885,8 @@ async def _resume_agent_graph(
                             "This confirmation has expired. "
                             "Please start the request again."
                         ),
-                        **_actor_fields(current_user),
                     },
+                    current_user,
                 )
                 return
 
@@ -2822,13 +2899,13 @@ async def _resume_agent_graph(
                         create_if_missing=False,
                     )
                 except (AgentThreadResolutionError, ValueError):
-                    await _set_job_async(
+                    await _publish_producer_status(
                         job_id,
                         {
                             "status": JobStatus.FAILED,
                             "error": "Thread not found",
-                            **_actor_fields(current_user),
                         },
+                        current_user,
                     )
                     return
 
@@ -2889,13 +2966,13 @@ async def _resume_agent_graph(
                     # Stamp the *requesting* user so their polling sees the
                     # error; never the snapshot owner. Status is FAILED — the
                     # legacy failed/error split is collapsed (audit C7).
-                    await _set_job_async(
+                    await _publish_producer_status(
                         job_id,
                         {
                             "status": JobStatus.FAILED,
                             "error": "Thread not found",
-                            **_actor_fields(current_user),
                         },
+                        current_user,
                     )
                     return
 
@@ -2921,14 +2998,14 @@ async def _resume_agent_graph(
                         "checkpoint; interrupt already consumed",
                         job_id,
                     )
-                    await _set_job_async(
+                    await _publish_producer_status(
                         job_id,
                         {
                             # Collapsed from the legacy "error" status (C7).
                             "status": JobStatus.FAILED,
                             "error": "Interrupt already consumed",
-                            **_actor_fields(current_user),
                         },
+                        current_user,
                     )
                     return
 
@@ -2943,13 +3020,12 @@ async def _resume_agent_graph(
             ):  # fail closed on a malformed DB adapter
                 durable_run.close()
                 durable_run = None
-            verified_thread_id = None
             if (
                 durable_run is not None
                 and durable_run.thread_id is not None
                 and str(durable_run.thread_id) == str(resume_thread_id)
             ):
-                verified_thread_id = durable_run.thread_id
+                verified_thread_id = str(durable_run.thread_id)
             config["metadata"] = build_trace_metadata(
                 trace_source=TraceSource.GRAPH,
                 user_id=current_user.id,
@@ -2988,19 +3064,20 @@ async def _resume_agent_graph(
                 await graph.aget_state(config)
             )
             if confirmation_details is not None:
-                await _set_job_async(
+                await _publish_producer_status(
                     job_id,
                     {
                         "status": JobStatus.AWAITING_CONFIRMATION,
                         "confirmation": confirmation_details,
                         "tool_executions": list(final_state.get("tool_executions", [])),
-                        **_actor_fields(current_user),
                         "request": (
                             original_request.model_dump(mode="json")
                             if original_request
                             else None
                         ),
                     },
+                    current_user,
+                    thread_id=verified_thread_id,
                 )
                 return
 
@@ -3115,14 +3192,15 @@ async def _resume_agent_graph(
                 conversation_id=conversation_id,
             )
 
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.COMPLETED,
                     "result": result.model_dump(),
                     "tool_executions": list(final_state.get("tool_executions", [])),
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=verified_thread_id,
             )
         except GraphInterrupt as exc:
             # A multi-step destructive flow can re-fire interrupt() during the
@@ -3134,7 +3212,7 @@ async def _resume_agent_graph(
             # as awaiting_confirmation. Uses original_request (the resume path's
             # request), not ``request``.
             confirmation_details = extract_interrupt_confirmation(exc)
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.AWAITING_CONFIRMATION,
@@ -3142,48 +3220,51 @@ async def _resume_agent_graph(
                     # ainvoke raised before returning, so no final_state exists —
                     # match _run_agent_graph and reset the per-turn executions.
                     "tool_executions": [],
-                    **_actor_fields(current_user),
                     "request": (
                         original_request.model_dump(mode="json")
                         if original_request
                         else None
                     ),
                 },
+                current_user,
+                thread_id=verified_thread_id,
             )
             return
         except asyncio.CancelledError:
             # See parallel handler in _run_agent_graph above — CancelledError
             # is a BaseException, so the ``except Exception`` below misses it.
             logger.warning("Agent graph resume cancelled", extra={"job_id": job_id})
-            try:
-                await _set_job_async(
-                    job_id,
-                    {
-                        "status": JobStatus.CANCELLED,
-                        "error": "resume cancelled",
-                        **_actor_fields(current_user),
-                    },
-                )
-            except Exception:
-                logger.exception("Failed to mark cancelled resume job %s", job_id)
+            await _publish_producer_status(
+                job_id,
+                {"status": JobStatus.CANCELLED, "error": "resume cancelled"},
+                current_user,
+                thread_id=verified_thread_id,
+            )
+            raise
+        except _job_store.JobStatusPublicationError:
+            logger.exception(
+                "Durable status publication failed for resumed agent graph %s", job_id
+            )
             raise
         except asyncio.TimeoutError:
             logger.error("Agent graph resume timed out", extra={"job_id": job_id})
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.FAILED,
                     "error": "Agent execution timed out after 360s",
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=verified_thread_id,
             )
         except Exception as e:
             logger.error("Agent graph resume failed", exc_info=e)
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.FAILED,
                     "error": client_safe_error(e),
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=verified_thread_id,
             )

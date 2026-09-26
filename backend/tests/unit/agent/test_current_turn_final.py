@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 
 pytestmark = pytest.mark.unit
 
@@ -205,6 +206,101 @@ async def test_error_exhaustion_cannot_return_previous_turn(
     }
 
 
+async def test_compiled_specialist_graph_repairs_three_failed_tool_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The compiled specialist path must normalize its own exhausted history."""
+    from src.services.agent import graph as graph_module
+    from src.services.agent import reflection
+    from src.services.agent.state import AgentState
+    from src.services.agent.subgraphs import _factory, research_agent
+
+    llm_round = 0
+
+    async def emit_failed_tool_call(
+        _state: AgentState, _config: RunnableConfig | None = None
+    ) -> dict[str, Any]:
+        nonlocal llm_round
+        llm_round += 1
+        return {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": f"research-call-{llm_round}",
+                            "name": "search_documents",
+                            "args": {"query": f"round {llm_round}"},
+                        }
+                    ],
+                )
+            ]
+        }
+
+    async def no_op(
+        _state: AgentState, _config: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return {}
+
+    executor = AsyncMock(return_value={"error": "Permission denied"})
+    monkeypatch.setattr(_factory, "make_planner_node", lambda _names: no_op)
+    monkeypatch.setattr(_factory, "make_compactor_node", lambda: no_op)
+    monkeypatch.setattr(
+        reflection,
+        "reflect_on_response",
+        AsyncMock(
+            return_value=reflection.ReflectionResult(
+                passed=True, issues=[], severity="none"
+            )
+        ),
+    )
+    monkeypatch.setattr(graph_module, "_get_execute_tool", lambda: executor)
+
+    specialist = _factory.make_specialist_subgraph(
+        name="research",
+        llm_node=emit_failed_tool_call,
+        max_tool_loops=5,
+        prompt_builder=lambda: "Research test prompt",
+        synthesis_addendum="",
+        synthesis_timeout_message="Synthesis timed out",
+        loop_exhaustion_intent="research",
+        invoke_tags=["intent:research", "subgraph:research"],
+        reflection_intent_filter={"research"},
+        has_interrupt=False,
+        tool_registry_getter=lambda: research_agent.TOOL_REGISTRY,
+    )
+    result = (
+        await specialist.build()
+        .compile()
+        .ainvoke(
+            cast(
+                AgentState,
+                {
+                    "messages": [
+                        HumanMessage(content="older question"),
+                        AIMessage(content="STALE PRIOR TURN ANSWER"),
+                        HumanMessage(content="Find current-turn documents"),
+                    ],
+                    "error_count": 0,
+                    "intent": "research",
+                    "tool_executions": [],
+                    "retrieved_contexts": [],
+                    "reflection_count": 0,
+                    "tool_loop_count": 0,
+                },
+            )
+        )
+    )
+
+    from src.services.agent._sanitize import current_turn_final_text
+
+    answer = current_turn_final_text(result["messages"])
+    assert executor.await_count == 3
+    assert answer is not None
+    assert answer != "STALE PRIOR TURN ANSWER"
+    assert not getattr(result["messages"][-1], "tool_calls", [])
+
+
 @pytest.mark.parametrize("runner", ["initial", "resume"])
 async def test_queued_initial_and_resume_results_use_current_turn_text(
     runner: str,
@@ -259,6 +355,63 @@ async def test_queued_initial_and_resume_results_use_current_turn_text(
     assert job["result"]["message"]["content"] == ""
 
 
+async def test_queued_initial_approval_pause_uses_durable_publication() -> None:
+    """The producer must await an authorized projection before parking for approval."""
+    from types import SimpleNamespace
+
+    from src.api.agent.execute import AgentExecuteRequest, _get_job
+    from src.services.agent import agent_execution_service as service
+    from src.services.agent.agent_execution_service import _run_agent_graph
+    from src.services.agent.schemas import AgentMessage, PageContextRequest
+    from src.shared.enums import JobStatus
+
+    user = _make_mock_user()
+    job_id = "runner-approval-pause"
+    request = AgentExecuteRequest(
+        messages=[AgentMessage(role="user", content="current question")],
+        page_context=PageContextRequest(),
+        model="model-router",
+        use_rag=True,
+        max_context_docs=5,
+    )
+
+    class PendingGraph(_ResultGraph):
+        async def aget_state(self, _config: dict[str, Any]) -> Any:
+            return SimpleNamespace(
+                tasks=[
+                    SimpleNamespace(
+                        interrupts=[
+                            SimpleNamespace(
+                                value={"tool_name": "create_note", "args": {}}
+                            )
+                        ]
+                    )
+                ]
+            )
+
+    with service._jobs_lock:
+        service._jobs[job_id] = {
+            "status": JobStatus.RUNNING.value,
+            "tool_executions": [],
+            "user_id": str(user.id),
+        }
+    decisions = await _invoke_runner_with_fake_graph(
+        "initial",
+        job_id,
+        request,
+        user,
+        "00000000-0000-0000-0000-000000000005",
+        PendingGraph([], False, str(user.id)),
+    )
+
+    job = _get_job(job_id)
+    assert job is not None
+    assert job["status"] == JobStatus.AWAITING_CONFIRMATION.value
+    assert job["confirmation"] == {"tool_name": "create_note", "args": {}}
+    assert len(decisions) == 1
+    assert decisions[0].effective_status is JobStatus.AWAITING_CONFIRMATION
+
+
 def _make_mock_user() -> Any:
     from unittest.mock import Mock
 
@@ -305,7 +458,7 @@ async def _invoke_runner_with_fake_graph(
     user: Any,
     thread_id: str,
     graph: _ResultGraph,
-) -> None:
+) -> list[Any]:
     """Patch only slow/infrastructure boundaries; keep result construction real."""
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
@@ -324,10 +477,39 @@ async def _invoke_runner_with_fake_graph(
     async def no_cancel(_db: Any, _job_id: str, **_scope: Any) -> bool:
         return False
 
-    async def record_job(job_key: str, data: dict[str, Any]) -> None:
+    from src.services.agent.agent_run_service import RunStatusDecision
+    from src.shared.enums import JobStatus
+
+    decisions: list[RunStatusDecision] = []
+
+    async def record_job(
+        job_key: str,
+        data: dict[str, Any],
+        *,
+        require_durable_decision: bool = False,
+    ) -> RunStatusDecision:
+        assert require_durable_decision is True
+        status = JobStatus(data["status"])
+        decision = RunStatusDecision(
+            job_id=job_key,
+            requested_status=status,
+            effective_status=status,
+            user_id=str(data.get("user_id")) if data.get("user_id") else None,
+            organization_id=(
+                str(data.get("organization_id"))
+                if data.get("organization_id")
+                else None
+            ),
+            thread_id=str(data.get("thread_id")) if data.get("thread_id") else None,
+            error=data.get("error"),
+            cancel_requested_at=None,
+            updated_at="2026-09-26T00:00:00+00:00",
+        )
+        decisions.append(decision)
         with service._jobs_lock:
             current = service._jobs.get(job_key, {})
             service._jobs[job_key] = {**current, **data}
+        return decision
 
     with (
         patch.object(service, "AsyncSessionLocal", session),
@@ -368,6 +550,7 @@ async def _invoke_runner_with_fake_graph(
             await service._run_agent_graph(job_id, request, user)
         else:
             await service._resume_agent_graph(job_id, True, user)
+    return decisions
 
 
 @asynccontextmanager
