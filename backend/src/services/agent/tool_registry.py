@@ -45,6 +45,14 @@ class ToolPolicyTag(StrEnum):
     CONTEXT_REQUIRED = "context_required"
 
 
+class ToolEffectMode(StrEnum):
+    """Business-effect boundary used by durable operation orchestration."""
+
+    READ_ONLY = "read_only"
+    LOCAL_TRANSACTION = "local_transaction"
+    EXTERNAL = "external"
+
+
 @dataclass(frozen=True)
 class ToolDescriptor:
     """Immutable metadata for one decorated LangChain tool wrapper."""
@@ -54,6 +62,7 @@ class ToolDescriptor:
     intents: frozenset[AgentIntent]
     subgraphs: frozenset[AgentSubgraph]
     policy_tags: frozenset[ToolPolicyTag]
+    effect_mode: ToolEffectMode = ToolEffectMode.READ_ONLY
     enabled: bool = True
     exposed_in_all_tools: bool = True
     availability_condition: str | None = None
@@ -63,7 +72,7 @@ class ToolDescriptor:
 class ToolRegistry:
     """Validated, deterministic view over code-defined tool descriptors."""
 
-    METADATA_VERSION = "1"
+    METADATA_VERSION = "2"
 
     def __init__(self, descriptors: Iterable[ToolDescriptor]) -> None:
         self._descriptors = tuple(descriptors)
@@ -158,6 +167,19 @@ class ToolRegistry:
                 raise TypeError(
                     "tool descriptor policy_tags must contain ToolPolicyTag values"
                 )
+            if not isinstance(descriptor.effect_mode, ToolEffectMode):
+                raise TypeError("tool descriptor effect_mode must be a ToolEffectMode")
+            if descriptor.effect_mode != ToolEffectMode.READ_ONLY:
+                required_tags = {
+                    ToolPolicyTag.DESTRUCTIVE,
+                    ToolPolicyTag.NO_OUTER_RETRY,
+                }
+                if not required_tags.issubset(descriptor.policy_tags):
+                    raise ValueError(
+                        "mutating tool effects require destructive and no_outer_retry policies"
+                    )
+                if ToolPolicyTag.CONTEXT_FREE in descriptor.policy_tags:
+                    raise ValueError("mutating tool effects cannot be context-free")
             if (
                 ToolPolicyTag.NO_OUTER_RETRY in descriptor.policy_tags
                 and ToolPolicyTag.SLOW not in descriptor.policy_tags
@@ -176,6 +198,7 @@ class ToolRegistry:
                     subgraph.value for subgraph in descriptor.subgraphs
                 ),
                 "policy_tags": sorted(tag.value for tag in descriptor.policy_tags),
+                "effect_mode": descriptor.effect_mode.value,
                 "enabled": descriptor.enabled,
                 "exposed_in_all_tools": descriptor.exposed_in_all_tools,
                 "availability_condition": descriptor.availability_condition,
@@ -277,6 +300,7 @@ class ToolRegistry:
                 "intents": sorted(value.value for value in item.intents),
                 "subgraphs": sorted(value.value for value in item.subgraphs),
                 "policy_tags": sorted(value.value for value in item.policy_tags),
+                "effect_mode": item.effect_mode.value,
                 "enabled": item.enabled,
                 "exposed_in_all_tools": item.exposed_in_all_tools,
                 "availability_condition": item.availability_condition,

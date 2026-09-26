@@ -26,6 +26,7 @@ from src.services.agent.tool_registry import (
     AgentIntent,
     AgentSubgraph,
     ToolDescriptor,
+    ToolEffectMode,
     ToolPolicyTag,
     ToolRegistry,
 )
@@ -1060,6 +1061,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="search_documents",
@@ -1110,6 +1112,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="list_projects",
@@ -1146,6 +1149,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="create_project_note",
@@ -1162,6 +1166,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="list_project_documents",
@@ -1268,6 +1273,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="revise_draft",
@@ -1282,6 +1288,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="export_bibliography",
@@ -1314,6 +1321,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="search_external_database",
@@ -1377,6 +1385,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
     ]
 )

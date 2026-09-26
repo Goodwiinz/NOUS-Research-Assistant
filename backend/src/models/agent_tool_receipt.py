@@ -12,9 +12,10 @@ table is deliberately tiny and write-once: no updates, no soft delete, no
 relationships.
 """
 
-from sqlalchemy import Column, DateTime, String, func
+from sqlalchemy import JSON, CheckConstraint, Column, DateTime, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 
-from .base import Base
+from .base import GUID, Base
 
 
 class AgentToolReceipt(Base):
@@ -36,4 +37,37 @@ class AgentToolReceipt(Base):
 
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AgentToolOperation(Base):
+    """Scoped durable claim and bounded observation for one agent mutation."""
+
+    __tablename__ = "agent_tool_operations"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('claimed', 'dispatched', 'completed', 'unknown')",
+            name="ck_agent_tool_operations_state",
+        ),
+    )
+
+    operation_id = Column(String(64), primary_key=True)
+    organization_id = Column(GUID(), nullable=True)
+    user_id = Column(GUID(), nullable=False)
+    thread_id = Column(String(128), nullable=False)
+    turn_id = Column(String(128), nullable=False)
+    tool_call_id = Column(String(128), nullable=False)
+    tool_name = Column(String(64), nullable=False)
+    args_hash = Column(String(64), nullable=False)
+    state = Column(String(16), nullable=False)
+    owner_token = Column(GUID(), nullable=False)
+    result = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )

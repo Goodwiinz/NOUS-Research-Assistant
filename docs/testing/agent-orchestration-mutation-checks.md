@@ -503,3 +503,77 @@ nine errors on the same pre-existing functions; the new test and helpers have
 annotations. Logs are `task1-round4-{ruff,black,isort,diff-check,mypy}.log` and
 `task1-round4-mypy-baseline.log` in the scratch directory. No new Python file
 was added.
+
+## Task 2 — durable tool-operation claims/results (2026-09-26)
+
+Evidence is against immutable Task 2 review base
+`bc221b6eaff63e6701a8bdd9bb993e67c122ec0a`. The package adds one additive
+`agent_tool_operations` table and leaves historical receipt rows intact. The
+final source bytes for the three independently mutated guards match the
+restored SHA256 values below; each focused mutant was run after source restore,
+and the owning selections below passed after all final test/format edits.
+
+The focused behavioral RED is preserved at
+`.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task-2-behavior-red.log`.
+It recorded four implementation failures; the integration harness and fixture
+failures are reported separately in the ignored Task 2 completion report.
+Final focused GREEN commands, using externally supplied local test service
+URLs, are:
+
+```sh
+PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${REDIS_URL:?}" .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/unit/agent/test_tool_receipts.py backend/tests/unit/agent/test_tool_operation_results.py backend/tests/unit/agent/test_tool_registry_policy.py backend/tests/unit/agent/test_tools_r7_hardening.py backend/tests/unit/services/test_agent_tools.py
+PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}" .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_agent_tool_operation_concurrency.py
+```
+
+Observed results were 81 unit tests and 11 real-PostgreSQL integration tests
+passing. The integration tests create disposable schemas in local PostgreSQL,
+then inspect effects and operation rows from fresh sessions after executor
+return. They cover project, note, and document-link writes; rollback on a
+result-storage failure; concurrent uniqueness; authenticated result isolation;
+and idempotent result save/return/replay. Provider/model dispatch and draft
+generation/status are offline fakes. The draft replay case exercises pending →
+pending → completed with one generation call and the same task identity, and
+checks there is no open SQL transaction across the status waits. No live model,
+provider, external message, or third-party side effect was used. The local
+Redis URL is required by test configuration; the database concurrency and
+atomicity evidence is from PostgreSQL.
+
+Each mutation below was applied to the named source bytes, run against the
+focused owning test, then restored with byte-for-byte comparison. The logs in
+`.superpowers/sdd/2026-09-25-agent-orchestration-repairs/` retain command,
+baseline/mutant/restored hashes, exit code, and pytest output.
+
+| Guard proved | Owning test and temporary mutation | Observed failure | Restored source SHA256 / log |
+| --- | --- | --- | --- |
+| Unique claim winner | `test_postgres_same_scoped_operation_concurrently_creates_once`; remove `ON CONFLICT DO NOTHING` from `tool_operations.py`. | PostgreSQL reported duplicate `operation_id` primary key while both calls reached the insert. | `8c0e75e24cf93a8bac7531247daa733a3d7aa4ed31ef8f49b698d6055bf84eaa`; `task-2-mutation-uniqueness.log`. |
+| Claim owner CAS | `test_postgres_only_claim_owner_can_record_completion`; remove the `owner_token` predicate from `_cas_operation`. | The stale owner completed the claim; test failed because it expected the guarded update to raise. | `8c0e75e24cf93a8bac7531247daa733a3d7aa4ed31ef8f49b698d6055bf84eaa`; `task-2-mutation-owner.log`. |
+| Argument fingerprint CAS | Same owner-CAS test; remove the `args_hash` compare from `_cas_operation`. | A changed fingerprint completed the same operation identity; the fingerprint assertion failed. | `8c0e75e24cf93a8bac7531247daa733a3d7aa4ed31ef8f49b698d6055bf84eaa`; `task-2-mutation-full-scope.log`. |
+| Thread identity-scope CAS | Same owner-CAS test; remove the `thread_id` predicate from `_cas_operation`. | The test changed the stored thread inside a savepoint; completion then succeeded, so the scope assertion failed with `DID NOT RAISE RuntimeError`. | `8c0e75e24cf93a8bac7531247daa733a3d7aa4ed31ef8f49b698d6055bf84eaa`; `task-2-mutation-thread-scope.log`. |
+| Local effect/result atomicity | `test_postgres_local_effect_and_claim_roll_back_on_result_failure`; insert `await session.commit()` after the local helper returns but before `complete_operation`. | A fresh session found one durable project where rollback requires zero (`projects == 1`). | `a3db9052a5ffdcecac7d4e3e99c33ed9c562625cc30d76adc6b3f886ed38a90d`; `task-2-mutation-local-early-commit.log`. |
+| Claim-store fail-closed | `test_postgres_external_claim_store_failure_never_dispatches`; after the claim-store exception, synthesize a claimed result and let control reach dispatch. | The fake external dispatcher ran once (`dispatch_count == 1`, expected 0). This proves storage-failure behavior, separately from actor/scope authorization. | `a3db9052a5ffdcecac7d4e3e99c33ed9c562625cc30d76adc6b3f886ed38a90d`; `task-2-mutation-store-fail-closed.log`. |
+| Authenticated scope before result lookup | `test_postgres_authentication_precedes_saved_result_lookup`; temporarily make the operation-context matcher always true. | A second valid actor received the saved `project_id`; the test failed on the explicit no-result-leak assertion. | `a3db9052a5ffdcecac7d4e3e99c33ed9c562625cc30d76adc6b3f886ed38a90d`; `task-2-mutation-auth-scope.log`. |
+| Same-fingerprint uncertain replay | `test_postgres_uncertain_external_effect_blocks_new_call_id_replay`; omit `unknown` from the same-turn external barrier states. | A fresh provider call ID dispatched a second time (`dispatch_count == 2`, expected 1). | `8c0e75e24cf93a8bac7531247daa733a3d7aa4ed31ef8f49b698d6055bf84eaa`; `task-2-mutation-uncertain-replay.log`. |
+| Read invalidation after attempted mutation | `test_reads_invalidate_prior_cache_after_an_attempted_mutation`; neutralize the latest-mutation position update. | The later verification read reused the pre-mutation cached result. | `ab846a94248dc1e19a2b7cf140ca7fd1b351a783b83d9cdc98f0c3d5e87e3156`; `task-2-mutation-read-invalidation.log`. |
+
+An initial weaker atomicity mutation changed the helper's `defer_local_commit`
+argument to false. It was detected, but the legacy service's internal commit
+closed the surrounding transaction before refresh, so the injected result
+failure was not reached. That attempt is recorded in
+`task-2-mutation-local-atomicity.log`; the early-commit mutation above is the
+owning result-boundary proof. The first fingerprint mutator selector found two
+matching `args_hash` predicates and stopped before modifying source or running
+tests. The selector was narrowed to `_cas_operation` and then produced the
+recorded behavioral failure. The independent `thread_id` CAS mutant proves the
+row cannot be completed after its thread scope changes.
+
+Migration validation found the single head `agent_ops_20260925`, directly
+following `u3v4w5x6y7z8`; the exact migration/fixture are scoped to that
+historical affected-schema parent. `alembic history` output is retained in
+`task-2-migration-green.log`. Changed-file Ruff, Black, and isort passed, and
+Mypy passed for all four newly added Python files. See the ignored
+`task-2-report.md` for complete commands, operation limits, and the intentional
+executor compatibility tightening: injected `db`/`current_user` mutation
+calls now also require an authenticated checkpointed operation key. The only
+production executor caller is the graph `_nodes_tools` path; tests verify an
+unscoped injected mutation fails closed. `ProjectService` REST commit defaults
+remain unchanged.

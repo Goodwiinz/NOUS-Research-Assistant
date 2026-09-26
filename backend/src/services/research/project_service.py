@@ -104,7 +104,11 @@ class ProjectService:
         }
 
     async def create_project(
-        self, user_id: UUID, project_data: ProjectCreate
+        self,
+        user_id: UUID,
+        project_data: ProjectCreate,
+        *,
+        commit: bool = True,
     ) -> Collection:
         """Create a project after ownership validation."""
         await self._ensure_workspace_owned(project_data.workspace_id, user_id)
@@ -143,7 +147,10 @@ class ProjectService:
         )
 
         self.db.add(project)
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
         await self.db.refresh(project)
         return project
 
@@ -157,6 +164,7 @@ class ProjectService:
         tags: Optional[List[str]] = None,
         linked_document_ids: Optional[List[Any]] = None,
         is_pinned: bool = False,
+        commit: bool = True,
     ) -> ProjectNote:
         """Persist a project note and return it (refreshed).
 
@@ -183,7 +191,10 @@ class ProjectService:
             is_pinned=is_pinned,
         )
         self.db.add(note)
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
         await self.db.refresh(note)
         return note
 

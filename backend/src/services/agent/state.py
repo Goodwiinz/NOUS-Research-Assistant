@@ -3,7 +3,7 @@
 from typing import Annotated, Any, Literal
 
 from langgraph.graph import add_messages
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 THREAD_PERSISTENCE_DURABLE = "durable"
 THREAD_PERSISTENCE_EPHEMERAL = "ephemeral"
@@ -77,3 +77,7 @@ class AgentState(TypedDict):
     # Azure p95) and route straight to force_synthesis_node to produce
     # the final answer from the cached results already in state.
     tools_all_deduped: bool
+    # Versioned turn identity for durable tool operations. These fields are
+    # checkpointed in preprocessing before any mutation can reach tool_node.
+    tool_operation_protocol_version: NotRequired[int]
+    tool_operation_turn_id: NotRequired[str]

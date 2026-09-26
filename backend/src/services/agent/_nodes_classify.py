@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
@@ -208,6 +209,26 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
     - count this turn's first error against last turn's accumulated
       ``error_count``.
     """
+    messages = list(state.get("messages", []))
+    latest_human = next(
+        (
+            message
+            for message in reversed(messages)
+            if isinstance(message, HumanMessage)
+        ),
+        None,
+    )
+    checkpointed_messages: list[Any] = []
+    operation_turn_id: str | None = None
+    if latest_human is not None:
+        message_id = getattr(latest_human, "id", None)
+        if not isinstance(message_id, str) or not message_id:
+            message_id = str(uuid.uuid4())
+            latest_human.id = message_id
+            checkpointed_messages = [latest_human]
+        if len(message_id) <= 128:
+            operation_turn_id = message_id
+
     results = await asyncio.gather(
         _timed_subtask("rag", rag_node(state, config)),
         _timed_subtask("classify", _classify_core(state, config)),
@@ -241,10 +262,20 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         # tool_calls "no response" exit). Reset both per turn.
         "compaction_count": 0,
         "_force_synthesis_fired": False,
+        # Never let a prior checkpoint's operation anchor authorize a legacy
+        # or unanchored new turn. Set the v1 pair again only when the current
+        # checkpointed HumanMessage has a stable id.
+        "tool_operation_protocol_version": 0,
+        "tool_operation_turn_id": "",
     }
+    if operation_turn_id is not None:
+        merged["tool_operation_protocol_version"] = 1
+        merged["tool_operation_turn_id"] = operation_turn_id
+    if checkpointed_messages:
+        merged["messages"] = checkpointed_messages
     removals = _prune_checkpoint_history(list(state.get("messages", [])))
     if removals:
-        merged["messages"] = removals
+        merged["messages"] = [*merged.get("messages", []), *removals]
     for result, default in zip(results, defaults):
         if isinstance(result, asyncio.CancelledError):
             # CancelledError is BaseException (not Exception) since 3.8, so the

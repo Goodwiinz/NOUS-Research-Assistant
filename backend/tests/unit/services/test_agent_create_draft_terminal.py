@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,13 +12,42 @@ from src.services.agent.tools_impl import _tool_create_draft
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 
+def _request_session() -> tuple[MagicMock, Callable[[], bool]]:
+    request_transaction_open = True
+
+    async def commit() -> None:
+        nonlocal request_transaction_open
+        request_transaction_open = False
+
+    db = MagicMock()
+    db.commit = AsyncMock(side_effect=commit)
+    return db, lambda: request_transaction_open
+
+
 async def test_create_draft_tool_returns_completed_terminal_payload() -> None:
     project = SimpleNamespace(id=uuid4(), name="Transformers")
     user = cast(User, SimpleNamespace(id=uuid4()))
+    db, request_transaction_open = _request_session()
     service = MagicMock()
-    service.generate_draft = AsyncMock(
-        return_value={"task_id": "task-1", "status": "pending"}
-    )
+
+    async def generate_draft(**_: object) -> dict[str, str]:
+        assert not request_transaction_open()
+        return {"task_id": "task-1", "status": "pending"}
+
+    service.generate_draft = AsyncMock(side_effect=generate_draft)
+
+    async def wait_for_terminal_status(
+        task_id: str, *, timeout_seconds: float
+    ) -> dict[str, str | int]:
+        assert not request_transaction_open()
+        assert task_id == "task-1"
+        assert timeout_seconds == 105.0
+        return {
+            "task_id": "task-1",
+            "status": "completed",
+            "draft_id": "draft-9",
+            "progress": 100,
+        }
 
     with (
         patch(
@@ -30,19 +60,15 @@ async def test_create_draft_tool_returns_completed_terminal_payload() -> None:
     ):
         service_cls.return_value = service
         service_cls.wait_for_terminal_status = AsyncMock(
-            return_value={
-                "task_id": "task-1",
-                "status": "completed",
-                "draft_id": "draft-9",
-                "progress": 100,
-            }
+            side_effect=wait_for_terminal_status
         )
         result = await _tool_create_draft(
             {"project_id": str(project.id), "themes": ["attention"]},
-            MagicMock(),
+            db,
             user,
         )
 
+    db.commit.assert_awaited_once_with()
     assert result["status"] == "completed"
     assert result["draft_id"] == "draft-9"
     assert result["task_id"] == "task-1"
@@ -51,10 +77,26 @@ async def test_create_draft_tool_returns_completed_terminal_payload() -> None:
 async def test_create_draft_tool_returns_readable_terminal_failure() -> None:
     project = SimpleNamespace(id=uuid4(), name="Transformers")
     user = cast(User, SimpleNamespace(id=uuid4()))
+    db, request_transaction_open = _request_session()
     service = MagicMock()
-    service.generate_draft = AsyncMock(
-        return_value={"task_id": "task-2", "status": "pending"}
-    )
+
+    async def generate_draft(**_: object) -> dict[str, str]:
+        assert not request_transaction_open()
+        return {"task_id": "task-2", "status": "pending"}
+
+    service.generate_draft = AsyncMock(side_effect=generate_draft)
+
+    async def wait_for_terminal_status(
+        task_id: str, *, timeout_seconds: float
+    ) -> dict[str, str]:
+        assert not request_transaction_open()
+        assert task_id == "task-2"
+        assert timeout_seconds == 105.0
+        return {
+            "task_id": "task-2",
+            "status": "failed",
+            "current_step": "Error: citation review blocked persistence",
+        }
 
     with (
         patch(
@@ -67,18 +109,15 @@ async def test_create_draft_tool_returns_readable_terminal_failure() -> None:
     ):
         service_cls.return_value = service
         service_cls.wait_for_terminal_status = AsyncMock(
-            return_value={
-                "task_id": "task-2",
-                "status": "failed",
-                "current_step": "Error: citation review blocked persistence",
-            }
+            side_effect=wait_for_terminal_status
         )
         result = await _tool_create_draft(
             {"project_id": str(project.id), "themes": ["attention"]},
-            MagicMock(),
+            db,
             user,
         )
 
+    db.commit.assert_awaited_once_with()
     assert result["status"] == "failed"
     assert result["message"] == "citation review blocked persistence"
     assert result["error"] == "citation review blocked persistence"
