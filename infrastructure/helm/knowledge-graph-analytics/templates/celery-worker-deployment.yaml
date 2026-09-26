@@ -8,7 +8,7 @@ metadata:
     {{- include "knowledge-graph-analytics.labels" . | nindent 4 }}
     app.kubernetes.io/component: celery-worker
 spec:
-  replicas: {{ .Values.celeryWorker.replicaCount | default 1 }}
+  replicas: {{ .Values.celeryWorker.replicaCount | int }}
   selector:
     matchLabels:
       {{- include "knowledge-graph-analytics.selectorLabels" . | nindent 6 }}

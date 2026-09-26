@@ -14,6 +14,7 @@ metadata:
     app.kubernetes.io/component: synthetic-traffic
 spec:
   schedule: {{ .Values.syntheticTraffic.schedule | quote }}
+  suspend: {{ .Values.syntheticTraffic.suspend | default false }}
   # Forbid overlapping runs: if the previous job is still running when the
   # next tick fires, skip that tick rather than stacking a second pod.
   concurrencyPolicy: Forbid

@@ -75,6 +75,7 @@ const refreshSessionMock = vi.fn();
 const getDefaultWorkspaceMock = vi.fn();
 const listWorkspaceThreadsMock = vi.fn();
 const getThreadMock = vi.fn();
+const persistenceInitMock = vi.hoisted(() => vi.fn());
 const realFetch = global.fetch;
 const realConsoleError = console.error;
 const realConsoleLog = console.log;
@@ -150,6 +151,10 @@ vi.mock('@/services/workspaceService', () => ({
       listWorkspaceThreadsMock(...args),
     getThread: (...args: unknown[]) => getThreadMock(...args),
   },
+}));
+
+vi.mock('@/hooks/useChatPersistence', () => ({
+  useChatPersistence: () => ({ initialize: persistenceInitMock }),
 }));
 
 function wrapper({ children }: { children: ReactNode }): ReactNode {
@@ -279,6 +284,13 @@ describe('useChatStreaming exhausted-auth recovery', () => {
   });
 
   beforeEach(() => {
+    persistenceInitMock.mockReset().mockImplementation(async () => {
+      useChatStore.setState({
+        currentWorkspaceId: 'workspace-A',
+        currentConversationId: 'conversation-A',
+        error: null,
+      });
+    });
     sessionStorage.clear();
     currentSearchParams = new URLSearchParams();
     useActualStreamMessage = false;

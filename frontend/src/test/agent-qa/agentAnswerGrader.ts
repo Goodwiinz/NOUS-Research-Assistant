@@ -1,5 +1,7 @@
 export interface AgentAnswerCriteria {
   requiredConcepts: string[][];
+  /** Optional regex alternatives, indexed by required concept, against normalized answer text. */
+  requiredConceptPatterns?: string[][];
   forbiddenPhrases?: string[];
   /** Case-specific patterns for claims that depend on punctuation or position. */
   forbiddenPatterns?: { pattern: string; reason: string }[];
@@ -39,12 +41,20 @@ export function gradeAgentAnswer(
         `required concept ${index + 1} must contain at least one non-empty phrase`
       );
     }
-    const matched = alternatives.some((phrase) =>
-      searchableAnswer.includes(` ${normalize(phrase)} `)
-    );
+    const patterns = criteria.requiredConceptPatterns?.[index] ?? [];
+    const matched =
+      alternatives.some((phrase) =>
+        searchableAnswer.includes(` ${normalize(phrase)} `)
+      ) ||
+      patterns.some((pattern) =>
+        new RegExp(pattern, 'iu').test(normalizedAnswer)
+      );
     if (!matched) {
       failures.push(
-        `missing concept ${index + 1} (${alternatives.join(' | ')})`
+        `missing concept ${index + 1} (${[
+          ...alternatives,
+          ...patterns.map((pattern) => `/${pattern}/`),
+        ].join(' | ')})`
       );
     }
   });

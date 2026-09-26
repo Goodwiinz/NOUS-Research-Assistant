@@ -21,7 +21,7 @@ infisical:
   envSlug: "dev"
 # ──────────────────────────────────────────────
 # Frontend deployed via Vercel — no in-cluster manifests.
-# Host: dev-app.gen-text.app (DNS points at Vercel).
+# Host: dev-app.goodwiinz.tech (DNS points at Vercel).
 # ──────────────────────────────────────────────
 # Backend
 # ──────────────────────────────────────────────
@@ -52,14 +52,14 @@ backend:
       nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
       nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"
     hosts:
-      - host: dev-api.gen-text.app
+      - host: dev-api.goodwiinz.tech
         paths:
           - path: /
             pathType: Prefix
     tls:
       - secretName: rag-dev-api-tls
         hosts:
-          - dev-api.gen-text.app
+          - dev-api.goodwiinz.tech
   resources:
     limits:
       # 1 CPU throttled the single-worker loop during agent synthesis + arXiv
@@ -175,10 +175,10 @@ backend:
     - name: MALLOC_ARENA_MAX
       value: "2"
     - name: CORS_ORIGINS
-      value: "https://dev-app.gen-text.app,http://localhost:3000,http://127.0.0.1:3000,https://goodwiinz.tech,https://www.goodwiinz.tech"
+      value: "https://dev-app.goodwiinz.tech,http://localhost:3000,http://127.0.0.1:3000,https://goodwiinz.tech,https://www.goodwiinz.tech"
     # Canonical frontend host for CLI-auth device-login approval links.
     # Set explicitly so the browser_url doesn't ride on CORS_ORIGINS[0] (still
-    # dev-app.gen-text.app) — the frontend now lives at goodwiinz.tech. See
+    # dev-app.goodwiinz.tech) — the frontend now lives at goodwiinz.tech. See
     # backend/src/api/auth/cli_auth.py::_frontend_base_url.
     - name: FRONTEND_BASE_URL
       value: "https://goodwiinz.tech"
@@ -323,7 +323,7 @@ neo4j:
     tag: "5.26-community"
     pullPolicy: IfNotPresent
   # password: supply via --set neo4j.password=... at deploy time
-  advertisedAddress: "dev-neo4j.gen-text.app"
+  advertisedAddress: "dev-neo4j.goodwiinz.tech"
   persistence:
     size: 5Gi
   resources:
@@ -452,7 +452,7 @@ podSecurityPolicy:
 #      namespace: `kubectl get ns -L kubernetes.io/metadata.name | grep nginx`.
 #      If it lives elsewhere, override `networkPolicy.ingressControllerNamespace`.
 #   2. Confirm Prometheus runs in `monitoring` (or override `monitoringNamespace`).
-#   3. Set `enabled: true`, let ArgoCD sync, then verify: dev-api.gen-text.app
+#   3. Set `enabled: true`, let ArgoCD sync, then verify: dev-api.goodwiinz.tech
 #      still serves, backend readiness probes stay green (kubelet host->pod), and
 #      backend metrics still scrape. Rollback = set `enabled: false` (policy is
 #      pruned on next sync).

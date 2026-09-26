@@ -35,7 +35,7 @@ openai>=1.13.3,<3.0.0
 anthropic==0.105.2
 tiktoken>=0.13.0
 numpy>=1.26,<3
-sentence-transformers>=2.3.0
+sentence-transformers>=6.1.0,<7.0.0
 transformers>=4.36.0
 torch>=2.1.0,<3.0.0
 huggingface_hub>=0.20.0

@@ -1870,7 +1870,9 @@ async def _tool_do_kb_retrieve(
                 seen_document_ids.add(document_id)
                 requested_document_ids.append(document_id)
 
-    kb_enabled = getattr(_kb_settings, "DO_KB_ENABLED", False)
+    bedrock_kb_id = getattr(_kb_settings, "BEDROCK_KB_ID", "")
+    bedrock_enabled = isinstance(bedrock_kb_id, str) and bool(bedrock_kb_id)
+    kb_enabled = getattr(_kb_settings, "DO_KB_ENABLED", False) or bedrock_enabled
     if not kb_enabled and not scoped_intent:
         return {"chunks": [], "total": 0, "source": "do_kb", "reason": "disabled"}
 
@@ -1918,25 +1920,36 @@ async def _tool_do_kb_retrieve(
                 if member_document_ids != requested_document_id_set:
                     return scoped_limitation("requested_documents_unavailable")
 
-            item_names: list[str] = []
-            seen_item_names: set[str] = set()
-            for document_id in requested_document_ids:
-                candidate_names = [f"{document_id}.txt"]
-                storage_path, storage_backend = authorized_documents[document_id]
-                if storage_backend == "s3" and storage_path:
-                    original_leaf = storage_path.rsplit("/", 1)[-1]
-                    if original_leaf:
-                        candidate_names.append(original_leaf)
-                for item_name in candidate_names:
-                    if item_name not in seen_item_names:
-                        seen_item_names.add(item_name)
-                        item_names.append(item_name)
+            if bedrock_enabled:
+                clauses = [
+                    {"equals": {"key": "document_id", "value": str(document_id)}}
+                    for document_id in requested_document_ids
+                ]
+                provider_filters = (
+                    clauses[0] if len(clauses) == 1 else {"orAll": clauses}
+                )
+            else:
+                item_names: list[str] = []
+                seen_item_names: set[str] = set()
+                for document_id in requested_document_ids:
+                    candidate_names = [f"{document_id}.txt"]
+                    storage_path, storage_backend = authorized_documents[document_id]
+                    if storage_backend == "s3" and storage_path:
+                        original_leaf = storage_path.rsplit("/", 1)[-1]
+                        if original_leaf:
+                            candidate_names.append(original_leaf)
+                    for item_name in candidate_names:
+                        if item_name not in seen_item_names:
+                            seen_item_names.add(item_name)
+                            item_names.append(item_name)
 
-            clauses = [
-                {"equals": {"key": "item_name", "value": item_name}}
-                for item_name in item_names
-            ]
-            provider_filters = clauses[0] if len(clauses) == 1 else {"or_all": clauses}
+                clauses = [
+                    {"equals": {"key": "item_name", "value": item_name}}
+                    for item_name in item_names
+                ]
+                provider_filters = (
+                    clauses[0] if len(clauses) == 1 else {"or_all": clauses}
+                )
         except Exception as exc:
             logger.warning(
                 "do_kb_retrieve named-document authorization failed: %s", exc
@@ -2054,6 +2067,10 @@ async def _tool_do_kb_retrieve(
         if scoped_intent:
             resolve_kwargs["allowed_document_ids"] = set(requested_document_ids)
         title_by_key, chunks_to_emit = await resolve_and_filter_chunks(**resolve_kwargs)
+        if bedrock_enabled:
+            chunks_to_emit = [
+                chunk for chunk in chunks_to_emit if chunk.document_id in title_by_key
+            ]
 
     from src.services.do_kb.postprocess import sanitize_and_deduplicate_chunks
 

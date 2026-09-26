@@ -6,9 +6,9 @@ Three environment value files:
 
 | File | Cluster | Namespace | URL |
 |------|---------|-----------|-----|
-| `values-dev.yaml` | `do-nyc3-rag-system-cluster` | `rag-dev` | `dev-app.gen-text.app` |
+| `values-dev.yaml` | `do-nyc3-rag-system-cluster` | `rag-dev` | `dev-app.goodwiinz.tech` |
 | `values-staging.yaml` | same | `rag-staging` | staging |
-| `values-production.yaml` | same | `rag-production` | `app.gen-text.app` |
+| `values-production.yaml` | same | `rag-production` | `app.goodwiinz.tech` |
 
 ## Externally managed secrets
 

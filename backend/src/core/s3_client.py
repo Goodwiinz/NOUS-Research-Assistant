@@ -1,8 +1,8 @@
-"""S3-compatible object storage client for DigitalOcean Spaces."""
+"""S3-compatible object storage client for Spaces and AWS S3."""
 
 import os
 import tempfile
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import structlog
 
@@ -13,20 +13,27 @@ logger = structlog.get_logger(__name__)
 _s3_client = None
 
 
+def missing_s3_credentials() -> list[str]:
+    """Only custom S3 endpoints need explicit keys; AWS uses the IAM chain."""
+    if not settings.S3_ENDPOINT_URL:
+        return []
+    return [
+        name
+        for name in ("S3_ACCESS_KEY", "S3_SECRET_KEY")
+        if not getattr(settings, name)
+    ]
+
+
 def get_s3_client():
     """Get or create the boto3 S3 client singleton."""
     global _s3_client
     if _s3_client is not None:
         return _s3_client
 
-    if (
-        not settings.S3_ENDPOINT_URL
-        or not settings.S3_ACCESS_KEY
-        or not settings.S3_SECRET_KEY
-    ):
+    if missing_s3_credentials():
         logger.warning(
             "s3_not_configured",
-            msg="S3_ENDPOINT_URL, S3_ACCESS_KEY, or S3_SECRET_KEY not set",
+            msg="S3_ACCESS_KEY or S3_SECRET_KEY not set for custom endpoint",
         )
         return None
 
@@ -34,18 +41,21 @@ def get_s3_client():
         import boto3
         from botocore.config import Config
 
-        _s3_client = boto3.client(
-            "s3",
-            endpoint_url=settings.S3_ENDPOINT_URL,
-            aws_access_key_id=settings.S3_ACCESS_KEY,
-            aws_secret_access_key=settings.S3_SECRET_KEY,
-            region_name=settings.S3_REGION,
-            config=Config(
+        client_kwargs: dict[str, Any] = {
+            "region_name": settings.S3_REGION,
+            "config": Config(
                 retries={"max_attempts": 3, "mode": "adaptive"},
                 connect_timeout=10,
                 read_timeout=30,
             ),
-        )
+        }
+        if settings.S3_ENDPOINT_URL:
+            client_kwargs.update(
+                endpoint_url=settings.S3_ENDPOINT_URL,
+                aws_access_key_id=settings.S3_ACCESS_KEY,
+                aws_secret_access_key=settings.S3_SECRET_KEY,
+            )
+        _s3_client = boto3.client("s3", **client_kwargs)
         logger.info(
             "s3_client_initialized",
             endpoint=settings.S3_ENDPOINT_URL,
@@ -58,16 +68,17 @@ def get_s3_client():
 
 
 class S3StorageHelper:
-    """Helper class for S3-compatible storage operations (DigitalOcean Spaces)."""
+    """Helper class for S3-compatible storage operations."""
 
     def __init__(self, client=None):
         self.client = client or get_s3_client()
         if self.client is None:
             raise RuntimeError(
                 "S3 client not available. "
-                "Check S3_ENDPOINT_URL, S3_ACCESS_KEY, and S3_SECRET_KEY."
+                "Check custom-endpoint keys or the AWS IAM role."
             )
         self.bucket = settings.S3_BUCKET_NAME
+        self._put_acl_kwargs = {"ACL": "private"} if settings.S3_ENDPOINT_URL else {}
         self._log = logger.bind(component="s3_storage_helper")
 
     def upload_file(
@@ -89,7 +100,7 @@ class S3StorageHelper:
                 Key=key,
                 Body=file_data,
                 ContentType=content_type,
-                ACL="private",
+                **self._put_acl_kwargs,
             )
             self._log.info("s3_upload_complete", key=key)
             return key
@@ -110,7 +121,7 @@ class S3StorageHelper:
                 Key=key,
                 Body=fileobj,
                 ContentType=content_type,
-                ACL="private",
+                **self._put_acl_kwargs,
             )
             return key
         except Exception as exc:

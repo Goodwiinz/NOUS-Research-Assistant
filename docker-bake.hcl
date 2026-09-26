@@ -5,7 +5,7 @@
 # Note: cache configuration is handled by the workflow invoking bake
 
 variable "REGISTRY" {
-  default = "ghcr.io/goodwiinz/rag"
+  default = "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous"
 }
 
 variable "TAG" {

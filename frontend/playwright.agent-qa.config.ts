@@ -1,12 +1,18 @@
 import { defineConfig, devices } from '@playwright/test';
-import { resolveAgentQaConfig } from './src/test/agent-qa/agentQaConfig';
+import {
+  assertAgentQaRunLocationAvailable,
+  resolveAgentQaConfig,
+  resolveAgentQaReportPaths,
+} from './src/test/agent-qa/agentQaConfig';
 
 const live = resolveAgentQaConfig(process.env, __dirname);
+const reportPaths = resolveAgentQaReportPaths(process.env);
+assertAgentQaRunLocationAvailable(reportPaths, process.env, __dirname);
 
 export default defineConfig({
   testDir: './e2e/agent-qa',
   testMatch: 'live-agent-qa.spec.ts',
-  outputDir: './test-results/agent-qa',
+  outputDir: reportPaths.outputDir,
   timeout: 300_000,
   expect: { timeout: 30_000 },
   fullyParallel: false,
@@ -15,8 +21,8 @@ export default defineConfig({
   retries: 0,
   reporter: [
     ['list'],
-    ['html', { open: 'never', outputFolder: 'playwright-agent-qa-report' }],
-    ['json', { outputFile: 'test-results/agent-qa/results.json' }],
+    ['html', { open: 'never', outputFolder: reportPaths.htmlOutputFolder }],
+    ['json', { outputFile: reportPaths.jsonOutputFile }],
   ],
   use: {
     baseURL: live.enabled ? live.baseURL : undefined,

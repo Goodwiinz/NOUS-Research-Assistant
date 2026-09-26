@@ -67,6 +67,28 @@ describe('gradeAgentAnswer', () => {
     });
   });
 
+  it('accepts a bounded wording pattern for one concept without matching unrelated nouns', () => {
+    const criteria = {
+      requiredConcepts: [['larger study'], ['test']],
+      requiredConceptPatterns: [
+        [
+          '\\b(?:larger|bigger)(?:\\s+(?:well|powered|follow|up|scale|more|diverse|and|participant)){0,4}\\s+(?:study|group)\\b',
+        ],
+      ],
+    };
+
+    expect(
+      gradeAgentAnswer(
+        'Test the tool in a larger, well-powered follow-up study.',
+        criteria
+      ).passed
+    ).toBe(true);
+    expect(
+      gradeAgentAnswer('Test a larger database with the same group.', criteria)
+        .passed
+    ).toBe(false);
+  });
+
   it('supports exact answers and maximum length', () => {
     expect(
       gradeAgentAnswer('blue sky', {

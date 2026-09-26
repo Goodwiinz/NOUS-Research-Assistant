@@ -151,7 +151,9 @@ describe('useChatPersistence initialization', () => {
     expect(secondSettled).toBe(true);
     expect(serviceMocks.listConversations).toHaveBeenCalledOnce();
     expect(serviceMocks.listThreads).toHaveBeenCalledOnce();
-    expect(useChatStore.getState().currentThreadId).toBe('thread-1');
+    // Layout hydration only caches its conversation; the chat page chooses
+    // the workspace-wide default when it mounts.
+    expect(useChatStore.getState().currentThreadId).toBeNull();
   });
 
   it('makes selection visible synchronously while the triggered read remains awaitable', async () => {
@@ -238,6 +240,25 @@ describe('useChatPersistence initialization', () => {
     });
 
     expect(useChatStore.getState().currentThreadId).toBe(thread.id);
+  });
+
+  it('preserves a sidebar selection on bare chat while conversation hydration is in flight', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    window.history.replaceState({}, '', '/chat');
+
+    const hook = renderHook(() => useChatPersistence());
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    await act(async () => {
+      useChatStore.getState().setCurrentThread('thread-selected');
+      conversations.resolve(conversationPage([conversation]));
+      await hook.result.current.initialize();
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe('thread-selected');
   });
 
   it('preserves a newer sidebar selection made before the URL catches up', async () => {

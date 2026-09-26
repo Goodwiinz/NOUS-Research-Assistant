@@ -39,7 +39,7 @@ jobs:
         # base file alone is intentionally incomplete (e.g. neo4j.image), so lint
         # each real combination rather than the base on its own.
         run: |
-          for env in dev staging production; do
+          for env in dev staging production aws; do
             echo "::group::helm lint ($env)"
             helm lint "$CHART" -f "$CHART/values.yaml" -f "$CHART/values-$env.yaml"
             echo "::endgroup::"
@@ -47,7 +47,7 @@ jobs:
 
       - name: Helm template (render sanity, all envs)
         run: |
-          for env in dev staging production; do
+          for env in dev staging production aws; do
             echo "::group::helm template ($env)"
             helm template rag "$CHART" -f "$CHART/values.yaml" -f "$CHART/values-$env.yaml" >/dev/null
             echo "::endgroup::"
