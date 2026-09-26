@@ -10,6 +10,16 @@ and reran the same test successfully. The temporary copies were kept under
 Run commands from the repository worktree root. The examples use the task's
 fresh Python environment and isolated Redis service.
 
+## Documentation redaction amendment — 2026-09-26
+
+The command examples below now require externally supplied disposable-service
+URLs. This documentation-only amendment removes the task's synthetic local
+connection values to follow `docs/AGENTS.md`; it does not change the recorded
+commands' test selections, outcomes, source hashes or restoration evidence.
+Exact historical commands remain in the local ignored execution logs. Task 1's
+scoped acceptance remains tied to `66e435a053a7f2e1c8b81c07c9899b1229b6df9d`;
+this amendment makes no new runtime or release-verification claim.
+
 ## Durable status transition guard
 
 - **Source and guard:** `backend/src/services/agent/agent_run_service.py`,
@@ -24,7 +34,7 @@ fresh Python environment and isolated Redis service.
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:32775/15 LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short backend/tests/unit/agent/test_agent_run_service.py::test_terminal_update_loses_to_completed
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short backend/tests/unit/agent/test_agent_run_service.py::test_terminal_update_loses_to_completed
   ```
 
 - **Observed mutant failure:** exit 1; a stale terminal update returned
@@ -49,7 +59,7 @@ fresh Python environment and isolated Redis service.
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:32775/15 LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short backend/tests/unit/services/test_agent_cancellation.py::test_resumed_cancel_interrupts_graph
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short backend/tests/unit/services/test_agent_cancellation.py::test_resumed_cancel_interrupts_graph
   ```
 
 - **Observed mutant failure:** exit 1; the test timed out waiting for the
@@ -63,9 +73,9 @@ fresh Python environment and isolated Redis service.
 ## Fix round 1: terminal winner publication and slot preservation
 
 All mutation commands below ran from the Task 1 worktree root with this
-environment: `PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:32775/15
-ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15
-ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test
+environment: `PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}"
+ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}"
+ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}"
 LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing`.
 The test cases use disposable PostgreSQL schemas and the isolated Redis DB 15.
 Each mutant was applied once, failed its listed assertion, then was restored
@@ -88,7 +98,7 @@ Logs are retained in `/tmp/task1-mutation-*.log`.
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q 'backend/tests/integration/test_agent_run_concurrency.py::test_post_monitor_stop_wins_through_real_runner_publication[initial]' 'backend/tests/integration/test_agent_run_concurrency.py::test_post_monitor_stop_wins_through_real_runner_publication[resume]'
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q 'backend/tests/integration/test_agent_run_concurrency.py::test_post_monitor_stop_wins_through_real_runner_publication[initial]' 'backend/tests/integration/test_agent_run_concurrency.py::test_post_monitor_stop_wins_through_real_runner_publication[resume]'
   ```
 
 - **Observed mutant failure:** exit 1; `2 failed`. Both initial and resumed
@@ -116,7 +126,7 @@ Logs are retained in `/tmp/task1-mutation-*.log`.
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q backend/tests/integration/test_agent_run_concurrency.py::test_postgres_slot_collision_never_drops_valid_thread_after_winner_finishes
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q backend/tests/integration/test_agent_run_concurrency.py::test_postgres_slot_collision_never_drops_valid_thread_after_winner_finishes
   ```
 
 - **Observed mutant failure:** exit 1; `1 failed`. Row B became a RUNNING
@@ -143,7 +153,7 @@ Logs are retained in `/tmp/task1-mutation-*.log`.
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q backend/tests/integration/test_agent_run_concurrency.py::test_delayed_real_redis_running_writer_cannot_replace_cancelled_winner
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q backend/tests/integration/test_agent_run_concurrency.py::test_delayed_real_redis_running_writer_cannot_replace_cancelled_winner
   ```
 
 - **Observed mutant failure:** exit 1; `1 failed`. Redis ended as `running`
@@ -170,7 +180,7 @@ Logs are retained in `/tmp/task1-mutation-*.log`.
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q backend/tests/integration/test_agent_run_concurrency.py::test_real_sweeper_acknowledges_old_stop_and_corrects_cached_terminal
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q backend/tests/integration/test_agent_run_concurrency.py::test_real_sweeper_acknowledges_old_stop_and_corrects_cached_terminal
   ```
 
 - **Observed mutant failure:** exit 1; `1 failed`. Durable status remained
@@ -199,7 +209,7 @@ Logs are retained in `/tmp/task1-mutation-*.log`.
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q 'backend/tests/integration/test_agent_run_concurrency.py::test_real_sweeper_consumes_stop_or_completion_winning_after_refresh[stopping]'
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/pytest -q 'backend/tests/integration/test_agent_run_concurrency.py::test_real_sweeper_consumes_stop_or_completion_winning_after_refresh[stopping]'
   ```
 
 - **Observed mutant failure:** exit 1; `1 failed`. The real row remained
@@ -231,7 +241,7 @@ Logs are retained in `/tmp/task1-mutation-*.log`.
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false --tb=short backend/tests/unit/services/test_job_store_terminal_durability.py -k sync_set_job
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${REDIS_URL:?}" .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false --tb=short backend/tests/unit/services/test_job_store_terminal_durability.py -k sync_set_job
   ```
 
 - **Observed mutant failure:** exit 1; both the COMPLETED and STOPPING winner
@@ -259,10 +269,10 @@ pipeline context is closed on return or cancellation.
 The focused commands below ran with this environment (the displayed values
 are the disposable test services):
 `PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false
-ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15
-ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15`; the delayed-writer
+ENVIRONMENT=testing REDIS_URL="${REDIS_URL:?}"
+ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}"`; the delayed-writer
 test also used
-`ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test`.
+`ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}"`.
 
 ### Redis JSON shape survives cold reads and merges
 
@@ -275,7 +285,7 @@ test also used
 - **Behavioral RED command:**
 
   ```sh
-  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_job_store_redis_publication.py
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_job_store_redis_publication.py
   ```
 
 - **Observed failures:** `3 failed`; Redis turned `tool_executions: []` and
@@ -306,7 +316,7 @@ test also used
   `and False`.
 - **Command:** the shared focused environment above with
   ```sh
-  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_job_store_redis_publication.py::test_repeated_completed_publication_preserves_winner_payload_and_enriches_scope
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_job_store_redis_publication.py::test_repeated_completed_publication_preserves_winner_payload_and_enriches_scope
   ```
 - **Observed mutant failure:** exit 1; the real two-client Redis test saw
   `different later answer` instead of the existing `first completed answer`
@@ -334,7 +344,7 @@ test also used
 - **Command:**
 
   ```sh
-  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/unit/services/test_job_store_redis_guard.py::test_redis_write_with_unknown_status_cannot_replace_absorbing_winner backend/tests/integration/test_job_store_redis_publication.py::test_real_redis_unknown_status_cannot_replace_absorbing_winner
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/unit/services/test_job_store_redis_guard.py::test_redis_write_with_unknown_status_cannot_replace_absorbing_winner backend/tests/integration/test_job_store_redis_publication.py::test_real_redis_unknown_status_cannot_replace_absorbing_winner
   ```
 - **Observed mutant failure:** exit 1; all four cases overwrote the terminal or
   STOPPING payload with the newer missing-status candidate (`4 failed`). Output:
@@ -362,7 +372,7 @@ test also used
   above:
 
   ```sh
-  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_REDIS_URL=redis://127.0.0.1:32775/15 ORCHESTRATION_TEST_DATABASE_URL=postgresql://orch_test:orch_local_test@127.0.0.1:32774/orch_test .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_agent_run_concurrency.py::test_delayed_real_redis_running_writer_cannot_replace_cancelled_winner
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${ORCHESTRATION_TEST_REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${ORCHESTRATION_TEST_DATABASE_URL:?}" .venv/bin/pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/integration/test_agent_run_concurrency.py::test_delayed_real_redis_running_writer_cannot_replace_cancelled_winner
   ```
 - **Observed mutant failure:** the clean repeated mutant failed at the Redis
   winner assertion (`running` instead of `cancelled`, `1 failed`). Output:
