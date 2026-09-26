@@ -123,7 +123,7 @@ _DIRECT_ARXIV_BLOCKED_MODIFIER_RE = re.compile(
     r"|\b(?:\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|"
     r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
     r"nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
-    r"hundred|thousand)\b(?:[ -]+[\w]+){0,18}[ -]+"
+    r"hundred|thousand)\b(?:[ -]+[\w]+(?:-[\w]+)*){0,18}[ -]+"
     r"(?:papers?|results?|studies|articles?)\b"
     r"|\b(?:up\s+to|at\s+least|no\s+more\s+than|more\s+than|"
     r"fewer\s+than|less\s+than)\s+\d+\b",

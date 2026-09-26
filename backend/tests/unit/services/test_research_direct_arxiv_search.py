@@ -109,6 +109,7 @@ def test_narrow_standalone_forms_take_fast_path(content: str) -> None:
         "search arxiv for 15 transformer based language model optimization papers",
         "search arxiv for eleven transformer based language model optimization papers",
         "search arxiv for 15 a b c d e f g h i j k l m n o p q r papers",
+        "search arxiv for 15 a-b c-d e-f g-h i-j k-l m-n o-p q-r s-t papers",
         "search arxiv for transformer papers published yesterday",
         "search arxiv for those papers",
         "search arxiv for the same topic",
@@ -191,6 +192,7 @@ def test_prior_tool_result_after_current_human_disables_shortcut() -> None:
         "search arxiv for eleven transformer papers",
         "search arxiv for 15 transformer based language model optimization papers",
         "search arxiv for eleven transformer based language model optimization papers",
+        "search arxiv for 15 a-b c-d e-f g-h i-j k-l m-n o-p q-r s-t papers",
         "search arxiv for transformer papers published yesterday",
     ],
 )
