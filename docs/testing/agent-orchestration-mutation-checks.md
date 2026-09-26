@@ -378,3 +378,53 @@ test also used
 - **Restored result:** the same real-Postgres/Redis test passed (`1 passed`),
   output
   `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round2-watch-guard-green.log`.
+
+## Fix round 3 — normal publisher and terminal poll handoff
+
+Evidence is against round-3 base `7cf7fa869d142bb2047c6aa45422f3947e51f7bc`.
+The normal awaited `set_job` now receives a typed committed/refused/unavailable
+Redis outcome. A compatible same-status winning snapshot is adopted by L1
+only while the publisher still owns its exact terminal reservation and local
+generation. A process-local completion event gates terminal poll snapshots;
+the API checks both at entry and after its awaited Redis refresh. This keeps
+the terminal reservation itself in L1 during Redis work, so the existing
+absorbing-state guard continues rejecting stale synchronous progress writes.
+Redis absence, EXEC errors, exhausted WATCH retries, and publisher cancellation
+release waiting polls to the authorized L1 fallback. Redis outages still do
+not establish a global completed-result winner across processes.
+
+The three guards were mutated independently and each owning test failed on the
+named behavior. Each mutation was restored by copying the pre-mutation file;
+`sha256sum` matched the saved and restored bytes exactly:
+
+- **Winner adoption:** changed `and outcome.state in {"committed", "refused"}`
+  to `and False` in `job_store.set_job`. The real-Redis normal publisher/API
+  poll test failed because the response returned `later local loser` instead
+  of `original Redis winner` (`1 failed`). Test:
+  `test_normal_completed_publication_and_poll_adopt_redis_winner`. Output:
+  `task1-round3-adoption-mutation-red.log`. Restore hash:
+  `45ac10296b230d6fa6329e1d9d2b45cf641d7380bef801f6cdffa09ddb4610a6`.
+- **Generation/gate ownership:** changed the `finally` cleanup from
+  `_retire_pending_publication(job_id, pending_publication)` to an unconditional
+  `_retire_pending_publication(job_id)`. The older publisher removed the newer
+  generation's pending gate; the test failed when the current generation entry
+  was missing after the old completion (`1 failed`). Test:
+  `test_poll_waits_for_current_superseding_terminal_generation`. Output:
+  `task1-round3-generation-mutation-red.log`. Restore hash:
+  `45ac10296b230d6fa6329e1d9d2b45cf641d7380bef801f6cdffa09ddb4610a6`.
+- **Final visibility boundary:** replaced the post-Redis-refresh
+  `await _get_job_for_poll(job_id)` with `None`. A poll that began on RUNNING
+  and yielded in Redis returned the provisional terminal response before its
+  publisher resolved (`1 failed`). Test:
+  `test_poll_started_before_publication_rechecks_after_redis_await`. Output:
+  `task1-round3-visibility-mutation-red.log`. Restore hash:
+  `c8539050303a4ec493b6cb5591cebc55cb45858725ecd6f8aa62c2fd13c292c8`.
+
+The final owning selection was rerun after all three byte restores. It includes
+the existing delayed background writer, strict durable-decision rejection,
+Redis terminal parity, actual API polling, nested JSON shape, the late poll
+boundary, stale synchronous progress, superseding generation, poll and
+publisher cancellation, Redis EXEC failure, and five-conflict exhaustion.
+Exact command and output are in the round-3 report; observed result was
+`182 passed, 1 baseline Pydantic warning in 8.54s`, log
+`.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round3-affected-final.log`.

@@ -606,11 +606,22 @@ async def get_job_status(
     # poller would see "running" until the 1h TTL. get_job_fresh degrades to
     # the L1 read when Redis is unavailable, so single-process behavior (and
     # Redis-less tests) are unchanged.
-    job = _get_job(job_id)
+    from src.services.agent.job_store import get_job_for_poll as _get_job_for_poll
+
+    job = await _get_job_for_poll(job_id)
     if job is None or not _normalized_job_status(job.get("status")).is_terminal:
         from src.services.agent.job_store import get_job_fresh as _get_job_fresh
 
         job = (await _get_job_fresh(job_id)) or job
+        # The Redis refresh above yields to a concurrent terminal publisher.
+        # Resolve that generation at the final selection boundary so this
+        # poll cannot return the reservation while its Redis winner is pending.
+        terminal_snapshot = await _get_job_for_poll(job_id)
+        if (
+            terminal_snapshot is not None
+            and _normalized_job_status(terminal_snapshot.get("status")).is_terminal
+        ):
+            job = terminal_snapshot
     if not job:
         # Redis miss: fall back to the durable projection (tenancy-filtered —
         # org + user must both match; a miss 404s without confirming existence).

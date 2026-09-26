@@ -20,8 +20,9 @@ import json as _json
 import logging
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 from uuid import uuid4
 
 from src.core.config import get_settings
@@ -54,6 +55,26 @@ _JOB_TTL_SECONDS = 3600  # 1 hour — matches the old in-memory expiry
 _l1: OrderedDict[str, dict] = OrderedDict()
 _l1_lock = Lock()
 _L1_MAX_ENTRIES = 500
+
+
+@dataclass(frozen=True)
+class _PendingTerminalPublication:
+    """Process-local gate for a terminal L1 value awaiting Redis resolution."""
+
+    reservation: dict
+    completed: asyncio.Event
+    loop: asyncio.AbstractEventLoop
+
+
+@dataclass(frozen=True)
+class _RedisWriteOutcome:
+    """Result of one atomic Redis publication attempt."""
+
+    state: Literal["committed", "refused", "unavailable"]
+    payload: Optional[dict]
+
+
+_pending_terminal_publications: dict[str, _PendingTerminalPublication] = {}
 
 _LAST_L1_CLEANUP: float = 0.0
 _L1_CLEANUP_INTERVAL = 60.0
@@ -164,6 +185,26 @@ def _preserve_terminal_payload(
             candidate.pop("confirmation", None)
 
 
+def _signal_pending_publication(publication: _PendingTerminalPublication) -> None:
+    """Wake gate waiters safely even when a synchronous writer owns the lock."""
+    try:
+        publication.loop.call_soon_threadsafe(publication.completed.set)
+    except RuntimeError:
+        # The owning event loop has already closed during shutdown.
+        pass
+
+
+def _retire_pending_publication(
+    job_id: str,
+    publication: Optional[_PendingTerminalPublication] = None,
+) -> None:
+    """Retire and signal a job gate; caller must hold ``_l1_lock``."""
+    current = _pending_terminal_publications.get(job_id)
+    if current is not None and (publication is None or current is publication):
+        del _pending_terminal_publications[job_id]
+        _signal_pending_publication(current)
+
+
 def _l1_cleanup() -> None:
     """Remove expired entries (>1h) and evict oldest when over max.
 
@@ -176,8 +217,10 @@ def _l1_cleanup() -> None:
     ]
     for k in expired:
         del _l1[k]
+        _retire_pending_publication(k)
     while len(_l1) > _L1_MAX_ENTRIES:
-        _l1.popitem(last=False)
+        evicted, _ = _l1.popitem(last=False)
+        _retire_pending_publication(evicted)
     _LAST_L1_CLEANUP = now
 
 
@@ -370,7 +413,7 @@ async def _redis_write_if_newer(
     *,
     authorized_status: Optional[JobStatus] = None,
     allow_terminal_correction: bool = False,
-) -> None:
+) -> _RedisWriteOutcome:
     """Atomically guard Redis publication while preserving Python JSON shape.
 
     WATCH/MULTI keeps the status/freshness decision and write atomic. JSON is
@@ -400,7 +443,7 @@ async def _redis_write_if_newer(
                         allow_terminal_correction=allow_terminal_correction,
                     ):
                         await pipe.reset()
-                        return
+                        return _RedisWriteOutcome("refused", existing)
 
                     scope_compatible = existing is None or _scope_compatible(
                         candidate, existing
@@ -423,7 +466,7 @@ async def _redis_write_if_newer(
                         _json.dumps(candidate, default=str),
                     )
                     await pipe.execute()
-                    return
+                    return _RedisWriteOutcome("committed", candidate)
                 except WatchError:
                     await pipe.reset()
                     if attempt + 1 == _REDIS_WRITE_MAX_ATTEMPTS:
@@ -431,9 +474,11 @@ async def _redis_write_if_newer(
                             "Redis job publication retries exhausted for job %s",
                             job_id,
                         )
-                        return
+                        return _RedisWriteOutcome("unavailable", None)
     except Exception:
         logger.exception("Failed to write job %s to Redis", job_id)
+        return _RedisWriteOutcome("unavailable", None)
+    return _RedisWriteOutcome("unavailable", None)
 
 
 async def _write_to_redis_only(job_id: str, data: dict) -> None:
@@ -590,6 +635,7 @@ async def set_job(
         projected_synchronously = project
 
     data["created_at"] = time.time()
+    pending_publication: Optional[_PendingTerminalPublication] = None
     with _l1_lock:
         _seq += 1
         data["_seq"] = _seq
@@ -606,11 +652,53 @@ async def set_job(
             )
             _l1[job_id] = data
         _l1_maybe_cleanup()
+        if (
+            authorized_status is not None
+            and authorized_status.is_terminal
+            and _l1.get(job_id) is data
+        ):
+            pending_publication = _PendingTerminalPublication(
+                reservation=data,
+                completed=asyncio.Event(),
+                loop=asyncio.get_running_loop(),
+            )
+            previous = _pending_terminal_publications.get(job_id)
+            _pending_terminal_publications[job_id] = pending_publication
+            if previous is not None:
+                # Old waiters must recheck and attach to the newer generation.
+                _signal_pending_publication(previous)
 
     if project and not projected_synchronously:
         schedule_run_projection(job_id, data)
 
-    await set_job_redis_only(job_id, data, decision=durable_decision)
+    try:
+        try:
+            outcome = await set_job_redis_only(job_id, data, decision=durable_decision)
+        except Exception:
+            logger.exception("Redis job publication failed for job %s", job_id)
+            outcome = None
+        if pending_publication is not None and isinstance(outcome, _RedisWriteOutcome):
+            with _l1_lock:
+                if (
+                    _pending_terminal_publications.get(job_id) is pending_publication
+                    and _l1.get(job_id) is pending_publication.reservation
+                    and outcome.state in {"committed", "refused"}
+                    and outcome.payload is not None
+                    and _status_value(outcome.payload) == authorized_status
+                    and _scope_compatible(data, outcome.payload)
+                ):
+                    resolved = dict(outcome.payload)
+                    for field in ("user_id", "organization_id", "thread_id"):
+                        if resolved.get(field) is None and data.get(field) is not None:
+                            resolved[field] = data[field]
+                    _preserve_terminal_payload(resolved, None)
+                    _l1[job_id] = resolved
+    finally:
+        if pending_publication is not None:
+            with _l1_lock:
+                _retire_pending_publication(job_id, pending_publication)
+            # Signal this generation even if a newer publisher replaced it.
+            _signal_pending_publication(pending_publication)
     return durable_decision
 
 
@@ -619,20 +707,21 @@ async def set_job_redis_only(
     data: dict,
     *,
     decision: Optional[RunStatusDecision] = None,
-) -> None:
+) -> _RedisWriteOutcome:
     """Atomically write an authorized payload to Redis without touching L1."""
     redis_client = await _get_redis()
-    if redis_client is not None:
-        authorized_status = _decision_authorizes(job_id, data, decision)
-        await _redis_write_if_newer(
-            redis_client,
-            job_id,
-            data,
-            authorized_status=authorized_status,
-            allow_terminal_correction=(
-                authorized_status is not None and authorized_status.is_terminal
-            ),
-        )
+    if redis_client is None:
+        return _RedisWriteOutcome("unavailable", None)
+    authorized_status = _decision_authorizes(job_id, data, decision)
+    return await _redis_write_if_newer(
+        redis_client,
+        job_id,
+        data,
+        authorized_status=authorized_status,
+        allow_terminal_correction=(
+            authorized_status is not None and authorized_status.is_terminal
+        ),
+    )
 
 
 async def _cas_in_memory(
@@ -863,14 +952,44 @@ async def get_job_fresh(job_id: str) -> Optional[dict]:
             return None
         if time.time() - cached.get("created_at", 0) > _JOB_TTL_SECONDS:
             del _l1[job_id]
+            _retire_pending_publication(job_id)
             return None
         return cached
+
+
+async def get_job_for_poll(job_id: str) -> Optional[dict]:
+    """Return an L1 snapshot only after its terminal publication is resolved.
+
+    Polling uses this at each terminal-selection boundary, including after an
+    awaited Redis refresh. A newer local generation replaces the gate, and an
+    evicted/replaced reservation retires its own stale gate. The final gate
+    check and snapshot copy happen under one lock with no intervening await.
+    """
+    while True:
+        pending: Optional[_PendingTerminalPublication] = None
+        with _l1_lock:
+            _l1_maybe_cleanup()
+            pending = _pending_terminal_publications.get(job_id)
+            if pending is not None and _l1.get(job_id) is not pending.reservation:
+                _retire_pending_publication(job_id, pending)
+                pending = None
+            if pending is None:
+                cached = _l1.get(job_id)
+                if cached is None:
+                    return None
+                if time.time() - cached.get("created_at", 0) > _JOB_TTL_SECONDS:
+                    del _l1[job_id]
+                    _retire_pending_publication(job_id)
+                    return None
+                return dict(cached)
+        await asyncio.shield(pending.completed.wait())
 
 
 async def delete_job(job_id: str) -> None:
     """Remove a job from both L1 and Redis."""
     with _l1_lock:
         _l1.pop(job_id, None)
+        _retire_pending_publication(job_id)
 
     redis_client = await _get_redis()
     if redis_client is not None:

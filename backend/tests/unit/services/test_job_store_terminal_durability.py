@@ -153,6 +153,19 @@ class _FailingRedisPipeline:
         return None
 
 
+class _ConflictingRedisPipeline(_FailingRedisPipeline):
+    def __init__(self) -> None:
+        super().__init__()
+        self.execute_attempts = 0
+
+    async def execute(self) -> None:
+        from redis.exceptions import WatchError
+
+        self.execute_attempted = True
+        self.execute_attempts += 1
+        raise WatchError()
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_set_job_does_not_publish_terminal_status_when_projection_fails(
@@ -280,6 +293,55 @@ async def test_committed_terminal_decision_survives_redis_cache_outage(
     projection.assert_awaited_once()
     redis_client.pipeline.assert_called_once_with(transaction=True)
     assert failing_pipeline.execute_attempted
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_committed_terminal_decision_survives_redis_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Five WATCH conflicts are unavailable, not a reason to undo L1 commit."""
+    job_id = "job-cache-retries-exhausted"
+    decision = SimpleNamespace(
+        job_id=job_id,
+        requested_status=JobStatus.COMPLETED,
+        effective_status=JobStatus.COMPLETED,
+        user_id="u-retry",
+        organization_id=None,
+        thread_id="t-retry",
+        error=None,
+        cancel_requested_at=None,
+        updated_at="2026-09-26T00:00:00+00:00",
+    )
+    pipeline = _ConflictingRedisPipeline()
+    redis_client = SimpleNamespace(pipeline=Mock(return_value=pipeline))
+    monkeypatch.setattr(js, "_get_redis", AsyncMock(return_value=redis_client))
+    captured: list[Any] = []
+    real_writer = js.set_job_redis_only
+
+    async def _capture_outcome(*args: Any, **kwargs: Any) -> Any:
+        outcome = await real_writer(*args, **kwargs)
+        captured.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(js, "set_job_redis_only", _capture_outcome)
+    result = await js.set_job(
+        job_id,
+        {
+            "status": JobStatus.COMPLETED,
+            "user_id": "u-retry",
+            "thread_id": "t-retry",
+            "result": {"answer": "durable fallback"},
+        },
+        project=False,
+        decision=decision,
+    )
+
+    assert result is decision
+    assert captured[0].state == "unavailable"
+    assert pipeline.execute_attempts == js._REDIS_WRITE_MAX_ATTEMPTS == 5
+    assert js._l1[job_id]["status"] == JobStatus.COMPLETED
+    assert js._l1[job_id]["result"] == {"answer": "durable fallback"}
 
 
 # ---------------------------------------------------------------------------
