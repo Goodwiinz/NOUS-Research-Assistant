@@ -3,6 +3,12 @@
 import pytest
 from langchain_core.messages import HumanMessage, ToolMessage
 
+_DECOMPOSED_MARK_COUNT_QUERY = (
+    "search arxiv for 15 a\u0301 b\u0301 c\u0301 d\u0301 e\u0301 f\u0301 "
+    "g\u0301 h\u0301 i\u0301 j\u0301 k\u0301 l\u0301 m\u0301 n\u0301 "
+    "o\u0301 p\u0301 q\u0301 r\u0301 papers"
+)
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -110,6 +116,10 @@ def test_narrow_standalone_forms_take_fast_path(content: str) -> None:
         "search arxiv for eleven transformer based language model optimization papers",
         "search arxiv for 15 a b c d e f g h i j k l m n o p q r papers",
         "search arxiv for 15 a-b c-d e-f g-h i-j k-l m-n o-p q-r s-t papers",
+        "search arxiv for transformer-15 papers",
+        "search arxiv for paper-15 transformer",
+        "search arxiv for -15 papers",
+        _DECOMPOSED_MARK_COUNT_QUERY,
         "search arxiv for transformer papers published yesterday",
         "search arxiv for those papers",
         "search arxiv for the same topic",
@@ -124,6 +134,34 @@ def test_ambiguous_or_compound_requests_decline_direct_shortcut(content: str) ->
     from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_query
 
     assert _direct_arxiv_search_query(content) is None
+
+
+@pytest.mark.unit
+def test_count_guard_completes_for_many_hyphen_segments() -> None:
+    """Adversarial hyphen runs finish within a child-process time bound."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    backend_root = str(Path(__file__).resolve().parents[3])
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (backend_root, environment.get("PYTHONPATH", "")) if item
+    )
+    script = """
+from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_query
+content = "search arxiv for 15 " + "-".join(["token"] * 100) + " architectures"
+assert _direct_arxiv_search_query(content) is None
+"""
+    subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+        timeout=5,
+    )
 
 
 def test_direct_shortcut_requires_fresh_ordinary_projected_search() -> None:
@@ -193,6 +231,10 @@ def test_prior_tool_result_after_current_human_disables_shortcut() -> None:
         "search arxiv for 15 transformer based language model optimization papers",
         "search arxiv for eleven transformer based language model optimization papers",
         "search arxiv for 15 a-b c-d e-f g-h i-j k-l m-n o-p q-r s-t papers",
+        "search arxiv for transformer-15 papers",
+        "search arxiv for paper-15 transformer",
+        "search arxiv for -15 papers",
+        _DECOMPOSED_MARK_COUNT_QUERY,
         "search arxiv for transformer papers published yesterday",
     ],
 )

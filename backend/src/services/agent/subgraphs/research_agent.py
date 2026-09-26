@@ -118,17 +118,79 @@ _DIRECT_ARXIV_BLOCKED_WORDS = frozenset(
         "decades",
     }
 )
+_DIRECT_ARXIV_COUNT_WORDS = frozenset(
+    {
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+        "twenty",
+        "thirty",
+        "forty",
+        "fifty",
+        "sixty",
+        "seventy",
+        "eighty",
+        "ninety",
+        "hundred",
+        "thousand",
+        "dozen",
+    }
+)
+_DIRECT_ARXIV_RESULT_WORDS = frozenset(
+    {"paper", "papers", "result", "results", "study", "studies", "article", "articles"}
+)
 _DIRECT_ARXIV_BLOCKED_MODIFIER_RE = re.compile(
     r"\b(?:19|20)\d{2}\b"
-    r"|\b(?:\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|"
-    r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
-    r"nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
-    r"hundred|thousand)\b(?:[ -]+[\w]+(?:-[\w]+)*){0,18}[ -]+"
-    r"(?:papers?|results?|studies|articles?)\b"
     r"|\b(?:up\s+to|at\s+least|no\s+more\s+than|more\s+than|"
     r"fewer\s+than|less\s+than)\s+\d+\b",
     re.IGNORECASE,
 )
+
+
+def _normalize_arxiv_topic_part(part: str) -> str:
+    """Normalize a token part so combining marks cannot split count words."""
+    decomposed = unicodedata.normalize("NFKD", part.casefold())
+    return "".join(
+        char for char in decomposed if not unicodedata.category(char).startswith("M")
+    )
+
+
+def _is_arxiv_count_token(part: str) -> bool:
+    return part.isnumeric() or part in _DIRECT_ARXIV_COUNT_WORDS
+
+
+def _has_arxiv_count_modifier(parts_by_word: list[list[str]]) -> bool:
+    """Conservatively reject counts with work linear in the topic characters."""
+    result_word_later = False
+    for parts in reversed(parts_by_word):
+        if not parts:
+            continue
+        has_count_part = any(_is_arxiv_count_token(part) for part in parts)
+        has_result_word = any(part in _DIRECT_ARXIV_RESULT_WORDS for part in parts)
+        if len(parts) == 1 and has_count_part:
+            return True
+        if has_count_part and (result_word_later or has_result_word):
+            return True
+        if has_result_word:
+            result_word_later = True
+    return False
 
 
 def _direct_arxiv_search_query(content: str) -> str | None:
@@ -171,10 +233,14 @@ def _direct_arxiv_search_query(content: str) -> str | None:
     words = topic.split()
     if not 1 <= len(words) <= 20:
         return None
-    normalized_words = {
-        part.casefold() for word in words for part in word.split("-") if part
-    }
+    parts_by_word = [
+        [_normalize_arxiv_topic_part(part) for part in word.split("-")]
+        for word in words
+    ]
+    normalized_words = {part for parts in parts_by_word for part in parts if part}
     if normalized_words & _DIRECT_ARXIV_BLOCKED_WORDS:
+        return None
+    if _has_arxiv_count_modifier(parts_by_word):
         return None
     if _DIRECT_ARXIV_BLOCKED_MODIFIER_RE.search(topic):
         return None
