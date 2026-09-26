@@ -436,6 +436,8 @@ def render_dynamic_context(
     identity_projection = render_identity_ledger(
         state.get("identity_ledger", _EMPTY_IDENTITY_LEDGER),
         max_bytes=MAX_IDENTITY_CONTEXT_BYTES - 1_024,
+        current_turn_id=str(state.get("tool_operation_turn_id", "") or ""),
+        current_references=state.get("identity_current_references", []),
     )
     identity_json = json.dumps(
         identity_projection, ensure_ascii=False, separators=(",", ":")

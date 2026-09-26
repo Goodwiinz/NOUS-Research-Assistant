@@ -398,6 +398,7 @@ def make_compactor_node() -> Callable:
             messages,
             state.get("identity_ledger"),
             state.get("identity_current_references", []),
+            current_turn_id=str(state.get("tool_operation_turn_id", "") or ""),
         )
 
         def identity_update() -> dict[str, Any]:

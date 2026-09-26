@@ -775,3 +775,119 @@ The three commands above ran from `backend/` using `../.venv/bin/pytest` and
 saved complete output under the ignored `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/`
 directory. The restored hashes are the exact pre-mutation files, not hashes
 of normalized text.
+
+## Task 4 Astra repair round — 2026-09-26
+
+This dated evidence covers required review repairs on top of immutable
+candidate `40f069f6dd85b5a5961368760e80a430673d1fdc`. Tests use local fakes for
+model/provider boundaries; the connected identity path uses the task-owned
+PostgreSQL fixture. No external provider or network calls were made. Commands
+run from the repository worktree root. Test environment values are supplied by
+the task harness and are omitted here.
+
+### Duplicate identity observations are idempotent
+
+- **Source and guard:** `backend/src/services/agent/identity_ledger.py:842`,
+  `merge_identity_ledger`; an observation is merged only if its stable
+  observation ID is not already in `processed_set`.
+- **Owning test:**
+  `backend/tests/unit/agent/test_identity_ledger.py::test_duplicate_specialist_observation_replay_preserves_one_provenance_record`.
+  It caps a real tool result, merges the same specialist observation twice,
+  then checks the ledger is unchanged, processed provenance appears once, and
+  tool/call/turn provenance remains stable.
+- **Mutation:** changed
+  `if observation_id and observation_id not in processed_set:` to
+  `if observation_id:`.
+- **Command:**
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short -o log_cli=false backend/tests/unit/agent/test_identity_ledger.py::test_duplicate_specialist_observation_replay_preserves_one_provenance_record
+  ```
+
+- **Observed mutant failure:** exit 1; the exact ledger equality assertion at
+  `test_identity_ledger.py:183` failed after duplicate replay changed the
+  retained record.
+- **Restore proof:** `cmp -s` succeeded after restoring the saved source.
+  Pre-mutation and restored SHA-256:
+  `46a52106586a5613d3dc39b20caf93143850fb8dd2d762067aaee6d70ee69ea3`.
+  Mutant SHA-256: `62c2c850d67dea84028fdceb36ddd689daf070ab6cde0da04f5b5ed2bd9098dd`.
+- **Restored result:** same command, exit 0; `1 passed`.
+
+### Completed-mutation priority is scoped to the active turn
+
+- **Source and guard:** `backend/src/services/agent/identity_ledger.py:704`,
+  `_completed_mutation`; completed mutation priority requires the record's
+  `turn_id` to equal the current turn.
+- **Owning test:**
+  `backend/tests/unit/agent/test_identity_ledger.py::test_completed_mutation_retention_is_limited_to_active_turn`.
+  The saturated ledger checks explicit pinning, current-turn mutation
+  priority, eviction of an old mutation, and next-turn loss of the old
+  mutation's special priority.
+- **Mutation:** replaced
+  `and record.get("turn_id") == current_turn_id` with `and True`.
+- **Command:**
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short -o log_cli=false backend/tests/unit/agent/test_identity_ledger.py::test_completed_mutation_retention_is_limited_to_active_turn
+  ```
+
+- **Observed mutant failure:** exit 1; the stale completed mutation remained
+  in the retained records, failing the stale-ID eviction assertion at
+  `test_identity_ledger.py:506`.
+- **Restore proof:** `cmp -s` succeeded. Pre-mutation and restored SHA-256:
+  `46a52106586a5613d3dc39b20caf93143850fb8dd2d762067aaee6d70ee69ea3`.
+  Mutant SHA-256: `09988f7ab135c2407fe933444bf69d87426903522569c1edf19d7514e44e0493`.
+- **Restored result:** same command, exit 0; `1 passed`.
+
+### Active draft request matching preserves exact instructions and source IDs
+
+- **Source and guards:**
+  `backend/src/services/research/draft_generation_service.py:340-341`,
+  `_request_hash`; canonical request identity retains the exact validated
+  instruction string and effective selected document IDs. A different hash
+  returns a conflict before another worker or status publication.
+- **Owning test:**
+  `backend/tests/unit/services/test_draft_generation_llm_client.py::test_active_generation_conflicts_on_exact_instruction_or_source_change`.
+  The two cases call the real service registration method with a matching
+  active request whose instructions differ only by trailing whitespace, or
+  whose selected document differs. They assert conflict, no task ID, no
+  `_fire_and_forget`, and no status publication.
+- **Instruction mutation:** changed the hashed `instructions` value to
+  `instructions.strip()` when non-null.
+- **RED command:**
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short -o log_cli=false 'backend/tests/unit/services/test_draft_generation_llm_client.py::test_active_generation_conflicts_on_exact_instruction_or_source_change[exact-instruction-whitespace]'
+  ```
+
+- **Instruction RED:** exit 1; stripping trailing whitespace incorrectly
+  reused the active task, so the direct conflict assertion at
+  `test_draft_generation_llm_client.py:331` failed because
+  `result.get("error_category")` was `None`; the returned result instead had
+  the active task ID and “already in progress” status.
+- **Selection mutation:** changed the hashed `"document_ids": document_ids`
+  to `"document_ids": []`.
+- **Selection RED command:**
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short -o log_cli=false 'backend/tests/unit/services/test_draft_generation_llm_client.py::test_active_generation_conflicts_on_exact_instruction_or_source_change[different-document-selection]'
+  ```
+
+- **Selection RED:** exit 1; clearing selected IDs incorrectly reused the
+  active task, so the same direct conflict assertion failed because
+  `result.get("error_category")` was `None`; the active task ID was returned.
+- **Restore proof:** each mutant was restored from its separate saved source;
+  `cmp -s` succeeded after both restorations. Pre-mutation and restored SHA-256
+  for `draft_generation_service.py`:
+  `7c470666737a21da0b5ef926a76235f417e95e12179750fc035088a9beea065b`.
+  Instruction mutant SHA-256:
+  `82939f6f4dbe3c02369d2d0bb86b531910e8b3b756caf600d5091fb42ef467e1`.
+  Selection mutant SHA-256:
+  `d0fdfaea162860c6c268d39bf982e4e21782368b69242e7e01355026e71f6868`.
+- **Restored result:** the same owning test filtered by
+  `-k active_generation_conflicts_on_exact_instruction_or_source_change`,
+  exit 0; `2 passed, 12 deselected`.
+
+These mutation checks are intentional RED evidence and are excluded from the
+green test totals. They do not establish distributed request coalescing,
+external-provider behavior, or live model prompt-injection resistance.

@@ -464,6 +464,38 @@ def extract_tool_identities(
                     {"title": row.get("title"), "arxiv_id": paper_id},
                 )
 
+    def root_row(field_name: str) -> Mapping[str, Any] | None:
+        if tool_name == "create_project" and field_name == "project_id":
+            return {"name": payload.get("name")}
+        if tool_name == "create_project_note":
+            if field_name == "note_id":
+                return {
+                    "title": payload.get("title"),
+                    "project_id": payload.get("project_id"),
+                }
+            if field_name == "project_id":
+                return {"name": payload.get("project_name")}
+        if tool_name == "create_draft":
+            if field_name == "project_id":
+                return {"name": payload.get("project_name")}
+            if field_name == "draft_id":
+                return {
+                    "title": payload.get("draft_title"),
+                    "project_id": payload.get("project_id"),
+                }
+            if field_name == "task_id":
+                return {
+                    "title": payload.get("draft_title"),
+                    "project_id": payload.get("project_id"),
+                    "draft_id": payload.get("draft_id"),
+                }
+        if tool_name == "create_task" and field_name == "task_id":
+            return {
+                "title": payload.get("task_title"),
+                "project_id": payload.get("project_id"),
+            }
+        return None
+
     def walk(node: Any, path: str, depth: int) -> None:
         nonlocal visited, scanned_bytes, incomplete
         if not isinstance(node, (Mapping, list)):
@@ -518,7 +550,7 @@ def extract_tool_identities(
                     inspect_row(item, list_kind, f"{child_path}/{index}"[:192])
                 continue
             if key in _KNOWN_ROOT_IDS and path == "":
-                add(_KNOWN_ROOT_IDS[key], value, child_path)
+                add(_KNOWN_ROOT_IDS[key], value, child_path, root_row(key))
                 continue
             if key == "document_ids" and isinstance(value, Mapping):
                 # Ingestion adapters may return an explicit paper-ID → document-ID map.
@@ -561,7 +593,7 @@ def extract_tool_identities(
     # Root fields are exact typed IDs; arbitrary prose values are never searched.
     for field_name, kind in _KNOWN_ROOT_IDS.items():
         if field_name in payload:
-            add(kind, payload[field_name], f"/{field_name}")
+            add(kind, payload[field_name], f"/{field_name}", root_row(field_name))
     walk(payload, "", 0)
 
     if tool_name == "search_external_database":
@@ -652,16 +684,25 @@ def _record_key(record: Mapping[str, Any]) -> tuple[str, str, str] | None:
 
 
 def _is_pinned(record: Mapping[str, Any], refs: set[tuple[str, str, str]]) -> bool:
-    key = _record_key(record)
+    return _is_pinned_key(_record_key(record), refs)
+
+
+def _is_pinned_key(
+    key: tuple[str, str, str] | None,
+    refs: set[tuple[str, str, str]],
+) -> bool:
     if key is None:
         return False
     kind, namespace, identifier = key
     return ("", "", identifier) in refs or key in refs or (kind, "", identifier) in refs
 
 
-def _completed_mutation(record: Mapping[str, Any]) -> bool:
+def _completed_mutation(record: Mapping[str, Any], current_turn_id: str | None) -> bool:
     return (
-        record.get("source_tool") in _MUTATING_TOOLS
+        isinstance(current_turn_id, str)
+        and bool(current_turn_id)
+        and record.get("turn_id") == current_turn_id
+        and record.get("source_tool") in _MUTATING_TOOLS
         and str(record.get("observed_status", "")).casefold() in _COMPLETED_STATES
     )
 
@@ -724,6 +765,8 @@ def merge_identity_ledger(
     existing: Any,
     incoming: Any,
     current_references: Any,
+    *,
+    current_turn_id: str | None = None,
 ) -> dict[str, Any]:
     """Merge observations into one bounded last-value checkpoint envelope."""
     valid_existing = (
@@ -837,7 +880,7 @@ def merge_identity_ledger(
     candidates.sort(
         key=lambda record: (
             _is_pinned(record, refs),
-            _completed_mutation(record),
+            _completed_mutation(record, current_turn_id),
             int(record.get("observed_order", 0)),
             record.get("kind", ""),
             record.get("namespace", ""),
@@ -896,9 +939,19 @@ def merge_identity_ledger(
     return result
 
 
-def identity_references_from_text(text: Any, *server_ids: Any) -> list[str]:
-    """Return explicit UUID/arXiv references from current user text and scope."""
+def identity_references_from_text(
+    text: Any,
+    *server_ids: Any,
+    existing_ledger: Any = None,
+) -> list[str]:
+    """Return explicit IDs plus bounded exact-name evidence references.
+
+    Matching a complete existing label only prioritizes a record in prompt
+    context. It is advisory evidence and never grants access; retrieval tools
+    must still apply their normal ownership and scope checks.
+    """
     values: list[str] = []
+    bounded_text = ""
     if isinstance(text, str):
         bounded_text = text[:MAX_REFERENCE_TEXT_CHARS]
         values.extend(
@@ -910,6 +963,33 @@ def identity_references_from_text(text: Any, *server_ids: Any) -> list[str]:
         values.extend(
             re.findall(r"\b\d{4}\.\d{4,5}(?:v\d+)?\b", bounded_text)[:MAX_REFERENCE_IDS]
         )
+    if (
+        bounded_text
+        and isinstance(existing_ledger, Mapping)
+        and existing_ledger.get("version") == LEDGER_VERSION
+    ):
+        raw_records = existing_ledger.get("records")
+        if isinstance(raw_records, list):
+            text_folded = bounded_text.casefold()
+            for order, raw_record in enumerate(raw_records[:MAX_LEDGER_RECORDS]):
+                if len(values) >= MAX_REFERENCE_IDS:
+                    break
+                if not isinstance(raw_record, Mapping):
+                    continue
+                record = _bounded_record(raw_record, order)
+                if record is None:
+                    continue
+                name = record.get("name")
+                identifier = record.get("id")
+                # Long, complete labels avoid ranking ordinary words or short
+                # names. Matching does not authorize later tool access.
+                if (
+                    isinstance(name, str)
+                    and len(name) >= 16
+                    and name.casefold() in text_folded
+                    and isinstance(identifier, str)
+                ):
+                    values.append(identifier)
     for value in server_ids:
         if len(values) >= MAX_REFERENCE_IDS:
             break
@@ -922,6 +1002,8 @@ def harvest_legacy_tool_messages(
     messages: Sequence[Any],
     existing_ledger: Any = None,
     current_references: Any = None,
+    *,
+    current_turn_id: str | None = None,
 ) -> dict[str, Any]:
     """Recover typed identities from bounded, un-compacted legacy tool JSON."""
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -933,7 +1015,12 @@ def harvest_legacy_tool_messages(
     tool_call_metadata_seen = 0
     tool_metadata_omitted = False
     active_turn_id = ""
-    ledger = merge_identity_ledger(existing_ledger, None, current_references)
+    ledger = merge_identity_ledger(
+        existing_ledger,
+        None,
+        current_references,
+        current_turn_id=current_turn_id,
+    )
     for message in messages:
         if isinstance(message, HumanMessage):
             message_id = getattr(message, "id", None)
@@ -995,7 +1082,12 @@ def harvest_legacy_tool_messages(
                     getattr(message, "tool_call_id", ""),
                     turn_id,
                 )
-            ledger = merge_identity_ledger(ledger, incoming, current_references)
+            ledger = merge_identity_ledger(
+                ledger,
+                incoming,
+                current_references,
+                current_turn_id=current_turn_id,
+            )
     if (history_omitted or tool_metadata_omitted) and isinstance(ledger, Mapping):
         ledger = dict(ledger)
         raw_overflow = ledger.get("overflow", {})
@@ -1012,6 +1104,8 @@ def render_identity_ledger(
     ledger: Any,
     *,
     max_bytes: int = MAX_CONTEXT_BYTES - 384,
+    current_turn_id: str | None = None,
+    current_references: Any = None,
 ) -> dict[str, Any]:
     """Build a bounded context projection without granting identity authority."""
     valid = isinstance(ledger, Mapping) and ledger.get("version") == LEDGER_VERSION
@@ -1041,10 +1135,37 @@ def render_identity_ledger(
         overflow_valid = False
     projected: list[dict[str, Any]] = []
     scanned_record_count = min(len(records), MAX_LEDGER_RECORDS)
-    for value in records[:MAX_LEDGER_RECORDS]:
+    refs = _normalize_reference_set(current_references)
+    bounded_records = [
+        (
+            index,
+            value,
+            _record_key(value) if isinstance(value, Mapping) else None,
+        )
+        for index, value in enumerate(records[:MAX_LEDGER_RECORDS])
+    ]
+    bounded_records.sort(
+        key=lambda item: (
+            _is_pinned_key(item[2], refs),
+            (
+                _completed_mutation(item[1], current_turn_id)
+                if isinstance(item[1], Mapping)
+                else False
+            ),
+            (
+                item[1].get("observed_order", item[0])
+                if isinstance(item[1], Mapping)
+                and isinstance(item[1].get("observed_order", item[0]), int)
+                and not isinstance(item[1].get("observed_order", item[0]), bool)
+                else item[0]
+            ),
+            -item[0],
+        ),
+        reverse=True,
+    )
+    for _, value, key in bounded_records:
         if not isinstance(value, Mapping):
             continue
-        key = _record_key(value)
         if key is None or not _valid_identifier(key[0], key[2]):
             continue
         kind, namespace, identifier = key

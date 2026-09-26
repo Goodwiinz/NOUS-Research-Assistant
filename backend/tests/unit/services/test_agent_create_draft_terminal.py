@@ -31,7 +31,10 @@ async def test_create_draft_tool_returns_completed_terminal_payload() -> None:
     service = MagicMock()
 
     async def generate_draft(**_: object) -> dict[str, str]:
-        assert not request_transaction_open()
+        # Source validation owns the first commit; invalid selections must
+        # roll back before the worker can be published.
+        assert request_transaction_open()
+        await db.commit()
         return {"task_id": "task-1", "status": "pending"}
 
     service.generate_draft = AsyncMock(side_effect=generate_draft)
@@ -81,7 +84,8 @@ async def test_create_draft_tool_returns_readable_terminal_failure() -> None:
     service = MagicMock()
 
     async def generate_draft(**_: object) -> dict[str, str]:
-        assert not request_transaction_open()
+        assert request_transaction_open()
+        await db.commit()
         return {"task_id": "task-2", "status": "pending"}
 
     service.generate_draft = AsyncMock(side_effect=generate_draft)

@@ -351,6 +351,83 @@ async def test_legacy_draft_without_citation_scope_fails_closed() -> None:
     assert not any(isinstance(value, GeneratedDraft) for value in session.added)
 
 
+async def test_legacy_citation_scope_is_inherited_across_two_revisions() -> None:
+    cited_source = _document("Original cited source")
+    attached_later = _document("Attached after legacy draft")
+    base = _draft(1, "Legacy claim [Doc 1].", current=True)
+    base.generation_params = {}
+    base.citations = [_citation(1, cited_source.id, context="Referenced as [Doc 1]")]
+    service, session = await _service(
+        base, [cited_source, attached_later], max_version=1
+    )
+
+    with patch.object(
+        service,
+        "_build_revision_with_llm",
+        new=AsyncMock(return_value="First revision [Doc 1]."),
+    ):
+        await service.revise_draft(project_id=uuid4(), instructions="Clarify")
+
+    first_revision = next(
+        value for value in session.added if isinstance(value, GeneratedDraft)
+    )
+    assert first_revision.generation_params["selection_mode"] == "legacy_citations"
+    assert first_revision.generation_params["document_ids"] == [str(cited_source.id)]
+    first_revision.citations = [
+        value for value in session.added if isinstance(value, DraftCitation)
+    ]
+
+    session.base = first_revision
+    session.max_version = 2
+    session.current_id = first_revision.id
+    second_revision_model = AsyncMock(return_value="Second revision [Doc 1].")
+    with patch.object(service, "_build_revision_with_llm", new=second_revision_model):
+        result = await service.revise_draft(
+            project_id=uuid4(), instructions="Tighten the wording"
+        )
+
+    assert result["version"] == 3
+    assert second_revision_model.await_args is not None
+    evidence = second_revision_model.await_args.kwargs["document_context"]
+    assert "Original cited source" in evidence
+    assert "Attached after legacy draft" not in evidence
+    second_revision = [
+        value
+        for value in session.added
+        if isinstance(value, GeneratedDraft) and value is not first_revision
+    ][0]
+    assert second_revision.generation_params["selection_mode"] == "legacy_citations"
+    assert second_revision.generation_params["document_ids"] == [str(cited_source.id)]
+    assert [
+        citation.citation_index
+        for citation in session.added
+        if isinstance(citation, DraftCitation)
+        and citation.draft_id == second_revision.id
+    ] == [1]
+
+
+async def test_inherited_legacy_citation_scope_fails_when_source_was_deleted() -> None:
+    deleted_source = _document("Deleted source")
+    base = _draft(2, "Legacy claim [Doc 1].", current=True)
+    base.generation_params = {
+        "source_scope_version": 1,
+        "selection_mode": "legacy_citations",
+        "document_ids": [str(deleted_source.id)],
+    }
+    base.citations = [_citation(1, deleted_source.id)]
+    service, session = await _service(base, [], max_version=2)
+    revision_mock = AsyncMock(return_value="Revised claim [Doc 1].")
+
+    with (
+        patch.object(service, "_build_revision_with_llm", new=revision_mock),
+        pytest.raises(ValueError, match="source documents are unavailable"),
+    ):
+        await service.revise_draft(project_id=uuid4(), instructions="Clarify")
+
+    revision_mock.assert_not_awaited()
+    assert not any(isinstance(value, GeneratedDraft) for value in session.added)
+
+
 async def test_citations_only_preserves_prose_and_persists_visible_doc_index() -> None:
     base = _draft(3, "## Review\n\nBenchmark reached 28.4 BLEU.", current=True)
     documents = [_document("Other"), _document("Attention Is All You Need")]

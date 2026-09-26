@@ -6,6 +6,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, cast
 from unittest.mock import AsyncMock, patch
@@ -40,6 +41,7 @@ pytestmark = [
 class _DraftDatabase:
     factory: async_sessionmaker[AsyncSession]
     user_id: UUID
+    organization_id: UUID
     project_id: UUID
     document_ids: tuple[UUID, UUID, UUID]
 
@@ -186,7 +188,9 @@ async def _postgres_draft_schema(dsn: str) -> AsyncIterator[_DraftDatabase]:
                     )
             await setup.commit()
 
-        yield _DraftDatabase(factory, user_id, project_id, document_ids)
+        yield _DraftDatabase(
+            factory, user_id, organization_id, project_id, document_ids
+        )
     finally:
         if scoped_engine is not None:
             await scoped_engine.dispose()

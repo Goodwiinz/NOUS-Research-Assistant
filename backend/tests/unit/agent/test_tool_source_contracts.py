@@ -118,6 +118,33 @@ def test_adapter_filter_validators_reject_unsafe_or_invalid_values() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "organism",
+    [
+        "Homo sapiens OR Mus musculus",
+        "Homo sapiens AND Mus musculus",
+        "Homo sapiens NOT Mus musculus",
+        "HOMO SAPIENS or MUS MUSCULUS",
+    ],
+)
+def test_uniprot_filter_rejects_boolean_query_words(organism: str) -> None:
+    from src.services.connectors.uniprot import UniProtConnector
+
+    with pytest.raises(ValueError, match="query syntax"):
+        UniProtConnector().validate_search_filters({"organism": organism})
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("organism", ["Homo sapiens", "Arabidopsis thaliana"])
+def test_uniprot_filter_accepts_multiword_scientific_names(organism: str) -> None:
+    from src.services.connectors.uniprot import UniProtConnector
+
+    assert UniProtConnector().validate_search_filters({"organism": organism}) == {
+        "organism": organism
+    }
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_unsupported_filter_fails_before_connector_call(
     monkeypatch: pytest.MonkeyPatch,
@@ -153,6 +180,36 @@ async def test_heterogeneous_fanout_prevalidates_every_target(
 
     assert result["error_category"] == "unsupported_connector_filter"
     assert "pubmed" in result["error"]
+    uniprot.search.assert_not_awaited()
+    pubmed.search.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_real_uniprot_filter_rejects_heterogeneous_fanout_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.services.connectors import connector_registry
+    from src.services.connectors.pubmed import PubMedConnector
+    from src.services.connectors.uniprot import UniProtConnector
+
+    uniprot = UniProtConnector()
+    pubmed = PubMedConnector()
+    for connector in (uniprot, pubmed):
+        monkeypatch.setattr(connector, "is_available", lambda: True)
+        connector.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(connector_registry, "list_available", lambda: [uniprot, pubmed])
+
+    result = await _tool_search_external_database(
+        {
+            "query": "kinase",
+            "filters": {"organism": "Homo sapiens OR Mus musculus"},
+        }
+    )
+
+    assert result["error_category"] == "unsupported_connector_filter"
+    assert "uniprot" in result["error"]
+    assert "query syntax" in result["error"]
     uniprot.search.assert_not_awaited()
     pubmed.search.assert_not_awaited()
 

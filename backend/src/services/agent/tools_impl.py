@@ -962,6 +962,8 @@ def _identity_entry(
 
 def _collect_result_identities(
     result: dict[str, Any],
+    *,
+    tool_name: str | None = None,
 ) -> tuple[list[dict[str, Any]], int, int, bool]:
     """Collect typed identity rows without inferring IDs from generic fields.
 
@@ -1020,9 +1022,40 @@ def _collect_result_identities(
         if count < len(values):
             known_unvisited += len(values) - count
 
+    root_rows: dict[str, dict[str, Any]] = {}
+    if tool_name == "create_project":
+        root_rows["project_id"] = {"name": result.get("name")}
+    elif tool_name == "create_project_note":
+        root_rows["note_id"] = {
+            "title": result.get("title"),
+            "project_id": result.get("project_id"),
+        }
+        root_rows["project_id"] = {"name": result.get("project_name")}
+    elif tool_name == "create_draft":
+        root_rows["project_id"] = {"name": result.get("project_name")}
+        root_rows["draft_id"] = {
+            "title": result.get("draft_title"),
+            "project_id": result.get("project_id"),
+        }
+        root_rows["task_id"] = {
+            "title": result.get("draft_title"),
+            "project_id": result.get("project_id"),
+            "draft_id": result.get("draft_id"),
+        }
+    elif tool_name == "create_task":
+        root_rows["task_id"] = {
+            "title": result.get("task_title"),
+            "project_id": result.get("project_id"),
+        }
+
     for field_name, kind in _ROOT_IDENTITY_KINDS.items():
         if result.get(field_name) is not None:
-            add(kind, result[field_name], f"/{field_name}")
+            add(
+                kind,
+                result[field_name],
+                f"/{field_name}",
+                root_rows.get(field_name),
+            )
 
     # External records carry their actual namespace in each row's source.
     if isinstance(result.get("connectors_searched"), list) and isinstance(
@@ -1105,10 +1138,38 @@ def _collect_result_identities(
 
 def _root_result_controls(
     result: dict[str, Any],
+    *,
+    tool_name: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     protected: dict[str, Any] = {}
     root_entries: list[dict[str, Any]] = []
     invalid_root = False
+    root_rows: dict[str, dict[str, Any]] = {}
+    if tool_name == "create_project":
+        root_rows["project_id"] = {"name": result.get("name")}
+    elif tool_name == "create_project_note":
+        root_rows["note_id"] = {
+            "title": result.get("title"),
+            "project_id": result.get("project_id"),
+        }
+        root_rows["project_id"] = {"name": result.get("project_name")}
+    elif tool_name == "create_draft":
+        root_rows["project_id"] = {"name": result.get("project_name")}
+        root_rows["draft_id"] = {
+            "title": result.get("draft_title"),
+            "project_id": result.get("project_id"),
+        }
+        root_rows["task_id"] = {
+            "title": result.get("draft_title"),
+            "project_id": result.get("project_id"),
+            "draft_id": result.get("draft_id"),
+        }
+    elif tool_name == "create_task":
+        root_rows["task_id"] = {
+            "title": result.get("task_title"),
+            "project_id": result.get("project_id"),
+        }
+
     for key, kind in _ROOT_IDENTITY_KINDS.items():
         value = result.get(key)
         if value is None:
@@ -1117,7 +1178,9 @@ def _root_result_controls(
             invalid_root = True
             continue
         protected[key] = value
-        root_entries.append({"kind": kind, "id": value, "path": f"/{key}"})
+        entry = _identity_entry(kind, value, f"/{key}", root_rows.get(key))
+        if entry is not None:
+            root_entries.append(entry)
     for key in ("user_id", "workspace_id", "organization_id"):
         value = result.get(key)
         if value is not None:
@@ -1298,7 +1361,7 @@ def _shrink_ordinary(node: dict[str, Any], byte_limit: int) -> None:
             return
 
 
-def _cap_tool_result(result: Any) -> Any:
+def _cap_tool_result(result: Any, *, tool_name: str | None = None) -> Any:
     """Bound the exact saved/returned JSON result while protecting identities."""
     if not isinstance(result, dict):
         return _json_safe_result(result)
@@ -1308,7 +1371,7 @@ def _cap_tool_result(result: Any) -> Any:
             "error": "Tool result could not be represented safely.",
             "truncated": True,
         }
-    _, _, invalid_root = _root_result_controls(safe)
+    _, _, invalid_root = _root_result_controls(safe, tool_name=tool_name)
     try:
         if _result_size(safe) <= _MAX_TOOL_RESULT_BYTES and not invalid_root:
             return safe
@@ -1332,9 +1395,11 @@ def _cap_tool_result(result: Any) -> Any:
         }
     else:
         candidates, invalid_count, known_unvisited, incomplete_scan = (
-            _collect_result_identities(safe)
+            _collect_result_identities(safe, tool_name=tool_name)
         )
-        protected, root_entries, invalid_root = _root_result_controls(safe)
+        protected, root_entries, invalid_root = _root_result_controls(
+            safe, tool_name=tool_name
+        )
         # Root artifact IDs are kept first, while retaining their exact source
         # order and associating later list identities with their labels/relations.
         ordered_candidates = [*root_entries]
@@ -1591,7 +1656,8 @@ async def execute_tool(
                 runtime_snapshot_id,
                 project_id,
                 organization_id=organization_id,
-            )
+            ),
+            tool_name=tool_name,
         )
 
     if db is not None or current_user is not None:
@@ -1607,7 +1673,8 @@ async def execute_tool(
                     runtime_snapshot_id,
                     project_id,
                     organization_id=organization_id,
-                )
+                ),
+                tool_name=tool_name,
             )
         if db is None or current_user is None or operation_key is None:
             return _operation_error(
@@ -1675,7 +1742,8 @@ async def execute_tool(
                     runtime_snapshot_id,
                     project_id,
                     organization_id=organization_id,
-                )
+                ),
+                tool_name=tool_name,
             )
 
         if descriptor.effect_mode == ToolEffectMode.READ_ONLY:
@@ -1690,7 +1758,8 @@ async def execute_tool(
                     runtime_snapshot_id,
                     project_id,
                     organization_id=organization_id,
-                )
+                ),
+                tool_name=tool_name,
             )
 
         if operation_key is None:
@@ -1810,7 +1879,12 @@ def _operation_error(message: str, category: str, **fields: Any) -> Dict[str, An
     }
 
 
-def _tool_error_content(tool_error: Any, source: Dict[str, Any] | None = None) -> str:
+def _tool_error_content(
+    tool_error: Any,
+    source: Dict[str, Any] | None = None,
+    *,
+    tool_name: str | None = None,
+) -> str:
     """Serialize the authoritative bounded observation without reshaping it.
 
     Graph error classification is carried separately in ``error_info``. The
@@ -1819,7 +1893,9 @@ def _tool_error_content(tool_error: Any, source: Dict[str, Any] | None = None) -
     second error envelope would destroy the only saved evidence.
     """
     payload = source if isinstance(source, dict) else tool_error.to_payload()
-    return json.dumps(_cap_tool_result(payload), ensure_ascii=False)
+    return json.dumps(
+        _cap_tool_result(payload, tool_name=tool_name), ensure_ascii=False
+    )
 
 
 async def _execute_local_operation(
@@ -1861,7 +1937,8 @@ async def _execute_local_operation(
                     project_id,
                     organization_id=organization_id,
                     defer_local_commit=True,
-                )
+                ),
+                tool_name=tool_name,
             )
             if isinstance(result, dict) and "error" in result:
                 raise _RollbackResult(result)
@@ -1916,7 +1993,9 @@ async def _execute_external_operation(
             if recovered.get("_terminal_status"):
                 result = dict(recovered)
                 result.pop("_terminal_status", None)
-                bounded_result = cast(Dict[str, Any], _cap_tool_result(result))
+                bounded_result = cast(
+                    Dict[str, Any], _cap_tool_result(result, tool_name=tool_name)
+                )
                 if claim.owner_token is None:
                     return _uncertain_draft_recovery_result(
                         bounded_result, claim.result
@@ -1958,7 +2037,9 @@ async def _execute_external_operation(
                     )
                 return bounded_result
             recovered.pop("_terminal_status", None)
-            return cast(Dict[str, Any], _cap_tool_result(recovered))
+            return cast(
+                Dict[str, Any], _cap_tool_result(recovered, tool_name=tool_name)
+            )
         return claim.result or _operation_error(
             "This operation is still in progress or its dispatch is not yet known.",
             "operation_pending",
@@ -1982,7 +2063,7 @@ async def _execute_external_operation(
 
     async def _record_draft_dispatch(payload: Dict[str, Any]) -> None:
         nonlocal dispatch_recorded
-        bounded_payload = _cap_tool_result(payload)
+        bounded_payload = _cap_tool_result(payload, tool_name=tool_name)
         async with tool_session() as session:
             async with session.begin():
                 await record_dispatch(session, key, claim.owner_token, bounded_payload)
@@ -2023,7 +2104,7 @@ async def _execute_external_operation(
             )
         raise
 
-    bounded_result = cast(Dict[str, Any], _cap_tool_result(result))
+    bounded_result = cast(Dict[str, Any], _cap_tool_result(result, tool_name=tool_name))
     if (
         tool_name == "create_draft"
         and isinstance(bounded_result, dict)
@@ -2095,7 +2176,7 @@ def _uncertain_draft_recovery_result(
             value = observation.get(field_name)
             if isinstance(value, str) and value and len(value) <= 128:
                 result[field_name] = value
-    return cast(Dict[str, Any], _cap_tool_result(result))
+    return cast(Dict[str, Any], _cap_tool_result(result, tool_name="create_draft"))
 
 
 async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -2160,7 +2241,14 @@ def _draft_status_result(
         **status,
         **{
             key: dispatched_result[key]
-            for key in ("task_id", "project_id", "project_name", "user_id")
+            for key in (
+                "task_id",
+                "project_id",
+                "project_name",
+                "user_id",
+                "selection_mode",
+                "document_ids",
+            )
             if key in dispatched_result
         },
     }
@@ -4618,15 +4706,14 @@ async def _tool_create_draft(
         if not project:
             return {"error": "Project not found or access denied"}
 
-        # Snapshot every value needed after dispatch. The ownership query starts
-        # an implicit request-session transaction; generation and status polling
-        # can last 105 seconds, so release that transaction before either wait.
+        # Snapshot every value needed after dispatch. Keep the ownership
+        # transaction open until generate_draft validates the exact source
+        # scope; that service commits only after the full selection is accepted.
         verified_project_id = project.id
         verified_project_id_text = str(project.id)
         project_name = str(project.name)
         verified_user_id = current_user.id
         verified_user_id_text = str(current_user.id)
-        await db.commit()
 
         from src.services.research.draft_generation_service import (
             DraftGenerationService,
@@ -4668,11 +4755,26 @@ async def _tool_create_draft(
             "user_id": verified_user_id_text,
             "status": str(result.get("status", "pending")),
             "message": str(result.get("message", "Draft generation started")),
+            "selection_mode": result.get("selection_mode"),
+            "document_ids": list(result.get("document_ids", [])),
         }
         if dispatch_recorder is not None:
             # Persist task identity durably before entering the status wait.
+            # Keep Task 2's receipt payload stable; effective source selection
+            # is carried by generation status and the tool result.
+            receipt = {
+                key: dispatched[key]
+                for key in (
+                    "task_id",
+                    "project_id",
+                    "project_name",
+                    "user_id",
+                    "status",
+                    "message",
+                )
+            }
             try:
-                await dispatch_recorder(dispatched)
+                await dispatch_recorder(receipt)
             except Exception as exc:
                 raise _DraftDispatchRecordingFailed(
                     "The draft task started but its recovery identity was not recorded."

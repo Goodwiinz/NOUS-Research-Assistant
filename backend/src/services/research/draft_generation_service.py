@@ -189,10 +189,17 @@ class DraftGenerationService:
         # Resolve the exact authorized project snapshot before publishing a
         # task or starting model work. Explicit selections must match in full.
         source_query = self._build_project_documents_query(project_id, normalized_ids)
+        if normalized_ids is None:
+            # A project snapshot is an effective selection too. Read only one
+            # past the cap so oversized projects fail closed without loading
+            # an unbounded list just to discover that they cannot be used.
+            source_query = source_query.limit(self._MAX_SOURCE_DOCUMENTS + 1)
         selected_documents = list((await self.db.execute(source_query)).scalars().all())
         resolved_ids = sorted(str(document.id) for document in selected_documents)
-        if not resolved_ids or (
-            normalized_ids is not None and resolved_ids != normalized_ids
+        if (
+            not resolved_ids
+            or len(resolved_ids) > self._MAX_SOURCE_DOCUMENTS
+            or (normalized_ids is not None and resolved_ids != normalized_ids)
         ):
             await self.db.rollback()
             raise ValueError("Invalid document selection")
@@ -637,6 +644,7 @@ class DraftGenerationService:
                     100,
                     "Draft completed",
                     draft_id=str(draft.id),
+                    draft_title=title,
                     duration=duration,
                 )
 
@@ -979,7 +987,11 @@ class DraftGenerationService:
         if params.get("source_scope_version") == 1:
             raw_ids = params.get("document_ids")
             mode = params.get("selection_mode")
-            if mode not in {"explicit", "project_snapshot"}:
+            if mode not in {
+                "explicit",
+                "project_snapshot",
+                "legacy_citations",
+            }:
                 raise ValueError("Base draft source scope is unavailable")
             normalized = cls._normalize_document_selection(raw_ids)
             if normalized is None:

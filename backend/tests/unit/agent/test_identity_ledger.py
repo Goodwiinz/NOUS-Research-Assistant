@@ -100,6 +100,94 @@ def test_result_receipt_replays_only_the_retained_task_two_identity_subset() -> 
     assert extracted["overflow"] == {"dropped_count": 1, "incomplete": True}
 
 
+def test_oversized_result_receipt_scans_only_retained_entries_and_keeps_omission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.services.agent import identity_ledger
+
+    retained_ids = [str(uuid.uuid4()) for _ in range(32)]
+    clipped_id = str(uuid.uuid4())
+    entries = [
+        {"kind": "document", "id": identifier, "path": f"/documents/{index}"}
+        for index, identifier in enumerate(retained_ids)
+    ]
+    entries.extend(
+        {"kind": "document", "id": clipped_id, "path": f"/documents/{index}"}
+        for index in range(32, 10_000)
+    )
+    calls = 0
+    original = identity_ledger._record_from_values
+
+    def count_records(**kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(**kwargs)
+
+    monkeypatch.setattr(identity_ledger, "_record_from_values", count_records)
+    extracted = identity_ledger.extract_tool_identities(
+        "search_documents",
+        {
+            "documents": [{"document_id": clipped_id, "title": "Clipped tail"}],
+            "_tool_result_bounds": {
+                "version": 1,
+                "identity_entries": entries,
+                "identity_coverage": {
+                    "observed_entries": 10_000,
+                    "retained_entries": 32,
+                    "omitted_entries": 9_968,
+                    "incomplete": True,
+                },
+            },
+        },
+        "oversized-receipt-call",
+        "oversized-receipt-turn",
+    )
+
+    assert calls == 32
+    assert [record["id"] for record in extracted["records"]] == retained_ids
+    assert clipped_id not in {record["id"] for record in extracted["records"]}
+    assert extracted["overflow"] == {"dropped_count": 9_968, "incomplete": True}
+
+
+def test_duplicate_specialist_observation_replay_preserves_one_provenance_record() -> (
+    None
+):
+    from src.services.agent._nodes_tools import _identity_ledger_update
+    from src.services.agent.tools_impl import _cap_tool_result
+
+    document_id = str(uuid.uuid4())
+    receipt = _cap_tool_result(
+        {
+            "status": "completed",
+            "documents": [{"document_id": document_id, "title": "Specialist source"}],
+            "message": "x" * 40_000,
+        },
+        tool_name="search_documents",
+    )
+    observation = ("search_documents", "specialist-call-15", "completed", receipt)
+    state = {
+        "identity_ledger": {},
+        "identity_current_references": [],
+        "tool_operation_turn_id": "specialist-turn-15",
+    }
+
+    first = _identity_ledger_update(state, [observation])
+    replayed = _identity_ledger_update(
+        {**state, "identity_ledger": first["identity_ledger"]},
+        [observation, observation],
+    )
+
+    records = replayed["identity_ledger"]["records"]
+    processed = replayed["identity_ledger"]["processed_observations"]
+    record = next(item for item in records if item["id"] == document_id)
+    assert replayed["identity_ledger"] == first["identity_ledger"]
+    assert len(processed) == 1
+    assert record["source_tool"] == "search_documents"
+    assert record["tool_call_id"] == "specialist-call-15"
+    assert record["turn_id"] == "specialist-turn-15"
+    assert record["observation_id"] == processed[0]
+
+
 def test_result_receipt_replays_external_rows_with_exact_source_namespaces() -> None:
     from src.services.agent.identity_ledger import extract_tool_identities
 
@@ -147,6 +235,95 @@ def test_result_receipt_replays_external_rows_with_exact_source_namespaces() -> 
         ("sec_edgar", "shared-accession-7", "SEC"),
         ("uniprot", "shared-accession-7", "UniProt"),
     }
+
+
+def test_mutation_root_artifacts_keep_exact_labels_and_typed_relations() -> None:
+    from src.services.agent.identity_ledger import extract_tool_identities
+
+    project_id, note_id, draft_id = (str(uuid.uuid4()) for _ in range(3))
+    project = extract_tool_identities(
+        "create_project",
+        {
+            "status": "success",
+            "project_id": project_id,
+            "name": "Exact Project Name",
+            "message": "Created project 'untrusted prose label'.",
+        },
+        "project-call",
+        "turn-create",
+    )
+    note = extract_tool_identities(
+        "create_project_note",
+        {
+            "status": "success",
+            "note_id": note_id,
+            "project_id": project_id,
+            "title": "Exact Note Title",
+            "project_name": "Exact Project Name",
+            "message": "Created note 'untrusted prose label'.",
+        },
+        "note-call",
+        "turn-create",
+    )
+    draft = extract_tool_identities(
+        "create_draft",
+        {
+            "status": "completed",
+            "task_id": "draft-task-non-uuid-17",
+            "draft_id": draft_id,
+            "draft_title": "Exact Draft Title",
+            "project_id": project_id,
+            "project_name": "Exact Project Name",
+        },
+        "draft-call",
+        "turn-create",
+    )
+    standalone_task = extract_tool_identities(
+        "create_task",
+        {
+            "status": "completed",
+            "task_id": "task-7f2c",
+            "task_title": "Exact Task Title",
+            "project_id": project_id,
+        },
+        "task-call",
+        "turn-create",
+    )
+
+    project_record = next(
+        item for item in project["records"] if item["kind"] == "project"
+    )
+    note_record = next(item for item in note["records"] if item["kind"] == "note")
+    note_project = next(
+        item
+        for item in note["records"]
+        if item["kind"] == "project" and item["id"] == project_id
+    )
+    draft_record = next(item for item in draft["records"] if item["kind"] == "draft")
+    task_record = next(item for item in draft["records"] if item["kind"] == "task")
+    standalone_task_record = next(
+        item for item in standalone_task["records"] if item["kind"] == "task"
+    )
+
+    assert project_record["name"] == "Exact Project Name"
+    assert note_record["name"] == "Exact Note Title"
+    assert note_record["related"] == {"project_id": project_id}
+    assert note_project["name"] == "Exact Project Name"
+    assert "Exact Note Title" not in note_project.values()
+    assert draft_record["name"] == "Exact Draft Title"
+    assert draft_record["related"] == {"project_id": project_id}
+    assert task_record["id"] == "draft-task-non-uuid-17"
+    assert task_record["name"] == "Exact Draft Title"
+    assert task_record["related"] == {"project_id": project_id, "draft_id": draft_id}
+    assert standalone_task_record["kind"] == "task"
+    assert standalone_task_record["id"] == "task-7f2c"
+    assert standalone_task_record["name"] == "Exact Task Title"
+    assert standalone_task_record["related"] == {"project_id": project_id}
+    assert all(
+        "untrusted prose label" not in item.get("name", "")
+        for result in (project, note)
+        for item in result["records"]
+    )
 
 
 def test_ledger_merge_is_idempotent_prioritizes_references_and_keeps_latest_status() -> (
@@ -258,6 +435,103 @@ def test_mutation_priority_covers_live_writers_and_excludes_failed_or_pending() 
             ]
             == status
         )
+
+
+def test_completed_mutation_retention_is_limited_to_active_turn() -> None:
+    from src.services.agent.identity_ledger import (
+        extract_tool_identities,
+        merge_identity_ledger,
+        render_identity_ledger,
+    )
+
+    stale_mutation_id = str(uuid.uuid4())
+    pinned_id = str(uuid.uuid4())
+    current_mutation_id = str(uuid.uuid4())
+    existing_records = [
+        {
+            "kind": "project",
+            "id": stale_mutation_id,
+            "observed_status": "completed",
+            "source_tool": "create_project",
+            "turn_id": "turn-old",
+            "tool_call_id": "old-call",
+            "observation_id": "old-observation",
+            "observed_order": 0,
+        },
+        {
+            "kind": "document",
+            "id": pinned_id,
+            "observed_status": "observed",
+            "source_tool": "list_project_documents",
+            "turn_id": "turn-old",
+            "tool_call_id": "pin-call",
+            "observation_id": "pin-observation",
+            "observed_order": 1,
+        },
+    ]
+    existing_records.extend(
+        {
+            "kind": "project",
+            "id": str(uuid.uuid4()),
+            "observed_status": "observed",
+            "source_tool": "list_projects",
+            "turn_id": "turn-old",
+            "tool_call_id": f"read-{index}",
+            "observation_id": f"read-observation-{index}",
+            "observed_order": index + 2,
+        }
+        for index in range(126)
+    )
+    base = {
+        "version": 1,
+        "records": existing_records,
+        "overflow": {"dropped_count": 0, "incomplete": False},
+        "processed_observations": [],
+    }
+    active_mutation = extract_tool_identities(
+        "create_project",
+        {"status": "completed", "project_id": current_mutation_id},
+        "current-write",
+        "turn-current",
+    )
+
+    merged = merge_identity_ledger(
+        base,
+        active_mutation,
+        [pinned_id],
+        current_turn_id="turn-current",
+    )
+    assert merged["records"][0]["id"] == pinned_id
+    assert merged["records"][1]["id"] == current_mutation_id
+    assert stale_mutation_id not in {record["id"] for record in merged["records"]}
+
+    projection = render_identity_ledger(
+        merged,
+        current_turn_id="turn-current",
+        current_references=[pinned_id],
+    )
+    assert projection["records"][0]["id"] == pinned_id
+    assert projection["records"][1]["id"] == current_mutation_id
+
+    next_turn_reads = extract_tool_identities(
+        "list_projects",
+        {
+            "projects": [
+                {"id": str(uuid.uuid4()), "name": f"Next turn {index}"}
+                for index in range(127)
+            ]
+        },
+        "next-turn-reads",
+        "turn-next",
+    )
+    next_turn = merge_identity_ledger(
+        merged,
+        next_turn_reads,
+        [pinned_id],
+        current_turn_id="turn-next",
+    )
+    assert current_mutation_id not in {record["id"] for record in next_turn["records"]}
+    assert pinned_id in {record["id"] for record in next_turn["records"]}
 
 
 def test_extractor_stops_at_bounded_legacy_payload_accounting() -> None:
@@ -391,6 +665,55 @@ def test_reference_extraction_scans_only_a_bounded_user_text_prefix() -> None:
 
     assert early_id in references
     assert late_id not in references
+
+
+def test_reference_extraction_advises_exact_existing_names_within_bounded_ledger() -> (
+    None
+):
+    from src.services.agent.identity_ledger import (
+        MAX_LEDGER_RECORDS,
+        identity_references_from_text,
+    )
+
+    target_id = str(uuid.uuid4())
+    records = [
+        {
+            "kind": "document",
+            "id": str(uuid.uuid4()),
+            "name": f"Unrelated source {index}",
+        }
+        for index in range(MAX_LEDGER_RECORDS)
+    ]
+    records[15] = {
+        "kind": "document",
+        "id": target_id,
+        "name": "R6 middle-only target identity",
+    }
+    records.append(
+        {
+            "kind": "document",
+            "id": str(uuid.uuid4()),
+            "name": "Overflow target must not be scanned",
+        }
+    )
+    ledger = {"version": 1, "records": records}
+
+    matched = identity_references_from_text(
+        "Find R6 middle-only target identity please",
+        existing_ledger=ledger,
+    )
+    partial = identity_references_from_text(
+        "Find middle-only target please", existing_ledger=ledger
+    )
+    overflow = identity_references_from_text(
+        "Find Overflow target must not be scanned please",
+        existing_ledger=ledger,
+    )
+
+    assert target_id in matched
+    assert target_id not in partial
+    assert len(partial) == 0
+    assert len(overflow) == 0
 
 
 def test_projection_rejects_malformed_external_namespace_and_normalizes_arxiv() -> None:

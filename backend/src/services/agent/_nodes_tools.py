@@ -497,7 +497,13 @@ SIDE_EFFECT_TOOLS = frozenset(
 def _identity_ledger_update(state: AgentState, observations: list[tuple]) -> dict:
     """Merge exact bounded tool-result identities into checkpoint state."""
     references = state.get("identity_current_references", [])
-    ledger = merge_identity_ledger(state.get("identity_ledger"), None, references)
+    current_turn_id = str(state.get("tool_operation_turn_id", "") or "")
+    ledger = merge_identity_ledger(
+        state.get("identity_ledger"),
+        None,
+        references,
+        current_turn_id=current_turn_id,
+    )
     for tool_name, call_id, status, payload in observations[:128]:
         if not isinstance(payload, dict):
             continue
@@ -507,15 +513,23 @@ def _identity_ledger_update(state: AgentState, observations: list[tuple]) -> dic
             str(tool_name),
             payload,
             str(call_id),
-            str(state.get("tool_operation_turn_id", "") or "unknown_turn"),
+            current_turn_id or "unknown_turn",
         )
-        ledger = merge_identity_ledger(ledger, incoming, references)
+        ledger = merge_identity_ledger(
+            ledger,
+            incoming,
+            references,
+            current_turn_id=current_turn_id,
+        )
     if len(observations) > 128:
         ledger["overflow"]["dropped_count"] = min(
             2**31 - 1, ledger["overflow"]["dropped_count"] + len(observations) - 128
         )
         ledger["overflow"]["incomplete"] = True
-    return {"identity_ledger": ledger}
+    return {
+        "identity_ledger": ledger,
+        "tool_operation_turn_id": current_turn_id,
+    }
 
 
 def _identity_observation(
@@ -609,7 +623,9 @@ async def _execute_single_tool(
         tool_error = classify_error_from_payload(tool_name, operation_error)
         from src.services.agent.tools_impl import _tool_error_content
 
-        result_content = _tool_error_content(tool_error, operation_error)
+        result_content = _tool_error_content(
+            tool_error, operation_error, tool_name=tool_name
+        )
         _record_tool_error_category(tool_name, tool_error.category)
         duration_ms = int((time.monotonic() - t0) * 1000)
         _record_tool_metrics(tool_name, "failed")
@@ -725,7 +741,9 @@ async def _execute_single_tool(
                 error_info = tool_error.to_state_info()
                 from src.services.agent.tools_impl import _tool_error_content
 
-                result_content = _tool_error_content(tool_error, result)
+                result_content = _tool_error_content(
+                    tool_error, result, tool_name=tool_name
+                )
                 _record_tool_error_category(tool_name, tool_error.category)
                 # error_increment counts toward the error ceiling only for
                 # non-transient errors. Either way the status is "failed" (not

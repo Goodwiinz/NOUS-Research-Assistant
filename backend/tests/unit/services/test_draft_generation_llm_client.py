@@ -268,6 +268,72 @@ async def test_generate_draft_reuses_active_generation():
     assert "already in progress" in result["message"]
 
 
+@pytest.mark.parametrize(
+    ("requested_document_index", "instructions"),
+    [(0, "Keep it concise "), (1, "Keep it concise")],
+    ids=["exact-instruction-whitespace", "different-document-selection"],
+)
+@pytest.mark.asyncio
+async def test_active_generation_conflicts_on_exact_instruction_or_source_change(
+    requested_document_index: int,
+    instructions: str,
+) -> None:
+    from types import SimpleNamespace
+
+    document_ids = [uuid4(), uuid4()]
+    project_id, user_id = uuid4(), uuid4()
+    db = MagicMock()
+    query_result = MagicMock()
+    query_result.scalars.return_value.all.return_value = [
+        SimpleNamespace(id=document_ids[requested_document_index])
+    ]
+    db.execute = AsyncMock(return_value=query_result)
+    db.commit = AsyncMock()
+
+    with patch(
+        "src.services.research.extraction_matrix_service"
+        ".ExtractionMatrixService._get_openai_client",
+        side_effect=RuntimeError("no key"),
+    ):
+        service = DraftGenerationService(db=db)
+
+    active_hash = service._request_hash(
+        project_id=project_id,
+        user_id=user_id,
+        themes=["topic"],
+        document_ids=[str(document_ids[0])],
+        instructions="Keep it concise",
+        style="academic",
+        max_sections=5,
+        include_abstract=True,
+    )
+    active = {
+        "task_id": "active-task-17",
+        "status": "generating",
+        "user_id": str(user_id),
+        "generation_request_hash": active_hash,
+    }
+    with (
+        patch.object(DraftGenerationService, "get_latest_status", return_value=active),
+        patch.object(DraftGenerationService, "_fire_and_forget") as fire,
+        patch.object(
+            DraftGenerationService, "publish_status", new=AsyncMock()
+        ) as publish,
+    ):
+        result = await service.generate_draft(
+            project_id=project_id,
+            user_id=user_id,
+            themes=["topic"],
+            document_ids=[document_ids[requested_document_index]],
+            instructions=instructions,
+        )
+
+    assert result.get("error_category") == "draft_generation_conflict"
+    assert "task_id" not in result
+    fire.assert_not_called()
+    publish.assert_not_awaited()
+
+
 def test_generation_request_hash_has_scope_version_and_canonical_style() -> None:
     import hashlib
     import json

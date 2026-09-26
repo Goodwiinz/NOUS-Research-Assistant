@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -82,6 +83,7 @@ class UniProtConnector(ExternalDBConnector):
         if organism is not None and (
             not isinstance(organism, str)
             or not all(char.isalnum() or char in " _.-" for char in organism)
+            or re.search(r"\b(?:AND|OR|NOT)\b", organism, flags=re.IGNORECASE)
         ):
             raise ValueError("filter 'organism' contains unsupported query syntax")
         return validated
@@ -105,13 +107,14 @@ class UniProtConnector(ExternalDBConnector):
         max_results: int = 10,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[ConnectorResult]:
+        filters = self.validate_search_filters(filters)
         params: Dict[str, Any] = {
             "query": query,
             "size": min(max_results, self.info.max_results_per_query),
             "format": "json",
         }
         if filters and (org := filters.get("organism")):
-            params["query"] = f"{query} AND organism_name:{org}"
+            params["query"] = f'{query} AND organism_name:"{org}"'
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:

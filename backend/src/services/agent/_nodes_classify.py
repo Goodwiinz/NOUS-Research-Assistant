@@ -241,7 +241,9 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         else ""
     )
     identity_references = identity_references_from_text(
-        latest_user_text, state.get("current_project_id")
+        latest_user_text,
+        state.get("current_project_id"),
+        existing_ledger=state.get("identity_ledger"),
     )
     # Recover before any downstream LLM node trims the legacy message history.
     # This is also run on resumed checkpoints, whose older ToolMessages may
@@ -250,6 +252,7 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         messages,
         state.get("identity_ledger"),
         identity_references,
+        current_turn_id=operation_turn_id,
     )
 
     results = await asyncio.gather(
