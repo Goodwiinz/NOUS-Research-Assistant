@@ -60,8 +60,15 @@ class AgentState(TypedDict):
     model: str  # Per-request Azure deployment override; "" ⇒ server default
     use_rag: bool  # Request-level retrieval contract; False skips rag_node reads
     runtime_snapshot_id: str  # Durable frozen skill/tool metadata for this turn
+    runtime_tool_names: (
+        list  # Frozen registry membership; current flags may only remove
+    )
+    tool_registry_hash: str
+    tool_registry_version: str
+    runtime_projection_unavailable: bool
     project_skill_catalog: list  # Compact model-safe skill metadata only
     loaded_skill_versions: list  # Snapshot-audited versions loaded this turn
+    capability_limitation: dict  # Deterministic terminal boundary for unsupported work
     # Reflection result of the latest LLM response; cleared at the start of
     # each turn so a stale value from turn N cannot trigger a spurious
     # revision at the start of turn N+1. Stored as ``Any`` to avoid a

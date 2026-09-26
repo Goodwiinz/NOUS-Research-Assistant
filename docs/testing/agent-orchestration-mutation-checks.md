@@ -631,3 +631,63 @@ The code cannot prove whether that unrecorded external task was accepted, so it
 does not dispatch it again automatically. Post-dispatch cancellation and status
 read failures preserve the committed identity and return a bounded,
 non-retryable pending observation.
+
+## Task 3 whole-batch capability preflight
+
+Evidence dated 2026-09-26 against base
+`8afdb76ee1775fa678673aa40a896162a7cecdd5`. Both execution boundaries must
+reject an entire mixed batch before dedupe, approval, effect dispatch, or a
+durable operation claim. The tests supply a valid Task 2 operation protocol,
+turn ID, user, organization, and thread, so the no-prefix assertions do not
+pass because of an unrelated missing-scope guard.
+
+### Main tool node
+
+- **Source and guard:** `backend/src/services/agent/_nodes_tools.py:752-756`,
+  the `if unavailable` branch in `tool_node`.
+- **Owning test:**
+  `backend/tests/unit/agent/test_task3_batch_contract.py::test_main_tool_node_rejects_whole_batch_before_mutation_claim`.
+- **Mutation:** temporarily changed that condition to
+  `if False and unavailable`, allowing both the supported write and the
+  unregistered sibling to reach `_execute_single_tool`.
+- **Command:**
+
+  ```sh
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false --tb=short backend/tests/unit/agent/test_task3_batch_contract.py::test_main_tool_node_rejects_whole_batch_before_mutation_claim
+  ```
+
+- **Observed mutant failure:** exit 1; the expected zero executor awaits were
+  two. The failure specifically reports both calls reached the effect seam.
+  Full final-source output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task-3-batch-guard-mutation-v2-red.log`.
+- **Restore proof:** repeated against the formatted final source after the
+  earlier working-source run. The source was restored from its byte-exact
+  pre-mutation copy; `cmp -s` succeeded and both source hashes were
+  `db2b6534b61e2b9cae4d7c88eda5ff98c0128a859e7925d1dbb4e72f7d61b00c`.
+- **Restored result:** same command, exit 0; `1 passed`. Output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task-3-batch-guard-mutation-v2-green.log`.
+
+### Filtered specialist tool node
+
+- **Source and guard:** `backend/src/services/agent/_nodes_tools.py:988-994`,
+  the `if unavailable` branch in `make_filtered_tool_node`.
+- **Owning test:**
+  `backend/tests/unit/agent/test_task3_batch_contract.py::test_filtered_node_rejects_whole_mixed_batch_before_mutation_claim`.
+- **Mutation:** temporarily changed that condition to
+  `if False and unavailable`, allowing the supported write prefix to reach
+  `_execute_single_tool` before the out-of-scope sibling was skipped.
+- **Command:**
+
+  ```sh
+  PYTHONPATH=backend REDIS_URL="${REDIS_URL:?}" LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false --tb=short backend/tests/unit/agent/test_task3_batch_contract.py::test_filtered_node_rejects_whole_mixed_batch_before_mutation_claim
+  ```
+
+- **Observed mutant failure:** exit 1; `_execute_single_tool` was awaited once
+  for `create_project_note`, violating the zero-prefix assertion. Full output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task-3-filtered-guard-mutation-v2-red.log`.
+- **Restore proof:** repeated against the formatted final source after the
+  earlier working-source run. The source was restored from its byte-exact
+  pre-mutation copy; `cmp -s` succeeded and both source hashes were
+  `db2b6534b61e2b9cae4d7c88eda5ff98c0128a859e7925d1dbb4e72f7d61b00c`.
+- **Restored result:** same command, exit 0; `1 passed`. Output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task-3-filtered-guard-mutation-v2-green.log`.

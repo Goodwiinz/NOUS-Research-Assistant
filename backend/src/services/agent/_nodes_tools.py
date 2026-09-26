@@ -47,10 +47,78 @@ from src.services.agent.error_recovery import (
 from src.services.agent.observability import track_node_execution
 from src.services.agent.retrieval_provenance import merge_retrieved_contexts
 from src.services.agent.state import AgentState
-from src.services.agent.tool_registry import ToolPolicyTag
+from src.services.agent.tool_registry import ToolPolicyTag, runtime_tool_descriptors
 from src.services.agent.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
+
+
+def unavailable_tool_calls(
+    tool_calls: list[dict],
+    state: AgentState,
+    *,
+    branch: str = "main",
+    allowed_tool_names: set[str] | None = None,
+) -> list[str]:
+    """Return server-known names in a batch outside its runtime projection."""
+    if allowed_tool_names is None:
+        allowed_tool_names = {
+            descriptor.name
+            for descriptor in runtime_tool_descriptors(branch, state, TOOL_REGISTRY)
+        }
+    return [
+        tc["name"]
+        for tc in tool_calls
+        if not isinstance(tc.get("name"), str)
+        or tc["name"] not in allowed_tool_names
+        or TOOL_REGISTRY.descriptor(tc["name"]) is None
+        or not TOOL_REGISTRY.descriptor(tc["name"]).enabled
+    ]
+
+
+def _capability_rejection(
+    state: AgentState,
+    tool_calls: list[dict],
+    unavailable_names: list[str],
+    *,
+    branch: str,
+) -> dict:
+    """Build a paired, non-reflective whole-batch rejection update."""
+    known_names = sorted(
+        {
+            name
+            for name in unavailable_names
+            if isinstance(name, str) and TOOL_REGISTRY.descriptor(name) is not None
+        }
+    )[:8]
+    messages = [
+        ToolMessage(
+            content=json.dumps(
+                {
+                    "error_type": "capability_unavailable",
+                    "error": "The requested operation is not available in this workflow.",
+                }
+            ),
+            tool_call_id=str(call.get("id") or ""),
+            status="error",
+        )
+        for call in tool_calls
+    ]
+    limitation = {
+        "branch": branch,
+        "unavailable_tools": known_names,
+        "kind": "execution",
+        "reason": "The emitted tool batch includes an operation unavailable in this workflow.",
+    }
+    return {
+        "messages": messages,
+        "tool_executions": list(state.get("tool_executions", [])),
+        "capability_limitation": limitation,
+        "last_error": "capability_unavailable",
+        "error_count": state.get("error_count", 0),
+        "tool_loop_count": state.get("tool_loop_count", 0) + 1,
+        "tools_all_deduped": False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +749,12 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
     if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
         return {"messages": [], "tool_executions": []}
 
+    unavailable = unavailable_tool_calls(last_message.tool_calls, state)
+    if unavailable:
+        return _capability_rejection(
+            state, last_message.tool_calls, unavailable, branch="main"
+        )
+
     tool_executions: List[dict] = list(state.get("tool_executions", []))
     error_count = state.get("error_count", 0)
     last_error = state.get("last_error", "")
@@ -882,7 +956,11 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
     }
 
 
-def make_filtered_tool_node(allowed_tool_names: set[str]):
+def make_filtered_tool_node(
+    allowed_tool_names: set[str] | None = None,
+    *,
+    branch: str | None = None,
+):
     """Create a tool_node wrapper that only executes tools in the allowed set.
 
     Tool calls not in the allowed set are skipped with a warning ToolMessage.
@@ -894,13 +972,41 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
         if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
             return {"messages": [], "tool_executions": []}
 
+        # Reject the complete emitted batch before dedupe, approval/effect
+        # checks, or the durable operation claim. A supported prefix must not
+        # run when any sibling call is unavailable.
+        if branch is not None:
+            unavailable = unavailable_tool_calls(
+                last_message.tool_calls, state, branch=branch
+            )
+        else:
+            unavailable = unavailable_tool_calls(
+                last_message.tool_calls,
+                state,
+                allowed_tool_names=allowed_tool_names or set(),
+            )
+        if unavailable:
+            return _capability_rejection(
+                state,
+                last_message.tool_calls,
+                unavailable,
+                branch=branch or "specialist",
+            )
+
+        selected_names = allowed_tool_names or set()
+        if branch is not None:
+            selected_names = {
+                descriptor.name
+                for descriptor in runtime_tool_descriptors(branch, state, TOOL_REGISTRY)
+            }
+
         # Filter tool calls
         allowed_calls = []
         skipped_messages = []
         for tc in last_message.tool_calls:
             descriptor = TOOL_REGISTRY.descriptor(tc["name"])
             if (
-                tc["name"] in allowed_tool_names
+                tc["name"] in selected_names
                 and descriptor is not None
                 and descriptor.enabled
             ):
@@ -916,7 +1022,7 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
                         content=json.dumps(
                             {
                                 "error": f"Tool '{tc['name']}' is not available in this context. "
-                                f"Available tools: {', '.join(sorted(allowed_tool_names))}"
+                                f"Available tools: {', '.join(sorted(selected_names))}"
                             }
                         ),
                         tool_call_id=tc["id"],

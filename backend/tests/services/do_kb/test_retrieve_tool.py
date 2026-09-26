@@ -806,6 +806,94 @@ async def test_multiple_named_documents_use_one_or_all_filter():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_bedrock_named_document_uses_canonical_filter_after_tenant_auth():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    db = MagicMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _authorized_document_result([(TARGET_ID, None, "local")]),
+            _authorized_document_result(
+                [(TARGET_ID, None, "Attention Is All You Need")]
+            ),
+        ]
+    )
+    settings = _settings()
+    settings.DO_KB_ENABLED = False
+    settings.BEDROCK_KB_ID = "bedrock-kb-1"
+    provider = AsyncMock(
+        return_value=DOKBRetrieveOutcome(
+            status=DOKBRetrieveStatus.SUCCESS,
+            result=RetrieveResult(
+                chunks=[
+                    Chunk(
+                        text="The attention mechanism ...",
+                        score=0.91,
+                        document_id=str(TARGET_ID),
+                        metadata={"score_source": "upstream"},
+                    )
+                ],
+                total=1,
+            ),
+        )
+    )
+
+    with (
+        patch("src.core.config.settings", settings),
+        patch(
+            "src.services.do_kb.retrieval.resolve_org_kb_uuid",
+            AsyncMock(return_value="bedrock-kb-1"),
+        ),
+        patch("src.services.do_kb.retrieval.retrieve_kb_chunks", provider),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {"query": "attention mechanism", "document_ids": [str(TARGET_ID)]},
+            db,
+            user,
+        )
+
+    first_query = str(db.execute.await_args_list[0].args[0]).lower()
+    assert "documents.organization_id" in first_query
+    assert "documents.is_deleted = false" in first_query
+    assert provider.await_args.kwargs["filters"] == {
+        "equals": {"key": "document_id", "value": str(TARGET_ID)}
+    }
+    assert provider.await_args.kwargs["org_id"] == user.organization_id
+    assert [chunk["document_id"] for chunk in result["chunks"]] == [str(TARGET_ID)]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_foreign_bedrock_named_document_is_rejected_before_provider_dispatch():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=_authorized_document_result([]))
+    settings = _settings()
+    settings.DO_KB_ENABLED = False
+    settings.BEDROCK_KB_ID = "bedrock-kb-1"
+    kb_lookup = AsyncMock(return_value="bedrock-kb-1")
+    provider = AsyncMock()
+
+    with (
+        patch("src.core.config.settings", settings),
+        patch("src.services.do_kb.retrieval.resolve_org_kb_uuid", kb_lookup),
+        patch("src.services.do_kb.retrieval.retrieve_kb_chunks", provider),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {"query": "attention mechanism", "document_ids": [str(TARGET_ID)]},
+            db,
+            user,
+        )
+
+    first_query = str(db.execute.await_args.args[0]).lower()
+    assert "documents.organization_id" in first_query
+    assert "documents.is_deleted = false" in first_query
+    assert result["reason"] == "requested_documents_unavailable"
+    kb_lookup.assert_not_awaited()
+    provider.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "document_ids",
     [

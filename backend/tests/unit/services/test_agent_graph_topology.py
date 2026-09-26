@@ -50,9 +50,11 @@ RESEARCH_EDGES = [
     ("research_llm_node", "research_interrupt_node", True),
     ("research_llm_node", "research_reflection_gate", True),
     ("research_llm_node", "research_tool_node", True),
-    ("research_planner_node", "research_llm_node", False),
+    ("research_planner_node", "__end__", True),
+    ("research_planner_node", "research_llm_node", True),
     ("research_reflection_gate", "__end__", True),
     ("research_reflection_gate", "research_llm_node", True),
+    ("research_tool_node", "__end__", True),
     ("research_tool_node", "research_compactor_node", True),
     ("research_tool_node", "research_force_synthesis_node", True),
 ]
@@ -79,9 +81,11 @@ WRITING_EDGES = [
     ("writing_llm_node", "writing_interrupt_node", True),
     ("writing_llm_node", "writing_reflection_gate", True),
     ("writing_llm_node", "writing_tool_node", True),
-    ("writing_planner_node", "writing_llm_node", False),
+    ("writing_planner_node", "__end__", True),
+    ("writing_planner_node", "writing_llm_node", True),
     ("writing_reflection_gate", "__end__", True),
     ("writing_reflection_gate", "writing_llm_node", True),
+    ("writing_tool_node", "__end__", True),
     ("writing_tool_node", "writing_compactor_node", True),
     ("writing_tool_node", "writing_force_synthesis_node", True),
 ]
@@ -105,9 +109,11 @@ DATA_EDGES = [
     ("data_llm_node", "data_force_synthesis_node", True),
     ("data_llm_node", "data_reflection_gate", True),
     ("data_llm_node", "data_tool_node", True),
-    ("data_planner_node", "data_llm_node", False),
+    ("data_planner_node", "__end__", True),
+    ("data_planner_node", "data_llm_node", True),
     ("data_reflection_gate", "__end__", True),
     ("data_reflection_gate", "data_llm_node", True),
+    ("data_tool_node", "__end__", True),
     ("data_tool_node", "data_compactor_node", True),
     ("data_tool_node", "data_force_synthesis_node", True),
 ]
@@ -169,9 +175,11 @@ MAIN_EDGES = [
     ),
     ("data_subgraph:data_llm_node", "data_subgraph:data_reflection_gate", True),
     ("data_subgraph:data_llm_node", "data_subgraph:data_tool_node", True),
-    ("data_subgraph:data_planner_node", "data_subgraph:data_llm_node", False),
+    ("data_subgraph:data_planner_node", "data_subgraph:__end__", True),
+    ("data_subgraph:data_planner_node", "data_subgraph:data_llm_node", True),
     ("data_subgraph:data_reflection_gate", "data_subgraph:__end__", True),
     ("data_subgraph:data_reflection_gate", "data_subgraph:data_llm_node", True),
+    ("data_subgraph:data_tool_node", "data_subgraph:__end__", True),
     ("data_subgraph:data_tool_node", "data_subgraph:data_compactor_node", True),
     (
         "data_subgraph:data_tool_node",
@@ -186,7 +194,8 @@ MAIN_EDGES = [
     ("llm_node", "reflection_gate", True),
     ("llm_node", "tool_node", True),
     ("memory_save_node", "__end__", False),
-    ("planner_node", "llm_node", False),
+    ("planner_node", "llm_node", True),
+    ("planner_node", "memory_save_node", True),
     ("preprocessing_node", "data_subgraph:data_planner_node", True),
     ("preprocessing_node", "planner_node", True),
     ("preprocessing_node", "research_subgraph:research_planner_node", True),
@@ -236,8 +245,13 @@ MAIN_EDGES = [
     ),
     (
         "research_subgraph:research_planner_node",
+        "research_subgraph:__end__",
+        True,
+    ),
+    (
+        "research_subgraph:research_planner_node",
         "research_subgraph:research_llm_node",
-        False,
+        True,
     ),
     (
         "research_subgraph:research_reflection_gate",
@@ -247,6 +261,11 @@ MAIN_EDGES = [
     (
         "research_subgraph:research_reflection_gate",
         "research_subgraph:research_llm_node",
+        True,
+    ),
+    (
+        "research_subgraph:research_tool_node",
+        "research_subgraph:__end__",
         True,
     ),
     (
@@ -261,6 +280,7 @@ MAIN_EDGES = [
     ),
     ("tool_node", "compactor_node", True),
     ("tool_node", "force_synthesis_node", True),
+    ("tool_node", "memory_save_node", True),
     ("writing_subgraph:__end__", "memory_save_node", False),
     (
         "writing_subgraph:writing_compactor_node",
@@ -304,13 +324,23 @@ MAIN_EDGES = [
     ),
     (
         "writing_subgraph:writing_planner_node",
+        "writing_subgraph:__end__",
+        True,
+    ),
+    (
+        "writing_subgraph:writing_planner_node",
         "writing_subgraph:writing_llm_node",
-        False,
+        True,
     ),
     ("writing_subgraph:writing_reflection_gate", "writing_subgraph:__end__", True),
     (
         "writing_subgraph:writing_reflection_gate",
         "writing_subgraph:writing_llm_node",
+        True,
+    ),
+    (
+        "writing_subgraph:writing_tool_node",
+        "writing_subgraph:__end__",
         True,
     ),
     (

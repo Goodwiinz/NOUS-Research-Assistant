@@ -1073,8 +1073,14 @@ TOOL_REGISTRY = ToolRegistry(
                     AgentIntent.GENERAL,
                 }
             ),
-            subgraphs=frozenset({AgentSubgraph.RESEARCH, AgentSubgraph.DATA}),
-            subgraph_positions=((AgentSubgraph.RESEARCH, 2), (AgentSubgraph.DATA, 5)),
+            subgraphs=frozenset(
+                {AgentSubgraph.RESEARCH, AgentSubgraph.WRITING, AgentSubgraph.DATA}
+            ),
+            subgraph_positions=(
+                (AgentSubgraph.RESEARCH, 2),
+                (AgentSubgraph.WRITING, 15),
+                (AgentSubgraph.DATA, 5),
+            ),
             policy_tags=frozenset(),
         ),
         ToolDescriptor(
@@ -1092,8 +1098,14 @@ TOOL_REGISTRY = ToolRegistry(
             # only, that advice was unfollowable from the data subgraph —
             # make_filtered_tool_node answers "not available in this context"
             # (guarded by test_recovery_suggestions_are_callable).
-            subgraphs=frozenset({AgentSubgraph.RESEARCH, AgentSubgraph.DATA}),
-            subgraph_positions=((AgentSubgraph.RESEARCH, 3), (AgentSubgraph.DATA, 8)),
+            subgraphs=frozenset(
+                {AgentSubgraph.RESEARCH, AgentSubgraph.WRITING, AgentSubgraph.DATA}
+            ),
+            subgraph_positions=(
+                (AgentSubgraph.RESEARCH, 3),
+                (AgentSubgraph.WRITING, 16),
+                (AgentSubgraph.DATA, 8),
+            ),
             policy_tags=frozenset(),
             exposed_in_all_tools=False,
         ),

@@ -3041,6 +3041,20 @@ async def _resume_agent_graph(
                 ),
             )
 
+            runtime_state_update = {}
+            if snapshot and snapshot.values:
+                from src.services.agent.runtime_snapshot import (
+                    hydrate_runtime_state_from_snapshot,
+                )
+
+                runtime_state_update = await hydrate_runtime_state_from_snapshot(
+                    db,
+                    dict(snapshot.values),
+                    user_id=current_user.id,
+                    thread_id=resume_thread_id,
+                    job_id=job_id,
+                )
+
             # See the parallel commit in _run_agent_graph above (audit M9) —
             # get_run() above is a bare SELECT, so without this the session
             # holds its pooled connection through the whole confirm run.
@@ -3051,7 +3065,14 @@ async def _resume_agent_graph(
             async with _run_heartbeat(job_id), asyncio.timeout(360):
                 final_state = await _invoke_graph_with_cancellation_monitor(
                     graph,
-                    Command(resume={"confirmed": confirmed}),
+                    Command(
+                        **(
+                            {"update": runtime_state_update}
+                            if runtime_state_update
+                            else {}
+                        ),
+                        resume={"confirmed": confirmed},
+                    ),
                     config,
                     job_id,
                     current_user,

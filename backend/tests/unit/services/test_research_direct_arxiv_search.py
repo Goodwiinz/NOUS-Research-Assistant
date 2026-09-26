@@ -1,7 +1,7 @@
 """Regression tests for deterministic arXiv search routing."""
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 
 @pytest.mark.unit
@@ -21,10 +21,7 @@ async def test_explicit_arxiv_search_emits_tool_call_without_llm(monkeypatch):
         {
             "messages": [
                 HumanMessage(
-                    content=(
-                        "Search arXiv for recent retrieval-augmented "
-                        "generation papers"
-                    )
+                    content="Search arXiv for retrieval-augmented generation papers"
                 )
             ],
             "plan": [],
@@ -40,8 +37,9 @@ async def test_explicit_arxiv_search_emits_tool_call_without_llm(monkeypatch):
     tool_call = message.tool_calls[0]
     assert tool_call["name"] == "search_arxiv"
     assert tool_call["args"] == {
-        "query": "recent retrieval-augmented generation papers",
+        "query": "retrieval-augmented generation papers",
         "max_results": 5,
+        "recency_days": 365,
     }
     assert tool_call["id"].startswith("direct_search_arxiv_")
     assert tool_call["type"] == "tool_call"
@@ -75,13 +73,142 @@ def test_explicit_time_window_skips_fast_path(content: str) -> None:
 @pytest.mark.parametrize(
     "content",
     [
-        "find arxiv papers on RAG",
-        "search arxiv for recent RAG papers",
-        "show me the latest arxiv papers on diffusion",
+        "find papers on arxiv about RAG",
+        "please search arxiv for retrieval augmented generation.",
+        "search arxiv for graph neural networks",
     ],
 )
-def test_recency_words_still_take_fast_path(content: str) -> None:
-    """ "recent"/"latest" keep the deterministic path — 365 days is right there."""
+def test_narrow_standalone_forms_take_fast_path(content: str) -> None:
+    """Simple affirmative forms use the bounded default search arguments."""
     from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_query
 
     assert _direct_arxiv_search_query(content) is not None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "content",
+    [
+        "do not search arxiv for transformers",
+        "search arxiv for transformers and save a draft",
+        "search arxiv for transformers then ingest them",
+        'search arxiv for "transformers"',
+        "search arxiv for transformers; then create a note",
+        "search arxiv for transformers—attention",
+        "search arxiv for transformers from 2020",
+        "search arxiv for transformers in the last five years",
+        "search arxiv for transformers last-week",
+        "search arxiv for five-year studies",
+        "search arxiv for the top 10 transformer papers",
+        "search arxiv for up to 5 transformer papers",
+        "search arxiv for transformers at least 5 papers",
+        "search arxiv for those papers",
+        "search arxiv for the same topic",
+        "search arxiv for transformers?",
+        "search arxiv for transformers\nthen save a draft",
+        "\nsearch arxiv for transformers",
+        "search arxiv for transformers\n",
+        "search arxiv for one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty one",
+    ],
+)
+def test_ambiguous_or_compound_requests_decline_direct_shortcut(content: str) -> None:
+    from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_query
+
+    assert _direct_arxiv_search_query(content) is None
+
+
+def test_direct_shortcut_requires_fresh_ordinary_projected_search() -> None:
+    from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_message
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    messages = [HumanMessage(content="search arxiv for graph neural networks")]
+    ordinary = {
+        "messages": messages,
+        "plan": [],
+        "capability_limitation": {},
+        "tool_loop_count": 0,
+        "tool_executions": [],
+        "loaded_skill_versions": [],
+        "project_skill_catalog": [],
+    }
+    assert _direct_arxiv_search_message(messages, ordinary) is not None
+
+    cases = [
+        {**ordinary, "plan": [{"step": 1, "tool": "search_arxiv"}]},
+        {**ordinary, "capability_limitation": {"branch": "research"}},
+        {**ordinary, "tool_loop_count": 1},
+        {**ordinary, "tool_executions": [{"tool_name": "search_arxiv"}]},
+        {**ordinary, "loaded_skill_versions": [{"name": "paper-workflow"}]},
+        {
+            **ordinary,
+            "project_skill_catalog": [{"name": "paper-workflow"}],
+            "messages": [
+                HumanMessage(content="search arxiv for paper-workflow transformers")
+            ],
+        },
+        {
+            **ordinary,
+            "runtime_snapshot_id": "snapshot-1",
+            "runtime_tool_names": [
+                name
+                for name in TOOL_REGISTRY.available_descriptor_names()
+                if name != "search_arxiv"
+            ],
+            "tool_registry_hash": TOOL_REGISTRY.metadata_snapshot()["hash"],
+            "tool_registry_version": TOOL_REGISTRY.metadata_snapshot()["version"],
+        },
+        {**ordinary, "runtime_snapshot_id": "snapshot-1"},
+    ]
+    for state in cases:
+        assert _direct_arxiv_search_message(state["messages"], state) is None
+
+
+def test_prior_tool_result_after_current_human_disables_shortcut() -> None:
+    from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_message
+
+    messages = [
+        HumanMessage(content="search arxiv for graph neural networks"),
+        ToolMessage(content="{}", tool_call_id="prior-result"),
+    ]
+    assert _direct_arxiv_search_message(messages, {"tool_loop_count": 0}) is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_declined_shortcut_uses_ordinary_research_model(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    import src.services.agent.graph as graph
+    import src.services.agent.llm_factory as factory
+    from src.services.agent.subgraphs.research_agent import research_llm_node
+
+    observed: dict[str, object] = {}
+
+    class FakeLLM:
+        def bind_tools(self, tools, **_kwargs):
+            observed["tools"] = {tool.name for tool in tools}
+            return self
+
+        async def ainvoke(self, messages, **_kwargs):
+            observed["messages"] = messages
+            return AIMessage(content="I will search for that topic.")
+
+    monkeypatch.setattr(graph, "_build_llm", lambda **_kwargs: FakeLLM())
+    monkeypatch.setattr(factory, "resolve_chat_deployment", lambda *_args: "test-main")
+
+    result = await research_llm_node(
+        {
+            "messages": [
+                HumanMessage(content="search arxiv for transformers and save a draft")
+            ],
+            "plan": [],
+            "capability_limitation": {},
+            "tool_loop_count": 0,
+            "tool_executions": [],
+            "runtime_tool_names": [],
+        },
+        {},
+    )
+
+    assert result["messages"][0].content == "I will search for that topic."
+    assert "search_arxiv" in observed["tools"]

@@ -24,8 +24,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.core.config import get_settings
-
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
 
@@ -389,21 +387,15 @@ def _runtime_model_line(model_override: str | None) -> str:
     nothing is configured the line is omitted; the static rule in
     ``SHARED_AGENT_RULES`` still steers the agent away from guessing.
     """
-    settings = get_settings()
-    deployment = (
-        model_override
-        or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
-        or settings.AZURE_OPENAI_DEPLOYMENT_NAME
-        or ""
-    )
+    from src.services.agent.llm_factory import resolve_chat_deployment
+
+    deployment = resolve_chat_deployment(model_override)
     if not deployment:
         return ""
     if deployment == "model-router":
         return (
-            "Runtime model: routed via Azure deployment `model-router`. "
-            "The underlying model (gpt-5, claude-*, llama-*, ...) is "
-            "selected per request by Azure model-router and is not "
-            "visible from this prompt."
+            "Runtime model: routed deployment `model-router`; "
+            "underlying model is unknown."
         )
     return f"Runtime model: routed via Azure deployment `{deployment}`."
 

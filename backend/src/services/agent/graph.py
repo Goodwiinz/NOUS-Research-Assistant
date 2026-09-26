@@ -62,7 +62,10 @@ from src.services.agent.error_recovery import (
     classify_error_from_payload,
     retry_transient,
 )
-from src.services.agent.llm_factory import credential_fingerprint
+from src.services.agent.llm_factory import (
+    credential_fingerprint,
+    resolve_chat_deployment,
+)
 from src.services.agent.observability import track_node_execution
 from src.services.agent.planner import make_planner_node
 from src.services.agent.reflection import make_reflection_gate
@@ -147,11 +150,7 @@ def _build_llm(model_override: str | None = None):
     api_version = (
         settings.AZURE_OPENAI_CHAT_API_VERSION or settings.AZURE_OPENAI_API_VERSION
     )
-    deployment = (
-        model_override
-        or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
-        or settings.AZURE_OPENAI_DEPLOYMENT_NAME
-    )
+    deployment = resolve_chat_deployment(model_override)
 
     if not endpoint or not api_key:
         raise RuntimeError(

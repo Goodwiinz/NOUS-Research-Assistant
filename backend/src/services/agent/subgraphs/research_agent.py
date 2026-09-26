@@ -13,6 +13,8 @@ prompt, the direct-arxiv fast path, and the LLM node.
 import asyncio
 import logging
 import re
+import unicodedata
+from collections.abc import Mapping
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -41,67 +43,188 @@ RESEARCH_TOOL_NAMES_LIST = [t.name for t in RESEARCH_TOOLS]
 MAX_RESEARCH_TOOL_LOOPS = 5
 
 _DIRECT_ARXIV_SEARCH_RE = re.compile(
-    r"\b(?:search|find|look\s+up|lookup|discover|list|show)\b.*\barxiv\b"
-    r"|\barxiv\b.*\b(?:search|find|look\s+up|lookup|discover|list|show)\b",
+    r"(?:please[ ]+)?(?:search[ ]+arxiv[ ]+for|find[ ]+papers[ ]+on[ ]+arxiv[ ]+about)"
+    r"[ ]+(?P<topic>.+)",
     re.IGNORECASE,
 )
 
-
-# The fast path hard-codes search_arxiv's default 365-day window, so any turn
-# that states its own window must skip it and let the LLM set ``recency_days``
-# (a five-year review would otherwise silently return only the last year).
-# "recent"/"latest" are deliberately absent — the 365-day default is right for
-# those, and they are the most common phrasing the fast path exists to serve.
-_EXPLICIT_TIME_WINDOW_RE = re.compile(
-    r"\b(?:last|past|previous|within|over)\s+(?:the\s+)?"
-    r"(?:\w+[-\s]+)?(?:year|month|week|day|decade)s?\b"
-    r"|\b(?:since|before|after|between|from|until|up\s+to)\s+(?:19|20)\d{2}\b"
-    r"|\b(?:in|during)\s+(?:19|20)\d{2}\b"
-    r"|\b(?:19|20)\d{2}\s*(?:-|–|to)\s*(?:19|20)\d{2}\b"
-    r"|\ball[-\s]?time\b"
-    r"|\bdecades?\b"
-    r"|\b(?:earliest|oldest|foundational|seminal|historical|pioneering)\b",
+_DIRECT_ARXIV_BLOCKED_WORDS = frozenset(
+    {
+        "and",
+        "or",
+        "then",
+        "also",
+        "before",
+        "after",
+        "not",
+        "no",
+        "never",
+        "without",
+        "except",
+        "exclude",
+        "it",
+        "them",
+        "these",
+        "those",
+        "this",
+        "that",
+        "above",
+        "same",
+        "skill",
+        "skills",
+        "top",
+        "first",
+        "last",
+        "exactly",
+        "only",
+        "all",
+        "every",
+        "each",
+        "few",
+        "several",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "recent",
+        "latest",
+        "newest",
+        "earliest",
+        "oldest",
+        "current",
+        "since",
+        "during",
+        "within",
+        "previous",
+        "year",
+        "years",
+        "month",
+        "months",
+        "week",
+        "weeks",
+        "day",
+        "days",
+        "decade",
+        "decades",
+    }
+)
+_DIRECT_ARXIV_BLOCKED_MODIFIER_RE = re.compile(
+    r"\b(?:19|20)\d{2}\b"
+    r"|\b\d+\s+(?:papers?|results?|studies|articles?)\b"
+    r"|\b(?:up\s+to|at\s+least|no\s+more\s+than|more\s+than|"
+    r"fewer\s+than|less\s+than)\s+\d+\b",
     re.IGNORECASE,
 )
 
 
 def _direct_arxiv_search_query(content: str) -> str | None:
-    """Return a search query when the user explicitly asks to search arXiv."""
-    if not content or not content.strip():
+    """Match only a short standalone affirmative arXiv search command.
+
+    This is an optimization for one read-only operation. Any punctuation,
+    modifier, compound request, reference to prior context, or non-default
+    time/count constraint falls through to normal planning.
+    """
+    if not isinstance(content, str) or not content.strip():
         return None
-    if not _DIRECT_ARXIV_SEARCH_RE.search(content):
+    # Do not let strip() turn a multi-line request into a standalone command.
+    # The shortcut accepts plain spaces only; controls always go through normal
+    # planning even when they occur outside the matched phrase.
+    if any(unicodedata.category(char).startswith("C") for char in content):
         return None
-    if _EXPLICIT_TIME_WINDOW_RE.search(content):
+    match = _DIRECT_ARXIV_SEARCH_RE.fullmatch(content.strip())
+    if match is None:
         return None
 
-    query = re.sub(
-        r"\b(?:search|find|look\s+up|lookup|discover|list|show)\b",
-        " ",
-        content,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-    query = re.sub(r"\barxiv(?:\.org)?\b", " ", query, flags=re.IGNORECASE)
-    query = query.strip()
-    query = re.sub(
-        r"^(?:for|on|about|regarding|related\s+to)\s+",
-        "",
-        query,
-        flags=re.IGNORECASE,
-    )
-    query = " ".join(query.split())
-    return query or content.strip()
+    topic = match.group("topic").strip()
+    if topic.endswith("."):
+        topic = topic[:-1].rstrip()
+    if not topic:
+        return None
+
+    # The prompt permits Unicode letters and numbers in topics while excluding
+    # all punctuation/control characters except the ASCII hyphen used in
+    # technical names (for example, retrieval-augmented generation).
+    if any(
+        not (
+            char == " "
+            or char == "-"
+            or unicodedata.category(char)[0] in {"L", "M", "N"}
+        )
+        for char in topic
+    ):
+        return None
+
+    words = topic.split()
+    if not 1 <= len(words) <= 20:
+        return None
+    normalized_words = {
+        part.casefold() for word in words for part in word.split("-") if part
+    }
+    if normalized_words & _DIRECT_ARXIV_BLOCKED_WORDS:
+        return None
+    if _DIRECT_ARXIV_BLOCKED_MODIFIER_RE.search(topic):
+        return None
+    return topic
 
 
-def _direct_arxiv_search_message(messages: list) -> AIMessage | None:
-    """Build a deterministic search_arxiv call for clear direct-search turns."""
+def _direct_arxiv_search_message(
+    messages: list, state: Mapping[str, object] | None = None
+) -> AIMessage | None:
+    """Build a direct search only for fresh, ordinary, projected search turns."""
     if not messages or not isinstance(messages[-1], HumanMessage):
         return None
 
     raw_content = messages[-1].content
-    content = raw_content if isinstance(raw_content, str) else str(raw_content)
+    if not isinstance(raw_content, str):
+        return None
+    content = raw_content
     query = _direct_arxiv_search_query(content)
     if query is None:
+        return None
+
+    runtime_state = state or {}
+    if (
+        runtime_state.get("plan")
+        or runtime_state.get("capability_limitation")
+        or runtime_state.get("pending_confirmation")
+        or runtime_state.get("pending_skill_prerequisite")
+        or runtime_state.get("tool_loop_count", 0) != 0
+        or runtime_state.get("tool_executions")
+        or runtime_state.get("loaded_skill_versions")
+    ):
+        return None
+
+    # Catalog entries can require a normal skill-loading prerequisite. This
+    # only disables the optimization; it never grants a tool or authorizes a
+    # catalog instruction.
+    lowered_content = content.casefold()
+    catalog = runtime_state.get("project_skill_catalog")
+    if isinstance(catalog, (list, tuple)):
+        for item in catalog:
+            name = item.get("name") if isinstance(item, Mapping) else None
+            if isinstance(name, str) and name.strip():
+                escaped_name = re.escape(name.strip())
+                if re.search(
+                    rf"(?<!\w){escaped_name}(?!\w)",
+                    lowered_content,
+                    re.IGNORECASE,
+                ):
+                    return None
+
+    from src.services.agent.tool_registry import runtime_tool_descriptors
+
+    if not any(
+        descriptor.name == "search_arxiv"
+        for descriptor in runtime_tool_descriptors(
+            "research", runtime_state, TOOL_REGISTRY
+        )
+    ):
         return None
 
     return AIMessage(
@@ -110,7 +233,7 @@ def _direct_arxiv_search_message(messages: list) -> AIMessage | None:
             {
                 "id": f"direct_search_arxiv_{uuid4().hex}",
                 "name": "search_arxiv",
-                "args": {"query": query, "max_results": 5},
+                "args": {"query": query, "max_results": 5, "recency_days": 365},
             }
         ],
     )
@@ -138,7 +261,13 @@ def _build_research_system_prompt() -> str:
         "You are a research assistant focused on discovering, searching, "
         "and organizing academic papers and documents.\n\n"
         f"{SHARED_AGENT_RULES}\n\n"
-        "Be thorough in searching and systematic in organizing research."
+        "Use search_arxiv with a clean topic query; its default searches up to "
+        "five relevance-ranked papers from the last 365 days. Ingestion returns "
+        "document_ids (plural UUIDs) and ingested_count; it does not return a "
+        "single document_id. When an active project is in page context, ingest "
+        "already attaches its documents. Use the exact returned document_ids "
+        "for later document tools. For a named document, resolve its canonical "
+        "UUID with search_documents before retrieving content."
     )
 
 
@@ -160,36 +289,11 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     from src.core.config import get_settings
 
     sanitized = _sanitize_messages(state["messages"])
-    direct_search = _direct_arxiv_search_message(sanitized)
+    direct_search = _direct_arxiv_search_message(sanitized, state)
     if direct_search is not None:
         return {"messages": [direct_search]}
 
-    from src.services.agent._nodes_llm import _attachment_status_part
-    from src.services.agent.retrieval_provenance import render_retrieval_prompt
-
-    messages = [
-        SystemMessage(content=_build_research_system_prompt()),
-    ]
-    attachment_status_prompt = _attachment_status_part(
-        state.get("attachment_status", [])
-    )
-    if attachment_status_prompt:
-        messages.append(SystemMessage(content=attachment_status_prompt))
-    messages.append(
-        SystemMessage(
-            content=render_retrieval_prompt(
-                state.get("retrieved_contexts", []), sanitized
-            )
-        )
-    )
-    from src.services.agent.runtime_snapshot import render_project_skill_catalog
-
-    skill_catalog_prompt = render_project_skill_catalog(
-        state.get("project_skill_catalog", [])
-    )
-    if skill_catalog_prompt:
-        messages.append(SystemMessage(content=skill_catalog_prompt))
-    messages += sanitized
+    static_prompt = _build_research_system_prompt()
 
     settings = get_settings()
     # Post-tool synthesis turn → use the lightweight deployment. Mirrors the
@@ -202,16 +306,6 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         and isinstance(sanitized[-1], ToolMessage)
     )
 
-    # Close the plan→execute handoff (see planner.render_plan_directive).
-    # Inject on the pre-tool pass only; skip on synthesis turns where tools
-    # have already run.
-    if not use_lightweight_synthesis:
-        from src.services.agent.planner import render_plan_directive
-
-        plan_directive = render_plan_directive(state.get("plan"))
-        if plan_directive:
-            messages.insert(1, SystemMessage(content=plan_directive))
-
     # Hoisted above the branch: _build_llm is used inside it, so importing
     # after would NameError.
     from src.services.agent.graph import (
@@ -221,9 +315,13 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     )
 
     if use_lightweight_synthesis:
-        from src.services.agent.llm_factory import build_synthesis_llm
+        from src.services.agent.llm_factory import (
+            build_synthesis_llm,
+            get_synthesis_model_name,
+        )
 
         llm = build_synthesis_llm(max_tokens=4096, tool_calling=True)
+        resolved_model = get_synthesis_model_name()
         logger.debug("research_llm_node: using synthesis model after ToolMessage")
     else:
         # Tool-decision turn: the main deployment, deliberately. Multi-step
@@ -234,15 +332,32 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         # which hit the 30s cap (trace 019e1da5); that is no longer the
         # deployment, so the workaround goes with it.
         llm = _build_llm(model_override=state.get("model") or None)
+        from src.services.agent.llm_factory import resolve_chat_deployment
+
+        resolved_model = resolve_chat_deployment(state.get("model") or None)
         logger.debug("research_llm_node: using main model for tool decision")
+    from src.services.agent.runtime_context import render_dynamic_context
+
+    dynamic_context = render_dynamic_context(
+        state,
+        config,
+        resolved_model=resolved_model,
+        branch="research",
+        messages=sanitized,
+    )
+    messages = [
+        SystemMessage(content=static_prompt),
+        SystemMessage(content=dynamic_context),
+        *sanitized,
+    ]
     # See graph.llm_node for rationale on parallel_tool_calls=False.
     from src.services.agent._nodes_llm import (
         normalize_ai_content as _normalize_ai_content,
     )
-    from src.services.agent._nodes_llm import tools_for_runtime_snapshot
+    from src.services.agent._nodes_llm import tools_for_runtime_projection
 
     llm_with_tools = llm.bind_tools(
-        tools_for_runtime_snapshot(RESEARCH_TOOLS, state),
+        tools_for_runtime_projection(state, branch="research"),
         parallel_tool_calls=settings.AGENT_PARALLEL_TOOL_CALLS,
     )
 

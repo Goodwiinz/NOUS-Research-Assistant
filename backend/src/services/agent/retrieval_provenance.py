@@ -270,6 +270,14 @@ def render_retrieval_prompt(
     """Render one stable numbered source map for every model synthesis path."""
     if not contexts:
         return NO_RETRIEVAL_GUIDANCE
+    blocks = retrieval_prompt_blocks(contexts, messages)
+    return "Retrieved context:\n" + "\n\n".join(blocks)
+
+
+def retrieval_prompt_blocks(
+    contexts: Sequence[Mapping[str, Any]], messages: Sequence[BaseMessage]
+) -> list[str]:
+    """Return whole numbered evidence blocks for bounded shared rendering."""
     blocks: list[str] = []
     for source_position, context in enumerate(contexts, 1):
         body = _source_label(context)
@@ -286,7 +294,7 @@ def render_retrieval_prompt(
                 2300 if is_tool_context else 3100,
             )
         )
-    return "Retrieved context:\n" + "\n\n".join(blocks)
+    return blocks
 
 
 __all__ = [
@@ -294,5 +302,6 @@ __all__ = [
     "NO_RETRIEVAL_GUIDANCE",
     "contexts_from_tool_execution",
     "merge_retrieved_contexts",
+    "retrieval_prompt_blocks",
     "render_retrieval_prompt",
 ]

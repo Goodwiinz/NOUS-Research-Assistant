@@ -12,6 +12,7 @@ mirroring the SSE confirm path (streaming.py ``_resume_assistant_cmid``).
 import json
 import uuid as _uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, AsyncContextManager, AsyncIterator, cast
 from unittest.mock import AsyncMock, Mock, patch
@@ -112,10 +113,11 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid() -> Non
     from src.services.agent import agent_execution_service
     from src.services.agent.agent_execution_service import _resume_agent_graph
     from src.services.agent.agent_run_service import RunStatusDecision
+    from src.services.agent.tools import TOOL_REGISTRY
     from src.shared.enums import JobStatus
 
     user = Mock()
-    user.id = "user-confirm-1"
+    user.id = str(uuid4())
     user.organization_id = "org-1"
 
     thread_id = str(uuid4())
@@ -138,8 +140,27 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid() -> Non
             project=False,
         )
 
+    runtime_snapshot_id = uuid4()
+    registry_metadata = TOOL_REGISTRY.metadata_snapshot()
+    runtime_snapshot_row = SimpleNamespace(
+        id=runtime_snapshot_id,
+        user_id=_uuid.UUID(str(user.id)),
+        project_id=None,
+        thread_id=_uuid.UUID(thread_id),
+        job_id=job_id,
+        tool_registry_hash=registry_metadata["hash"],
+        tool_registry_version=registry_metadata["version"],
+        tool_metadata={"descriptors": TOOL_REGISTRY.frozen_descriptor_metadata()},
+        skill_catalog=[],
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
     pre_snapshot = SimpleNamespace(
-        values={"user_id": str(user.id)},
+        values={
+            "user_id": str(user.id),
+            "runtime_snapshot_id": str(runtime_snapshot_id),
+            "thread_id": thread_id,
+            "current_project_id": "",
+        },
         tasks=(_interrupt_task(),),
         config={"configurable": {"checkpoint_id": "ckpt-1"}},
     )
@@ -184,6 +205,13 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid() -> Non
     def _new_session() -> AsyncContextManager[AsyncMock]:
         db = AsyncMock()
         db.get = AsyncMock(return_value=thread_row)
+        db.get = AsyncMock(
+            side_effect=lambda model, _id: (
+                runtime_snapshot_row
+                if model.__name__ == "AgentRuntimeSnapshot"
+                else thread_row
+            )
+        )
         db.execute = AsyncMock(
             return_value=SimpleNamespace(
                 scalar_one_or_none=lambda: durable_run,
@@ -282,6 +310,16 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid() -> Non
     assert publication_pipeline.watched_key == f"agent:job:{job_id}"
     assert publication_pipeline.multi_called is True
     assert publication_pipeline.executed is True
+    resume_call = graph.ainvoke.await_args
+    assert resume_call is not None
+    resume_input = resume_call.args[0]
+    assert resume_input.resume == {"confirmed": True}
+    assert resume_input.update["runtime_tool_names"] == list(
+        TOOL_REGISTRY.available_descriptor_names()
+    )
+    assert resume_input.update["tool_registry_hash"] == registry_metadata["hash"]
+    assert resume_input.update["tool_registry_version"] == registry_metadata["version"]
+    assert resume_input.update["runtime_projection_unavailable"] is False
     published = json.loads(redis_client.values[f"agent:job:{job_id}"])
     assert published["status"] == JobStatus.COMPLETED.value
     assert published["user_id"] == str(user.id)
