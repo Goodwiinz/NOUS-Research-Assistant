@@ -10,6 +10,7 @@ Calls the endpoint function directly with the store layers patched out, the
 same style as the other agent job unit tests.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
@@ -459,6 +460,115 @@ async def test_redis_miss_and_projection_miss_is_404():
         with pytest.raises(HTTPException) as exc:
             await get_job_status(job_id=str(uuid.uuid4()), current_user=_user())
     assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize("fallback_row_exists", [True, False])
+@pytest.mark.asyncio
+async def test_poll_waits_for_publication_after_durable_fallback_read(
+    fallback_row_exists: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fallback read cannot outrun an overlapping local result publication."""
+    from src.api.agent import execute
+    from src.services.agent import job_store
+    from src.services.agent.agent_run_service import RunStatusDecision
+
+    user = _user()
+    job_id = str(uuid.uuid4())
+    thread_id = str(uuid.uuid4())
+    fallback_started = asyncio.Event()
+    fallback_release = asyncio.Event()
+    writer_started = asyncio.Event()
+    writer_release = asyncio.Event()
+    winner_result = {"message": {"content": "selected winner"}, "contexts": []}
+    fallback_run = (
+        SimpleNamespace(
+            status=JobStatus.COMPLETED,
+            error=None,
+            thread_id=thread_id,
+        )
+        if fallback_row_exists
+        else None
+    )
+
+    decision = RunStatusDecision(
+        job_id=job_id,
+        requested_status=JobStatus.COMPLETED,
+        effective_status=JobStatus.COMPLETED,
+        user_id=str(user.id),
+        organization_id=str(user.organization_id),
+        thread_id=thread_id,
+        error=None,
+        cancel_requested_at=None,
+        updated_at="2026-09-26T00:00:00+00:00",
+    )
+
+    async def held_fallback(*_args: Any, **_kwargs: Any) -> Any:
+        fallback_started.set()
+        await fallback_release.wait()
+        return fallback_run
+
+    async def held_writer(
+        published_job_id: str, data: dict[str, Any], **_kwargs: Any
+    ) -> Any:
+        assert published_job_id == job_id
+        writer_started.set()
+        await writer_release.wait()
+        return job_store._RedisWriteOutcome(
+            "committed", {**data, "result": winner_result}
+        )
+
+    with job_store._l1_lock:
+        job_store._l1.pop(job_id, None)
+        job_store._retire_pending_publication(job_id)
+
+    monkeypatch.setattr(execute, "_enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr(job_store, "_get_redis", AsyncMock(return_value=None))
+    monkeypatch.setattr(job_store, "set_job_redis_only", held_writer)
+    monkeypatch.setattr(
+        "src.services.agent.agent_run_service.get_run_fallback", held_fallback
+    )
+
+    poll: asyncio.Task[JobStatusResponse] | None = None
+    publisher: asyncio.Task[RunStatusDecision | None] | None = None
+    try:
+        poll = asyncio.create_task(get_job_status(job_id=job_id, current_user=user))
+        await asyncio.wait_for(fallback_started.wait(), timeout=1)
+
+        publisher = asyncio.create_task(
+            job_store.set_job(
+                job_id,
+                {
+                    "status": JobStatus.COMPLETED,
+                    "user_id": str(user.id),
+                    "organization_id": str(user.organization_id),
+                    "thread_id": thread_id,
+                    "result": {"message": {"content": "provisional candidate"}},
+                },
+                project=False,
+                decision=decision,
+            )
+        )
+        await asyncio.wait_for(writer_started.wait(), timeout=1)
+
+        fallback_release.set()
+        await asyncio.sleep(0)
+        assert not poll.done()
+
+        writer_release.set()
+        assert await asyncio.wait_for(publisher, timeout=1) is decision
+        response = await asyncio.wait_for(poll, timeout=1)
+        assert response.status is JobStatus.COMPLETED
+        assert response.result == winner_result
+        assert response.thread_id == thread_id
+    finally:
+        fallback_release.set()
+        writer_release.set()
+        tasks = [task for task in (poll, publisher) if task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        with job_store._l1_lock:
+            job_store._l1.pop(job_id, None)
+            job_store._retire_pending_publication(job_id)
 
 
 @pytest.mark.asyncio

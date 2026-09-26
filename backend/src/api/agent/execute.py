@@ -632,14 +632,19 @@ async def get_job_status(
             organization_id=getattr(current_user, "organization_id", None),
             user_id=current_user.id,
         )
-        if run is None:
+        # The durable read above yields while a normal terminal publication
+        # may register its local reservation. Re-enter the pending-aware
+        # selector before returning either the projection or a 404.
+        job = await _get_job_for_poll(job_id)
+        if job is None and run is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        run_thread_id = getattr(run, "thread_id", None)
-        return JobStatusResponse(
-            status=_normalized_job_status(run.status),
-            error=run.error,
-            thread_id=str(run_thread_id) if run_thread_id else None,
-        )
+        if job is None:
+            run_thread_id = getattr(run, "thread_id", None)
+            return JobStatusResponse(
+                status=_normalized_job_status(run.status),
+                error=run.error,
+                thread_id=str(run_thread_id) if run_thread_id else None,
+            )
     # Fail closed: a job record without an owner must not be readable. Every
     # write path stamps user_id; its absence means a corrupted/legacy record,
     # not a public one.

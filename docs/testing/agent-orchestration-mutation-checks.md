@@ -428,3 +428,68 @@ publisher cancellation, Redis EXEC failure, and five-conflict exhaustion.
 Exact command and output are in the round-3 report; observed result was
 `182 passed, 1 baseline Pydantic warning in 8.54s`, log
 `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round3-affected-final.log`.
+
+## Fix round 4 — durable-fallback publication boundary
+
+Evidence is against round-4 base `185dd927153c26f1df0b7a2a4a48b78c88d945b3`.
+After `get_run_fallback` returns, `get_job_status` re-enters the same
+pending-aware local poll selector before returning a durable projection or a
+missing-row 404. A local snapshot that appeared during the database await then
+uses the existing owner validation and response shaping. With no local snapshot,
+the tenant-filtered durable fallback is unchanged. The new scheduling test uses
+fakes for the durable-read and Redis-publication boundaries; it does not claim
+real PostgreSQL or Redis coverage. Its two cases hold a normal `set_job`
+publisher while a poll's fallback read is released, covering both an existing
+projection row and a missing row. The existing ordinary fallback test remains
+the no-publication control.
+
+- **Behavioral RED:**
+  `test_poll_waits_for_publication_after_durable_fallback_read[True]` returned
+  the durable COMPLETED response with no result before the publisher resolved;
+  `[False]` returned 404 in the same interval. Both failed at the pending-poll
+  assertion. Output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round4-fallback-boundary-red.log`.
+- **Mutation:** replaced only the post-fallback
+  `job = await _get_job_for_poll(job_id)` selector with `job = None`. Both
+  parametrized cases failed again at the same assertion, demonstrating that
+  this boundary check prevents both premature projection responses and 404s.
+  Output:
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round4-fallback-boundary-mutation-red.log`.
+- **Restore and GREEN:** restored the saved source byte-for-byte; SHA256 before
+  mutation and after restore was
+  `f821199089df2a7071355a123bcdec8e4d9bc22f62721d250a0b421a8f4027d6`.
+  Both new cases plus the ordinary no-publication fallback control passed
+  (`3 passed`), output
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round4-fallback-boundary-restored-green.log`.
+- **Focused command:**
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false --tb=short backend/tests/unit/api/test_agent_job_poll_fallback.py::test_poll_waits_for_publication_after_durable_fallback_read backend/tests/unit/api/test_agent_job_poll_fallback.py::test_redis_miss_falls_back_to_agent_runs_projection
+  ```
+
+- **Final affected selection:** reran the round-3 owning selection plus
+  `backend/tests/unit/api/test_agent_job_poll_fallback.py` under the same
+  disposable PostgreSQL/Redis environment shown in the round-4 report. Result:
+  `199 passed, 1 baseline Pydantic schema_extra warning in 10.66s`, log
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task1-round4-affected-final.log`.
+  This includes 12 actual-PostgreSQL concurrency cases. The Redis publication
+  integration module includes real-Redis paths, while not every publication
+  case uses Redis; the new poll/fallback interleaving itself uses fakes.
+
+Round-3 hash provenance clarification: `c8539050303a4ec493b6cb5591cebc55cb45858725ecd6f8aa62c2fd13c292c8`
+is the byte-identical immediate restore hash recorded by the round-3 mutation.
+The committed execute.py at round-4 base `185dd927...` hashes to
+`d897c0a16d9c73dd3a5de698654423563f584bb517438d1e053a51dcf0734434` because
+Black subsequently collapsed the multiline `get_job_for_poll` import to one
+line. Comparing the retained `c853...` snapshot with the committed base shows
+only that import wrapping change. The round-4 source saved before its mutation
+and restored byte-identically hashes to `f821199089df2a7071355a123bcdec8e4d9bc22f62721d250a0b421a8f4027d6`.
+
+Round-4 scoped quality: Ruff and Black passed for `execute.py` and the existing
+fallback test module; isort and `git diff --check` exited 0. The advisory mypy
+check on this modified legacy module reports nine existing missing-annotation
+errors. Running the same check against the round-4 base copy reports the same
+nine errors on the same pre-existing functions; the new test and helpers have
+annotations. Logs are `task1-round4-{ruff,black,isort,diff-check,mypy}.log` and
+`task1-round4-mypy-baseline.log` in the scratch directory. No new Python file
+was added.
