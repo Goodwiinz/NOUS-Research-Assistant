@@ -1,5 +1,5 @@
 {
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "Follow-up questions anchored to records supplied earlier in the same chat.",
   "cases": [
     {
@@ -45,14 +45,20 @@
           "search effectiveness",
           "suitability",
           "not compare",
-          "not ask to compare",
-          "rank",
-          "recommend"
+          "not ask to compare"
         ],
         "forbiddenPatterns": [
           {
             "pattern": "\\b(?:do|does|did|should|must)\\s+not\\s+(?:ask\\s+(?:you\\s+)?to\\s+)?compar(?:e|es|ing)\\b|\\b(?:don['’]t|doesn['’]t|didn['’]t)\\s+(?:ask\\s+(?:you\\s+)?to\\s+)?compar(?:e|es|ing)\\b|\\bask(?:ed|s)?\\s+(?:you\\s+)?not\\s+to\\s+compar(?:e|es|ing)\\b",
             "reason": "negates the comparison requested by the project brief"
+          },
+          {
+            "pattern": "\\b(?:(?:was|were|is|are)\\s+not|(?:wasn|weren|isn|aren)['’]t)\\s+ask(?:ing|ed)\\s+(?:you\\s+)?to\\s+compar(?:e|es|ing)\\b",
+            "reason": "negates the comparison requested by the project brief"
+          },
+          {
+            "pattern": "\\b(?:recommend(?:s|ed|ing|ations?)?|rank(?:s|ed|ings?)?)\\b",
+            "reason": "adds recommendation or ranking outside the project brief"
           }
         ]
       }

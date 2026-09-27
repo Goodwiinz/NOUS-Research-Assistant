@@ -157,6 +157,11 @@ metadata does not fail. Follow-up version 1.1.3 also catches contractions and
 wording such as "did not ask you to compare" when a project-brief recall
 negates the comparison. These grading changes do not alter earlier raw reports.
 
+Follow-up version 1.1.4 rejects negated recall such as "wasn't asking you to
+compare" and "were not asked to compare," plus recommendation and ranking
+inflections. Offline regressions cover these false positives; earlier live
+scores remain unchanged and this version has not been rerun live.
+
 To inspect the scenario without sending messages, omit `AGENT_QA_LIVE` and run
 `corepack pnpm@10.18.2 --dir frontend test:e2e:agent-qa:multi-turn --list`.
 

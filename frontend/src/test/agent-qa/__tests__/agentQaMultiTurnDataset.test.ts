@@ -73,12 +73,39 @@ describe('multi-turn agent Q&A follow-ups', () => {
     "Don't compare search tools used by librarians.",
     'The brief did not ask you to compare search tools used by librarians.',
     'The brief asked you not to compare search tools used by librarians.',
+    "The brief wasn't asking you to compare search tools used by librarians.",
+    'The brief was not asking you to compare search tools used by librarians.',
+    "You weren't asked to compare search tools used by librarians.",
+    'You were not asked to compare search tools used by librarians.',
+    'The brief isn’t asking you to compare search tools used by librarians.',
   ])('rejects a negated comparison in the brief recall: %s', (answer) => {
     const testCase = dataset.cases.find(
       (entry) => entry.id === 'recall-project-brief'
     );
     if (!testCase) throw new Error('Missing project-brief recall case');
     expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(false);
+  });
+
+  it.each([
+    'produce a recommendation',
+    'make recommendations',
+    'recommend one',
+    'recommend the highest-ranked one',
+    'finish by recommending one',
+    'produce a ranking',
+    'produce rankings',
+    'list the ranked results',
+  ])('rejects added scope in the brief recall: %s', (extraScope) => {
+    const testCase = dataset.cases.find(
+      (entry) => entry.id === 'recall-project-brief'
+    );
+    if (!testCase) throw new Error('Missing project-brief recall case');
+    expect(
+      gradeAgentAnswer(
+        `Compare search tools used by librarians and ${extraScope}.`,
+        testCase.criteria
+      ).passed
+    ).toBe(false);
   });
 
   it('asks each contextual follow-up while its source is still in recent history', () => {
