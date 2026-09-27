@@ -555,6 +555,7 @@ class StepExecutor:
             return [], 0, []
         if provider is None:
             raise ValueError("No provider is configured for a nonempty research stage")
+        calls = 0
         try:
             max_tokens = params.get("max_tokens", 2048)
             if type(max_tokens) is not int or not 1 <= max_tokens <= 2048:
@@ -564,7 +565,6 @@ class StepExecutor:
             responses: List[tuple[Dict[str, Any], Dict[str, Any], int]] = []
             batch_usage: List[Dict[str, Any]] = []
             total_tokens = 0
-            calls = 0
             for batch in batches:
                 reservation = (
                     budget.reserve(batch["input_bytes"], max_tokens) if budget else 0
@@ -577,6 +577,11 @@ class StepExecutor:
                     max_tokens=max_tokens,
                 )
                 calls += 1
+                self._last_call_accounting = (
+                    total_tokens,
+                    calls,
+                    copy.deepcopy(batch_usage),
+                )
                 try:
                     response = await provider.complete(request)
                 except asyncio.CancelledError as exc:
@@ -585,7 +590,7 @@ class StepExecutor:
                     raise StepExecutionError(
                         "research stage cancelled",
                         consumed_tokens=total_tokens,
-                        model_calls=len(batch_usage),
+                        model_calls=calls,
                         batch_metadata=batch_usage,
                     ) from exc
                 except Exception:
@@ -623,13 +628,13 @@ class StepExecutor:
                 raise StepExecutionError(
                     "research stage budget exhausted",
                     consumed_tokens=consumed_tokens,
-                    model_calls=len(batch_usage),
+                    model_calls=calls,
                     batch_metadata=batch_usage,
                 ) from exc
             raise StepExecutionError(
                 "research stage provider output failed contract validation",
                 consumed_tokens=consumed_tokens,
-                model_calls=len(batch_usage),
+                model_calls=calls,
                 batch_metadata=batch_usage,
             ) from exc
 
@@ -1087,6 +1092,7 @@ class StepExecutor:
         responses, total_tokens, batch_usage = await self._complete_batches(
             provider, batches, params, budget
         )
+        model_calls = len(batch_usage)
         claims, sections = _collect_synthesis_outputs(
             responses,
             id_prefix="m",
@@ -1135,6 +1141,7 @@ class StepExecutor:
                 )
             except StepExecutionError as exc:
                 total_tokens += exc.consumed_tokens
+                model_calls += exc.model_calls
                 batch_usage.extend(exc.batch_metadata)
                 if "budget exhausted" in str(exc).lower():
                     reduction_incomplete = True
@@ -1142,15 +1149,16 @@ class StepExecutor:
                 raise StepExecutionError(
                     "research synthesis reduction failed",
                     consumed_tokens=total_tokens,
-                    model_calls=len(batch_usage),
+                    model_calls=model_calls,
                     batch_metadata=batch_usage,
                 ) from exc
 
             total_tokens += reduced_tokens
+            model_calls += len(reduced_usage)
             batch_usage.extend(reduced_usage)
             self._last_call_accounting = (
                 total_tokens,
-                len(batch_usage),
+                model_calls,
                 copy.deepcopy(batch_usage),
             )
             reduced_claims, reduced_sections = _collect_synthesis_outputs(
@@ -1330,7 +1338,7 @@ class StepExecutor:
                 "diagnostics": reduction_diagnostics,
                 "content": content,
             },
-            model_calls=len(batch_usage),
+            model_calls=model_calls,
             total_tokens=total_tokens,
             batches=batch_usage,
         )

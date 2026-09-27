@@ -776,7 +776,7 @@ async def test_timeout_after_paid_batch_persists_usage_and_hash_once(
             assert len(errors) == 1
             error = errors[0]
             assert error["step_index"] == 2
-            assert error["model_calls"] == 1
+            assert error["model_calls"] == 2
             assert error["consumed_tokens"] == 60
             hashes = error["batch_metadata"]
             assert len(hashes) == 1

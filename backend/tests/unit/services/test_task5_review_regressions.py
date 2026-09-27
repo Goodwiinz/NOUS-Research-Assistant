@@ -48,6 +48,105 @@ class CallbackProvider(LLMProvider):
         )
 
 
+@pytest.mark.asyncio
+async def test_failed_provider_dispatch_counts_attempt_without_invented_usage() -> None:
+    class FailingProvider(CallbackProvider):
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            self.requests.append(request)
+            raise RuntimeError("synthetic provider failure")
+
+    provider = FailingProvider(lambda _request: "")
+    executor = StepExecutor(connectors={}, providers={"test-model": provider})
+
+    with pytest.raises(StepExecutionError) as error:
+        await executor.execute(
+            {
+                "type": "extract",
+                "parameters": {
+                    "contract_version": 1,
+                    "model_id": "test-model",
+                    "output_kind": "claims",
+                },
+            },
+            {
+                "contract_version": 1,
+                "source_records": [
+                    {
+                        "source_id": SOURCE_ID,
+                        "title": "Synthetic source",
+                        "abstract": "Synthetic evidence sentence.",
+                    }
+                ],
+            },
+        )
+
+    assert len(provider.requests) == 1
+    assert error.value.model_calls == 1
+    assert error.value.consumed_tokens == 0
+    assert error.value.batch_metadata == []
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_after_paid_batch_keeps_attempt_and_known_usage() -> (
+    None
+):
+    class FailsOnSecondBatch(CallbackProvider):
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            self.requests.append(request)
+            if len(self.requests) == 2:
+                raise RuntimeError("synthetic provider failure")
+            records = json.loads(request.prompt)["records"]
+            content = json.dumps(
+                {
+                    "records": [
+                        {
+                            "source_id": item["source_id"],
+                            "part_id": item["part_id"],
+                            "claims": [],
+                        }
+                        for item in records
+                    ]
+                }
+            )
+            return LLMResponse(
+                content=content,
+                model_id="test-model",
+                input_tokens=40,
+                output_tokens=20,
+            )
+
+    provider = FailsOnSecondBatch(lambda _request: "")
+    executor = StepExecutor(connectors={}, providers={"test-model": provider})
+    sources = [
+        {
+            "source_id": f"source-{index}",
+            "title": f"Source {index}",
+            "abstract": "Synthetic evidence sentence.",
+        }
+        for index in range(10)
+    ]
+
+    with pytest.raises(StepExecutionError) as error:
+        await executor.execute(
+            {
+                "type": "extract",
+                "parameters": {
+                    "contract_version": 1,
+                    "model_id": "test-model",
+                    "output_kind": "claims",
+                },
+            },
+            {"contract_version": 1, "source_records": sources},
+        )
+
+    assert len(provider.requests) == 2
+    assert error.value.model_calls == 2
+    assert error.value.consumed_tokens == 60
+    assert len(error.value.batch_metadata) == 1
+    assert error.value.batch_metadata[0]["input_hash"]
+    assert error.value.batch_metadata[0]["output_hash"]
+
+
 def _synthesis_context(
     *, evidence_count: int = 2, quote: str = "Treatment reduced the score."
 ) -> dict[str, Any]:
@@ -438,6 +537,56 @@ async def test_malformed_reduction_response_keeps_ordered_paid_batch_hashes() ->
 
 
 @pytest.mark.asyncio
+async def test_reduction_cancellation_counts_dispatch_and_keeps_paid_batch_usage() -> (
+    None
+):
+    class CancelsDuringReduction(CallbackProvider):
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            self.requests.append(request)
+            if len(self.requests) == 2:
+                raise asyncio.CancelledError
+            sections = [
+                {
+                    "heading": "Findings",
+                    "claims": [
+                        {
+                            "claim_text": f"Finding {evidence_id}",
+                            "evidence": [
+                                {"evidence_id": evidence_id, "relation": "supports"}
+                            ],
+                        }
+                        for evidence_id in _all_evidence_ids(request)
+                    ],
+                }
+            ]
+            return LLMResponse(
+                content=json.dumps({"sections": sections}),
+                model_id="test-model",
+                input_tokens=40,
+                output_tokens=20,
+            )
+
+    provider = CancelsDuringReduction(lambda _request: "")
+    executor = StepExecutor(connectors={}, providers={"test-model": provider})
+
+    with pytest.raises(StepExecutionError, match="reduction failed") as error:
+        await executor.execute(
+            {
+                "type": "synthesize",
+                "parameters": {"contract_version": 1, "model_id": "test-model"},
+            },
+            _synthesis_context(evidence_count=65),
+        )
+
+    assert len(provider.requests) == 2
+    assert error.value.model_calls == 2
+    assert error.value.consumed_tokens == 60
+    assert len(error.value.batch_metadata) == 1
+    assert error.value.batch_metadata[0]["input_hash"]
+    assert error.value.batch_metadata[0]["output_hash"]
+
+
+@pytest.mark.asyncio
 async def test_nonshrinking_reduction_is_incomplete() -> None:
     def respond(request: LLMRequest) -> str:
         body = json.loads(request.prompt)
@@ -542,7 +691,8 @@ async def test_timeout_after_paid_batch_retains_stage_usage() -> None:
     errors = [event for event in events if event["event"] == "step_error"]
     assert len(errors) == 1
     assert errors[0]["consumed_tokens"] == 60
-    assert errors[0]["model_calls"] == 1
+    assert errors[0]["model_calls"] == 2
+    assert len(provider.requests) == 2
     assert len(errors[0]["batch_metadata"]) == 1
     assert errors[0]["batch_metadata"][0]["input_hash"]
     assert errors[0]["batch_metadata"][0]["output_hash"]
