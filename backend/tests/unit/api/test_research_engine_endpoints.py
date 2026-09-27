@@ -278,3 +278,157 @@ class TestStartRun:
         body = response.json()
         assert body["status"] == "pending"
         assert "id" in body
+        created_run = mock_db.add.call_args.args[0]
+        assert created_run.reproducibility_manifest == {"parameters_override": {}}
+
+    @patch("src.api.research_engine.runs.select")
+    def test_daily_brief_requires_scope_confirmation(
+        self, mock_select, client, mock_db, mock_current_user
+    ):
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(
+            id=blueprint_id,
+            version=1,
+            template_source="daily_research_brief",
+            parameters={
+                "contract_version": 1,
+                "research_question": "",
+                "inclusion_criteria": [],
+                "exclusion_criteria": [],
+                "providers": ["openalex", "crossref"],
+                "limit_per_provider": 25,
+                "notes": "",
+            },
+        )
+        result = Mock()
+        scalars = Mock()
+        scalars.first.return_value = blueprint
+        result.scalars.return_value = scalars
+        mock_db.execute = AsyncMock(return_value=result)
+
+        response = client.post(
+            f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+            json={"parameters_override": {}},
+        )
+
+        assert response.status_code == 422
+        assert (
+            response.json()["error"]["message"]
+            == "Daily Brief scope confirmation is required"
+        )
+        mock_db.add.assert_not_called()
+
+    @patch("src.api.research_engine.runs.select")
+    def test_daily_brief_stores_confirmed_effective_scope_with_server_metadata(
+        self, mock_select, client, mock_db, mock_current_user
+    ):
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(
+            id=blueprint_id,
+            version=1,
+            template_source="daily_research_brief",
+            parameters={
+                "contract_version": 1,
+                "research_question": "",
+                "inclusion_criteria": [],
+                "exclusion_criteria": [],
+                "providers": ["openalex", "crossref"],
+                "limit_per_provider": 25,
+                "notes": "",
+            },
+        )
+        run = _make_mock_run(blueprint_id=blueprint_id, blueprint_version=1)
+        result = Mock()
+        scalars = Mock()
+        scalars.first.return_value = blueprint
+        result.scalars.return_value = scalars
+        mock_db.execute = AsyncMock(return_value=result)
+        mock_db.add = Mock()
+        mock_db.commit = AsyncMock()
+
+        async def fake_refresh(obj):
+            obj.id = run.id
+            obj.created_at = run.created_at
+            obj.updated_at = run.updated_at
+
+        mock_db.refresh = AsyncMock(side_effect=fake_refresh)
+        overrides = {
+            "research_question": "What changed in grounded generation?",
+            "inclusion_criteria": ["Peer-reviewed empirical work"],
+            "exclusion_criteria": ["Editorials"],
+            "providers": ["pubmed"],
+            "limit_per_provider": 10,
+            "notes": "Last 24 hours.",
+        }
+
+        response = client.post(
+            f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+            json={
+                "parameters_override": overrides,
+                "scope_confirmation": {**overrides, "confirmed": True},
+            },
+        )
+
+        assert response.status_code == 201, response.text
+        created_run = mock_db.add.call_args.args[0]
+        manifest = created_run.reproducibility_manifest
+        assert manifest["parameters_override"] == overrides
+        confirmation = manifest["scope_confirmation"]
+        assert confirmation["contract_version"] == 1
+        for key, value in overrides.items():
+            assert confirmation[key] == value
+        assert confirmation["confirmed"] is True
+        assert confirmation["confirmed_by"] == str(mock_current_user.id)
+        assert len(confirmation["configuration_hash"]) == 64
+        assert datetime.fromisoformat(confirmation["confirmed_at"]).tzinfo is not None
+
+    @patch("src.api.research_engine.runs.select")
+    def test_daily_brief_rejects_confirmation_that_differs_from_effective_scope(
+        self, mock_select, client, mock_db, mock_current_user
+    ):
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(
+            id=blueprint_id,
+            version=1,
+            template_source="daily_research_brief",
+            parameters={
+                "contract_version": 1,
+                "research_question": "",
+                "inclusion_criteria": [],
+                "exclusion_criteria": [],
+                "providers": ["openalex"],
+                "limit_per_provider": 25,
+                "notes": "",
+            },
+        )
+        result = Mock()
+        scalars = Mock()
+        scalars.first.return_value = blueprint
+        result.scalars.return_value = scalars
+        mock_db.execute = AsyncMock(return_value=result)
+        overrides = {
+            "research_question": "What changed in grounded generation?",
+            "inclusion_criteria": ["Peer-reviewed empirical work"],
+            "exclusion_criteria": [],
+            "providers": ["openalex"],
+            "limit_per_provider": 10,
+            "notes": "",
+        }
+
+        response = client.post(
+            f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+            json={
+                "parameters_override": overrides,
+                "scope_confirmation": {
+                    **overrides,
+                    "limit_per_provider": 11,
+                    "confirmed": True,
+                },
+            },
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["message"] == (
+            "Scope confirmation does not match effective Daily Brief parameters"
+        )
+        mock_db.add.assert_not_called()

@@ -25,6 +25,7 @@ from src.models.user import User
 from src.schemas.research_engine import (
     RunCreate,
     RunResponse,
+    RunResumeRequest,
     validate_blueprint_runtime,
 )
 from src.services.expensive_work_admission import admit_expensive_work
@@ -41,6 +42,10 @@ from src.services.research_engine.providers import (
     OllamaProvider,
     OpenAIProvider,
     ProviderConfig,
+)
+from src.services.research_engine.scope import (
+    canonicalize_scope_confirmation,
+    resolve_effective_daily_brief_parameters,
 )
 from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
@@ -298,6 +303,33 @@ async def start_run(
             detail="Blueprint not found",
         )
 
+    manifest: Dict[str, Any] = {
+        "parameters_override": body.parameters_override or {},
+    }
+    if blueprint.template_source == "daily_research_brief":
+        if body.scope_confirmation is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Daily Brief scope confirmation is required",
+            )
+        try:
+            effective = resolve_effective_daily_brief_parameters(
+                blueprint.parameters or {}, body.parameters_override or {}
+            )
+            manifest["scope_confirmation"] = canonicalize_scope_confirmation(
+                effective=effective,
+                submitted=body.scope_confirmation,
+                actor_id=current_user.id,
+                confirmed_at=datetime.now(timezone.utc),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "Scope confirmation does not match effective Daily Brief parameters"
+                ),
+            ) from exc
+
     # Mark blueprint as immutable
     blueprint.is_immutable = True
 
@@ -306,9 +338,7 @@ async def start_run(
         blueprint_id=blueprint_id,
         blueprint_version=blueprint.version,
         status=RunStatus.PENDING.value,
-        reproducibility_manifest={
-            "parameters_override": body.parameters_override or {},
-        },
+        reproducibility_manifest=manifest,
     )
     db.add(run)
     await db.commit()
@@ -377,10 +407,13 @@ async def pause_run(
 )
 async def resume_run(
     run_id: UUID,
+    body: RunResumeRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Resume a paused run."""
+    if body is None:
+        body = RunResumeRequest()
     run = await _get_owned_run(run_id, current_user.id, db)
     if run.status != RunStatus.PAUSED.value:
         raise HTTPException(

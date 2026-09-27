@@ -3,10 +3,10 @@
 import json
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # These limits are deliberately server-owned.  They protect both newly
 # validated blueprints and the legacy JSONB rows that are revalidated by the
@@ -201,18 +201,15 @@ class BlueprintCreate(BaseModel):
     name: str
     template_source: Optional[str] = None
     steps: List[BlueprintStepDefinition] = Field(
-        ..., min_length=1, max_length=MAX_BLUEPRINT_STEPS
+        default_factory=list, max_length=MAX_BLUEPRINT_STEPS
     )
     parameters: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("steps")
-    @classmethod
-    def steps_not_empty(
-        cls, v: List[BlueprintStepDefinition]
-    ) -> List[BlueprintStepDefinition]:
-        if len(v) == 0:
+    @model_validator(mode="after")
+    def custom_blueprints_have_steps(self) -> "BlueprintCreate":
+        if not self.steps and not self.template_source:
             raise ValueError("steps must not be empty")
-        return v
+        return self
 
     @field_validator("parameters")
     @classmethod
@@ -256,20 +253,79 @@ class BlueprintResponse(BaseModel):
     updated_at: datetime
 
 
+class BlueprintTemplateDetailResponse(BaseModel):
+    """Validated full content of one server-owned blueprint template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=2000)
+    template_source: str = Field(min_length=1, max_length=100)
+    contract_version: int = Field(ge=1)
+    parameters: Dict[str, Any]
+    constraints: Dict[str, Any]
+    coverage: Dict[str, Any]
+    steps: List[BlueprintStepDefinition] = Field(
+        min_length=1, max_length=MAX_BLUEPRINT_STEPS
+    )
+
+
 # ============================================================================
 # Run Schemas
 # ============================================================================
+
+
+BoundedCriterion = Annotated[str, Field(min_length=1, max_length=500)]
+
+
+class DailyBriefScopeConfirmation(BaseModel):
+    """User-confirmed, bounded scope for a Daily Research Brief run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    research_question: str = Field(min_length=1, max_length=2000)
+    inclusion_criteria: List[BoundedCriterion] = Field(min_length=1, max_length=25)
+    exclusion_criteria: List[BoundedCriterion] = Field(
+        default_factory=list, max_length=25
+    )
+    providers: List[str] = Field(min_length=1, max_length=4)
+    limit_per_provider: int = Field(ge=1, le=50)
+    notes: str = Field(default="", max_length=2000)
+    confirmed: Literal[True]
+
+    @field_validator("providers")
+    @classmethod
+    def providers_are_canonical_and_eligible(cls, value: List[str]) -> List[str]:
+        from src.services.research_engine.connectors.registry import (
+            normalize_connector_selection,
+        )
+
+        return list(normalize_connector_selection(value, daily_brief_only=True))
 
 
 class RunCreate(BaseModel):
     """Schema for creating a research run."""
 
     parameters_override: Dict[str, Any] = Field(default_factory=dict)
+    scope_confirmation: Optional[DailyBriefScopeConfirmation] = None
 
     @field_validator("parameters_override")
     @classmethod
     def parameters_are_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
         return _bounded_payload(value, "run parameters")
+
+
+class RunResumeRequest(BaseModel):
+    """Bounded authorization supplied only for exceptional run continuation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    continue_unverified: bool = False
+    output_hash: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 class RunResponse(BaseModel):

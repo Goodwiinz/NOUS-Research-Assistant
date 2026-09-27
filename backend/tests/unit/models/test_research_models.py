@@ -6,6 +6,8 @@ ResearchProject, ResearchBlueprint, ResearchRun,
 ResearchStep, and ResearchSource.
 """
 
+import importlib
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -15,6 +17,11 @@ from src.models.research_project import ResearchProject
 from src.models.research_run import ResearchRun, RunStatus
 from src.models.research_source import ResearchSource
 from src.models.research_step import ExecutionMode, ResearchStep, StepType
+
+
+def _review_model():
+    module = importlib.import_module("src.models.research_stage_review")
+    return module.ResearchStageReview
 
 
 class TestRunStatusEnum:
@@ -166,6 +173,9 @@ class TestResearchRun:
     def test_tablename(self):
         assert ResearchRun.__tablename__ == "research_runs"
 
+    def test_exposes_append_only_stage_reviews_relationship(self):
+        assert ResearchRun.reviews.property.back_populates == "run"
+
 
 class TestResearchStep:
     """Tests for ResearchStep model."""
@@ -247,3 +257,94 @@ class TestResearchSource:
 
     def test_tablename(self):
         assert ResearchSource.__tablename__ == "research_sources"
+
+
+class TestResearchStageReview:
+    """Tests for the append-only human-review ledger model."""
+
+    def test_uses_plain_base_and_only_review_ledger_columns(self):
+        from src.models.base import Base, BaseModel
+
+        review_model = _review_model()
+
+        assert issubclass(review_model, Base)
+        assert not issubclass(review_model, BaseModel)
+        assert set(review_model.__table__.columns.keys()) == {
+            "id",
+            "owner_id",
+            "organization_id",
+            "run_id",
+            "step_index",
+            "stage_type",
+            "review_kind",
+            "reviewer_id",
+            "output_hash",
+            "decision",
+            "decision_payload",
+            "note",
+            "created_at",
+        }
+        assert not hasattr(review_model, "soft_delete")
+
+    def test_creation_preserves_review_audit_values(self):
+        review_model = _review_model()
+        owner_id = uuid4()
+        organization_id = uuid4()
+        run_id = uuid4()
+        reviewer_id = uuid4()
+        created_at = datetime.now(timezone.utc)
+
+        review = review_model(
+            owner_id=owner_id,
+            organization_id=organization_id,
+            run_id=run_id,
+            step_index=2,
+            stage_type="extract",
+            review_kind="extraction",
+            reviewer_id=reviewer_id,
+            output_hash="a" * 64,
+            decision="approve",
+            decision_payload={"records": [{"id": "record-1", "decision": "accept"}]},
+            note="Checked against the evidence.",
+            created_at=created_at,
+        )
+
+        assert review.owner_id == owner_id
+        assert review.organization_id == organization_id
+        assert review.run_id == run_id
+        assert review.step_index == 2
+        assert review.stage_type == "extract"
+        assert review.review_kind == "extraction"
+        assert review.reviewer_id == reviewer_id
+        assert review.output_hash == "a" * 64
+        assert review.decision == "approve"
+        assert review.decision_payload["records"][0]["id"] == "record-1"
+        assert review.note == "Checked against the evidence."
+        assert review.created_at == created_at
+
+    def test_table_declares_owner_review_indexes_and_unique_gate(self):
+        review_model = _review_model()
+        table = review_model.__table__
+        index_columns = {
+            tuple(column.name for column in index.columns) for index in table.indexes
+        }
+        unique_columns = {
+            tuple(column.name for column in constraint.columns)
+            for constraint in table.constraints
+            if constraint.__class__.__name__ == "UniqueConstraint"
+        }
+
+        assert ("run_id", "step_index") in index_columns
+        assert ("owner_id",) in index_columns
+        assert ("reviewer_id",) in index_columns
+        assert ("organization_id",) in index_columns
+        assert (
+            "run_id",
+            "step_index",
+            "output_hash",
+            "review_kind",
+        ) in unique_columns
+
+    def test_is_exported_from_models_package(self):
+        models = importlib.import_module("src.models")
+        assert models.ResearchStageReview is _review_model()
