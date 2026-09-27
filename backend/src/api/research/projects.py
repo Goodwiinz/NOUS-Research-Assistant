@@ -30,6 +30,7 @@ from src.models import (
 from src.models.processing import JobPriority, JobStatus, JobType, ProcessingJob
 from src.services.research.bibliography_service import BibliographyService
 from src.services.research.project_service import ProjectService
+from src.services.research_engine.project_access import ResearchAction, resolve_project
 from src.shared.research_schemas import (
     NoteCreate,
     NoteListResponse,
@@ -407,7 +408,7 @@ async def add_document_to_project(
         Created association
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         # Verify document exists
         doc_query = select(Document).where(
@@ -623,7 +624,7 @@ async def remove_document_from_project(
         db: Database session
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         # Find and delete the association
         query = select(CollectionDocument).where(
@@ -770,7 +771,7 @@ async def create_note(
         # adapter — the route and the agent tool verify ownership differently
         # (see ProjectService.create_note docstring), so the shared service
         # method stays persistence-only.
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
         await _validate_note_document_links(
             project_id, note_data.linked_document_ids, current_user, db
         )
@@ -859,7 +860,7 @@ async def update_note(
         Updated note
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
         note = await _get_note(project_id, note_id, db)
 
         # Update fields
@@ -911,7 +912,7 @@ async def delete_note(
         db: Database session
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
         note = await _get_note(project_id, note_id, db)
 
         await db.delete(note)
@@ -949,7 +950,7 @@ async def toggle_note_pin(
         Updated pin status
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
         note = await _get_note(project_id, note_id, db)
 
         note.is_pinned = not note.is_pinned
@@ -1096,43 +1097,10 @@ async def _get_project_with_auth(
     project_id: UUID,
     current_user: User,
     db: AsyncSession,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> Collection:
-    """Get project with authorization check.
-
-    Args:
-        project_id: Project ID
-        current_user: Current user
-        db: Database session
-
-    Returns:
-        Project if authorized
-
-    Raises:
-        HTTPException: If not found or not authorized
-    """
-    from src.models import Workspace
-
-    query = (
-        select(Collection)
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            and_(
-                Collection.id == project_id,
-                Workspace.owner_id == current_user.id,
-                Collection.is_deleted.is_(False),
-            )
-        )
-    )
-    result = await db.execute(query)
-    project = result.scalar_one_or_none()
-
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found or access denied",
-        )
-
-    return project
+    """Apply the canonical project authorization and lifecycle boundary."""
+    return (await resolve_project(db, project_id, current_user.id, action)).collection
 
 
 async def _get_note(
@@ -1216,6 +1184,10 @@ def _to_project_response(project: Collection) -> ProjectResponse:
 
     return ProjectResponse(
         id=project.id,
+        research_engine_project_id=project.__dict__.get("research_engine_project_id"),
+        can_edit=project.__dict__.get("can_edit", False),
+        can_manage=project.__dict__.get("can_manage", False),
+        workspace_archived=project.__dict__.get("workspace_archived", False),
         workspace_id=project.workspace_id,
         name=project.name,
         description=project.description,
@@ -1313,7 +1285,7 @@ async def create_project_memory(
 ):
     """Save a durable fact for a project."""
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         memory = ProjectMemory(
             project_id=project_id,
@@ -1354,7 +1326,7 @@ async def delete_project_memory(
 ):
     """Delete a project memory."""
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         query = select(ProjectMemory).where(
             and_(

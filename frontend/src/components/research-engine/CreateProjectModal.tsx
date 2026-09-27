@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, X } from 'lucide-react';
 import { createProject } from '@/services/researchEngineService';
-import { projectService } from '@/services/projectService';
+import { listWorkflowLinkOptions } from '@/services/projectService';
 
 export interface CreateProjectModalProps {
   isOpen: boolean;
@@ -25,8 +25,7 @@ export function CreateProjectModal({
 
   const { data: collections = [] } = useQuery({
     queryKey: ['projects', 'research-engine-link-options'],
-    queryFn: async () =>
-      (await projectService.listProjects({ limit: 200 })).projects,
+    queryFn: listWorkflowLinkOptions,
     enabled: isOpen,
   });
 
@@ -46,14 +45,14 @@ export function CreateProjectModal({
   };
 
   const handleSubmit = async () => {
-    if (!name.trim()) return;
+    if (!collectionId) return;
     setSubmitting(true);
     setError(null);
     try {
       await createProject({
         name: name.trim(),
         description: description.trim() || undefined,
-        collection_id: collectionId || undefined,
+        collection_id: collectionId,
       });
       reset();
       onClose();
@@ -101,7 +100,7 @@ export function CreateProjectModal({
               onChange={(event) => setCollectionId(event.target.value)}
               className="w-full px-3 py-2 bg-muted border border-border rounded text-sm text-foreground"
             >
-              <option value="">No linked project</option>
+              <option value="">Select a project</option>
               {collections.map((collection) => (
                 <option key={collection.id} value={collection.id}>
                   {collection.name}

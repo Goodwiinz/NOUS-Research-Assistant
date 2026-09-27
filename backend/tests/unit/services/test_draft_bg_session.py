@@ -93,14 +93,22 @@ def _make_bg_session(documents):
 
     docs_result = MagicMock()
     docs_result.scalars.return_value.all.return_value = documents
-    lock_result = MagicMock()
-    lock_result.scalar_one_or_none.return_value = uuid4()
+    review_lock_result = MagicMock()
+    review_lock_result.scalar_one_or_none.return_value = uuid4()
+    draft_lock_result = MagicMock()
+    draft_lock_result.scalar_one_or_none.return_value = uuid4()
     version_result = MagicMock()
     version_result.scalar.return_value = 0
     update_result = MagicMock()
 
     session.execute = AsyncMock(
-        side_effect=[docs_result, lock_result, version_result, update_result]
+        side_effect=[
+            docs_result,
+            review_lock_result,
+            draft_lock_result,
+            version_result,
+            update_result,
+        ]
     )
     session.flush = AsyncMock()
     session.attach_mock(AsyncMock(), "commit")
@@ -249,12 +257,19 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
 
     version_result = MagicMock()
     version_result.scalar.return_value = 0
-    lock_result = MagicMock()
-    lock_result.scalar_one_or_none.return_value = uuid4()
+    review_lock_result = MagicMock()
+    review_lock_result.scalar_one_or_none.return_value = uuid4()
+    draft_lock_result = MagicMock()
+    draft_lock_result.scalar_one_or_none.return_value = uuid4()
     update_result = MagicMock()
     window2_session = MagicMock()
     window2_session.execute = AsyncMock(
-        side_effect=[lock_result, version_result, update_result]
+        side_effect=[
+            review_lock_result,
+            draft_lock_result,
+            version_result,
+            update_result,
+        ]
     )
     window2_session.flush = AsyncMock()
     window2_session.attach_mock(AsyncMock(), "commit")

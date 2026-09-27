@@ -1,11 +1,12 @@
 import { create } from 'zustand';
-import type { components } from '@/types/generated/api';
+import type { ProjectResponse } from '@/services/researchEngineService';
 
-export type ResearchProject =
-  components['schemas']['src__schemas__research_engine__ProjectResponse'];
+export type ResearchProject = ProjectResponse;
 
 export interface ResearchRun {
   id: string;
+  project_id?: string;
+  research_engine_project_id?: string;
   blueprint_id: string;
   blueprint_version: number;
   status: 'pending' | 'running' | 'paused' | 'completed' | 'failed';

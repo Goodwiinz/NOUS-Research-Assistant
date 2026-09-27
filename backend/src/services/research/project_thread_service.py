@@ -24,13 +24,11 @@ from src.models import CollectionDocument, ProjectThread
 
 async def get_project_document_scope(project_id: UUID, db: AsyncSession) -> list[str]:
     """Return non-deleted document IDs linked to a project (RAG scope)."""
+    from src.models.document import Document
+    from src.services.research_engine.project_access import project_documents_query
+
     rows = await db.execute(
-        select(CollectionDocument.document_id).where(
-            and_(
-                CollectionDocument.collection_id == project_id,
-                CollectionDocument.is_deleted == False,  # noqa: E712
-            )
-        )
+        project_documents_query(project_id).with_only_columns(Document.id)
     )
     return [str(r[0]) for r in rows.all()]
 

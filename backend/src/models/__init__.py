@@ -114,6 +114,7 @@ from .evaluation import (
 # Research Engine models
 from .research_blueprint import ResearchBlueprint
 from .research_project import ResearchProject
+from .research_project_role import ResearchProjectRole, ResearchProjectRoleAssignment
 from .research_run import ResearchRun, RunStatus
 from .research_source import ResearchSource
 from .research_step import ExecutionMode, ResearchStep, StepType
@@ -201,6 +202,8 @@ __all__ = [
     "DraftReview",
     "ProjectThread",
     "ProjectThreadLinkType",
+    "ResearchProjectRole",
+    "ResearchProjectRoleAssignment",
     # Permission and role models
     "Permission",
     "Role",

@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, Optional
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,7 @@ from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document
 from src.models.user import User
 from src.models.workspace import Workspace
+from src.services.research_engine.project_access import ResearchAction, resolve_project
 
 logger = logging.getLogger(__name__)
 
@@ -252,26 +254,19 @@ async def _verify_project_ownership(
     project_id: str,
     db: AsyncSession,
     current_user: User,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> Optional[Collection]:
-    """Verify a project (collection) exists and belongs to the current user."""
+    """Resolve legacy agent name inputs, then apply canonical authorization."""
     proj_uuid = await _resolve_project_id(project_id, db, current_user)
     if not proj_uuid:
         return None
-
-    stmt = (
-        select(Collection)
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            Collection.id == proj_uuid,
-            Collection.is_deleted == False,
-            Workspace.owner_id == current_user.id,
-        )
-    )
-    result = await db.execute(stmt)
-    project = result.scalar_one_or_none()
-    if project is None:
+    try:
+        return (
+            await resolve_project(db, proj_uuid, current_user.id, action)
+        ).collection
+    except HTTPException:
         _log_resource_access_denied("project", project_id, current_user)
-    return project
+        return None
 
 
 async def _link_documents_to_project(

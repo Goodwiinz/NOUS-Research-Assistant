@@ -91,6 +91,7 @@ from src.models.collection import CollectionDocument
 from src.models.document import Document
 from src.models.user import User
 from src.services.agent.trace_metadata import internal_llm_config
+from src.services.research_engine.project_access import ResearchAction
 
 from .error_recovery import tool_error_payload
 from .tool_helpers import (
@@ -1614,7 +1615,10 @@ async def _tool_ingest_arxiv(
                 try:
                     async with _LinkSession() as link_db:
                         project = await _verify_project_ownership(
-                            project_id, link_db, current_user
+                            project_id,
+                            link_db,
+                            current_user,
+                            action=ResearchAction.EDIT,
                         )
                         if not project:
                             link_error = (
@@ -2202,7 +2206,9 @@ async def _tool_add_document_to_project(
         doc_uuid = doc.id
 
         # Verify project ownership (resolves UUID or name)
-        project = await _verify_project_ownership(project_id, db, current_user)
+        project = await _verify_project_ownership(
+            project_id, db, current_user, action=ResearchAction.EDIT
+        )
         if not project:
             return {"error": "Project not found or access denied"}
 
@@ -2323,7 +2329,9 @@ async def _tool_create_project_note(
         # adapter — the tool and the REST route authorize differently, so
         # ProjectService.create_note stays persistence-only. ``db`` is the
         # tool-call-scoped session (audit B8 — fresh-session dodge removed).
-        project = await _verify_project_ownership(project_id, db, current_user)
+        project = await _verify_project_ownership(
+            project_id, db, current_user, action=ResearchAction.EDIT
+        )
         if not project:
             return {"error": "Project not found or access denied"}
 
@@ -3222,7 +3230,9 @@ async def _tool_create_draft(
         return {"error": "At least one theme is required"}
 
     try:
-        project = await _verify_project_ownership(project_id, db, current_user)
+        project = await _verify_project_ownership(
+            project_id, db, current_user, action=ResearchAction.EDIT
+        )
         if not project:
             return {"error": "Project not found or access denied"}
 
@@ -3294,7 +3304,9 @@ async def _tool_revise_draft(
         return {"error": "mode must be 'revise' or 'citations_only'"}
 
     try:
-        project = await _verify_project_ownership(project_id, db, current_user)
+        project = await _verify_project_ownership(
+            project_id, db, current_user, action=ResearchAction.EDIT
+        )
         if not project:
             return {"error": "Project not found or access denied"}
 

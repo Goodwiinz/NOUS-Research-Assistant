@@ -19,6 +19,7 @@ from src.services.research_engine.project_access import (
     ResearchAction,
     require_blueprint,
     require_research_project,
+    resolve_engine_project_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ async def create_blueprint(
 ) -> BlueprintResponse:
     """Create a blueprint for a project."""
     project = await require_research_project(
-        db, project_id, current_user.id, ResearchAction.ADJUDICATE
+        db, project_id, current_user.id, ResearchAction.EDIT
     )
 
     blueprint = ResearchBlueprint(
@@ -65,7 +66,13 @@ async def create_blueprint(
     db.add(blueprint)
     await db.commit()
     await db.refresh(blueprint)
-    return BlueprintResponse.model_validate(blueprint)
+    return BlueprintResponse.model_validate(
+        {
+            **blueprint.__dict__,
+            "project_id": project_id,
+            "research_engine_project_id": project.id,
+        }
+    )
 
 
 @router.get(
@@ -79,6 +86,16 @@ async def get_blueprint(
 ) -> BlueprintResponse:
     """Get a single blueprint with ownership verification in one query."""
     blueprint = await require_blueprint(
-        db, blueprint_id, current_user.id, ResearchAction.REVIEW
+        db, blueprint_id, current_user.id, ResearchAction.VIEW
     )
-    return BlueprintResponse.model_validate(blueprint)
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.VIEW
+    )
+    assert context.engine is not None
+    return BlueprintResponse.model_validate(
+        {
+            **blueprint.__dict__,
+            "project_id": context.collection.id,
+            "research_engine_project_id": context.engine.id,
+        }
+    )

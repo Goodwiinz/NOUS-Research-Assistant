@@ -32,7 +32,7 @@ router = APIRouter(
 
 async def _verify_run_access(run_id: UUID, user_id: UUID, db: AsyncSession) -> None:
     """Verify user owns the project for this run via a single JOIN query."""
-    await require_run(db, run_id, user_id, ResearchAction.REVIEW)
+    await require_run(db, run_id, user_id, ResearchAction.VIEW)
 
 
 @router.get(
@@ -48,7 +48,10 @@ async def list_steps(
     await _verify_run_access(run_id, current_user.id, db)
     query = (
         select(ResearchStep)
-        .where(ResearchStep.run_id == run_id)
+        .where(
+            ResearchStep.run_id == run_id,
+            ResearchStep.is_deleted.is_(False),
+        )
         .order_by(ResearchStep.step_index)
     )
     result = await db.execute(query)
@@ -66,5 +69,5 @@ async def get_step(
     db: AsyncSession = Depends(get_db),
 ) -> StepResponse:
     """Get a single step with ownership verification in one query."""
-    step = await require_step(db, step_id, current_user.id, ResearchAction.REVIEW)
+    step = await require_step(db, step_id, current_user.id, ResearchAction.VIEW)
     return StepResponse.model_validate(step)

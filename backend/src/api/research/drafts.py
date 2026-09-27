@@ -26,6 +26,7 @@ from src.services.research.draft_generation_service import (
     DraftGenerationService,
     DraftGenerationStatus,
 )
+from src.services.research_engine.project_access import ResearchAction, resolve_project
 
 logger = get_logger()
 router = APIRouter(prefix="/api/v1/projects/{project_id}/drafts", tags=["drafts"])
@@ -68,48 +69,10 @@ async def _validate_project_ownership(
     project_id: UUID,
     current_user: User,
     db: AsyncSession,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> Collection:
-    """
-    Validate that the current user owns the project.
-
-    Args:
-        project_id: Project ID to validate
-        current_user: Authenticated user
-        db: Database session
-
-    Returns:
-        Project (Collection) if authorized
-
-    Raises:
-        HTTPException: 403 if not authorized, 404 if not found
-    """
-    query = (
-        select(Collection)
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            and_(
-                Collection.id == project_id,
-                Workspace.owner_id == current_user.id,
-                Collection.is_deleted.is_(False),
-                Workspace.is_deleted.is_(False),
-            )
-        )
-    )
-    result = await db.execute(query)
-    project = result.scalar_one_or_none()
-
-    if not project:
-        logger.warning(
-            "draft_access_denied",
-            project_id=str(project_id),
-            user_id=str(current_user.id),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found or access denied",
-        )
-
-    return project
+    """Apply the canonical project authorization and lifecycle boundary."""
+    return (await resolve_project(db, project_id, current_user.id, action)).collection
 
 
 # ============================================================================
@@ -154,7 +117,7 @@ async def generate_draft(
         )
 
     # Validate project ownership
-    await _validate_project_ownership(project_id, current_user, db)
+    await _validate_project_ownership(project_id, current_user, db, ResearchAction.EDIT)
 
     service = DraftGenerationService(db)
 
@@ -331,7 +294,7 @@ async def delete_draft(
 ):
     """Delete a specific draft."""
     # Validate project ownership
-    await _validate_project_ownership(project_id, current_user, db)
+    await _validate_project_ownership(project_id, current_user, db, ResearchAction.EDIT)
 
     service = DraftGenerationService(db)
 
@@ -545,7 +508,7 @@ async def cancel_generation(
 ):
     """Cancel a task or latest active generation for the project."""
     # Validate project ownership
-    await _validate_project_ownership(project_id, current_user, db)
+    await _validate_project_ownership(project_id, current_user, db, ResearchAction.EDIT)
 
     if task_id:
         generation_status = DraftGenerationService.get_status(task_id)

@@ -72,6 +72,10 @@ async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata(
             )
             db.add(organization)
             await db.flush()
+            await db.execute(
+                text("UPDATE users SET organization_id=:org WHERE id=:user"),
+                {"org": organization.id, "user": user_id},
+            )
             workspace = Workspace(
                 name="Bibliography workspace",
                 owner_id=user_id,

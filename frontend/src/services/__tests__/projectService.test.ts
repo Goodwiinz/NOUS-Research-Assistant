@@ -1,6 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
-import { projectService } from '../projectService';
+import { listWorkflowLinkOptions, projectService } from '../projectService';
+
+describe('listWorkflowLinkOptions', () => {
+  it('paginates at the API maximum and returns only manageable live projects', async () => {
+    const eligible = {
+      id: 'eligible',
+      name: 'Eligible',
+      workspace_id: 'workspace',
+      can_manage: true,
+      workspace_archived: false,
+      research_status: 'active' as const,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    const first = Array.from({ length: 100 }, (_, index) => ({
+      ...eligible,
+      id: `project-${index}`,
+      can_manage: index !== 0,
+    }));
+    const list = vi
+      .spyOn(projectService, 'listProjects')
+      .mockResolvedValueOnce({ projects: first, total: 101, has_next: true })
+      .mockResolvedValueOnce({
+        projects: [{ ...eligible, id: 'project-100' }],
+        total: 101,
+        has_next: false,
+      });
+
+    const result = await listWorkflowLinkOptions();
+
+    expect(list).toHaveBeenNthCalledWith(1, { skip: 0, limit: 100 });
+    expect(list).toHaveBeenNthCalledWith(2, { skip: 100, limit: 100 });
+    expect(result).toHaveLength(100);
+    expect(result.at(-1)?.id).toBe('project-100');
+  });
+});
 
 describe('projectService.downloadBibliography', () => {
   const createObjectURL = vi.fn(() => 'blob:download-url');
