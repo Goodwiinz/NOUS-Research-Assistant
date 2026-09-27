@@ -518,29 +518,32 @@ async def stream_run(
             ),
         )
     manifest = dict(run.reproducibility_manifest or {})
-    if manifest.pop(_CONTINUATION_REQUESTED_KEY, False):
-        failed_quality_steps = [
-            item
-            for item in history
-            if any(
-                isinstance(mark, dict) and not mark.get("passed", True)
-                for mark in (item.quality_marks or [])
-            )
-        ]
-        if failed_quality_steps:
-            persisted_failure_index = manifest.get("continued_after_failure_step_index")
-            failed_step_index = (
-                persisted_failure_index
-                if type(persisted_failure_index) is int
-                else min(int(item.step_index) for item in failed_quality_steps)
-            )
-            manifest[_CONTINUED_AFTER_FAILURE_KEY] = True
-            manifest["continued_after_failure_step_index"] = failed_step_index
-            prior_outputs["continued_after_failure"] = True
-            verification = prior_outputs.get("verification")
-            if isinstance(verification, dict):
-                verification["passed"] = False
-                verification["continued_after_failure"] = True
+    continuation_requested = bool(manifest.pop(_CONTINUATION_REQUESTED_KEY, False))
+    failed_quality_steps = [
+        item
+        for item in history
+        if any(
+            isinstance(mark, dict) and not mark.get("passed", True)
+            for mark in (item.quality_marks or [])
+        )
+    ]
+    # A direct stream request is itself the continuation action for a paused
+    # run. Preserve the same verification override used by POST /resume.
+    if failed_quality_steps and was_paused:
+        persisted_failure_index = manifest.get("continued_after_failure_step_index")
+        failed_step_index = (
+            persisted_failure_index
+            if type(persisted_failure_index) is int
+            else min(int(item.step_index) for item in failed_quality_steps)
+        )
+        manifest[_CONTINUED_AFTER_FAILURE_KEY] = True
+        manifest["continued_after_failure_step_index"] = failed_step_index
+        prior_outputs["continued_after_failure"] = True
+        verification = prior_outputs.get("verification")
+        if isinstance(verification, dict):
+            verification["passed"] = False
+            verification["continued_after_failure"] = True
+    if continuation_requested or (failed_quality_steps and was_paused):
         run.reproducibility_manifest = manifest
     try:
         validate_blueprint_runtime(

@@ -419,6 +419,82 @@ async def test_persisted_post_resume_stream_rehydrates_failed_stages_once(
             assert len(persisted_steps) == 2
 
 
+async def test_direct_paused_stream_persists_continuation_and_unverified_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    source_id = "source-stable-direct-continuation"
+    blueprint_steps = [
+        {"type": "search", "name": "Search", "params": {"contract_version": 1}},
+        {"type": "verify", "name": "Verify", "params": {"contract_version": 1}},
+        {
+            "type": "export",
+            "name": "Export",
+            "params": {"contract_version": 1, "format": "markdown"},
+        },
+    ]
+    async with _research_schema(dsn) as factory:
+        owner_id, run_id = await _seed_run(
+            factory,
+            steps=blueprint_steps,
+            persisted_outputs=[_search_envelope(source_id), _verification_envelope()],
+            total_tokens=23,
+        )
+        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        monkeypatch.setattr(
+            "src.api.research_engine.runs._build_connectors", lambda **_: {}
+        )
+
+        async def admitted(**_: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(
+            "src.api.research_engine.runs.admit_expensive_work", admitted
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            streamed = await client.get(f"/research-engine/runs/{run_id}/stream")
+            assert streamed.status_code == 200
+            assert "event: step_complete" in streamed.text
+            assert "event: run_complete" in streamed.text
+
+        async with factory() as db:
+            run = await db.get(ResearchRun, run_id)
+            assert run is not None
+            assert run.status == "completed"
+            manifest = cast(dict[str, Any], run.reproducibility_manifest)
+            assert manifest["continued_after_failure"] is True
+            assert manifest["continued_after_failure_step_index"] == 1
+            persisted = (
+                (
+                    await db.execute(
+                        select(ResearchStep)
+                        .where(ResearchStep.run_id == run_id)
+                        .order_by(ResearchStep.step_index.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert [item.step_index for item in persisted] == [0, 1, 2]
+            export_step = persisted[-1]
+            assert export_step.output["stage_type"] == "export"
+            assert (
+                "continued after a failed quality check"
+                in export_step.output["markdown"]
+            )
+
+            report = await ExportService().export_json(run_id, db)
+            assert report["verification"]["passed"] is False
+            assert report["verification"]["continued_after_failure"] is True
+            assert report["continued_after_failure"] is True
+            assert "continued after a failed quality check" in report["markdown"]
+
+
 async def test_repeated_resume_executes_export_and_reconstructs_unverified_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
