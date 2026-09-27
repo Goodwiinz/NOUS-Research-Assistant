@@ -681,6 +681,7 @@ async def test_agent_tool_returns_completed_revision_metadata() -> None:
     current_user = MagicMock()
     expected = {
         "draft_id": str(uuid4()),
+        "draft_title": "Review of Transformers",
         "status": "completed",
         "version": 4,
         "base_version": 2,

@@ -20,8 +20,10 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.agent_tool_receipt import AgentToolOperation
 from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.organization import Organization
+from src.models.project_note import ProjectNote
 from src.services.agent import _nodes_classify, _nodes_llm, _nodes_tools, compactor
 from src.services.agent.compactor import _COMPACTED_FLAG
 from src.services.agent.tools import TOOL_REGISTRY
@@ -133,6 +135,15 @@ async def test_search_identity_survives_real_compaction_checkpoint_and_scoped_fo
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
 
     async with _postgres_draft_schema(dsn) as database:
+        async_engine = database.factory.kw["bind"]
+        async with async_engine.begin() as schema_connection:
+            await schema_connection.run_sync(
+                lambda connection: ProjectNote.__table__.create(connection)
+            )
+            await schema_connection.run_sync(
+                lambda connection: AgentToolOperation.__table__.create(connection)
+            )
+
         foreign_id = uuid4()
         deleted_id = database.document_ids[2]
         foreign_org_id = uuid4()
@@ -437,3 +448,116 @@ async def test_search_identity_survives_real_compaction_checkpoint_and_scoped_fo
             followup_results["r6-deleted"]["reason"]
             == "requested_documents_unavailable"
         )
+
+        # Execute an actual registered mutation through the writing specialist
+        # node. The tool dispatcher creates the PostgreSQL note and persists its
+        # completed operation result before the graph checkpoint is written.
+        # Reusing the exact provider call identity must return that receipt
+        # without creating another note, while the ledger recognizes the same
+        # tool observation only once.
+        specialist_state = dict(resumed_state)
+        specialist_state["intent"] = "writing"
+        specialist_state["tool_operation_protocol_version"] = 1
+        note_call = _tool_call(
+            "r6-note-mutation",
+            "create_project_note",
+            {
+                "title": "Task4 connected receipt note",
+                "content": "Created through the real writing tool node.",
+                "project_id": str(database.project_id),
+            },
+        )
+        specialist_state["messages"] = [
+            *specialist_state["messages"],
+            AIMessage(content="", tool_calls=[note_call]),
+        ]
+        writing_tool_node = _nodes_tools.make_filtered_tool_node(branch="writing")
+        first_note_update = await writing_tool_node(specialist_state, config)
+        _merge_update(specialist_state, first_note_update)
+        first_note_message = next(
+            message
+            for message in reversed(specialist_state["messages"])
+            if isinstance(message, ToolMessage)
+            and message.tool_call_id == "r6-note-mutation"
+        )
+        first_note_result = _tool_json(first_note_message)
+        assert first_note_result["status"] == "success", first_note_result
+        assert first_note_result["title"] == "Task4 connected receipt note"
+        assert first_note_result["project_id"] == str(database.project_id)
+        first_ledger = specialist_state["identity_ledger"]
+        note_identity = next(
+            record
+            for record in first_ledger["records"]
+            if record["kind"] == "note" and record["id"] == first_note_result["note_id"]
+        )
+        assert note_identity["name"] == "Task4 connected receipt note"
+        assert note_identity["related"] == {"project_id": str(database.project_id)}
+
+        async with database.factory() as verify_first:
+            note_rows = (
+                await verify_first.execute(
+                    text(
+                        "SELECT id FROM project_notes WHERE title = :title "
+                        "AND project_id = :project_id"
+                    ),
+                    {
+                        "title": "Task4 connected receipt note",
+                        "project_id": database.project_id,
+                    },
+                )
+            ).all()
+            operation_rows = (
+                (
+                    await verify_first.execute(
+                        text(
+                            "SELECT state, result FROM agent_tool_operations "
+                            "WHERE tool_call_id = :call_id"
+                        ),
+                        {"call_id": "r6-note-mutation"},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        assert len(note_rows) == 1
+        assert len(operation_rows) == 1
+        assert operation_rows[0]["state"] == "completed"
+        assert operation_rows[0]["result"] == first_note_result
+
+        specialist_state["messages"].append(
+            AIMessage(content="", tool_calls=[note_call])
+        )
+        replay_update = await writing_tool_node(specialist_state, config)
+        _merge_update(specialist_state, replay_update)
+        replay_message = next(
+            message
+            for message in reversed(specialist_state["messages"])
+            if isinstance(message, ToolMessage)
+            and message.tool_call_id == "r6-note-mutation"
+        )
+        assert _tool_json(replay_message) == first_note_result
+        assert specialist_state["identity_ledger"] == first_ledger
+        async with database.factory() as verify_replay:
+            replayed_note_rows = (
+                await verify_replay.execute(
+                    text(
+                        "SELECT id FROM project_notes WHERE title = :title "
+                        "AND project_id = :project_id"
+                    ),
+                    {
+                        "title": "Task4 connected receipt note",
+                        "project_id": database.project_id,
+                    },
+                )
+            ).all()
+            replayed_operation_count = (
+                await verify_replay.execute(
+                    text(
+                        "SELECT count(*) FROM agent_tool_operations "
+                        "WHERE tool_call_id = :call_id AND state = 'completed'"
+                    ),
+                    {"call_id": "r6-note-mutation"},
+                )
+            ).scalar_one()
+        assert len(replayed_note_rows) == 1
+        assert replayed_operation_count == 1

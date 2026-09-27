@@ -489,6 +489,14 @@ def extract_tool_identities(
                     "project_id": payload.get("project_id"),
                     "draft_id": payload.get("draft_id"),
                 }
+        if tool_name == "revise_draft":
+            if field_name == "draft_id":
+                return {
+                    "title": payload.get("draft_title"),
+                    "project_id": payload.get("project_id"),
+                }
+            if field_name == "project_id":
+                return {"name": payload.get("project_name")}
         if tool_name == "create_task" and field_name == "task_id":
             return {
                 "title": payload.get("task_title"),

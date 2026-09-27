@@ -891,3 +891,45 @@ the task harness and are omitted here.
 These mutation checks are intentional RED evidence and are excluded from the
 green test totals. They do not establish distributed request coalescing,
 external-provider behavior, or live model prompt-injection resistance.
+
+## Task 4 Astra follow-up: specialist receipt replay remains idempotent
+
+- **Source and guard:**
+  `backend/src/services/agent/identity_ledger.py:850`,
+  `merge_identity_ledger`. A previously processed `observation_id` must not
+  merge its records or provenance a second time.
+- **Connected owning test:**
+  `backend/tests/integration/test_task4_connected_identity_postgres.py::test_search_identity_survives_real_compaction_checkpoint_and_scoped_followup`,
+  with the replay equality assertion at line 539. It dispatches the registered
+  `create_project_note` mutation through the real writing tool node, verifies
+  the completed PostgreSQL operation receipt and single persisted note, then
+  repeats the same tool call ID and turn. The second dispatch returns the
+  persisted receipt, leaves one database effect, and leaves the identity
+  ledger unchanged.
+- **Mutation:** changed
+  `if observation_id and observation_id not in processed_set:` to
+  `if observation_id:`.
+- **Command:**
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${TASK_OWNED_REDIS_URL:?}" ORCHESTRATION_TEST_REDIS_URL="${TASK_OWNED_REDIS_URL:?}" ORCHESTRATION_TEST_DATABASE_URL="${TASK_OWNED_DATABASE_URL:?}" .venv/bin/python -m pytest -c backend/pytest.ini -q --tb=short -o log_cli=false backend/tests/integration/test_task4_connected_identity_postgres.py
+  ```
+
+- **Observed mutant failure:** exit 1; the equality assertion at
+  `test_task4_connected_identity_postgres.py:539` failed because duplicate
+  specialist replay changed the persisted identity ledger.
+- **Restore proof:** restored from the saved pre-mutation file using its
+  absolute worktree destination and verified the SHA-256. Pre-mutation and
+  restored `identity_ledger.py` SHA-256:
+  `f4c94ecb9a635cdb32b7924dea273a0de0d4ad5af3d35d5528a5c5d689f5d956`.
+  Mutant SHA-256:
+  `9a6e4a889968699c17cf33ff9e5234a3ba2b769fd6b4e2ce8f7247c1ecefad17`.
+- **Restored result:** same command, exit 0; `1 passed`, with the existing
+  Pydantic v2 `schema_extra` rename warning.
+
+The Task 4 follow-up also adds a real `revise_draft` root identity mapping:
+the completed service result now carries the saved draft title, and extraction
+retains that title plus its project relation through both uncapped extraction
+and capped Task 2 receipt replay. That contract is covered by
+`test_uncapped_revision_result_keeps_draft_title_and_project_relation` and the
+revision case in `test_result_receipts_keep_mutation_root_labels_and_relations_for_replay`.

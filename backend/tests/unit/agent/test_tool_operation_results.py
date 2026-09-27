@@ -113,7 +113,7 @@ def test_result_receipts_keep_mutation_root_labels_and_relations_for_replay() ->
     from src.services.agent.identity_ledger import extract_tool_identities
     from src.services.agent.tools_impl import _cap_tool_result
 
-    project_id, note_id, draft_id = (str(uuid.uuid4()) for _ in range(3))
+    project_id, note_id, draft_id, revision_id = (str(uuid.uuid4()) for _ in range(4))
     cases = [
         (
             "create_project",
@@ -157,6 +157,29 @@ def test_result_receipts_keep_mutation_root_labels_and_relations_for_replay() ->
             ),
         ),
         (
+            "revise_draft",
+            {
+                "draft_id": revision_id,
+                "status": "completed",
+                "version": 4,
+                "base_version": 3,
+                "word_count": 120,
+                "citation_count": 2,
+                "change_summary": "Revised v3.",
+                "draft_title": "Exact Revision Title",
+                "project_id": project_id,
+                "project_name": "Exact Project Name",
+                "padding": "x" * 40_000,
+            },
+            (
+                "draft",
+                "",
+                revision_id,
+                "Exact Revision Title",
+                {"project_id": project_id},
+            ),
+        ),
+        (
             "create_task",
             {
                 "status": "completed",
@@ -181,7 +204,42 @@ def test_result_receipts_keep_mutation_root_labels_and_relations_for_replay() ->
             == expected[:3]
         )
         assert (matching["name"], matching.get("related", {})) == expected[3:]
+        if tool_name == "revise_draft":
+            project = next(
+                record
+                for record in replay["records"]
+                if record["kind"] == "project" and record["id"] == project_id
+            )
+            assert project["name"] == "Exact Project Name"
         assert _cap_tool_result(bounded, tool_name=tool_name) == bounded
+
+
+def test_uncapped_revision_result_keeps_draft_title_and_project_relation() -> None:
+    from src.services.agent.identity_ledger import extract_tool_identities
+
+    project_id = str(uuid.uuid4())
+    draft_id = str(uuid.uuid4())
+    payload = {
+        "draft_id": draft_id,
+        "status": "completed",
+        "version": 4,
+        "base_version": 3,
+        "draft_title": "Exact Revision Title",
+        "project_id": project_id,
+        "project_name": "Exact Project Name",
+    }
+
+    extracted = extract_tool_identities("revise_draft", payload, "revision-1", "t1")
+
+    draft = next(record for record in extracted["records"] if record["kind"] == "draft")
+    project = next(
+        record for record in extracted["records"] if record["kind"] == "project"
+    )
+    assert draft["id"] == draft_id
+    assert draft["name"] == "Exact Revision Title"
+    assert draft["related"] == {"project_id": project_id}
+    assert project["id"] == project_id
+    assert project["name"] == "Exact Project Name"
 
 
 def test_result_cap_retains_pending_and_error_classification_with_large_collections() -> (

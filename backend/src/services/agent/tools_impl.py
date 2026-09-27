@@ -1042,6 +1042,12 @@ def _collect_result_identities(
             "project_id": result.get("project_id"),
             "draft_id": result.get("draft_id"),
         }
+    elif tool_name == "revise_draft":
+        root_rows["project_id"] = {"name": result.get("project_name")}
+        root_rows["draft_id"] = {
+            "title": result.get("draft_title"),
+            "project_id": result.get("project_id"),
+        }
     elif tool_name == "create_task":
         root_rows["task_id"] = {
             "title": result.get("task_title"),
@@ -1163,6 +1169,12 @@ def _root_result_controls(
             "title": result.get("draft_title"),
             "project_id": result.get("project_id"),
             "draft_id": result.get("draft_id"),
+        }
+    elif tool_name == "revise_draft":
+        root_rows["project_id"] = {"name": result.get("project_name")}
+        root_rows["draft_id"] = {
+            "title": result.get("draft_title"),
+            "project_id": result.get("project_id"),
         }
     elif tool_name == "create_task":
         root_rows["task_id"] = {

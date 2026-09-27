@@ -1333,6 +1333,7 @@ class DraftGenerationService:
         )
         return {
             "draft_id": str(draft.id),
+            "draft_title": draft.title,
             "status": "completed",
             "version": draft.version,
             "base_version": base.version,

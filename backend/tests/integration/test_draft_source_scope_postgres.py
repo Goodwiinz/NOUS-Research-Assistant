@@ -497,6 +497,10 @@ async def test_http_generation_uses_selected_scope_and_persists_postgres_rows() 
                             SimpleNamespace(id=database.user_id),
                         )
                     assert revision_result["version"] == 3, revision_result
+                    assert (
+                        revision_result["draft_title"]
+                        == "Literature Review - bounded evidence"
+                    )
                     assert len(completions.calls) == 3
                     revision_prompt = completions.calls[2]["messages"][1]["content"]
                     assert (
