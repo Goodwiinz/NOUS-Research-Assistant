@@ -1,5 +1,5 @@
 name: "Evidence Synthesis"
-description: "Search academic and web sources, extract claims and supporting evidence, build an evidence map, verify grounding, and export a synthesis report."
+description: "Search configured academic sources, extract claims and supporting evidence, build an evidence map, verify grounding, and export a synthesis report."
 parameters:
   contract_version: 1
   query: ""
@@ -12,7 +12,7 @@ parameters:
 steps:
   - type: search
     name: "Multi-Source Search"
-    description: "Search academic databases and web sources for documents related to the research query."
+    description: "Search configured academic databases for documents related to the research query."
     parameters:
       contract_version: 1
       sources: "{sources}"
@@ -33,9 +33,8 @@ steps:
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >
-      Extract all factual claims from the document along with supporting evidence.
-      For each claim, provide: claim_text, evidence_text, confidence (0-1), and page_reference.
-      Return as a JSON array.
+      Return exactly {"records":[{"source_id":"<UUID>","part_id":"p0001","claims":[{"claim_text":"Treatment reduced the measured score","quote":"The measured score decreased after treatment","confidence":0.9,"page_reference":null}]}]}.
+      Include only claims supported by an exact source-substring quote. Confidence must be finite and from 0 to 1. Set page_reference to null unless trusted source metadata supplied a page locator.
 
   - type: synthesize
     name: "Evidence Map Construction"
@@ -44,9 +43,8 @@ steps:
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >
-      Build an evidence map from the extracted claims and evidence.
-      Group related claims, identify supporting and contradicting evidence,
-      and assess overall strength of evidence for each claim cluster.
+      Return exactly {"sections":[{"heading":"Findings","claims":[{"claim_text":"The study reports a lower score","evidence":[{"evidence_id":"e0001","relation":"supports"}]}]}]}.
+      Use only supplied evidence IDs, include at least one supporting reference per factual claim, and use relation supports or contradicts. Do not infer full-paper evidence from abstracts.
 
   - type: verify
     name: "Grounding Verification"
@@ -55,9 +53,8 @@ steps:
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >
-      Verify each claim in the evidence map against original source material.
-      Mark each claim as verified, unverified, or contradicted.
-      Provide source references for verification.
+      Return exactly {"checks":[{"claim_id":"c0001","status":"supported","reason":"The cited excerpt states this result"}]} with exactly one check per supplied claim ID.
+      Status must be supported, unverified, or contradicted. Assess each claim only against its supplied original source quotes.
 
   - type: export
     name: "Synthesis Report Export"

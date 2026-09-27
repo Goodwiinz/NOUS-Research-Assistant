@@ -102,7 +102,20 @@ def parse_provider_json(raw: str) -> dict[str, Any]:
         raise ValueError("provider returned malformed JSON") from exc
     if not isinstance(value, dict):
         raise ValueError("provider JSON response must be an object")
+    _validate_finite_numbers(value)
     return value
+
+
+def _validate_finite_numbers(value: Any) -> None:
+    """Reject exponent-overflow floats wherever they occur in decoded JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite JSON number is forbidden")
+    if isinstance(value, dict):
+        for child in value.values():
+            _validate_finite_numbers(child)
+    elif isinstance(value, list):
+        for child in value:
+            _validate_finite_numbers(child)
 
 
 def validate_envelope(value: dict[str, Any], stage_type: str) -> dict[str, Any]:

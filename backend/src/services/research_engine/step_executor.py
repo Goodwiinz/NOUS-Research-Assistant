@@ -1,12 +1,13 @@
 """Step executor for research engine workflow steps."""
 
+import asyncio
 import copy
 import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 from string import Template
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
 from src.services.research_engine.contracts import (
@@ -114,8 +115,7 @@ class ExecutionBudget:
             raise ValueError("research stage model-call budget exhausted")
         if self.used_calls >= self.max_total_calls:
             raise ValueError("research run model-call budget exhausted")
-        input_reserve = (max(0, input_bytes) + 3) // 4 + 512
-        reservation = input_reserve + max(0, output_tokens)
+        reservation = max(0, input_bytes) + 512 + max(0, output_tokens)
         if (
             self.used_tokens + self.reserved_tokens + reservation
             > self.max_total_tokens
@@ -150,7 +150,7 @@ class StepExecutor:
     ) -> None:
         self.connectors = connectors
         self.providers = providers
-        self._handlers = {
+        self._handlers: Dict[str, Callable[..., Awaitable[StepResult]]] = {
             "search": self._execute_search,
             "screen": self._execute_screen,
             "extract": self._execute_extract,
@@ -211,6 +211,7 @@ class StepExecutor:
                 f"connector fanout exceeds the {MAX_CONNECTOR_FANOUT}-connector limit"
             )
         query_template = params.get("query_template", "$query")
+        max_documents_value = params.get("max_documents")
         max_results_value = params.get(
             "max_results",
             params.get(
@@ -225,6 +226,14 @@ class StepExecutor:
             max_results = int(max_results_value)
         except (TypeError, ValueError) as exc:
             raise ValueError("max_results must be an integer") from exc
+        if max_documents_value is not None:
+            try:
+                max_documents = int(max_documents_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("max_documents must be an integer") from exc
+            if max_documents < 1:
+                raise ValueError("max_documents must be a positive integer")
+            max_results = min(max_documents, MAX_CONNECTOR_RESULTS)
         if max_results < 1 or max_results > MAX_CONNECTOR_RESULTS:
             raise ValueError(
                 f"connector results exceed the {MAX_CONNECTOR_RESULTS}-result limit"
@@ -451,13 +460,13 @@ class StepExecutor:
             )
         elif stage_type == "extract" and output_kind == "claims":
             common += (
-                '\nSchema: {"records":[{"source_id":"...","part_id":"p0001",'
+                '\nSchema: {"records":[{"source_id":"<UUID>","part_id":"p0001",'
                 '"claims":[{"claim_text":"...","quote":"exact source substring",'
                 '"confidence":0.9,"page_reference":null}]}]}. Use no page reference unless supplied.'
             )
         elif stage_type == "extract":
             common += (
-                '\nSchema: {"records":[{"source_id":"...","part_id":"p0001",'
+                '\nSchema: {"records":[{"source_id":"<UUID>","part_id":"p0001",'
                 '"data":{},"evidence":[{"pointer":"/field","quote":"exact source substring",'
                 '"page_reference":null}]}]}. Include evidence for each non-null scalar leaf.'
             )
@@ -480,9 +489,18 @@ class StepExecutor:
             )
         if output_kind == "claims":
             common += " Output kind is claims; claim_text and exact quote are required."
-        if params.get("extraction_fields"):
+        review_fields = params.get("fields", params.get("extraction_fields"))
+        if output_kind == "review_fields" and review_fields:
             common += " Requested review fields: " + json.dumps(
-                params["extraction_fields"], ensure_ascii=False, separators=(",", ":")
+                review_fields, ensure_ascii=False, separators=(",", ":")
+            )
+        if stage_type == "extract" and output_kind in {
+            "structured_data",
+            "review_fields",
+        }:
+            common += (
+                " Use null only when the supplied extraction schema permits null; "
+                "otherwise return a schema-valid value supported by the source."
             )
         return rendered + common
 
@@ -494,6 +512,7 @@ class StepExecutor:
         context: Dict[str, Any],
         stage_type: str,
         records: List[Dict[str, Any]],
+        structured_records: bool = False,
     ) -> List[Dict[str, Any]]:
         template = step_def.get("system_prompt_template") or params.get(
             "system_prompt_template", ""
@@ -516,7 +535,12 @@ class StepExecutor:
                 not in {"system_prompt_template", "model_id", "temperature", "seed"}
             },
         }
-        return build_prompt_batches(records, fixed, MAX_PROMPT_BYTES)
+        return build_prompt_batches(
+            records,
+            fixed,
+            MAX_PROMPT_BYTES,
+            structured_records=structured_records,
+        )
 
     async def _complete_batches(
         self,
@@ -555,6 +579,15 @@ class StepExecutor:
                 calls += 1
                 try:
                     response = await provider.complete(request)
+                except asyncio.CancelledError as exc:
+                    if budget:
+                        budget.release(reservation)
+                    raise StepExecutionError(
+                        "research stage cancelled",
+                        consumed_tokens=total_tokens,
+                        model_calls=len(batch_usage),
+                        batch_metadata=batch_usage,
+                    ) from exc
                 except Exception:
                     if budget:
                         budget.release(reservation)
@@ -590,13 +623,13 @@ class StepExecutor:
                 raise StepExecutionError(
                     "research stage budget exhausted",
                     consumed_tokens=consumed_tokens,
-                    model_calls=locals().get("calls", len(batch_usage)),
+                    model_calls=len(batch_usage),
                     batch_metadata=batch_usage,
                 ) from exc
             raise StepExecutionError(
                 "research stage provider output failed contract validation",
                 consumed_tokens=consumed_tokens,
-                model_calls=locals().get("calls", len(batch_usage)),
+                model_calls=len(batch_usage),
                 batch_metadata=batch_usage,
             ) from exc
 
@@ -1031,6 +1064,7 @@ class StepExecutor:
             records.append(
                 {
                     "source_id": source_id,
+                    "part_id": first["part_id"],
                     "title": first["title"],
                     "evidence_level": first["evidence_level"],
                     "full_text": text,
@@ -1043,6 +1077,7 @@ class StepExecutor:
             context=context,
             stage_type="synthesize",
             records=records,
+            structured_records=True,
         )
         if batches and provider is None:
             raise ValueError(
@@ -1083,6 +1118,7 @@ class StepExecutor:
                 context=context,
                 stage_type="synthesize",
                 records=reduce_records,
+                structured_records=True,
             )
             if any(
                 record["part_id"] != "p0001"
@@ -1112,6 +1148,11 @@ class StepExecutor:
 
             total_tokens += reduced_tokens
             batch_usage.extend(reduced_usage)
+            self._last_call_accounting = (
+                total_tokens,
+                len(batch_usage),
+                copy.deepcopy(batch_usage),
+            )
             reduced_claims, reduced_sections = _collect_synthesis_outputs(
                 reduced_responses,
                 id_prefix=f"r{layer}_",
@@ -1243,6 +1284,14 @@ class StepExecutor:
                 }
             )
         source_ids = list(dict.fromkeys(item["source_id"] for item in evidence))
+        required_evidence_ids = {item["evidence_id"] for item in evidence}
+        final_evidence_ids = {
+            reference["evidence_id"]
+            for claim in claims
+            for reference in claim["evidence"]
+        }
+        missing_final_evidence = required_evidence_ids - final_evidence_ids
+        omitted_evidence.update(missing_final_evidence)
         coverage = {
             "seen_source_ids": source_ids,
             "processed_source_ids": source_ids,
@@ -1322,7 +1371,7 @@ class StepExecutor:
             context.get("source_records") or [],
             context.get("processing_coverage") or {},
         )
-        synthesis = (
+        synthesis: Dict[str, Any] = (
             context.get("synthesis")
             if isinstance(context.get("synthesis"), dict)
             else {}
@@ -1354,14 +1403,14 @@ class StepExecutor:
         for claim in claims:
             for reference in claim.get("evidence", []):
                 evidence_id = reference.get("evidence_id")
-                evidence_item = evidence_by_id.get(evidence_id)
-                if evidence_item is None:
+                evidence_record = evidence_by_id.get(evidence_id)
+                if evidence_record is None:
                     raise ValueError(
                         "synthesis evidence reference is missing or unknown"
                     )
-                key = (evidence_item["source_id"], evidence_item["part_id"])
+                key = (evidence_record["source_id"], evidence_record["part_id"])
                 text = source_parts.get(key)
-                if text is None or evidence_item["quote"] not in text:
+                if text is None or evidence_record["quote"] not in text:
                     raise ValueError(
                         "synthesis quote is not exact in its referenced source part"
                     )
@@ -1386,7 +1435,9 @@ class StepExecutor:
             return StepResult(
                 output=envelope,
                 quality_marks=[
-                    QualityMark("semantic_verification", False, verification["reason"])
+                    QualityMark(
+                        "semantic_verification", False, str(verification["reason"])
+                    )
                 ],
             )
         records = []
@@ -1433,6 +1484,7 @@ class StepExecutor:
             context=context,
             stage_type="verify",
             records=records,
+            structured_records=True,
         )
         if batches and provider is None:
             raise ValueError(

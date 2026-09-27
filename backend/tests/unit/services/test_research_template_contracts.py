@@ -13,6 +13,7 @@ from src.services.research_engine.connectors.base import SourceConnector, Source
 from src.services.research_engine.contracts import (
     parse_provider_json,
     resolve_parameters,
+    validate_extraction_record,
 )
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.providers.base import (
@@ -59,6 +60,17 @@ class SyntheticConnector(SourceConnector):
                 url="https://example.test/paper/1",
             )
         ]
+
+
+class RecordingLimitConnector(SyntheticConnector):
+    def __init__(self) -> None:
+        self.requested_limits: list[int] = []
+
+    async def search(
+        self, query: str, max_results: int = 50, **kwargs: Any
+    ) -> list[SourceDocument]:
+        self.requested_limits.append(max_results)
+        return await super().search(query, max_results, **kwargs)
 
 
 class ContractProvider(LLMProvider):
@@ -320,6 +332,100 @@ async def test_shipped_template_reaches_verified_export(template_name: str) -> N
     assert context["verification"]["passed"] is True
     assert context["exported"]["verification"]["passed"] is True
     assert context["exported"]["sources"][0]["source_id"]
+    rendered_prompts = {
+        stage: next(
+            request.system_prompt or ""
+            for request in provider.requests
+            if f"stage_type={stage}" in (request.system_prompt or "")
+        )
+        for stage in {"screen", "extract", "synthesize", "verify"}
+        if any(
+            f"stage_type={stage}" in (r.system_prompt or "") for r in provider.requests
+        )
+    }
+    template_prompt_text = "\n".join(
+        str(step.get("system_prompt_template") or "") for step in blueprint["steps"]
+    )
+    assert "Return as a JSON array" not in template_prompt_text
+    assert (
+        "Return a JSON object matching the schema exactly" not in template_prompt_text
+    )
+    if template_name == "data_extraction":
+        extraction_prompt = rendered_prompts["extract"]
+        verifier_prompt = rendered_prompts["verify"]
+        assert '"records":[{"source_id":"<UUID>","part_id":"p0001"' in extraction_prompt
+        assert '"data":{"sample_size":42}' in extraction_prompt
+        assert '"evidence":[{"pointer":"/sample_size"' in extraction_prompt
+        assert (
+            "Use null only when the supplied extraction schema permits null"
+            in extraction_prompt
+        )
+        assert "Use null only" not in verifier_prompt
+        assert '"checks":[{"claim_id":"c0001"' in verifier_prompt
+        extraction_request = next(
+            request
+            for request in provider.requests
+            if "stage_type=extract" in (request.system_prompt or "")
+        )
+        request_parameters = json.loads(extraction_request.prompt)["context"][
+            "parameters"
+        ]
+        assert request_parameters["schema"]["properties"]["sample_size"] == {
+            "type": "integer"
+        }
+    else:
+        assert (
+            '"sections":[{"heading":"Findings","claims":[{"claim_text":"The study reports a lower score"'
+            in rendered_prompts["synthesize"]
+        )
+        assert (
+            '"evidence":[{"evidence_id":"e0001","relation":"supports"}]'
+            in rendered_prompts["synthesize"]
+        )
+        assert '"checks":[{"claim_id":"c0001"' in rendered_prompts["verify"]
+        assert "Use null only" not in rendered_prompts["synthesize"]
+        assert "Use null only" not in rendered_prompts["verify"]
+        extraction_prompt = rendered_prompts["extract"]
+        assert '"records":[{"source_id":"<UUID>","part_id":"p0001"' in extraction_prompt
+        if template_name == "evidence_synthesis":
+            assert (
+                '"claims":[{"claim_text":"Treatment reduced the measured score"'
+                in extraction_prompt
+            )
+            assert "Use null only" not in extraction_prompt
+            assert "Use no page reference unless supplied" in extraction_prompt
+        if template_name == "systematic_literature_review":
+            assert (
+                "Use null only when the supplied extraction schema permits null"
+                in extraction_prompt
+            )
+            assert '"screening":[{"source_id":"<UUID>"' in rendered_prompts["screen"]
+            assert 'Requested review fields: ["findings"]' in extraction_prompt
+    if template_name == "evidence_synthesis":
+        template_text = json.dumps(_load_template(template_name)).lower()
+        assert "general web" not in template_text
+        assert "web sources" not in template_text
+
+
+@pytest.mark.parametrize("requested, expected", [(3, 3), (100, 50)])
+@pytest.mark.asyncio
+async def test_data_extraction_search_limit_uses_effective_max_documents(
+    requested: int, expected: int
+) -> None:
+    blueprint = _load_template("data_extraction")
+    connector = RecordingLimitConnector()
+    executor = StepExecutor(connectors={"rag_store": connector}, providers={})
+
+    await executor.execute(
+        blueprint["steps"][0],
+        {
+            **blueprint["parameters"],
+            "query": "synthetic query",
+            "max_documents": requested,
+        },
+    )
+
+    assert connector.requested_limits == [expected]
 
 
 @pytest.mark.asyncio
@@ -562,6 +668,76 @@ def test_typed_parameter_placeholder_preserves_json_value() -> None:
 def test_provider_json_rejects_duplicate_keys() -> None:
     with pytest.raises(ValueError, match="duplicate JSON key"):
         parse_provider_json('{"checks": [], "checks": []}')
+
+
+@pytest.mark.parametrize("number", ["1e999", "-1e999"])
+def test_provider_json_rejects_nested_exponent_overflow(number: str) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        parse_provider_json('{"outer":[{"value":' + number + "}]}")
+
+
+def test_wrong_integer_is_rejected_by_extraction_schema() -> None:
+    with pytest.raises(ValueError, match="required schema"):
+        validate_extraction_record(
+            {
+                "source_id": SOURCE_ID,
+                "part_id": "p0001",
+                "data": {"sample_size": "42"},
+                "evidence": [],
+            },
+            schema={
+                "type": "object",
+                "properties": {"sample_size": {"type": "integer"}},
+                "required": ["sample_size"],
+                "additionalProperties": False,
+            },
+            source_parts={(SOURCE_ID, "p0001"): "The study included 42 participants."},
+        )
+
+
+def test_missing_scalar_evidence_is_rejected() -> None:
+    with pytest.raises(ValueError, match="lack exact evidence"):
+        validate_extraction_record(
+            {
+                "source_id": SOURCE_ID,
+                "part_id": "p0001",
+                "data": {"sample_size": 42},
+                "evidence": [],
+            },
+            schema={
+                "type": "object",
+                "properties": {"sample_size": {"type": "integer"}},
+                "required": ["sample_size"],
+                "additionalProperties": False,
+            },
+            source_parts={(SOURCE_ID, "p0001"): "The study included 42 participants."},
+        )
+
+
+def test_invented_page_reference_is_rejected() -> None:
+    with pytest.raises(ValueError, match="trusted source metadata"):
+        validate_extraction_record(
+            {
+                "source_id": SOURCE_ID,
+                "part_id": "p0001",
+                "data": {"sample_size": 42},
+                "evidence": [
+                    {
+                        "pointer": "/sample_size",
+                        "quote": "42 participants",
+                        "page_reference": "page 7",
+                    }
+                ],
+            },
+            schema={
+                "type": "object",
+                "properties": {"sample_size": {"type": "integer"}},
+                "required": ["sample_size"],
+                "additionalProperties": False,
+            },
+            source_parts={(SOURCE_ID, "p0001"): "The study included 42 participants."},
+            trusted_pages={(SOURCE_ID, "p0001"): set()},
+        )
 
 
 @pytest.mark.asyncio

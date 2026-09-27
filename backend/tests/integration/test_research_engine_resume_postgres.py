@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -22,7 +23,16 @@ from src.core.dependencies import get_current_user
 from src.models.research_blueprint import ResearchBlueprint
 from src.models.research_project import ResearchProject
 from src.models.research_run import ResearchRun
+from src.models.research_source import ResearchSource
 from src.models.research_step import ResearchStep
+from src.services.research_engine.engine import WorkflowEngine
+from src.services.research_engine.export_service import ExportService
+from src.services.research_engine.providers.base import (
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    ProviderConfig,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -63,6 +73,7 @@ async def _research_schema(
                 ResearchProject,
                 ResearchBlueprint,
                 ResearchRun,
+                ResearchSource,
                 ResearchStep,
             ):
                 await connection.run_sync(cast(Any, model).__table__.create)
@@ -184,6 +195,92 @@ class _RecordingWorkflowEngine:
     async def run(self, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         self.calls.append(kwargs)
         yield {"event": "run_complete"}
+
+
+class _InvalidReductionProvider(LLMProvider):
+    """Return one paid map batch, then malformed paid reduction JSON."""
+
+    def __init__(self) -> None:
+        super().__init__(ProviderConfig(provider_type="test", model_id="test-model"))
+        self.requests: list[LLMRequest] = []
+
+    async def is_model_available(self) -> bool:
+        return True
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        if len(self.requests) > 1:
+            content = '{"sections": ['
+        else:
+            prompt_body = json.loads(request.prompt)
+            evidence_ids: list[str] = []
+            for record in prompt_body["records"]:
+                for item in json.loads(record["text"]):
+                    evidence_ids.append(item["evidence_id"])
+            content = json.dumps(
+                {
+                    "sections": [
+                        {
+                            "heading": "Findings",
+                            "claims": [
+                                {
+                                    "claim_text": f"Finding {evidence_id}",
+                                    "evidence": [
+                                        {
+                                            "evidence_id": evidence_id,
+                                            "relation": "supports",
+                                        }
+                                    ],
+                                }
+                                for evidence_id in evidence_ids
+                            ],
+                        }
+                    ]
+                }
+            )
+        return LLMResponse(
+            content=content,
+            model_id="test-model",
+            input_tokens=40,
+            output_tokens=20,
+        )
+
+
+class _SlowSecondBatchProvider(LLMProvider):
+    """Pause after one successful response so timeout accounting is durable."""
+
+    def __init__(self) -> None:
+        super().__init__(ProviderConfig(provider_type="test", model_id="test-model"))
+        self.requests: list[LLMRequest] = []
+
+    async def is_model_available(self) -> bool:
+        return True
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        if len(self.requests) > 1:
+            import asyncio
+
+            await asyncio.sleep(5)
+        prompt_body = json.loads(request.prompt)
+        content = json.dumps(
+            {
+                "records": [
+                    {
+                        "source_id": item["source_id"],
+                        "part_id": item["part_id"],
+                        "claims": [],
+                    }
+                    for item in prompt_body["records"]
+                ]
+            }
+        )
+        return LLMResponse(
+            content=content,
+            model_id="test-model",
+            input_tokens=40,
+            output_tokens=20,
+        )
 
 
 class _RacingSession:
@@ -320,6 +417,294 @@ async def test_persisted_post_resume_stream_rehydrates_failed_stages_once(
                 .all()
             )
             assert len(persisted_steps) == 2
+
+
+async def test_repeated_resume_executes_export_and_reconstructs_unverified_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    source_id = "source-stable-continued"
+    blueprint_steps = [
+        {"type": "search", "name": "Search", "params": {"contract_version": 1}},
+        {"type": "verify", "name": "Prior Verify", "params": {"contract_version": 1}},
+        {"type": "verify", "name": "Recheck", "params": {"contract_version": 1}},
+        {
+            "type": "export",
+            "name": "Export",
+            "params": {"contract_version": 1, "format": "markdown"},
+        },
+    ]
+    async with _research_schema(dsn) as factory:
+        owner_id, run_id = await _seed_run(
+            factory,
+            steps=blueprint_steps,
+            persisted_outputs=[_search_envelope(source_id), _verification_envelope()],
+            total_tokens=23,
+        )
+        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        monkeypatch.setattr(
+            "src.api.research_engine.runs._build_connectors", lambda **_: {}
+        )
+
+        async def admitted(**_: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(
+            "src.api.research_engine.runs.admit_expensive_work", admitted
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first_resume = await client.post(f"/research-engine/runs/{run_id}/resume")
+            assert first_resume.status_code == 200
+            first_stream = await client.get(f"/research-engine/runs/{run_id}/stream")
+            assert first_stream.status_code == 200
+            assert "event: run_paused" in first_stream.text
+            paused_data = next(
+                line.removeprefix("data: ")
+                for line in first_stream.text.splitlines()
+                if line.startswith("data: ") and '"event": "run_paused"' in line
+            )
+            paused_event = json.loads(paused_data)
+            assert paused_event["context"]["verification"]["passed"] is False
+            assert (
+                paused_event["context"]["verification"]["continued_after_failure"]
+                is True
+            )
+
+            second_resume = await client.post(f"/research-engine/runs/{run_id}/resume")
+            assert second_resume.status_code == 200
+            completed_stream = await client.get(
+                f"/research-engine/runs/{run_id}/stream"
+            )
+            assert completed_stream.status_code == 200
+            assert "event: run_complete" in completed_stream.text
+
+        async with factory() as db:
+            run = await db.get(ResearchRun, run_id)
+            assert run is not None
+            assert run.status == "completed"
+            assert run.total_tokens == 23
+            assert run.reproducibility_manifest["continued_after_failure"] is True
+            assert (
+                run.reproducibility_manifest["continued_after_failure_step_index"] == 1
+            )
+            persisted = (
+                (
+                    await db.execute(
+                        select(ResearchStep)
+                        .where(ResearchStep.run_id == run_id)
+                        .order_by(ResearchStep.step_index.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert [item.step_index for item in persisted] == [0, 1, 2, 3]
+            export_step = persisted[-1]
+            assert export_step.output["stage_type"] == "export"
+            assert export_step.output["format"] == "markdown"
+            assert (
+                "continued after a failed quality check"
+                in export_step.output["markdown"]
+            )
+
+            report = await ExportService().export_json(run_id, db)
+            assert report["verification"]["passed"] is False
+            assert report["verification"]["continued_after_failure"] is True
+            assert report["continued_after_failure"] is True
+            assert "continued after a failed quality check" in report["markdown"]
+
+
+async def test_paid_reduction_parse_failure_persists_usage_hashes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    source_id = "source-stable-accounting"
+    quote = "Synthetic evidence quote."
+    search = _search_envelope(source_id)
+    search["source_records"][0].update(
+        {"abstract": quote, "evidence_level": "abstract"}
+    )
+    extraction = {
+        "contract_version": 1,
+        "stage_type": "extract",
+        "usage": {"model_calls": 1, "total_tokens": 5, "batches": []},
+        "extractions": [
+            {
+                "source_id": source_id,
+                "part_id": "p0001",
+                "claims": [
+                    {
+                        "claim_text": f"Finding {index}",
+                        "evidence_id": f"e{index:04d}",
+                        "quote": quote,
+                        "confidence": 0.9,
+                        "page_reference": None,
+                    }
+                    for index in range(1, 66)
+                ],
+            }
+        ],
+        "processing_coverage": {"1": {"complete": True}},
+    }
+    steps = [
+        {"type": "search", "name": "Search", "params": {"contract_version": 1}},
+        {"type": "extract", "name": "Extract", "params": {"contract_version": 1}},
+        {"type": "verify", "name": "Verify", "params": {"contract_version": 1}},
+        {
+            "type": "synthesize",
+            "name": "Synthesize",
+            "model_id": "test-model",
+            "params": {"contract_version": 1},
+        },
+        {"type": "export", "name": "Export", "params": {"contract_version": 1}},
+    ]
+    async with _research_schema(dsn) as factory:
+        owner_id, run_id = await _seed_run(
+            factory,
+            steps=steps,
+            persisted_outputs=[search, extraction, _verification_envelope()],
+            total_tokens=23,
+        )
+        provider = _InvalidReductionProvider()
+        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        monkeypatch.setattr(
+            "src.api.research_engine.runs._build_connectors", lambda **_: {}
+        )
+        monkeypatch.setattr(
+            "src.api.research_engine.runs._build_providers",
+            lambda _steps: {"test-model": provider},
+        )
+
+        async def admitted(**_: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(
+            "src.api.research_engine.runs.admit_expensive_work", admitted
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resumed = await client.post(f"/research-engine/runs/{run_id}/resume")
+            assert resumed.status_code == 200
+            streamed = await client.get(f"/research-engine/runs/{run_id}/stream")
+            assert streamed.status_code == 200
+            assert streamed.text.count("event: step_error") == 1
+            assert "event: run_failed" in streamed.text
+
+        assert len(provider.requests) == 2
+        async with factory() as db:
+            run = await db.get(ResearchRun, run_id)
+            assert run is not None
+            assert run.status == "failed"
+            assert run.total_tokens == 143
+            manifest = cast(dict[str, Any], run.reproducibility_manifest)
+            errors = manifest["execution_errors"]
+            assert len(errors) == 1
+            error = errors[0]
+            assert error["step_index"] == 3
+            assert error["model_calls"] == 2
+            assert error["consumed_tokens"] == 120
+            hashes = error["batch_metadata"]
+            assert len(hashes) == 2
+            assert all(item["input_hash"] and item["output_hash"] for item in hashes)
+
+
+async def test_timeout_after_paid_batch_persists_usage_and_hash_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    source_records = [
+        {
+            "source_id": f"source-{index}",
+            "title": f"Persisted source {index}",
+            "abstract": "Synthetic evidence sentence.",
+            "evidence_level": "abstract",
+        }
+        for index in range(10)
+    ]
+    search = _search_envelope(source_records[0]["source_id"])
+    search["source_records"] = source_records
+    search["selected_sources"] = [item["source_id"] for item in source_records]
+    steps = [
+        {"type": "search", "name": "Search", "params": {"contract_version": 1}},
+        {"type": "verify", "name": "Prior Verify", "params": {"contract_version": 1}},
+        {
+            "type": "extract",
+            "name": "Extract",
+            "model_id": "test-model",
+            "params": {
+                "contract_version": 1,
+                "output_kind": "claims",
+            },
+        },
+    ]
+    async with _research_schema(dsn) as factory:
+        owner_id, run_id = await _seed_run(
+            factory,
+            steps=steps,
+            persisted_outputs=[search, _verification_envelope()],
+            total_tokens=23,
+        )
+        provider = _SlowSecondBatchProvider()
+        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        monkeypatch.setattr(
+            "src.api.research_engine.runs._build_connectors", lambda **_: {}
+        )
+        monkeypatch.setattr(
+            "src.api.research_engine.runs._build_providers",
+            lambda _steps: {"test-model": provider},
+        )
+
+        class ShortTimeoutEngine(WorkflowEngine):
+            def __init__(self, step_executor: Any) -> None:
+                super().__init__(step_executor, max_wall_time_seconds=0.25)
+
+        monkeypatch.setattr(
+            "src.api.research_engine.runs.WorkflowEngine", ShortTimeoutEngine
+        )
+
+        async def admitted(**_: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(
+            "src.api.research_engine.runs.admit_expensive_work", admitted
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resumed = await client.post(f"/research-engine/runs/{run_id}/resume")
+            assert resumed.status_code == 200
+            streamed = await client.get(f"/research-engine/runs/{run_id}/stream")
+            assert streamed.status_code == 200
+            assert streamed.text.count("event: step_error") == 1
+            assert "event: run_failed" in streamed.text
+
+        assert len(provider.requests) == 2
+        async with factory() as db:
+            run = await db.get(ResearchRun, run_id)
+            assert run is not None
+            assert run.status == "failed"
+            assert run.total_tokens == 83
+            errors = run.reproducibility_manifest["execution_errors"]
+            assert len(errors) == 1
+            error = errors[0]
+            assert error["step_index"] == 2
+            assert error["model_calls"] == 1
+            assert error["consumed_tokens"] == 60
+            hashes = error["batch_metadata"]
+            assert len(hashes) == 1
+            assert hashes[0]["input_hash"] and hashes[0]["output_hash"]
 
 
 async def test_persisted_resume_losing_stream_returns_conflict_without_execution(

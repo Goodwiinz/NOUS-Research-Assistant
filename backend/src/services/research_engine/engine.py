@@ -235,6 +235,7 @@ class WorkflowEngine:
                         "step_id": step_id,
                         "reason": "Quality check failed",
                         "quality_marks": quality_marks_data,
+                        "context": context,
                     }
                     return
 

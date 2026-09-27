@@ -528,8 +528,11 @@ async def stream_run(
             )
         ]
         if failed_quality_steps:
-            failed_step_index = max(
-                int(item.step_index) for item in failed_quality_steps
+            persisted_failure_index = manifest.get("continued_after_failure_step_index")
+            failed_step_index = (
+                persisted_failure_index
+                if type(persisted_failure_index) is int
+                else min(int(item.step_index) for item in failed_quality_steps)
             )
             manifest[_CONTINUED_AFTER_FAILURE_KEY] = True
             manifest["continued_after_failure_step_index"] = failed_step_index

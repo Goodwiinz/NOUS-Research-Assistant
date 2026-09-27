@@ -81,6 +81,8 @@ def build_prompt_batches(
     records: list[dict[str, Any]],
     fixed_context: dict[str, Any],
     max_bytes: int = MAX_PROMPT_BYTES,
+    *,
+    structured_records: bool = False,
 ) -> list[dict[str, Any]]:
     """Pack projected evidence records under a combined UTF-8 request ceiling.
 
@@ -120,27 +122,75 @@ def build_prompt_batches(
                 "source_id": source_id,
                 "title": str(title),
                 "evidence_level": str(evidence_level),
-                "part_id": "p0001",
+                "part_id": (
+                    original.get("part_id")
+                    if isinstance(original.get("part_id"), str)
+                    else "p0001"
+                ),
                 "text": text,
             }
         )
 
     parts: list[dict[str, Any]] = []
-    for record in projected:
-        if _request_bytes([record], fixed_context) <= max_bytes:
-            parts.append(record)
-        else:
-            parts.extend(_split_record(record, fixed_context, max_bytes))
+    if structured_records:
+        for record in projected:
+            try:
+                decoded = json.loads(record["text"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    "structured evidence record is malformed JSON"
+                ) from exc
+            values = decoded if isinstance(decoded, list) else [decoded]
+            if not values or any(not isinstance(value, dict) for value in values):
+                raise ValueError("structured evidence records must be JSON objects")
+
+            # Structured evidence and claims are indivisible. Array payloads can
+            # be grouped at object boundaries; an individual oversized object
+            # fails before the first provider request.
+            group: list[dict[str, Any]] = []
+            for value in values:
+                candidate_group = group + [value]
+                structured_candidate = {
+                    **record,
+                    "text": _compact_json(
+                        candidate_group if isinstance(decoded, list) else value
+                    ),
+                }
+                if _request_bytes([structured_candidate], fixed_context) <= max_bytes:
+                    group = candidate_group
+                    continue
+                if group:
+                    parts.append(candidate_for_group(record, group))
+                    group = []
+                    structured_candidate = {
+                        **record,
+                        "text": _compact_json(
+                            [value] if isinstance(decoded, list) else value
+                        ),
+                    }
+                if _request_bytes([structured_candidate], fixed_context) > max_bytes:
+                    raise ValueError(
+                        "oversized structured evidence/claim object exceeds UTF-8 byte limit"
+                    )
+                group = [value]
+            if group:
+                parts.append(candidate_for_group(record, group))
+    else:
+        for record in projected:
+            if _request_bytes([record], fixed_context) <= max_bytes:
+                parts.append(record)
+            else:
+                parts.extend(_split_record(record, fixed_context, max_bytes))
 
     batches: list[dict[str, Any]] = []
     current: list[dict[str, Any]] = []
     for record in parts:
-        candidate = current + [record]
+        batch_candidate = current + [record]
         if (
-            len(candidate) <= MAX_PARTS_PER_BATCH
-            and _request_bytes(candidate, fixed_context) <= max_bytes
+            len(batch_candidate) <= MAX_PARTS_PER_BATCH
+            and _request_bytes(batch_candidate, fixed_context) <= max_bytes
         ):
-            current = candidate
+            current = batch_candidate
             continue
         if not current:
             raise ValueError(
@@ -155,6 +205,18 @@ def build_prompt_batches(
     if current:
         batches.append(_make_batch(current, fixed_context, len(batches)))
     return batches
+
+
+def candidate_for_group(
+    record: dict[str, Any],
+    values: list[dict[str, Any]],
+) -> dict[str, Any]:
+    decoded_was_array = json.loads(record["text"])
+    text_value: Any = values if isinstance(decoded_was_array, list) else values[0]
+    return {
+        **record,
+        "text": _compact_json(text_value),
+    }
 
 
 def _make_batch(

@@ -1,6 +1,6 @@
 """Export service for research engine results."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -151,6 +151,17 @@ class ExportService:
             # Existing immutable legacy rows may have gaps and remain readable.
             typed_context = {}
         report = build_report(typed_context)
+        manifest: Dict[str, Any] = (
+            cast(Dict[str, Any], run.reproducibility_manifest) or {}
+        )
+        if manifest.get("continued_after_failure"):
+            verification = report.get("verification")
+            if not isinstance(verification, dict):
+                verification = {"available": False, "passed": False}
+            verification["passed"] = False
+            verification["continued_after_failure"] = True
+            report["verification"] = verification
+            report["continued_after_failure"] = True
         report["markdown"] = render_markdown(report)
         # Preserve the established export fields while adding typed evidence
         # and verification projections.
@@ -209,4 +220,4 @@ class ExportService:
         if run.reproducibility_manifest is None:
             raise ValueError(f"Research run {run_id} has no reproducibility manifest")
 
-        return run.reproducibility_manifest
+        return cast(Dict[str, Any], run.reproducibility_manifest)
