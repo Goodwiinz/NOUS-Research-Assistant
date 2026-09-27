@@ -4580,6 +4580,150 @@
         "title": "DocumentType",
         "type": "string"
       },
+      "DraftReviewListResponse": {
+        "properties": {
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/DraftReviewResponse"
+            },
+            "title": "Reviews",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reviews"
+        ],
+        "title": "DraftReviewListResponse",
+        "type": "object"
+      },
+      "DraftReviewPayload": {
+        "properties": {
+          "claims": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "title": "Coverage",
+            "type": "object"
+          },
+          "docs_checked": {
+            "default": 0,
+            "title": "Docs Checked",
+            "type": "integer"
+          },
+          "docs_skipped": {
+            "default": 0,
+            "title": "Docs Skipped",
+            "type": "integer"
+          },
+          "duration_ms": {
+            "default": 0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "fully_verified": {
+            "default": false,
+            "title": "Fully Verified",
+            "type": "boolean"
+          },
+          "summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Summary",
+            "type": "object"
+          },
+          "uncited_assertions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Uncited Assertions",
+            "type": "array"
+          },
+          "verdicts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Verdicts",
+            "type": "array"
+          }
+        },
+        "title": "DraftReviewPayload",
+        "type": "object"
+      },
+      "DraftReviewResponse": {
+        "properties": {
+          "base_draft_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Draft Id"
+          },
+          "candidate_content": {
+            "title": "Candidate Content",
+            "type": "string"
+          },
+          "candidate_content_hash": {
+            "title": "Candidate Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "review": {
+            "$ref": "#/components/schemas/DraftReviewPayload"
+          },
+          "source_document_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Source Document Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "candidate_content_hash",
+          "candidate_content",
+          "source_document_ids",
+          "review",
+          "outcome",
+          "created_at"
+        ],
+        "title": "DraftReviewResponse",
+        "type": "object"
+      },
       "DuplicateCheckRequest": {
         "properties": {
           "sha256": {
@@ -8140,6 +8284,21 @@
           "updated_at"
         ],
         "title": "ProjectDetailResponse",
+        "type": "object"
+      },
+      "ProjectLink": {
+        "description": "One-time explicit link to an existing canonical Collection.",
+        "properties": {
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection_id"
+        ],
+        "title": "ProjectLink",
         "type": "object"
       },
       "ProjectListResponse": {
@@ -14542,6 +14701,18 @@
       "src__schemas__research_engine__ProjectCreate": {
         "description": "Schema for creating a research project.",
         "properties": {
+          "collection_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Id"
+          },
           "description": {
             "anyOf": [
               {
@@ -14574,6 +14745,18 @@
       "src__schemas__research_engine__ProjectResponse": {
         "description": "Schema for project API responses.",
         "properties": {
+          "collection_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Id"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -28662,6 +28845,67 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/drafts/reviews": {
+      "get": {
+        "description": "List durable candidate reviews, including blocked candidates.",
+        "operationId": "list_draft_reviews_api_v1_projects__project_id__drafts_reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReviewListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Draft Reviews",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/drafts/status": {
       "get": {
         "description": "Get generation status for a task or the latest project generation.",
@@ -31278,6 +31522,65 @@
           }
         ],
         "summary": "Get Project",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/collection": {
+      "patch": {
+        "description": "Owner-only, one-time explicit mapping for a historical engine project.",
+        "operationId": "link_project_collection_api_v1_research_engine_projects__project_id__collection_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectLink"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/src__schemas__research_engine__ProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Link Project Collection",
         "tags": [
           "research-engine"
         ]

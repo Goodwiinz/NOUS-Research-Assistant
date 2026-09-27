@@ -4,6 +4,7 @@ import {
   listProjects,
   createProject,
   getProject,
+  linkProject,
   listTemplates,
   createBlueprint,
   getBlueprint,
@@ -21,6 +22,7 @@ vi.mock('../api-client', () => ({
   api: {
     get: vi.fn(),
     post: vi.fn(),
+    patch: vi.fn(),
   },
 }));
 
@@ -55,6 +57,17 @@ describe('researchEngineService', () => {
       mockApi.get.mockResolvedValue({ id: 'p1' });
       await getProject('p1');
       expect(mockApi.get).toHaveBeenCalledWith(`${BASE}/projects/p1`);
+    });
+  });
+
+  describe('linkProject', () => {
+    it('links an engine project to the canonical collection id', async () => {
+      mockApi.patch.mockResolvedValue({ id: 'p1', collection_id: 'c1' });
+      await linkProject('p1', 'c1');
+      expect(mockApi.patch).toHaveBeenCalledWith(
+        `${BASE}/projects/p1/collection`,
+        { collection_id: 'c1' }
+      );
     });
   });
 

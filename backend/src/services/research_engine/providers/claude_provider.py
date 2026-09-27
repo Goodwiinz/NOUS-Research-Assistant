@@ -60,7 +60,7 @@ class ClaudeProvider(LLMProvider):
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             temperature=request.temperature,
-            seed=request.seed,
+            seed=None,
         )
 
     async def is_model_available(self) -> bool:

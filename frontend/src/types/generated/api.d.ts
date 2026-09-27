@@ -4805,6 +4805,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/drafts/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Draft Reviews
+         * @description List durable candidate reviews, including blocked candidates.
+         */
+        get: operations["list_draft_reviews_api_v1_projects__project_id__drafts_reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/drafts/status": {
         parameters: {
             query?: never;
@@ -5629,6 +5649,26 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/collection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Link Project Collection
+         * @description Owner-only, one-time explicit mapping for a historical engine project.
+         */
+        patch: operations["link_project_collection_api_v1_research_engine_projects__project_id__collection_patch"];
         trace?: never;
     };
     "/api/v1/research-engine/runs/{run_id}": {
@@ -10323,6 +10363,83 @@ export interface components {
          * @enum {string}
          */
         DocumentType: "text" | "image" | "audio" | "video" | "pdf" | "spreadsheet" | "presentation" | "multimodal";
+        /** DraftReviewListResponse */
+        DraftReviewListResponse: {
+            /** Reviews */
+            reviews: components["schemas"]["DraftReviewResponse"][];
+        };
+        /** DraftReviewPayload */
+        DraftReviewPayload: {
+            /** Claims */
+            claims?: {
+                [key: string]: unknown;
+            }[];
+            /** Coverage */
+            coverage?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Docs Checked
+             * @default 0
+             */
+            docs_checked: number;
+            /**
+             * Docs Skipped
+             * @default 0
+             */
+            docs_skipped: number;
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /**
+             * Fully Verified
+             * @default false
+             */
+            fully_verified: boolean;
+            /** Summary */
+            summary?: {
+                [key: string]: number;
+            };
+            /** Uncited Assertions */
+            uncited_assertions?: {
+                [key: string]: unknown;
+            }[];
+            /** Verdicts */
+            verdicts?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** DraftReviewResponse */
+        DraftReviewResponse: {
+            /** Base Draft Id */
+            base_draft_id?: string | null;
+            /** Candidate Content */
+            candidate_content: string;
+            /** Candidate Content Hash */
+            candidate_content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Outcome */
+            outcome: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            review: components["schemas"]["DraftReviewPayload"];
+            /** Source Document Ids */
+            source_document_ids: string[];
+        };
         /** DuplicateCheckRequest */
         DuplicateCheckRequest: {
             /**
@@ -12008,6 +12125,17 @@ export interface components {
              * Format: uuid
              */
             workspace_id: string;
+        };
+        /**
+         * ProjectLink
+         * @description One-time explicit link to an existing canonical Collection.
+         */
+        ProjectLink: {
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
         };
         /**
          * ProjectListResponse
@@ -14859,6 +14987,8 @@ export interface components {
          * @description Schema for creating a research project.
          */
         src__schemas__research_engine__ProjectCreate: {
+            /** Collection Id */
+            collection_id?: string | null;
             /** Description */
             description?: string | null;
             /** Name */
@@ -14873,6 +15003,8 @@ export interface components {
          * @description Schema for project API responses.
          */
         src__schemas__research_engine__ProjectResponse: {
+            /** Collection Id */
+            collection_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -22881,6 +23013,39 @@ export interface operations {
             };
         };
     };
+    list_draft_reviews_api_v1_projects__project_id__drafts_reviews_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftReviewListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_generation_status_api_v1_projects__project_id__drafts_status_get: {
         parameters: {
             query?: {
@@ -24396,6 +24561,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["src__schemas__research_engine__ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_project_collection_api_v1_research_engine_projects__project_id__collection_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectLink"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

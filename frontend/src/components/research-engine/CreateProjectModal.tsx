@@ -1,8 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Loader2, X } from 'lucide-react';
 import { createProject } from '@/services/researchEngineService';
+import { projectService } from '@/services/projectService';
 
 export interface CreateProjectModalProps {
   isOpen: boolean;
@@ -17,14 +19,23 @@ export function CreateProjectModal({
 }: CreateProjectModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [collectionId, setCollectionId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const { data: collections = [] } = useQuery({
+    queryKey: ['projects', 'research-engine-link-options'],
+    queryFn: async () =>
+      (await projectService.listProjects({ limit: 200 })).projects,
+    enabled: isOpen,
+  });
 
   if (!isOpen) return null;
 
   const reset = () => {
     setName('');
     setDescription('');
+    setCollectionId('');
     setError(null);
   };
 
@@ -42,6 +53,7 @@ export function CreateProjectModal({
       await createProject({
         name: name.trim(),
         description: description.trim() || undefined,
+        collection_id: collectionId || undefined,
       });
       reset();
       onClose();
@@ -76,6 +88,27 @@ export function CreateProjectModal({
         )}
 
         <div className="space-y-4">
+          <div>
+            <label
+              htmlFor="engine-project-collection"
+              className="block text-xs text-muted-foreground font-mono uppercase tracking-wide mb-1"
+            >
+              Existing project
+            </label>
+            <select
+              id="engine-project-collection"
+              value={collectionId}
+              onChange={(event) => setCollectionId(event.target.value)}
+              className="w-full px-3 py-2 bg-muted border border-border rounded text-sm text-foreground"
+            >
+              <option value="">No linked project</option>
+              {collections.map((collection) => (
+                <option key={collection.id} value={collection.id}>
+                  {collection.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <div>
             <label className="block text-xs text-muted-foreground font-mono uppercase tracking-wide mb-1">
               Project Name *

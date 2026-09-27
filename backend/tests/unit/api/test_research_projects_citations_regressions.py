@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api.research import citations as citations_api
+from src.api.research import drafts as drafts_api
 from src.api.research import projects as projects_api
 
 
@@ -32,6 +33,25 @@ def _make_user():
     return SimpleNamespace(
         id=uuid4(), organization_id=uuid4(), email="owner@example.com"
     )
+
+
+@pytest.mark.asyncio
+async def test_draft_review_access_rejects_deleted_workspace() -> None:
+    statements = []
+    db = AsyncMock()
+
+    async def execute(statement):
+        statements.append(str(statement).lower())
+        return _result(scalar=None)
+
+    db.execute = AsyncMock(side_effect=execute)
+    with pytest.raises(HTTPException) as exc:
+        await drafts_api.list_draft_reviews(
+            project_id=uuid4(), current_user=_make_user(), db=db, limit=20
+        )
+
+    assert exc.value.status_code == 404
+    assert "workspaces.is_deleted IS false".lower() in statements[0]
 
 
 def _make_document(**overrides):

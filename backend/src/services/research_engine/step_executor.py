@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from string import Template
@@ -58,6 +59,10 @@ class StepResult:
     inputs_hash: Optional[str] = None
     outputs_hash: Optional[str] = None
     full_prompt: Optional[str] = None
+    model_id: Optional[str] = None
+    model_version: Optional[str] = None
+    temperature: float = 0.0
+    seed: Optional[int] = None
 
 
 class StepExecutor:
@@ -224,6 +229,8 @@ class StepExecutor:
 
         response: LLMResponse = await provider.complete(request)
 
+        # full_prompt stores the exact permitted inputs needed to verify this
+        # digest. Older rows may contain only the system-prompt string.
         inputs_hash = hashlib.sha256(
             (request.prompt + (request.system_prompt or "")).encode()
         ).hexdigest()
@@ -234,5 +241,12 @@ class StepExecutor:
             token_count=response.total_tokens,
             inputs_hash=inputs_hash,
             outputs_hash=outputs_hash,
-            full_prompt=system_prompt,
+            full_prompt=json.dumps(
+                {"prompt": request.prompt, "system_prompt": request.system_prompt},
+                separators=(",", ":"),
+            ),
+            model_id=response.model_id,
+            model_version=response.model_version,
+            temperature=response.temperature,
+            seed=response.seed,
         )

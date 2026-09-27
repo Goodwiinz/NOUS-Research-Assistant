@@ -56,6 +56,7 @@ from .document_processing import (
 # isort to move imports across those boundaries.
 # isort: off
 from .draft_citation import DraftCitation
+from .draft_review import DraftReview
 
 # Encrypted user models
 from .encrypted_user import (
@@ -197,6 +198,7 @@ __all__ = [
     "ProjectSkillVersionScan",
     "GeneratedDraft",
     "DraftCitation",
+    "DraftReview",
     "ProjectThread",
     "ProjectThreadLinkType",
     # Permission and role models

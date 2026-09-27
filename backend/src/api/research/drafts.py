@@ -7,18 +7,20 @@ Security: All endpoints validate project ownership before granting access.
 
 import io
 import zipfile
-from typing import List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog import get_logger
 
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
-from src.models import Collection, Workspace
+from src.models import Collection, DraftReview, Workspace
 from src.models.user import User
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
@@ -27,6 +29,34 @@ from src.services.research.draft_generation_service import (
 
 logger = get_logger()
 router = APIRouter(prefix="/api/v1/projects/{project_id}/drafts", tags=["drafts"])
+
+
+class DraftReviewPayload(BaseModel):
+    verdicts: List[Dict[str, Any]] = Field(default_factory=list)
+    uncited_assertions: List[Dict[str, Any]] = Field(default_factory=list)
+    summary: Dict[str, int] = Field(default_factory=dict)
+    coverage: Dict[str, Any] = Field(default_factory=dict)
+    fully_verified: bool = False
+    claims: List[Dict[str, Any]] = Field(default_factory=list)
+    docs_checked: int = 0
+    docs_skipped: int = 0
+    duration_ms: int = 0
+
+
+class DraftReviewResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    base_draft_id: Optional[UUID] = None
+    candidate_content_hash: str
+    candidate_content: str
+    source_document_ids: List[UUID]
+    review: DraftReviewPayload
+    outcome: str
+    created_at: datetime
+
+
+class DraftReviewListResponse(BaseModel):
+    reviews: List[DraftReviewResponse]
 
 
 # ============================================================================
@@ -61,6 +91,7 @@ async def _validate_project_ownership(
                 Collection.id == project_id,
                 Workspace.owner_id == current_user.id,
                 Collection.is_deleted.is_(False),
+                Workspace.is_deleted.is_(False),
             )
         )
     )
@@ -143,6 +174,33 @@ async def generate_draft(
 # ============================================================================
 # Draft Listing (T080)
 # ============================================================================
+
+
+@router.get("/reviews", response_model=DraftReviewListResponse)
+async def list_draft_reviews(
+    project_id: UUID,
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List durable candidate reviews, including blocked candidates."""
+    await _validate_project_ownership(project_id, current_user, db)
+    reviews = list(
+        (
+            await db.execute(
+                select(DraftReview)
+                .where(
+                    DraftReview.project_id == project_id,
+                    DraftReview.is_deleted.is_(False),
+                )
+                .order_by(DraftReview.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {"reviews": [review.to_frontend_format() for review in reviews]}
 
 
 @router.get("")

@@ -1,13 +1,8 @@
 import { create } from 'zustand';
+import type { components } from '@/types/generated/api';
 
-export interface ResearchProject {
-  id: string;
-  name: string;
-  description?: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
+export type ResearchProject =
+  components['schemas']['src__schemas__research_engine__ProjectResponse'];
 
 export interface ResearchRun {
   id: string;

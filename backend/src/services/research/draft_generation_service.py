@@ -9,6 +9,7 @@ import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from uuid import UUID
 
@@ -23,8 +24,10 @@ from src.models.citation import Citation
 from src.models.collection import Collection
 from src.models.document import Document
 from src.models.draft_citation import DraftCitation
+from src.models.draft_review import DraftReview
 from src.models.generated_draft import GeneratedDraft
 from src.services.agent.job_store import get_redis
+from src.services.research.bibliography_service import BibliographyService
 from src.services.research.evidence_selection import select_relevant_passages
 
 logger = structlog.get_logger(__name__)
@@ -351,6 +354,16 @@ class DraftGenerationService:
                 citation_review = await self._review_citations(
                     db, draft_content, documents
                 )
+                review_record = await self._persist_draft_review(
+                    db,
+                    project_id=project_id,
+                    content=draft_content,
+                    documents=documents,
+                    review=citation_review,
+                    cited_document_indices=[
+                        int(citation["citation_index"]) for citation in citations_data
+                    ],
+                )
                 self._require_passing_citation_review(
                     citation_review,
                     [int(citation["citation_index"]) for citation in citations_data],
@@ -403,6 +416,7 @@ class DraftGenerationService:
                         # generation is distinguishable from a real one.
                         **({"fallback_template": True} if used_fallback else {}),
                         "citation_review": citation_review,
+                        "citation_review_id": str(review_record.id),
                     },
                     is_current=True,
                 )
@@ -916,6 +930,17 @@ class DraftGenerationService:
         citation_review = await self._review_citations(
             self.db, revised_content, documents
         )
+        review_record = await self._persist_draft_review(
+            self.db,
+            project_id=project_id,
+            content=revised_content,
+            documents=documents,
+            review=citation_review,
+            cited_document_indices=[
+                int(citation["citation_index"]) for citation in citations_data
+            ],
+            base_draft_id=base.id,
+        )
         self._require_passing_citation_review(
             citation_review,
             [int(citation["citation_index"]) for citation in citations_data],
@@ -956,6 +981,7 @@ class DraftGenerationService:
                     "mode": mode,
                     "base_version": base.version,
                     "citation_review": citation_review,
+                    "citation_review_id": str(review_record.id),
                 },
                 is_current=False,
             )
@@ -1013,6 +1039,37 @@ class DraftGenerationService:
             content, documents
         )
 
+    @classmethod
+    async def _persist_draft_review(
+        cls,
+        db: AsyncSession,
+        *,
+        project_id: UUID,
+        content: str,
+        documents: List[Document],
+        review: Dict[str, Any],
+        cited_document_indices: List[int],
+        base_draft_id: Optional[UUID] = None,
+    ) -> DraftReview:
+        try:
+            cls._require_passing_citation_review(review, cited_document_indices)
+            outcome = "passed"
+        except ValueError:
+            outcome = "blocked"
+
+        record = DraftReview(
+            project_id=project_id,
+            base_draft_id=base_draft_id,
+            candidate_content_hash=hashlib.sha256(content.encode()).hexdigest(),
+            candidate_content=content,
+            source_document_ids=[str(document.id) for document in documents],
+            review=review,
+            outcome=outcome,
+        )
+        db.add(record)
+        await db.commit()
+        return record
+
     @staticmethod
     def _require_passing_citation_review(
         review: Dict[str, Any], cited_document_indices: List[int]
@@ -1022,6 +1079,16 @@ class DraftGenerationService:
             raise ValueError("Citation review did not return a usable result")
         if int(review.get("docs_skipped") or 0) > 0:
             raise ValueError("Citation review skipped cited documents")
+        coverage = review.get("coverage")
+        if isinstance(coverage, dict) and coverage.get("complete") is not True:
+            raise ValueError("Citation review did not cover every cited document")
+        uncited = review.get("uncited_assertions", [])
+        if not isinstance(uncited, list):
+            raise ValueError("Citation review returned invalid uncited assertions")
+        if uncited:
+            raise ValueError(
+                f"Citation review blocked persistence: {len(uncited)} uncited factual assertion(s)"
+            )
         verdicts = review.get("verdicts")
         expected_indices = set(cited_document_indices)
         if not isinstance(verdicts, list) or len(verdicts) != len(expected_indices):
@@ -1077,7 +1144,9 @@ class DraftGenerationService:
                 location = f"Page {page_number}"
             citation["context"] = (
                 f"Referenced as [Doc {citation['citation_index']}]; {location}; "
-                f"review={entry.get('verdict', 'unknown')}"
+                f"review={entry.get('verdict', 'unknown')}; "
+                "fully_verified="
+                f"{entry.get('verdict') == 'exact' and entry.get('checks', {}).get('identity', {}).get('status') == 'match' and entry.get('checks', {}).get('publication', {}).get('status') == 'clear'}"
             )
 
     @staticmethod
@@ -1551,6 +1620,10 @@ Key takeaways include the importance of continued investigation and the potentia
         """Get citations for a specific draft"""
         query = (
             select(DraftCitation)
+            .options(
+                selectinload(DraftCitation.citation),
+                selectinload(DraftCitation.document),
+            )
             .join(GeneratedDraft, DraftCitation.draft_id == GeneratedDraft.id)
             .where(
                 GeneratedDraft.project_id == project_id,
@@ -1733,14 +1806,27 @@ Key takeaways include the importance of continued investigation and the potentia
 
     def _generate_bib_entries(self, citations: List[DraftCitation]) -> str:
         """Generate BibTeX entries for citations"""
-        entries = []
+        canonical_citations = []
+        keys = []
         for c in citations:
-            title = self._latex_escape(str(c.snippet or "")[:100])
-            note = self._latex_escape(str(c.context or ""))
-            entry = f"""@misc{{doc{c.citation_index},
-  title = {{{title}}},
-  note = {{{note}}},
-}}
-"""
-            entries.append(entry)
-        return "\n".join(entries)
+            if c.citation is not None:
+                canonical = c.citation
+            else:
+                document = c.document
+                metadata = document.document_metadata or {} if document else {}
+                canonical = SimpleNamespace(
+                    document_title=document.title if document else None,
+                    authors=metadata.get("authors"),
+                    year=metadata.get("year"),
+                    venue=metadata.get("venue"),
+                    doi=metadata.get("doi") or metadata.get("DOI"),
+                    arxiv_id=(
+                        metadata.get("arxiv_id")
+                        or (document.arxiv_id if document else None)
+                    ),
+                    abstract=metadata.get("abstract"),
+                )
+            canonical_citations.append(canonical)
+            keys.append(f"doc{c.citation_index}")
+
+        return BibliographyService.format_bibtex(canonical_citations, keys=keys)
