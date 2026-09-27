@@ -17,6 +17,10 @@ from src.models.research_run import ResearchRun
 from src.models.research_stage_review import ResearchStageReview
 from src.models.research_step import ResearchStep
 from src.schemas.research_engine import (
+    MAX_NESTED_PAYLOAD_BYTES,
+    MAX_PENDING_REVIEW_OUTPUT_BYTES,
+    MAX_REVIEW_ITEMS,
+    MAX_REVIEW_SAFE_FIELD_CHARS,
     ExtractionReviewDecisionPayload,
     PendingReviewResponse,
     ReviewDecision,
@@ -26,6 +30,7 @@ from src.schemas.research_engine import (
     ScreeningReviewDecisionPayload,
     StageReviewRequest,
     StageReviewResponse,
+    serialized_payload_size,
 )
 from src.services.research_engine.contracts import (
     canonical_json_sha256,
@@ -103,12 +108,81 @@ class ResearchReviewService:
         return PendingReviewResponse(
             pending=True,
             descriptor=descriptor,
-            stage_output=output,
+            stage_output=self._pending_stage_output(output),
             accepted_review=(
                 self._response(accepted, replay=True) if accepted is not None else None
             ),
             validation=validation,
         )
+
+    @classmethod
+    def _pending_stage_output(cls, output: Mapping[str, Any]) -> dict[str, Any]:
+        """Project oversized output to the complete ordered review identity set."""
+
+        copied = copy.deepcopy(dict(output))
+        if serialized_payload_size(copied) <= MAX_NESTED_PAYLOAD_BYTES:
+            return copied
+
+        stage_type = output.get("stage_type")
+        collection_key = (
+            {
+                "screen": "screening",
+                "extract": "extractions",
+            }.get(stage_type)
+            if isinstance(stage_type, str)
+            else None
+        )
+        projected: dict[str, Any] = {
+            "contract_version": output.get("contract_version"),
+            "stage_type": stage_type,
+            "review_projection": {
+                "projected": True,
+                "truncated": True,
+                "identity_complete": True,
+            },
+        }
+        if collection_key is not None:
+            records = output.get(collection_key)
+            if not isinstance(records, list) or len(records) > MAX_REVIEW_ITEMS:
+                raise cls._review_required()
+            projected_items: list[dict[str, Any]] = []
+            for record in records:
+                if not isinstance(record, dict):
+                    raise cls._review_required()
+                source_id = record.get("source_id")
+                part_id = record.get("part_id")
+                if not isinstance(source_id, str) or not isinstance(part_id, str):
+                    raise cls._review_required()
+                item: dict[str, Any] = {
+                    "source_id": source_id,
+                    "part_id": part_id,
+                }
+                evidence_level = record.get("evidence_level")
+                if (
+                    isinstance(evidence_level, str)
+                    and len(evidence_level) <= MAX_REVIEW_SAFE_FIELD_CHARS
+                ):
+                    item["evidence_level"] = evidence_level
+                included = record.get("included")
+                if isinstance(included, bool):
+                    item["included"] = included
+                projected_items.append(item)
+            projected[collection_key] = projected_items
+        elif stage_type == "export":
+            for field in (
+                "format",
+                "verification_output_hash",
+                "report_hash",
+            ):
+                field_value = output.get(field)
+                if isinstance(field_value, str):
+                    projected[field] = field_value
+        else:
+            raise cls._review_required()
+
+        if serialized_payload_size(projected) > MAX_PENDING_REVIEW_OUTPUT_BYTES:
+            raise cls._review_required()
+        return projected
 
     async def submit_review(
         self,
@@ -164,7 +238,13 @@ class ResearchReviewService:
         canonical: _CanonicalDecision,
     ) -> StageReviewResponse:
         async with self.session.begin():
-            run = await self._load_owned_run(run_id, owner_id, lock=True)
+            shared_lock = request.decision == ReviewDecision.DECLINE
+            run = await self._load_owned_run(
+                run_id,
+                owner_id,
+                lock=True,
+                shared=shared_lock,
+            )
             pending = self._pending_mapping(run)
             if pending is None or run.status != "paused":
                 raise self._review_required()
@@ -173,7 +253,12 @@ class ResearchReviewService:
             if descriptor_index != step_index:
                 raise self._review_required()
             persisted_run_id = cast(UUID, run.id)
-            step = await self._load_step(persisted_run_id, step_index, lock=True)
+            step = await self._load_step(
+                persisted_run_id,
+                step_index,
+                lock=True,
+                shared=shared_lock,
+            )
             if step is None or not isinstance(step.output, dict):
                 raise self._review_required()
 
@@ -203,6 +288,7 @@ class ResearchReviewService:
                 output_hash=output_hash,
                 review_kind=request.review_kind.value,
                 lock=True,
+                shared=shared_lock,
             )
             if existing is not None:
                 return self._resolve_existing(existing, canonical)
@@ -308,7 +394,12 @@ class ResearchReviewService:
         return projected
 
     async def _load_owned_run(
-        self, run_id: UUID, owner_id: UUID, *, lock: bool
+        self,
+        run_id: UUID,
+        owner_id: UUID,
+        *,
+        lock: bool,
+        shared: bool = False,
     ) -> ResearchRun:
         statement = (
             select(ResearchRun)
@@ -327,7 +418,7 @@ class ResearchReviewService:
             )
         )
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(read=shared)
         result = await self.session.execute(statement)
         run = result.scalars().first()
         if run is None:
@@ -339,14 +430,19 @@ class ResearchReviewService:
         return run
 
     async def _load_step(
-        self, run_id: UUID, step_index: int, *, lock: bool
+        self,
+        run_id: UUID,
+        step_index: int,
+        *,
+        lock: bool,
+        shared: bool = False,
     ) -> ResearchStep | None:
         statement = select(ResearchStep).where(
             cast(Any, ResearchStep.run_id) == run_id,
             cast(Any, ResearchStep.step_index) == step_index,
         )
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(read=shared)
         result = await self.session.execute(statement)
         return result.scalars().first()
 
@@ -358,6 +454,7 @@ class ResearchReviewService:
         output_hash: str,
         review_kind: str,
         lock: bool,
+        shared: bool = False,
     ) -> ResearchStageReview | None:
         statement = select(ResearchStageReview).where(
             ResearchStageReview.run_id == run_id,
@@ -366,7 +463,7 @@ class ResearchReviewService:
             ResearchStageReview.review_kind == review_kind,
         )
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(read=shared)
         result = await self.session.execute(statement)
         return result.scalars().first()
 

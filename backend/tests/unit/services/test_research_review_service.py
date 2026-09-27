@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import AsyncIterator
 from importlib import import_module
 from types import ModuleType
@@ -753,6 +754,170 @@ async def test_decline_is_durable_and_keeps_run_paused(
     assert run.reproducibility_manifest["pending_review"]["status"] == "pending"
     stored = await db.scalar(select(ResearchStageReview))
     assert stored is not None and stored.decision == "decline"
+
+
+@pytest.mark.asyncio
+async def test_extraction_decline_accepts_an_all_unresolved_exact_set(
+    db: AsyncSession,
+) -> None:
+    output = _extract_output()
+    owner_id, organization_id, run, step = await _seed_gate(
+        db, output=output, review_kind="extraction", step_index=2
+    )
+    payload: dict[str, object] = {
+        "items": [
+            {
+                "source_id": "source-a",
+                "part_id": "p0001",
+                "decision": "unresolved",
+            },
+            {
+                "source_id": "source-b",
+                "part_id": "p0002",
+                "decision": "unresolved",
+            },
+        ]
+    }
+    request = _request(
+        kind="extraction",
+        output_hash=canonical_stage_output_hash(output),
+        payload=payload,
+        decision="decline",
+    )
+
+    assert isinstance(
+        request.decision_payload,
+        _schemas().ExtractionReviewDecisionPayload,
+    )
+    response = (
+        await _review_module()
+        .ResearchReviewService(db)
+        .submit_review(
+            run_id=run.id,
+            step_index=step.step_index,
+            owner_id=owner_id,
+            organization_id=organization_id,
+            reviewer_id=owner_id,
+            request=request,
+        )
+    )
+
+    await db.refresh(run)
+    assert response.decision.value == "decline"
+    assert response.decision_payload == payload
+    assert run.reproducibility_manifest["pending_review"]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_pending_large_output_projects_every_ordered_identity_within_bound(
+    db: AsyncSession,
+) -> None:
+    identities = [(f"source-{index:03d}", f"p{index:04d}") for index in range(40)]
+    output = {
+        "contract_version": 1,
+        "stage_type": "extract",
+        "usage": _usage(),
+        "extractions": [
+            {
+                "source_id": source_id,
+                "part_id": part_id,
+                "evidence_level": "full_text",
+                "data": {"sensitive_text": "x" * 1200},
+                "evidence": [{"quote": "q" * 1200}],
+            }
+            for source_id, part_id in identities
+        ],
+        "processing_coverage": {},
+    }
+    assert len(json.dumps(output).encode("utf-8")) > 32 * 1024
+    original = copy.deepcopy(output)
+    owner_id, _organization_id, run, step = await _seed_gate(
+        db, output=output, review_kind="extraction", step_index=2
+    )
+
+    pending = (
+        await _review_module()
+        .ResearchReviewService(db)
+        .get_pending_review(
+            run_id=run.id,
+            owner_id=owner_id,
+        )
+    )
+
+    assert pending.stage_output is not None
+    projection = pending.stage_output
+    assert projection["review_projection"] == {
+        "projected": True,
+        "truncated": True,
+        "identity_complete": True,
+    }
+    projected_items = projection["extractions"]
+    assert [
+        (item["source_id"], item["part_id"]) for item in projected_items
+    ] == identities
+    assert all(item["evidence_level"] == "full_text" for item in projected_items)
+    assert "sensitive_text" not in json.dumps(projection)
+    assert len(json.dumps(projection).encode("utf-8")) <= 32 * 1024
+    await db.refresh(step)
+    assert step.output == original
+
+
+@pytest.mark.asyncio
+async def test_pending_projection_covers_200_near_worst_case_identities(
+    db: AsyncSession,
+) -> None:
+    identities = [
+        (
+            f"s{index:03d}-" + ("s" * 507),
+            f"p{index:03d}-" + ("p" * 507),
+        )
+        for index in range(200)
+    ]
+    assert all(len(source_id) == 512 for source_id, _part_id in identities)
+    assert all(len(part_id) == 512 for _source_id, part_id in identities)
+    output = {
+        "contract_version": 1,
+        "stage_type": "screen",
+        "usage": _usage(),
+        "screening": [
+            {
+                "source_id": source_id,
+                "part_id": part_id,
+                "included": index % 2 == 0,
+                "evidence_level": "full_text",
+                "reason": "private model rationale " + ("r" * 512),
+            }
+            for index, (source_id, part_id) in enumerate(identities)
+        ],
+        "included_source_ids": [source_id for source_id, _part_id in identities],
+        "processing_coverage": {"private": "c" * 4096},
+    }
+    owner_id, _organization_id, run, _step = await _seed_gate(
+        db,
+        output=output,
+        review_kind="screening",
+        step_index=1,
+    )
+
+    pending = (
+        await _review_module()
+        .ResearchReviewService(db)
+        .get_pending_review(
+            run_id=run.id,
+            owner_id=owner_id,
+        )
+    )
+
+    assert pending.stage_output is not None
+    projection = pending.stage_output
+    assert projection["review_projection"]["identity_complete"] is True
+    assert [
+        (item["source_id"], item["part_id"]) for item in projection["screening"]
+    ] == identities
+    serialized = json.dumps(projection)
+    assert "private model rationale" not in serialized
+    assert '"private"' not in serialized
+    assert len(serialized.encode("utf-8")) < 1_000_000
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -322,3 +323,43 @@ def test_review_request_rejects_client_supplied_content_before_service(
 
     assert response.status_code == 422
     submit.assert_not_awaited()
+
+
+def test_review_validation_redacts_nested_input_from_response_and_logs(
+    review_client: ReviewClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _user, _db = review_client
+    run_id = uuid4()
+    secret = "review-secret-7f6b5d4c"
+    caplog.set_level(logging.WARNING, logger="src.main")
+
+    response = client.post(
+        f"/api/v1/research-engine/runs/{run_id}/reviews/1",
+        json={
+            "review_kind": "screening",
+            "output_hash": "a" * 64,
+            "decision": "approve",
+            "note": secret + ("n" * 2001),
+            "decision_payload": {
+                "items": [
+                    {
+                        "source_id": "source-a",
+                        "part_id": "p0001",
+                        "decision": "include",
+                        "citation": {"text": secret, "evidence_id": secret},
+                        "reason": secret,
+                        secret: "secret supplied as a field name",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert secret not in caplog.text
+    details = response.json()["error"]["details"]
+    assert details
+    assert all(set(error) == {"loc", "msg", "type"} for error in details)
+    assert all(error["loc"] and error["msg"] and error["type"] for error in details)

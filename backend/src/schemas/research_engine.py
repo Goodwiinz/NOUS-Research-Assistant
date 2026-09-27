@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -14,9 +14,20 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 MAX_BLUEPRINT_STEPS = 32
 MAX_NESTED_PAYLOAD_BYTES = 32 * 1024
 MAX_PROMPT_TEMPLATE_CHARS = 16 * 1024
+MAX_REVIEW_ITEMS = 200
+MAX_REVIEW_ID_CHARS = 512
+MAX_REVIEW_SAFE_FIELD_CHARS = 64
+# A projected pending review retains two bounded identities and one bounded safe
+# field for every supported candidate. Six bytes per character covers JSON
+# control escaping; the per-item and envelope allowances cover keys/markers.
+MAX_PENDING_REVIEW_OUTPUT_BYTES = 4096 + MAX_REVIEW_ITEMS * (
+    (2 * MAX_REVIEW_ID_CHARS * 6) + (MAX_REVIEW_SAFE_FIELD_CHARS * 6) + 512
+)
+
+_PayloadT = TypeVar("_PayloadT")
 
 
-def _serialized_size(value: Any) -> int:
+def serialized_payload_size(value: Any) -> int:
     """Return the compact JSON size used for request/runtime accounting."""
     try:
         return len(
@@ -31,11 +42,13 @@ def _serialized_size(value: Any) -> int:
         raise ValueError("payload must be JSON serializable") from exc
 
 
-def _bounded_payload(value: Any, field_name: str) -> Any:
-    if _serialized_size(value) > MAX_NESTED_PAYLOAD_BYTES:
-        raise ValueError(
-            f"{field_name} exceeds the {MAX_NESTED_PAYLOAD_BYTES}-byte limit"
-        )
+def _bounded_payload(
+    value: _PayloadT,
+    field_name: str,
+    max_bytes: int = MAX_NESTED_PAYLOAD_BYTES,
+) -> _PayloadT:
+    if serialized_payload_size(value) > max_bytes:
+        raise ValueError(f"{field_name} exceeds the {max_bytes}-byte limit")
     return value
 
 
@@ -355,8 +368,8 @@ class ScreeningItemDecision(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_id: str = Field(strict=True, min_length=1, max_length=512)
-    part_id: str = Field(strict=True, min_length=1, max_length=512)
+    source_id: str = Field(strict=True, min_length=1, max_length=MAX_REVIEW_ID_CHARS)
+    part_id: str = Field(strict=True, min_length=1, max_length=MAX_REVIEW_ID_CHARS)
     decision: Literal["include", "exclude", "unresolved"]
     reason: Optional[str] = Field(
         default=None, strict=True, min_length=1, max_length=500
@@ -374,8 +387,8 @@ class ExtractionItemDecision(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_id: str = Field(strict=True, min_length=1, max_length=512)
-    part_id: str = Field(strict=True, min_length=1, max_length=512)
+    source_id: str = Field(strict=True, min_length=1, max_length=MAX_REVIEW_ID_CHARS)
+    part_id: str = Field(strict=True, min_length=1, max_length=MAX_REVIEW_ID_CHARS)
     decision: Literal["accept", "reject", "unresolved"]
     reason: Optional[str] = Field(
         default=None, strict=True, min_length=1, max_length=500
@@ -393,7 +406,9 @@ class ScreeningReviewDecisionPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    items: List[ScreeningItemDecision] = Field(min_length=1, max_length=1000)
+    items: List[ScreeningItemDecision] = Field(
+        min_length=1, max_length=MAX_REVIEW_ITEMS
+    )
 
 
 class ExtractionReviewDecisionPayload(BaseModel):
@@ -401,7 +416,9 @@ class ExtractionReviewDecisionPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    items: List[ExtractionItemDecision] = Field(min_length=1, max_length=1000)
+    items: List[ExtractionItemDecision] = Field(
+        min_length=1, max_length=MAX_REVIEW_ITEMS
+    )
 
 
 class FinalReviewDecisionPayload(BaseModel):
@@ -427,6 +444,30 @@ class StageReviewRequest(BaseModel):
     decision: ReviewDecision
     decision_payload: ReviewDecisionPayload
     note: Optional[str] = Field(default=None, strict=True, max_length=2000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def select_payload_model(cls, value: Any) -> Any:
+        """Parse the payload with the model selected by the sibling kind."""
+
+        if not isinstance(value, dict) or "decision_payload" not in value:
+            return value
+        try:
+            review_kind = ReviewKind(value.get("review_kind"))
+        except (TypeError, ValueError):
+            return value
+        payload_model: type[BaseModel]
+        if review_kind == ReviewKind.SCREENING:
+            payload_model = ScreeningReviewDecisionPayload
+        elif review_kind == ReviewKind.EXTRACTION:
+            payload_model = ExtractionReviewDecisionPayload
+        else:
+            payload_model = FinalReviewDecisionPayload
+        selected = dict(value)
+        selected["decision_payload"] = payload_model.model_validate(
+            value["decision_payload"]
+        )
+        return selected
 
     @model_validator(mode="after")
     def payload_matches_review_kind(self) -> "StageReviewRequest":
@@ -512,7 +553,22 @@ class PendingReviewResponse(BaseModel):
         ):
             raise ValueError("non-pending review responses cannot carry gate data")
         if self.stage_output is not None:
-            _bounded_payload(self.stage_output, "pending stage output")
+            projection = self.stage_output.get("review_projection")
+            projected = (
+                isinstance(projection, dict)
+                and projection.get("projected") is True
+                and projection.get("truncated") is True
+                and projection.get("identity_complete") is True
+            )
+            _bounded_payload(
+                self.stage_output,
+                "pending stage output",
+                (
+                    MAX_PENDING_REVIEW_OUTPUT_BYTES
+                    if projected
+                    else MAX_NESTED_PAYLOAD_BYTES
+                ),
+            )
         return self
 
 
