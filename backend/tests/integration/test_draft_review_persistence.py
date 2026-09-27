@@ -9,20 +9,46 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, select, text
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from src.models import Base, DraftReview, GeneratedDraft
 from src.services.research.draft_generation_service import DraftGenerationService
 
 
+def _postgres_urls(configured: str) -> tuple[URL, URL]:
+    parsed = make_url(configured)
+    return (
+        parsed.set(drivername="postgresql+psycopg2"),
+        parsed.set(drivername="postgresql+asyncpg"),
+    )
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        "postgresql://user:p%40ss@localhost/review",
+        "postgresql+psycopg2://user:p%40ss@localhost/review",
+        "postgresql+asyncpg://user:p%40ss@localhost/review",
+    ],
+)
+def test_postgres_urls_select_sync_and_async_drivers(configured: str) -> None:
+    sync_url, async_url = _postgres_urls(configured)
+
+    assert sync_url.drivername == "postgresql+psycopg2"
+    assert async_url.drivername == "postgresql+asyncpg"
+    assert sync_url.password == "p@ss"
+    assert async_url.password == "p@ss"
+
+
 @pytest.fixture
 def draft_review_postgres_url(
     request: pytest.FixtureRequest,
-) -> Iterator[tuple[str, str]]:
+) -> Iterator[tuple[URL, str]]:
     configured = os.getenv("DRAFT_REVIEW_DATABASE_URL")
-    sync_url = (
+    sync_url, async_url = _postgres_urls(
         configured or str(request.getfixturevalue("postgres_container")["url"])
-    ).replace("+asyncpg", "")
+    )
     schema = f"test_draft_review_{uuid4().hex}"
     admin = create_engine(sync_url)
     with admin.begin() as connection:
@@ -33,7 +59,6 @@ def draft_review_postgres_url(
     Base.metadata.create_all(schema_engine)
     schema_engine.dispose()
     try:
-        async_url = sync_url.replace("postgresql://", "postgresql+asyncpg://")
         yield async_url, schema
     finally:
         with admin.begin() as connection:
@@ -45,7 +70,7 @@ def draft_review_postgres_url(
 @pytest.mark.integration
 @pytest.mark.requires_postgres
 async def test_blocked_revision_review_survives_and_current_draft_is_unchanged(
-    draft_review_postgres_url: tuple[str, str],
+    draft_review_postgres_url: tuple[URL, str],
 ) -> None:
     ids = {
         name: uuid4()

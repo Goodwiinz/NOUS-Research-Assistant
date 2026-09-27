@@ -117,3 +117,25 @@ passed locally: **5,829 passed, 80 skipped, three existing non-strict XPASSes**.
 The 35% coverage threshold and all 150 measured per-file coverage floors passed.
 Selection: `backend/tests/ -c backend/pytest.ini -m "unit or not (integration or
 e2e or slow)"`. Hosted confirmation remains separate from this local result.
+
+## CI follow-up: PostgreSQL fixture drivers
+
+Hosted Unit Tests passed at `8d9b89f6d97b1872b4bed939f49ca9cbb8ca1449`:
+5,829 tests, 161 workflow-contract tests and the coverage ratchet. The subsequent
+[Integration Tests producer job](https://github.com/Goodwiinz/NOUS-Research-Assistant/actions/runs/36343518707/job/108689659155)
+failed the draft-review persistence proof because the container fixture supplies
+`postgresql+psycopg2://`, which the bare-prefix replacement left unchanged when
+constructing an async engine. That job had 254 passes, one failure and 15 skips.
+
+The fixtures now use SQLAlchemy URL objects and explicit sync/async driver
+selection, preserving credentials. Bibliography, mapping and migration proofs
+also fall back to the existing `postgres_container` when their optional local
+override is absent; they were previously skipped in hosted CI. This fixture uses
+PostgreSQL 15, while the workflow's separate service uses PostgreSQL 16.
+
+Local verification reproduced the old async-engine error. All five PostgreSQL
+proofs plus three URL regressions passed together using psycopg2-qualified
+inputs: **8 passed**. The review, bibliography and mapping tests also passed
+individually with bare and asyncpg-qualified URLs. CI-pinned Ruff, Black, isort,
+added-file mypy and `git diff --check` passed. These changes affect tests only;
+production database connections and CI thresholds are unchanged.

@@ -11,6 +11,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import Connection, create_engine, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 from src.models import Base
@@ -35,17 +36,17 @@ def _run_migration(connection: Connection, module: ModuleType, direction: str) -
 
 
 @pytest.fixture
-def pre_wave_connection() -> Iterator[Connection]:
+def pre_wave_connection(request: pytest.FixtureRequest) -> Iterator[Connection]:
     configured_url = os.getenv("ACADEMIC_MIGRATION_DATABASE_URL")
-    if not configured_url:
-        pytest.skip("ACADEMIC_MIGRATION_DATABASE_URL is required")
-    assert configured_url is not None
+    url = make_url(
+        configured_url or str(request.getfixturevalue("postgres_container")["url"])
+    ).set(drivername="postgresql+psycopg2")
     schema = f"test_academic_wave_{uuid4().hex}"
-    engine = create_engine(configured_url.replace("+asyncpg", ""))
+    engine = create_engine(url)
     with engine.begin() as connection:
         connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
     scoped_engine = create_engine(
-        configured_url.replace("+asyncpg", ""),
+        url,
         connect_args={"options": f"-csearch_path={schema}"},
     )
     Base.metadata.create_all(scoped_engine)

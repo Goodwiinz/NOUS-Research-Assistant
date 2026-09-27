@@ -10,6 +10,7 @@ import pytest
 from fastapi import Response
 from pybtex.database import parse_string
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -27,14 +28,16 @@ from src.models.workspace import Workspace
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.requires_postgres
-async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata() -> None:
-    configured_url = os.getenv("BIBLIOGRAPHY_DATABASE_URL")
-    if not configured_url:
-        pytest.skip("BIBLIOGRAPHY_DATABASE_URL is required for this PostgreSQL test")
-    assert configured_url is not None
+async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata(
+    request: pytest.FixtureRequest,
+) -> None:
+    configured_url = os.getenv("BIBLIOGRAPHY_DATABASE_URL") or str(
+        request.getfixturevalue("postgres_container")["url"]
+    )
 
-    sync_url = configured_url.replace("+asyncpg", "")
-    async_url = configured_url.replace("postgresql://", "postgresql+asyncpg://")
+    parsed_url = make_url(configured_url)
+    sync_url = parsed_url.set(drivername="postgresql+psycopg2")
+    async_url = parsed_url.set(drivername="postgresql+asyncpg")
     schema = f"test_draft_bibliography_{uuid4().hex}"
     admin_engine = create_engine(sync_url)
     with admin_engine.begin() as connection:

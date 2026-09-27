@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.api.research_engine.projects import link_project_collection
@@ -24,12 +25,13 @@ from src.services.research_engine.project_access import (
 
 
 @pytest.fixture
-async def mapping_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    configured_url = os.getenv("RESEARCH_PROJECT_DATABASE_URL")
-    if not configured_url:
-        pytest.skip("RESEARCH_PROJECT_DATABASE_URL is required")
-    assert configured_url is not None
-    async_url = configured_url.replace("postgresql://", "postgresql+asyncpg://")
+async def mapping_session_factory(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    configured_url = os.getenv("RESEARCH_PROJECT_DATABASE_URL") or str(
+        request.getfixturevalue("postgres_container")["url"]
+    )
+    async_url = make_url(configured_url).set(drivername="postgresql+asyncpg")
     schema = f"test_research_project_mapping_{uuid4().hex}"
     admin_engine = create_async_engine(async_url)
     async with admin_engine.begin() as connection:
