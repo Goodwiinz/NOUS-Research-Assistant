@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from src.api.research_engine.runs import pause_run, resume_run, router, stream_run
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
+from src.schemas.research_engine import RunResponse, RunResumeRequest
 
 # ============================================================================
 # Helpers
@@ -58,6 +59,17 @@ def _make_blueprint(**overrides):
     bp.parameters = overrides.get("parameters", {})
     bp.is_immutable = True
     return bp
+
+
+def _resume_authorization() -> dict[str, object]:
+    return {
+        "kind": "user_resume",
+        "actor_id": str(uuid.uuid4()),
+        "step_index": -1,
+        "output_hash": "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "consumed_at": None,
+    }
 
 
 def _mock_db_returning(
@@ -281,7 +293,12 @@ class TestStreamEndpointSuccess:
     def test_stream_works_with_paused_run(self, stream_app, stream_client):
         run_id = uuid.uuid4()
         bp_id = uuid.uuid4()
-        mock_run = _make_run(id=run_id, blueprint_id=bp_id, status="paused")
+        mock_run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="paused",
+            reproducibility_manifest={"resume_authorization": _resume_authorization()},
+        )
         mock_bp = _make_blueprint(id=bp_id)
         db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
 
@@ -307,6 +324,7 @@ class TestStreamEndpointSuccess:
             blueprint_id=bp_id,
             status="paused",
             started_at=old_started_at,
+            reproducibility_manifest={"resume_authorization": _resume_authorization()},
         )
         mock_bp = _make_blueprint(id=bp_id)
         db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
@@ -696,6 +714,8 @@ class TestStreamEndpointSuccess:
 
         async def rollback():
             operations.append("rollback")
+            mock_run.reproducibility_manifest = {"_pause_requested": True}
+            mock_run.total_tokens = 0
 
         async def refresh(_obj):
             operations.append("refresh")
@@ -723,7 +743,7 @@ class TestStreamEndpointSuccess:
             async for chunk in response.body_iterator:
                 chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
 
-        rollback_index = operations.index("rollback")
+        rollback_index = len(operations) - 1 - operations[::-1].index("rollback")
         assert operations[rollback_index : rollback_index + 2] == [
             "rollback",
             "refresh",
@@ -770,6 +790,9 @@ class TestStreamEndpointErrors:
         run_id = uuid.uuid4()
         run = _make_run(id=run_id, status="paused")
         db = AsyncMock()
+        no_step = Mock()
+        no_step.scalars.return_value.first.return_value = None
+        db.execute = AsyncMock(return_value=no_step)
         db.commit = AsyncMock()
         db.refresh = AsyncMock()
         stream_app.dependency_overrides[get_db] = lambda: db
@@ -796,7 +819,10 @@ class TestStreamEndpointErrors:
             id=run_id,
             blueprint_id=bp_id,
             status="paused",
-            reproducibility_manifest={"parameters_override": {}},
+            reproducibility_manifest={
+                "parameters_override": {},
+                "resume_authorization": _resume_authorization(),
+            },
         )
         blueprint = _make_blueprint(id=bp_id)
         blueprint_result = Mock()
@@ -840,7 +866,12 @@ class TestStreamEndpointErrors:
             engine = Mock()
             engine.run = engine_run
             engine_cls.return_value = engine
-            resumed = await resume_run(run_id, user, db)
+            resumed = await resume_run(
+                run_id,
+                body=RunResumeRequest(),
+                current_user=user,
+                db=db,
+            )
             assert resumed.status.value == "paused"
             response = await stream_run(run_id, user, db)
             chunks = []
@@ -881,6 +912,11 @@ class TestStreamEndpointErrors:
         )
         db.commit = AsyncMock()
         db.rollback = AsyncMock()
+
+        async def refresh_after_competing_claim(target, **_kwargs):
+            target.status = "running"
+
+        db.lifecycle_lock_run = AsyncMock(side_effect=refresh_after_competing_claim)
         user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
 
         with (
@@ -929,3 +965,77 @@ class TestStreamEndpointErrors:
         response = stream_client.get(f"/api/v1/research-engine/runs/{run_id}/stream")
         assert response.status_code == 409
         stream_app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.mark.asyncio
+async def test_ordinary_resume_cannot_bypass_pending_review():
+    """POST resume must require the approved row bound to the pending hash."""
+
+    run_id = uuid.uuid4()
+    run = _make_run(
+        id=run_id,
+        status="paused",
+        reproducibility_manifest={
+            "pending_review": {
+                "run_id": str(run_id),
+                "step_index": 1,
+                "stage_type": "screen",
+                "review_kind": "screening",
+                "contract_version": 1,
+                "output_hash": "a" * 64,
+                "status": "pending",
+                "created_at": "2026-09-27T12:00:00+00:00",
+            }
+        },
+    )
+    db = AsyncMock()
+    current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+    with patch(
+        "src.api.research_engine.runs._get_owned_run",
+        new=AsyncMock(return_value=run),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await resume_run(run_id, RunResumeRequest(), current_user, db)
+
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "review_required"
+    assert error.value.detail["descriptor"] == {
+        "pause_reason": "review_required",
+        "review_kind": "screening",
+        "step_index": 1,
+        "output_hash": "a" * 64,
+    }
+    db.commit.assert_not_awaited()
+
+
+def test_run_response_reloads_content_free_pause_descriptor():
+    """Reloading GET /runs must expose the durable gate without stage content."""
+
+    run_id = uuid.uuid4()
+    run = _make_run(
+        id=run_id,
+        status="paused",
+        reproducibility_manifest={
+            "pending_review": {
+                "run_id": str(run_id),
+                "step_index": 2,
+                "stage_type": "extract",
+                "review_kind": "extraction",
+                "contract_version": 1,
+                "output_hash": "b" * 64,
+                "status": "pending",
+                "created_at": "2026-09-27T12:00:00+00:00",
+            },
+            "private_report": "must not be serialized",
+        },
+    )
+
+    response = RunResponse.model_validate(run).model_dump(mode="json")
+
+    assert response["pause_reason"] == "review_required"
+    assert response["review_kind"] == "extraction"
+    assert response["step_index"] == 2
+    assert response["output_hash"] == "b" * 64
+    assert "reproducibility_manifest" not in response
+    assert "private_report" not in str(response)

@@ -34,7 +34,10 @@ from src.services.research_engine.connectors import (
     RagStoreConnector,
     SemanticScholarConnector,
 )
-from src.services.research_engine.connectors.registry import build_connectors
+from src.services.research_engine.connectors.registry import (
+    build_connectors,
+    safe_capability_projection,
+)
 from src.services.research_engine.contracts import rehydrate_stage_outputs
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.providers import (
@@ -42,6 +45,11 @@ from src.services.research_engine.providers import (
     OllamaProvider,
     OpenAIProvider,
     ProviderConfig,
+)
+from src.services.research_engine.review_service import ResearchReviewService
+from src.services.research_engine.run_lifecycle import (
+    ResearchRunLifecycleError,
+    ResearchRunLifecycleService,
 )
 from src.services.research_engine.scope import (
     canonicalize_scope_confirmation,
@@ -322,6 +330,12 @@ async def start_run(
                 actor_id=current_user.id,
                 confirmed_at=datetime.now(timezone.utc),
             )
+            selected = set(manifest["scope_confirmation"]["providers"])
+            manifest["provider_manifest"] = [
+                capability
+                for capability in safe_capability_projection()
+                if capability["id"] in selected
+            ]
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -411,23 +425,22 @@ async def resume_run(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
-    """Resume a paused run."""
+    """Authorize a paused run to be claimed exactly once by its stream."""
     if body is None:
         body = RunResumeRequest()
     run = await _get_owned_run(run_id, current_user.id, db)
-    if run.status != RunStatus.PAUSED.value:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Run is not currently paused",
+    lifecycle = ResearchRunLifecycleService(db)
+    try:
+        await lifecycle.authorize_resume(
+            run=run,
+            actor_id=current_user.id,
+            request=body,
         )
-    manifest = dict(run.reproducibility_manifest or {})
-    manifest[_CONTINUATION_REQUESTED_KEY] = True
-    run.reproducibility_manifest = manifest
-    # The stream endpoint is the only owner of the RUNNING claim. Keeping this
-    # row PAUSED lets POST /resume be followed by the existing GET /stream.
-    run.status = RunStatus.PAUSED.value
-    await db.commit()
-    await db.refresh(run)
+    except ResearchRunLifecycleError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+        ) from exc
     return RunResponse.model_validate(run)
 
 
@@ -516,6 +529,26 @@ async def stream_run(
             detail=f"Persisted run stages cannot be resumed: {exc}",
         ) from exc
 
+    manifest = dict(run.reproducibility_manifest or {})
+    scope_confirmation = manifest.get("scope_confirmation")
+    provider_manifest = manifest.get("provider_manifest")
+    if isinstance(scope_confirmation, dict):
+        prior_outputs["scope_confirmation"] = scope_confirmation
+    if isinstance(provider_manifest, list):
+        prior_outputs["provider_manifest"] = provider_manifest
+    if manifest.get("review_history"):
+        try:
+            prior_outputs = await ResearchReviewService(db).apply_approved_overlays(
+                run_id=run_id,
+                owner_id=current_user.id,
+                context=prior_outputs,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Approved review overlays cannot be resumed: {exc}",
+            ) from exc
+
     required_models = sorted(
         {
             str(step.get("model_id") or _get_step_params(step).get("model_id"))
@@ -550,34 +583,6 @@ async def stream_run(
                 "start a new run from the version-1 template."
             ),
         )
-    manifest = dict(run.reproducibility_manifest or {})
-    continuation_requested = bool(manifest.pop(_CONTINUATION_REQUESTED_KEY, False))
-    failed_quality_steps = [
-        item
-        for item in history
-        if any(
-            isinstance(mark, dict) and not mark.get("passed", True)
-            for mark in (item.quality_marks or [])
-        )
-    ]
-    # A direct stream request is itself the continuation action for a paused
-    # run. Preserve the same verification override used by POST /resume.
-    if failed_quality_steps and was_paused:
-        persisted_failure_index = manifest.get("continued_after_failure_step_index")
-        failed_step_index = (
-            persisted_failure_index
-            if type(persisted_failure_index) is int
-            else min(int(item.step_index) for item in failed_quality_steps)
-        )
-        manifest[_CONTINUED_AFTER_FAILURE_KEY] = True
-        manifest["continued_after_failure_step_index"] = failed_step_index
-        prior_outputs["continued_after_failure"] = True
-        verification = prior_outputs.get("verification")
-        if isinstance(verification, dict):
-            verification["passed"] = False
-            verification["continued_after_failure"] = True
-    if continuation_requested or (failed_quality_steps and was_paused):
-        run.reproducibility_manifest = manifest
     try:
         validate_blueprint_runtime(
             {"steps": blueprint.steps or [], "parameters": effective_parameters}
@@ -587,6 +592,22 @@ async def stream_run(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Blueprint exceeds a server-owned execution limit",
         )
+    lifecycle = ResearchRunLifecycleService(db)
+    try:
+        stream_claim = await lifecycle.claim_stream(run=run)
+    except ResearchRunLifecycleError as exc:
+        detail: Any = exc.detail()
+        if exc.code == "run_already_claimed":
+            detail = exc.message
+        raise HTTPException(status_code=exc.status_code, detail=detail) from exc
+
+    manifest = dict(run.reproducibility_manifest or {})
+    if stream_claim.authorization_kind == "continue_unverified":
+        prior_outputs["continued_after_failure"] = True
+        verification = prior_outputs.get("verification")
+        if isinstance(verification, dict):
+            verification["passed"] = False
+            verification["continued_after_failure"] = True
     blueprint_dict = {
         "steps": blueprint.steps or [],
         "parameters": effective_parameters,
@@ -599,52 +620,25 @@ async def stream_run(
     organization_id = _get_verified_organization_id(current_user)
     connectors = _build_connectors(organization_id=str(organization_id))
 
-    claim = await db.execute(
-        update(ResearchRun)
-        .where(
-            ResearchRun.id == run_id,
-            ResearchRun.status.in_(["pending", "paused"]),
-        )
-        .values(status=RunStatus.RUNNING.value)
-    )
-    if claim.rowcount == 0:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Run was just claimed by another stream",
-        )
-    await db.commit()
-
     # Admit only after this request has won the atomic claim. Otherwise every
     # concurrent loser consumes a shared paid-work slot before receiving 409.
     if not await admit_expensive_work(
         user_id=current_user.id,
         organization_id=organization_id,
     ):
-        release = await db.execute(
-            update(ResearchRun)
-            .where(
-                ResearchRun.id == run_id,
-                ResearchRun.status == RunStatus.RUNNING.value,
-            )
-            .values(
-                status=RunStatus.PAUSED.value if was_paused else RunStatus.PENDING.value
-            )
-        )
-        await db.commit()
-        if release.rowcount == 0:
+        try:
+            await lifecycle.release_stream_claim(run=run, claim=stream_claim)
+        except ResearchRunLifecycleError:
             logger.warning(
                 "Research run %s could not be released after admission denial",
                 run_id,
             )
+            raise
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many expensive research runs; retry later",
         )
 
-    await db.refresh(run)
-    run.started_at = run.started_at or datetime.now(timezone.utc)
-    await db.commit()
     await db.refresh(run)
 
     async def event_generator():
@@ -713,47 +707,25 @@ async def stream_run(
                     if 0 <= step_index < len(blueprint_dict["steps"]):
                         step_def = blueprint_dict["steps"][step_index] or {}
 
-                    params = _get_step_params(step_def)
-                    model_id = step_def.get("model_id") or params.get("model_id")
-                    mode = step_def.get("mode") or params.get("mode") or "deterministic"
-                    temperature = params.get("temperature", 0.0)
-                    seed = params.get("seed")
                     output = event.get("output")
                     if output is not None and not isinstance(output, dict):
                         output = {"value": output}
-
-                    if step_def.get("type") == "search" and output:
-                        for source_row in research_source_rows(run_id, output):
-                            db.add(source_row)
-
-                    db.add(
-                        ResearchStep(
-                            run_id=run_id,
-                            step_index=step_index,
-                            step_type=str(
-                                event.get("step_type")
-                                or step_def.get("type")
-                                or "search"
-                            ),
-                            mode=str(mode),
-                            model_id=str(model_id) if model_id is not None else None,
-                            temperature=float(temperature),
-                            seed=int(seed) if seed is not None else None,
-                            output=output,
-                            inputs_hash=event.get("inputs_hash"),
-                            outputs_hash=event.get("outputs_hash"),
-                            full_prompt=event.get("full_prompt"),
-                            quality_marks=event.get("quality_marks") or [],
-                            token_count=int(event.get("token_count") or 0),
-                            completed_at=datetime.now(timezone.utc),
-                        )
+                    source_rows = (
+                        research_source_rows(run_id, output)
+                        if step_def.get("type") == "search" and output
+                        else []
                     )
-                    total_tokens += int(event.get("token_count") or 0)
-                    run.total_tokens = total_tokens
-                    if pause_requested:
+                    transition = await lifecycle.persist_step_completion(
+                        run=run,
+                        event={**event, "output": output},
+                        step_definition=step_def,
+                        source_rows=source_rows,
+                    )
+                    total_tokens = int(run.total_tokens or 0)
+                    if pause_requested and transition.pause is None:
                         _set_pause_requested(run, False)
                         run.status = RunStatus.PAUSED.value
-                    await db.commit()
+                        await db.commit()
                 elif event_type == "run_paused":
                     _set_pause_requested(run, False)
                     run.status = RunStatus.PAUSED.value
@@ -797,7 +769,12 @@ async def stream_run(
                     run.completed_at = datetime.now(timezone.utc)
                     previous_manifest = dict(run.reproducibility_manifest or {})
                     previous_manifest.pop(_CONTINUATION_REQUESTED_KEY, None)
+                    previous_manifest.pop("resume_authorization", None)
+                    previous_manifest.pop(_PAUSE_REQUESTED_KEY, None)
+                    if isinstance(previous_manifest.get("verification_override"), dict):
+                        previous_manifest["final_status"] = "unverified"
                     run.reproducibility_manifest = {
+                        **previous_manifest,
                         "run_id": str(run.id),
                         "blueprint_id": str(blueprint.id),
                         "blueprint_version": blueprint.version,
@@ -805,16 +782,6 @@ async def stream_run(
                         "completed_at": run.completed_at.isoformat(),
                         "parameters_override": parameter_overrides,
                         "parameters": effective_parameters,
-                        **{
-                            key: value
-                            for key, value in previous_manifest.items()
-                            if key
-                            in {
-                                _CONTINUED_AFTER_FAILURE_KEY,
-                                "continued_after_failure_step_index",
-                                _EXECUTION_ERRORS_KEY,
-                            }
-                        },
                     }
                     await db.commit()
 

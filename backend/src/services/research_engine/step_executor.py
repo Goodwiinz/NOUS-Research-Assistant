@@ -15,6 +15,7 @@ from src.services.research_engine.contracts import (
     ClaimRecord,
     SynthesisSection,
     VerificationCheck,
+    immediate_stage_envelope,
     parse_provider_json,
     resolve_parameters,
     validate_extraction_record,
@@ -25,6 +26,7 @@ from src.services.research_engine.prompt_batches import (
     MAX_PROMPT_BYTES,
     build_prompt_batches,
 )
+from src.services.research_engine.prompt_context import PromptContextBuilder
 from src.services.research_engine.providers.base import (
     LLMProvider,
     LLMRequest,
@@ -77,6 +79,7 @@ class StepResult:
     inputs_hash: Optional[str] = None
     outputs_hash: Optional[str] = None
     full_prompt: Optional[str] = None
+    prompt_metadata: Optional[Dict[str, str]] = None
 
 
 class StepExecutionError(RuntimeError):
@@ -343,25 +346,42 @@ class StepExecutor:
         if stage_type == "export":
             return self._execute_contract_export(step_def, context)
         params = resolve_parameters(self._get_params(step_def), context)
+        execution_context = context
+        prompt_metadata: Dict[str, str] | None = None
+        if self._is_daily_brief_context(context):
+            built = self._daily_brief_prompt_context(
+                stage_type=stage_type,
+                context=context,
+                params=params,
+                budget=budget,
+            )
+            execution_context = copy.deepcopy(context)
+            execution_context["_daily_brief_prompt_context"] = built.payload
+            prompt_metadata = built.persistence_metadata()
         model_id = step_def.get("model_id") or params.get("model_id", "")
         provider = self.providers.get(str(model_id))
         self._last_call_accounting = (0, 0, [])
         try:
             if stage_type == "screen":
-                return await self._execute_screen_contract(
-                    step_def, context, params, provider, budget
+                result = await self._execute_screen_contract(
+                    step_def, execution_context, params, provider, budget
                 )
-            if stage_type == "extract":
-                return await self._execute_extract_contract(
-                    step_def, context, params, provider, budget
+            elif stage_type == "extract":
+                result = await self._execute_extract_contract(
+                    step_def, execution_context, params, provider, budget
                 )
-            if stage_type == "synthesize":
-                return await self._execute_synthesize_contract(
-                    step_def, context, params, provider, budget
+            elif stage_type == "synthesize":
+                result = await self._execute_synthesize_contract(
+                    step_def, execution_context, params, provider, budget
                 )
-            return await self._execute_verify_contract(
-                step_def, context, params, provider, budget
-            )
+            else:
+                result = await self._execute_verify_contract(
+                    step_def, execution_context, params, provider, budget
+                )
+            if prompt_metadata is not None:
+                result.prompt_metadata = prompt_metadata
+                result.full_prompt = None
+            return result
         except StepExecutionError:
             raise
         except Exception as exc:
@@ -517,29 +537,115 @@ class StepExecutor:
         template = step_def.get("system_prompt_template") or params.get(
             "system_prompt_template", ""
         )
-        rendered = resolve_parameters(str(template), context)
+        safe_prompt_context = context.get("_daily_brief_prompt_context")
+        template_context = context
+        if isinstance(safe_prompt_context, dict):
+            confirmed_scope = safe_prompt_context.get("confirmed_scope")
+            template_context = (
+                dict(confirmed_scope) if isinstance(confirmed_scope, dict) else {}
+            )
+        rendered = resolve_parameters(str(template), template_context)
         system_prompt = self._stage_instructions(
             stage_type,
             str(rendered),
             str(params.get("output_kind") or ""),
             params,
         )
-        fixed = {
-            "system_prompt": system_prompt,
-            "stage_type": stage_type,
-            "query": context.get("query", ""),
-            "parameters": {
-                key: value
-                for key, value in params.items()
-                if key
-                not in {"system_prompt_template", "model_id", "temperature", "seed"}
-            },
-        }
+        if isinstance(safe_prompt_context, dict):
+            fixed = {
+                "system_prompt": system_prompt,
+                "prompt_context": safe_prompt_context,
+            }
+        else:
+            fixed = {
+                "system_prompt": system_prompt,
+                "stage_type": stage_type,
+                "query": context.get("query", ""),
+                "parameters": {
+                    key: value
+                    for key, value in params.items()
+                    if key
+                    not in {
+                        "system_prompt_template",
+                        "model_id",
+                        "temperature",
+                        "seed",
+                    }
+                },
+            }
         return build_prompt_batches(
             records,
             fixed,
             MAX_PROMPT_BYTES,
             structured_records=structured_records,
+        )
+
+    @staticmethod
+    def _is_daily_brief_context(context: Dict[str, Any]) -> bool:
+        scope = context.get("scope_confirmation")
+        capabilities = context.get("provider_manifest")
+        return (
+            isinstance(scope, dict)
+            and scope.get("confirmed") is True
+            and isinstance(capabilities, list)
+        )
+
+    @staticmethod
+    def _daily_brief_prompt_context(
+        *,
+        stage_type: str,
+        context: Dict[str, Any],
+        params: Dict[str, Any],
+        budget: Optional[ExecutionBudget],
+    ):
+        expected = {
+            "screen": "search",
+            "extract": "screen",
+            "synthesize": "extract",
+            "verify": "synthesize",
+        }[stage_type]
+        try:
+            upstream = immediate_stage_envelope(context, expected)
+        except ValueError as exc:
+            raise ValueError(
+                "Daily Brief stage is missing its immediate upstream envelope"
+            ) from exc
+        if expected == "screen" and isinstance(
+            context.get("included_source_ids"), list
+        ):
+            upstream["included_source_ids"] = copy.deepcopy(
+                context["included_source_ids"]
+            )
+        if expected == "extract" and isinstance(context.get("extractions"), list):
+            upstream["extractions"] = copy.deepcopy(context["extractions"])
+
+        target_schema = params.get("schema") or params.get("extraction_schema")
+        if not isinstance(target_schema, dict):
+            target_schema = {
+                "contract_version": CONTRACT_VERSION,
+                "stage_type": stage_type,
+            }
+        remaining_tokens = (
+            max(
+                0,
+                budget.max_total_tokens - budget.used_tokens - budget.reserved_tokens,
+            )
+            if budget
+            else 0
+        )
+        remaining_calls = (
+            max(0, budget.max_total_calls - budget.used_calls) if budget else 0
+        )
+        return PromptContextBuilder.build(
+            stage_type=stage_type,
+            scope_confirmation=context["scope_confirmation"],
+            capability_manifest=context["provider_manifest"],
+            upstream_envelope=upstream,
+            target_schema=target_schema,
+            budget={
+                "remaining_tokens": remaining_tokens,
+                "remaining_calls": remaining_calls,
+            },
         )
 
     async def _complete_batches(

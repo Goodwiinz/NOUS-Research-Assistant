@@ -474,6 +474,29 @@ def merge_stage_output(
     return merged
 
 
+def immediate_stage_envelope(
+    context: Mapping[str, Any], expected_stage_type: str
+) -> dict[str, Any]:
+    """Return a copy of the latest persisted envelope for one upstream stage."""
+
+    stage_results = context.get("stage_results")
+    if not isinstance(stage_results, Mapping):
+        raise ValueError("research stage is missing its immediate upstream envelope")
+    ordered: list[tuple[int, Mapping[str, Any]]] = []
+    for index, value in stage_results.items():
+        if not isinstance(value, Mapping):
+            continue
+        try:
+            numeric_index = int(index)
+        except (TypeError, ValueError):
+            continue
+        if value.get("stage_type") == expected_stage_type:
+            ordered.append((numeric_index, value))
+    if not ordered:
+        raise ValueError("research stage is missing its immediate upstream envelope")
+    return copy.deepcopy(dict(max(ordered, key=lambda item: item[0])[1]))
+
+
 def rehydrate_stage_outputs(steps: list[Any]) -> dict[str, Any]:
     """Rebuild accumulated context from persisted ResearchStep-like rows."""
     ordered = sorted(steps, key=lambda step: int(step.step_index))

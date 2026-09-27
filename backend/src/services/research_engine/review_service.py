@@ -363,9 +363,11 @@ class ResearchReviewService:
             }
             if review.review_kind == ReviewKind.SCREENING.value:
                 included = sorted(
-                    source_id
-                    for (source_id, _part_id), decision in decisions.items()
-                    if decision == "include" and isinstance(source_id, str)
+                    {
+                        source_id
+                        for (source_id, _part_id), decision in decisions.items()
+                        if decision == "include" and isinstance(source_id, str)
+                    }
                 )
                 projected["included_source_ids"] = included
             elif review.review_kind == ReviewKind.EXTRACTION.value:

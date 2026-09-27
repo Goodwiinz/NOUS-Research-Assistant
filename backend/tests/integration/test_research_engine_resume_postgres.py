@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -25,6 +26,7 @@ from src.models.research_project import ResearchProject
 from src.models.research_run import ResearchRun
 from src.models.research_source import ResearchSource
 from src.models.research_step import ResearchStep
+from src.services.research_engine.contracts import canonical_stage_output_hash
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.export_service import ExportService
 from src.services.research_engine.providers.base import (
@@ -300,6 +302,23 @@ class _RacingSession:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._db, name)
 
+    async def lifecycle_lock_run(self, run: ResearchRun) -> None:
+        """Move the row before the lifecycle acquires its claim lock."""
+        manifest = run.reproducibility_manifest or {}
+        if isinstance(manifest.get("resume_authorization"), dict) and not self._raced:
+            self._raced = True
+            async with self._factory() as competitor:
+                await competitor.execute(
+                    update(ResearchRun)
+                    .where(
+                        ResearchRun.id == self._run_id,
+                        ResearchRun.status == "paused",
+                    )
+                    .values(status="running")
+                )
+                await competitor.commit()
+        await self._db.refresh(run, with_for_update=True)
+
     async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
         if isinstance(statement, Update) and not self._raced:
             self._raced = True
@@ -380,6 +399,18 @@ async def test_persisted_post_resume_stream_rehydrates_failed_stages_once(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resumed = await client.post(f"/research-engine/runs/{run_id}/resume")
+            assert resumed.status_code == 409
+            assert resumed.json()["detail"]["code"] == "verification_override_required"
+
+            resumed = await client.post(
+                f"/research-engine/runs/{run_id}/resume",
+                json={
+                    "continue_unverified": True,
+                    "output_hash": canonical_stage_output_hash(
+                        _verification_envelope()
+                    ),
+                },
+            )
             assert resumed.status_code == 200
             assert resumed.json()["status"] == "paused"
 
@@ -458,6 +489,20 @@ async def test_direct_paused_stream_persists_continuation_and_unverified_export(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             streamed = await client.get(f"/research-engine/runs/{run_id}/stream")
+            assert streamed.status_code == 409
+            assert streamed.json()["detail"]["code"] == "verification_override_required"
+
+            resumed = await client.post(
+                f"/research-engine/runs/{run_id}/resume",
+                json={
+                    "continue_unverified": True,
+                    "output_hash": canonical_stage_output_hash(
+                        _verification_envelope()
+                    ),
+                },
+            )
+            assert resumed.status_code == 200
+            streamed = await client.get(f"/research-engine/runs/{run_id}/stream")
             assert streamed.status_code == 200
             assert "event: step_complete" in streamed.text
             assert "event: run_complete" in streamed.text
@@ -534,7 +579,15 @@ async def test_repeated_resume_executes_export_and_reconstructs_unverified_warni
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            first_resume = await client.post(f"/research-engine/runs/{run_id}/resume")
+            first_resume = await client.post(
+                f"/research-engine/runs/{run_id}/resume",
+                json={
+                    "continue_unverified": True,
+                    "output_hash": canonical_stage_output_hash(
+                        _verification_envelope()
+                    ),
+                },
+            )
             assert first_resume.status_code == 200
             first_stream = await client.get(f"/research-engine/runs/{run_id}/stream")
             assert first_stream.status_code == 200
@@ -552,6 +605,16 @@ async def test_repeated_resume_executes_export_and_reconstructs_unverified_warni
             )
 
             second_resume = await client.post(f"/research-engine/runs/{run_id}/resume")
+            assert second_resume.status_code == 409
+            assert (
+                second_resume.json()["detail"]["code"]
+                == "verification_override_required"
+            )
+            second_hash = second_resume.json()["detail"]["descriptor"]["output_hash"]
+            second_resume = await client.post(
+                f"/research-engine/runs/{run_id}/resume",
+                json={"continue_unverified": True, "output_hash": second_hash},
+            )
             assert second_resume.status_code == 200
             completed_stream = await client.get(
                 f"/research-engine/runs/{run_id}/stream"
@@ -566,7 +629,7 @@ async def test_repeated_resume_executes_export_and_reconstructs_unverified_warni
             assert run.total_tokens == 23
             assert run.reproducibility_manifest["continued_after_failure"] is True
             assert (
-                run.reproducibility_manifest["continued_after_failure_step_index"] == 1
+                run.reproducibility_manifest["continued_after_failure_step_index"] == 2
             )
             persisted = (
                 (
@@ -668,7 +731,15 @@ async def test_paid_reduction_parse_failure_persists_usage_hashes_once(
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            resumed = await client.post(f"/research-engine/runs/{run_id}/resume")
+            resumed = await client.post(
+                f"/research-engine/runs/{run_id}/resume",
+                json={
+                    "continue_unverified": True,
+                    "output_hash": canonical_stage_output_hash(
+                        _verification_envelope()
+                    ),
+                },
+            )
             assert resumed.status_code == 200
             streamed = await client.get(f"/research-engine/runs/{run_id}/stream")
             assert streamed.status_code == 200
@@ -759,7 +830,15 @@ async def test_timeout_after_paid_batch_persists_usage_and_hash_once(
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            resumed = await client.post(f"/research-engine/runs/{run_id}/resume")
+            resumed = await client.post(
+                f"/research-engine/runs/{run_id}/resume",
+                json={
+                    "continue_unverified": True,
+                    "output_hash": canonical_stage_output_hash(
+                        _verification_envelope()
+                    ),
+                },
+            )
             assert resumed.status_code == 200
             streamed = await client.get(f"/research-engine/runs/{run_id}/stream")
             assert streamed.status_code == 200
@@ -826,3 +905,56 @@ async def test_persisted_resume_losing_stream_returns_conflict_without_execution
             run = await db.get(ResearchRun, run_id)
             assert run is not None
             assert run.status == "running"
+
+
+async def test_concurrent_postgres_stream_claims_execute_paid_run_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The compare-and-set claim must admit exactly one concurrent stream."""
+
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    async with _research_schema(dsn) as factory:
+        owner_id, run_id = await _seed_run(
+            factory,
+            status="pending",
+            steps=[
+                {"type": "export", "name": "Export", "params": {"contract_version": 1}}
+            ],
+        )
+        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        _RecordingWorkflowEngine.calls.clear()
+        monkeypatch.setattr(
+            "src.api.research_engine.runs.WorkflowEngine", _RecordingWorkflowEngine
+        )
+        monkeypatch.setattr(
+            "src.api.research_engine.runs._build_connectors", lambda **_: object()
+        )
+
+        async def admitted(**_: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(
+            "src.api.research_engine.runs.admit_expensive_work", admitted
+        )
+        async with (
+            AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as first,
+            AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as second,
+        ):
+            responses = await asyncio.gather(
+                first.get(f"/research-engine/runs/{run_id}/stream"),
+                second.get(f"/research-engine/runs/{run_id}/stream"),
+            )
+
+        assert sorted(response.status_code for response in responses) == [200, 409]
+        assert len(_RecordingWorkflowEngine.calls) == 1
+        async with factory() as db:
+            run = await db.get(ResearchRun, run_id)
+            assert run is not None
+            assert run.status == "completed"

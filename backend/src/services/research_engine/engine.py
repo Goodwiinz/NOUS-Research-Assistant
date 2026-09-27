@@ -189,9 +189,17 @@ class WorkflowEngine:
 
                 # Versioned envelopes merge only stage-owned data. Legacy
                 # custom executors retain their existing output shape.
-                from src.services.research_engine.contracts import merge_stage_output
+                from src.services.research_engine.contracts import (
+                    canonical_stage_output_hash,
+                    merge_stage_output,
+                )
 
                 context = merge_stage_output(context, result.output, idx)
+                persisted_output_hash = (
+                    canonical_stage_output_hash(result.output)
+                    if result.output.get("contract_version") == 1
+                    else result.outputs_hash
+                )
                 total_tokens += max(0, int(result.token_count or 0))
 
                 quality_marks_data = [
@@ -211,8 +219,9 @@ class WorkflowEngine:
                     "output": result.output,
                     "step_type": step_def.get("type", ""),
                     "inputs_hash": result.inputs_hash,
-                    "outputs_hash": result.outputs_hash,
+                    "outputs_hash": persisted_output_hash,
                     "full_prompt": result.full_prompt,
+                    "prompt_metadata": result.prompt_metadata,
                     "quality_marks": quality_marks_data,
                     "token_count": result.token_count,
                 }
@@ -236,6 +245,28 @@ class WorkflowEngine:
                         "reason": "Quality check failed",
                         "quality_marks": quality_marks_data,
                         "context": context,
+                    }
+                    return
+
+                params = step_def.get("params") or step_def.get("parameters") or {}
+                review_gate = (
+                    params.get("review_gate") if isinstance(params, dict) else None
+                )
+                if (
+                    review_gate == "final"
+                    and context.get("continued_after_failure") is True
+                ):
+                    review_gate = None
+                if review_gate in {"screening", "extraction", "final"}:
+                    yield {
+                        "event": "run_paused",
+                        "run_id": str(run_id),
+                        "step_index": idx,
+                        "step_id": step_id,
+                        "reason": "Review required",
+                        "pause_reason": "review_required",
+                        "review_kind": review_gate,
+                        "output_hash": persisted_output_hash,
                     }
                     return
 

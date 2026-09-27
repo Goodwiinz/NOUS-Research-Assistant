@@ -586,6 +586,77 @@ class RunResponse(BaseModel):
     total_tokens: int = 0
     created_at: datetime
     updated_at: datetime
+    pause_reason: Optional[
+        Literal["user_paused", "review_required", "verification_failed"]
+    ] = None
+    review_kind: Optional[ReviewKind] = None
+    step_index: Optional[int] = None
+    output_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def attach_content_free_pause_descriptor(cls, value: Any) -> Any:
+        """Project a durable manifest gate without serializing its content."""
+
+        from src.services.research_engine.run_lifecycle import (
+            ResearchRunLifecycleService,
+        )
+
+        manifest = (
+            value.get("reproducibility_manifest")
+            if isinstance(value, dict)
+            else getattr(value, "reproducibility_manifest", None)
+        )
+        status_value = (
+            value.get("status")
+            if isinstance(value, dict)
+            else getattr(value, "status", None)
+        )
+        run_id = (
+            value.get("id") if isinstance(value, dict) else getattr(value, "id", None)
+        )
+        projected: dict[str, Any] | None = None
+        if not isinstance(value, dict):
+            projected = {
+                field: getattr(value, field)
+                for field in (
+                    "id",
+                    "blueprint_id",
+                    "blueprint_version",
+                    "status",
+                    "started_at",
+                    "completed_at",
+                    "total_tokens",
+                    "created_at",
+                    "updated_at",
+                )
+            }
+        if manifest is None or run_id is None:
+            return projected if projected is not None else value
+
+        descriptor = ResearchRunLifecycleService.pause_descriptor(
+            type(
+                "RunDescriptorProjection",
+                (),
+                {
+                    "id": run_id,
+                    "status": (
+                        status_value.value
+                        if isinstance(status_value, Enum)
+                        else status_value
+                    ),
+                    "reproducibility_manifest": manifest,
+                },
+            )()
+        )
+        if descriptor is None:
+            return projected if projected is not None else value
+
+        if isinstance(value, dict):
+            projected = dict(value)
+        assert projected is not None
+        projected.update(descriptor.to_dict())
+        return projected
 
 
 # ============================================================================
