@@ -110,6 +110,21 @@ class GroundingStatus(str, Enum):
     FAILED = "failed"
 
 
+class ReviewKind(str, Enum):
+    """Durable review gates supported by the Daily Research Brief contract."""
+
+    SCREENING = "screening"
+    EXTRACTION = "extraction"
+    FINAL = "final"
+
+
+class ReviewDecision(str, Enum):
+    """Top-level reviewer disposition for a persisted stage output."""
+
+    APPROVE = "approve"
+    DECLINE = "decline"
+
+
 class ConnectorFeatures(BaseModel):
     """Safe, behavioral search features for a research connector."""
 
@@ -333,6 +348,172 @@ class RunResumeRequest(BaseModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+
+
+class ScreeningItemDecision(BaseModel):
+    """A review decision for exactly one persisted screening source part."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(strict=True, min_length=1, max_length=512)
+    part_id: str = Field(strict=True, min_length=1, max_length=512)
+    decision: Literal["include", "exclude", "unresolved"]
+    reason: Optional[str] = Field(
+        default=None, strict=True, min_length=1, max_length=500
+    )
+
+    @model_validator(mode="after")
+    def exclusion_has_a_reason(self) -> "ScreeningItemDecision":
+        if self.decision == "exclude" and not (self.reason and self.reason.strip()):
+            raise ValueError("exclude decisions require a reason")
+        return self
+
+
+class ExtractionItemDecision(BaseModel):
+    """A review decision for exactly one persisted extraction source part."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(strict=True, min_length=1, max_length=512)
+    part_id: str = Field(strict=True, min_length=1, max_length=512)
+    decision: Literal["accept", "reject", "unresolved"]
+    reason: Optional[str] = Field(
+        default=None, strict=True, min_length=1, max_length=500
+    )
+
+    @model_validator(mode="after")
+    def rejection_has_a_reason(self) -> "ExtractionItemDecision":
+        if self.decision == "reject" and not (self.reason and self.reason.strip()):
+            raise ValueError("reject decisions require a reason")
+        return self
+
+
+class ScreeningReviewDecisionPayload(BaseModel):
+    """Exact-set screening decisions submitted for one stage output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[ScreeningItemDecision] = Field(min_length=1, max_length=1000)
+
+
+class ExtractionReviewDecisionPayload(BaseModel):
+    """Exact-set extraction decisions submitted for one stage output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[ExtractionItemDecision] = Field(min_length=1, max_length=1000)
+
+
+class FinalReviewDecisionPayload(BaseModel):
+    """Final review carries no client-authored report or evidence fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+ReviewDecisionPayload = (
+    ScreeningReviewDecisionPayload
+    | ExtractionReviewDecisionPayload
+    | FinalReviewDecisionPayload
+)
+
+
+class StageReviewRequest(BaseModel):
+    """Strict exact-hash decision for one persisted review gate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    review_kind: ReviewKind
+    output_hash: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
+    decision: ReviewDecision
+    decision_payload: ReviewDecisionPayload
+    note: Optional[str] = Field(default=None, strict=True, max_length=2000)
+
+    @model_validator(mode="after")
+    def payload_matches_review_kind(self) -> "StageReviewRequest":
+        expected: type[BaseModel]
+        if self.review_kind == ReviewKind.SCREENING:
+            expected = ScreeningReviewDecisionPayload
+        elif self.review_kind == ReviewKind.EXTRACTION:
+            expected = ExtractionReviewDecisionPayload
+        else:
+            expected = FinalReviewDecisionPayload
+        if not isinstance(self.decision_payload, expected):
+            raise ValueError("decision_payload does not match review_kind")
+        return self
+
+
+class ReviewDescriptor(BaseModel):
+    """Content-free durable descriptor for the current review gate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    step_index: int = Field(ge=0)
+    stage_type: Literal["screen", "extract", "export"]
+    review_kind: ReviewKind
+    contract_version: int = Field(ge=1)
+    output_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["pending", "approved"] = "pending"
+    created_at: Optional[datetime] = None
+    review_id: Optional[UUID] = None
+
+
+class StageReviewResponse(BaseModel):
+    """The immutable accepted ledger row plus replay metadata."""
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    step_index: int = Field(ge=0)
+    stage_type: Literal["screen", "extract", "export"]
+    review_kind: ReviewKind
+    reviewer_id: UUID
+    output_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decision: ReviewDecision
+    decision_payload: Dict[str, Any]
+    note: Optional[str] = Field(default=None, max_length=2000)
+    created_at: datetime
+    replay: bool = False
+
+
+class ReviewValidationVocabulary(BaseModel):
+    """Bounded decision vocabulary used to render a pending gate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_decisions: List[str] = Field(default_factory=list, max_length=3)
+    reason_required_for: List[str] = Field(default_factory=list, max_length=1)
+
+
+class PendingReviewResponse(BaseModel):
+    """Owned pending review state, optionally including bounded stage output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pending: bool
+    descriptor: Optional[ReviewDescriptor] = None
+    stage_output: Optional[Dict[str, Any]] = None
+    accepted_review: Optional[StageReviewResponse] = None
+    validation: Optional[ReviewValidationVocabulary] = None
+
+    @model_validator(mode="after")
+    def pending_fields_are_consistent(self) -> "PendingReviewResponse":
+        if self.pending and (self.descriptor is None or self.stage_output is None):
+            raise ValueError("pending reviews require a descriptor and stage output")
+        if not self.pending and any(
+            value is not None
+            for value in (
+                self.descriptor,
+                self.stage_output,
+                self.accepted_review,
+                self.validation,
+            )
+        ):
+            raise ValueError("non-pending review responses cannot carry gate data")
+        if self.stage_output is not None:
+            _bounded_payload(self.stage_output, "pending stage output")
+        return self
 
 
 class RunResponse(BaseModel):

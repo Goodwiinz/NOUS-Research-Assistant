@@ -79,6 +79,7 @@ from src.api.research_engine import (
     research_engine_blueprints_router,
     research_engine_capabilities_router,
     research_engine_projects_router,
+    research_engine_reviews_router,
     research_engine_runs_router,
     research_engine_steps_router,
 )
@@ -654,6 +655,9 @@ app.include_router(
 app.include_router(
     research_engine_steps_router, prefix="/api/v1"
 )  # Research Engine steps
+app.include_router(
+    research_engine_reviews_router, prefix="/api/v1"
+)  # Research Engine stage reviews
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search
