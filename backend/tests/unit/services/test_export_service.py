@@ -152,6 +152,8 @@ async def test_export_json_returns_correct_structure():
 
     # Evidence count
     assert report["evidence_count"] == 0  # R5-L19
+    assert report["evidence_status"] == "unavailable_legacy"
+    assert "unverified" in report["markdown"]
 
 
 @pytest.mark.asyncio
@@ -192,6 +194,91 @@ async def test_export_json_with_no_evidence():
 
     assert report["evidence_count"] == 0
     assert report["steps"][0]["evidence"] == []
+
+
+@pytest.mark.asyncio
+async def test_export_json_projects_typed_evidence_and_failed_checks():
+    """Versioned envelopes produce honest JSON and readable failed-check output."""
+    run, search_step, source = _make_run(status="completed")
+    source_id = "11111111-1111-4111-8111-111111111111"
+    search_step.step_type = "search"
+    search_step.output = {
+        "contract_version": 1,
+        "stage_type": "search",
+        "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+        "source_records": [
+            {
+                "source_id": source_id,
+                "connector_type": "arxiv",
+                "title": "A Test Paper",
+                "abstract": "The reported score did not improve.",
+                "evidence_level": "abstract",
+                "url": "https://example.test/paper",
+            }
+        ],
+        "coverage": {"partial": False, "exhaustive": False},
+        "selected_sources": ["arxiv"],
+    }
+    extraction_step = _make_step(run.id, 1, step_type="extract")
+    extraction_step.output = {
+        "contract_version": 1,
+        "stage_type": "extract",
+        "usage": {"model_calls": 1, "total_tokens": 12, "batches": []},
+        "extractions": [
+            {
+                "source_id": source_id,
+                "part_id": "p0001",
+                "data": {"finding": "The reported score did not improve."},
+                "evidence": [
+                    {
+                        "pointer": "/finding",
+                        "quote": "The reported score did not improve.",
+                        "page_reference": None,
+                        "evidence_id": "e0001",
+                    }
+                ],
+            }
+        ],
+        "processing_coverage": {"1": {"complete": True}},
+    }
+    extraction_step.full_prompt = "[system instructions and batch hashes]"
+    verify_step = _make_step(run.id, 2, step_type="verify")
+    verify_step.output = {
+        "contract_version": 1,
+        "stage_type": "verify",
+        "usage": {"model_calls": 1, "total_tokens": 8, "batches": []},
+        "verification": {
+            "passed": False,
+            "deterministic_passed": True,
+            "schema_passed": True,
+            "semantic_status": "failed",
+            "claims": [
+                {
+                    "claim_id": "c0001",
+                    "status": "contradicted",
+                    "reason": "The excerpt says the result did not improve.",
+                    "evidence_ids": ["e0001"],
+                }
+            ],
+            "coverage_complete": True,
+            "continued_after_failure": True,
+        },
+        "processing_coverage": {},
+    }
+    run.steps = [search_step, extraction_step, verify_step]
+    db = _mock_db_for_run(run)
+
+    report = await ExportService().export_json(run.id, db)
+
+    assert report["contract_version"] == 1
+    assert report["evidence_count"] == 1
+    assert report["steps"][1]["evidence"][0]["evidence_id"] == "e0001"
+    assert report["steps"][1]["full_prompt"] == "[system instructions and batch hashes]"
+    assert report["verification"]["passed"] is False
+    assert "Verification failed or is incomplete" in report["markdown"]
+    assert "Failed verification checks" in report["markdown"]
+    assert "contradicted" in report["markdown"]
+    assert "The excerpt says the result did not improve\\." in report["markdown"]
 
 
 # ---------------------------------------------------------------------------

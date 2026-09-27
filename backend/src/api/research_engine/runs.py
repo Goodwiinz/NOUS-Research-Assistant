@@ -34,6 +34,7 @@ from src.services.research_engine.connectors import (
     SemanticScholarConnector,
 )
 from src.services.research_engine.connectors.registry import build_connectors
+from src.services.research_engine.contracts import rehydrate_stage_outputs
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.providers import (
     ClaudeProvider,
@@ -47,6 +48,9 @@ from src.services.research_engine.step_executor import StepExecutor
 logger = logging.getLogger(__name__)
 
 _PAUSE_REQUESTED_KEY = "_pause_requested"
+_CONTINUATION_REQUESTED_KEY = "continuation_requested"
+_CONTINUED_AFTER_FAILURE_KEY = "continued_after_failure"
+_EXECUTION_ERRORS_KEY = "execution_errors"
 
 
 def _pause_requested(run: ResearchRun) -> bool:
@@ -383,7 +387,12 @@ async def resume_run(
             status_code=status.HTTP_409_CONFLICT,
             detail="Run is not currently paused",
         )
-    run.status = RunStatus.RUNNING.value
+    manifest = dict(run.reproducibility_manifest or {})
+    manifest[_CONTINUATION_REQUESTED_KEY] = True
+    run.reproducibility_manifest = manifest
+    # The stream endpoint is the only owner of the RUNNING claim. Keeping this
+    # row PAUSED lets POST /resume be followed by the existing GET /stream.
+    run.status = RunStatus.PAUSED.value
     await db.commit()
     await db.refresh(run)
     return RunResponse.model_validate(run)
@@ -455,6 +464,25 @@ async def stream_run(
     if last_step is not None:
         start_from = last_step.step_index + 1
 
+    history = (
+        (
+            await db.execute(
+                select(ResearchStep)
+                .where(ResearchStep.run_id == run_id)
+                .order_by(ResearchStep.step_index.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    try:
+        prior_outputs = rehydrate_stage_outputs(history)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Persisted run stages cannot be resumed: {exc}",
+        ) from exc
+
     required_models = sorted(
         {
             str(step.get("model_id") or _get_step_params(step).get("model_id"))
@@ -478,6 +506,39 @@ async def stream_run(
     effective_parameters, parameter_overrides = _get_effective_parameters(
         blueprint, run
     )
+    if effective_parameters.get("contract_version") == 1 and any(
+        not isinstance(step.output, dict) or step.output.get("contract_version") != 1
+        for step in history
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This legacy run cannot resume under the version-1 evidence contract; "
+                "start a new run from the version-1 template."
+            ),
+        )
+    manifest = dict(run.reproducibility_manifest or {})
+    if manifest.pop(_CONTINUATION_REQUESTED_KEY, False):
+        failed_quality_steps = [
+            item
+            for item in history
+            if any(
+                isinstance(mark, dict) and not mark.get("passed", True)
+                for mark in (item.quality_marks or [])
+            )
+        ]
+        if failed_quality_steps:
+            failed_step_index = max(
+                int(item.step_index) for item in failed_quality_steps
+            )
+            manifest[_CONTINUED_AFTER_FAILURE_KEY] = True
+            manifest["continued_after_failure_step_index"] = failed_step_index
+            prior_outputs["continued_after_failure"] = True
+            verification = prior_outputs.get("verification")
+            if isinstance(verification, dict):
+                verification["passed"] = False
+                verification["continued_after_failure"] = True
+        run.reproducibility_manifest = manifest
     try:
         validate_blueprint_runtime(
             {"steps": blueprint.steps or [], "parameters": effective_parameters}
@@ -564,25 +625,6 @@ async def stream_run(
             await db.commit()
 
         executor = StepExecutor(providers=providers, connectors=connectors)
-        # R5-M19: rehydrate accumulated step outputs so resumed/synthesize
-        # steps see everything earlier steps produced instead of starting
-        # from bare blueprint parameters.
-        prior_outputs: dict = {}
-        history = (
-            (
-                await db.execute(
-                    select(ResearchStep)
-                    .where(ResearchStep.run_id == run_id)
-                    .order_by(ResearchStep.step_index.asc())
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for done_step in history:
-            if isinstance(done_step.output, dict):
-                prior_outputs.update(done_step.output)
-
         engine = WorkflowEngine(step_executor=executor)
 
         try:
@@ -609,7 +651,10 @@ async def stream_run(
 
                 # An unfinished event can stop immediately. A completed paid step
                 # must be persisted and charged before the pause takes effect.
-                if pause_requested and event_type != "step_complete":
+                if pause_requested and event_type not in {
+                    "step_complete",
+                    "step_error",
+                }:
                     _set_pause_requested(run, False)
                     run.status = RunStatus.PAUSED.value
                     run.total_tokens = total_tokens
@@ -656,6 +701,9 @@ async def stream_run(
                             temperature=float(temperature),
                             seed=int(seed) if seed is not None else None,
                             output=output,
+                            inputs_hash=event.get("inputs_hash"),
+                            outputs_hash=event.get("outputs_hash"),
+                            full_prompt=event.get("full_prompt"),
                             quality_marks=event.get("quality_marks") or [],
                             token_count=int(event.get("token_count") or 0),
                             completed_at=datetime.now(timezone.utc),
@@ -678,10 +726,38 @@ async def stream_run(
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
                     await db.commit()
+                elif event_type == "step_error":
+                    consumed_tokens = max(0, int(event.get("consumed_tokens") or 0))
+                    total_tokens += consumed_tokens
+                    manifest = dict(run.reproducibility_manifest or {})
+                    errors = list(manifest.get(_EXECUTION_ERRORS_KEY) or [])
+                    error_key = (event.get("step_index"), event.get("step_id"))
+                    if not any(
+                        (item.get("step_index"), item.get("step_id")) == error_key
+                        for item in errors
+                        if isinstance(item, dict)
+                    ):
+                        errors.append(
+                            {
+                                "step_index": event.get("step_index"),
+                                "step_id": event.get("step_id"),
+                                "model_calls": max(
+                                    0, int(event.get("model_calls") or 0)
+                                ),
+                                "consumed_tokens": consumed_tokens,
+                                "batch_metadata": event.get("batch_metadata") or [],
+                            }
+                        )
+                    manifest[_EXECUTION_ERRORS_KEY] = errors
+                    run.reproducibility_manifest = manifest
+                    run.total_tokens = total_tokens
+                    await db.commit()
                 elif event_type == "run_complete":
                     run.status = RunStatus.COMPLETED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
+                    previous_manifest = dict(run.reproducibility_manifest or {})
+                    previous_manifest.pop(_CONTINUATION_REQUESTED_KEY, None)
                     run.reproducibility_manifest = {
                         "run_id": str(run.id),
                         "blueprint_id": str(blueprint.id),
@@ -690,6 +766,16 @@ async def stream_run(
                         "completed_at": run.completed_at.isoformat(),
                         "parameters_override": parameter_overrides,
                         "parameters": effective_parameters,
+                        **{
+                            key: value
+                            for key, value in previous_manifest.items()
+                            if key
+                            in {
+                                _CONTINUED_AFTER_FAILURE_KEY,
+                                "continued_after_failure_step_index",
+                                _EXECUTION_ERRORS_KEY,
+                            }
+                        },
                     }
                     await db.commit()
 

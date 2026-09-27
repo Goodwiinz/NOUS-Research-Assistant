@@ -320,7 +320,7 @@ class TestWorkflowEngine:
 
     @pytest.mark.asyncio
     async def test_run_cancels_a_step_when_wall_budget_expires_during_execution(self):
-        async def slow_execute(_step, _context):
+        async def slow_execute(_step, _context, **_kwargs):
             await asyncio.sleep(0.2)
             return StepResult(output={"done": True})
 

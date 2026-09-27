@@ -933,3 +933,35 @@ retains that title plus its project relation through both uncapped extraction
 and capped Task 2 receipt replay. That contract is covered by
 `test_uncapped_revision_result_keeps_draft_title_and_project_relation` and the
 revision case in `test_result_receipts_keep_mutation_root_labels_and_relations_for_replay`.
+
+## Task 5 follow-up: losing research stream cannot acquire a claimed run
+
+- **Source and guard:** `backend/src/api/research_engine/runs.py:563-577`.
+  The stream's conditional `UPDATE` is the only transition from `pending` or
+  `paused` to `running`; a zero-row claim rolls back and returns HTTP 409 before
+  admission or workflow execution.
+- **Owning test:**
+  `backend/tests/unit/api/test_research_engine_stream.py::TestStreamEndpointErrors::test_stream_claim_loser_does_not_start_resumed_run`.
+- **Mutation:** inverted `if claim.rowcount == 0:` to
+  `if claim.rowcount == 1:` at the claim guard.
+- **RED command** (task-owned Redis endpoint supplied through the private
+  environment; its value is omitted here):
+
+  ```sh
+  PYTHONPATH=backend LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false ENVIRONMENT=testing REDIS_URL="${TASK_OWNED_REDIS_URL:?}" .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false 'backend/tests/unit/api/test_research_engine_stream.py::TestStreamEndpointErrors::test_stream_claim_loser_does_not_start_resumed_run'
+  ```
+
+- **Observed mutant failure:** exit 1; the test failed with “DID NOT RAISE
+  HTTPException,” proving the losing stream passed through the claim guard.
+- **Restore proof:** restored from
+  `.superpowers/sdd/2026-09-25-agent-orchestration-repairs/task-5-claim.pre-mutation.py`;
+  `cmp -s` succeeded. The pre-mutation and restored source SHA-256 was
+  `9cf4ab69e6f355f5e254d010058769cf598227f0d44890bfc5df6241e5d99b0e`.
+- **Restored result:** the same command exited 0; `1 passed` with the existing
+  Pydantic v2 `schema_extra` rename warning.
+- **Persisted API coverage:**
+  `backend/tests/integration/test_research_engine_resume_postgres.py` also
+  commits a competing `paused`→`running` transition through a second session
+  immediately before the real claim. The stream returns 409 and records zero
+  workflow-engine invocations against the task-owned disposable PostgreSQL
+  schema (2 integration cases pass; one baseline Pydantic warning).

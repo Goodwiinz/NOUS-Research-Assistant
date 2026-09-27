@@ -11,6 +11,8 @@ from src.models.research_blueprint import ResearchBlueprint
 from src.models.research_run import ResearchRun
 from src.models.research_source import ResearchSource
 from src.models.research_step import ResearchStep
+from src.services.research_engine.contracts import rehydrate_stage_outputs
+from src.services.research_engine.report_rendering import build_report, render_markdown
 
 
 class ExportService:
@@ -50,9 +52,58 @@ class ExportService:
                 f"Research run {run_id} is not completed (status: {run.status})"
             )
 
-        # The retired evidence table had no writers. Keep the response
-        # shape stable while returning the only truthful value.
+        # Evidence comes only from persisted, validated typed envelopes. The
+        # retired evidence table had no writers and is intentionally unused.
         evidence_by_step: Dict[UUID, List[Dict[str, Any]]] = {}
+        evidence_ids: set[str] = set()
+        for step in run.steps:
+            envelope = step.output if isinstance(step.output, dict) else {}
+            records = envelope.get("extractions", [])
+            step_evidence: list[Dict[str, Any]] = []
+            for record in records if isinstance(records, list) else []:
+                if not isinstance(record, dict):
+                    continue
+                for item in (
+                    record.get("evidence", [])
+                    if isinstance(record.get("evidence"), list)
+                    else []
+                ):
+                    if not isinstance(item, dict) or not isinstance(
+                        item.get("evidence_id"), str
+                    ):
+                        continue
+                    evidence_ids.add(item["evidence_id"])
+                    step_evidence.append(
+                        {
+                            "evidence_id": item["evidence_id"],
+                            "source_id": record.get("source_id"),
+                            "part_id": item.get("part_id", record.get("part_id")),
+                            "pointer": item.get("pointer"),
+                            "quote": item.get("quote"),
+                            "page_reference": item.get("page_reference"),
+                        }
+                    )
+                for claim in (
+                    record.get("claims", [])
+                    if isinstance(record.get("claims"), list)
+                    else []
+                ):
+                    if not isinstance(claim, dict) or not isinstance(
+                        claim.get("evidence_id"), str
+                    ):
+                        continue
+                    evidence_ids.add(claim["evidence_id"])
+                    step_evidence.append(
+                        {
+                            "evidence_id": claim["evidence_id"],
+                            "source_id": record.get("source_id"),
+                            "part_id": claim.get("part_id", record.get("part_id")),
+                            "claim_text": claim.get("claim_text"),
+                            "quote": claim.get("quote"),
+                            "page_reference": claim.get("page_reference"),
+                        }
+                    )
+            evidence_by_step[step.id] = step_evidence
 
         # Build steps section
         steps_data = []
@@ -68,6 +119,7 @@ class ExportService:
                     "seed": step.seed,
                     "inputs_hash": step.inputs_hash,
                     "outputs_hash": step.outputs_hash,
+                    "full_prompt": step.full_prompt,
                     "output": step.output,
                     "quality_marks": step.quality_marks,
                     "token_count": step.token_count,
@@ -91,24 +143,46 @@ class ExportService:
                 }
             )
 
-        # Build the report
+        try:
+            typed_context = rehydrate_stage_outputs(
+                sorted(run.steps, key=lambda item: item.step_index)
+            )
+        except ValueError:
+            # Existing immutable legacy rows may have gaps and remain readable.
+            typed_context = {}
+        report = build_report(typed_context)
+        report["markdown"] = render_markdown(report)
+        # Preserve the established export fields while adding typed evidence
+        # and verification projections.
         blueprint = run.blueprint
-        report: Dict[str, Any] = {
-            "run_id": str(run.id),
-            "status": run.status,
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-            "total_tokens": run.total_tokens,
-            "blueprint": {
-                "id": str(blueprint.id),
-                "name": blueprint.name,
-                "version": blueprint.version,
-                "template_source": blueprint.template_source,
-            },
-            "steps": steps_data,
-            "sources": sources_data,
-            "evidence_count": 0,
-        }
+        report.update(
+            {
+                "run_id": str(run.id),
+                "status": run.status,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "completed_at": (
+                    run.completed_at.isoformat() if run.completed_at else None
+                ),
+                "total_tokens": run.total_tokens,
+                "blueprint": {
+                    "id": str(blueprint.id),
+                    "name": blueprint.name,
+                    "version": blueprint.version,
+                    "template_source": blueprint.template_source,
+                },
+                "steps": steps_data,
+                "sources": sources_data,
+                "evidence_count": len(evidence_ids),
+            }
+        )
+        if report.get("contract_version") is None:
+            report["evidence_status"] = "unavailable_legacy"
+            report["verification"] = {
+                "available": False,
+                "passed": False,
+                "semantic_status": "unverified",
+                "reason": "Typed verification evidence is unavailable for this legacy run.",
+            }
 
         return report
 

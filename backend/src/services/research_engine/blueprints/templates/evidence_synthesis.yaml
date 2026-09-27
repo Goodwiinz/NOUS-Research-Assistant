@@ -1,11 +1,11 @@
 name: "Evidence Synthesis"
 description: "Search academic and web sources, extract claims and supporting evidence, build an evidence map, verify grounding, and export a synthesis report."
 parameters:
+  contract_version: 1
   query: ""
   sources:
     - arxiv
     - semantic_scholar
-    - web
   max_results: 30
   claim_threshold: 0.7
 
@@ -14,11 +14,9 @@ steps:
     name: "Multi-Source Search"
     description: "Search academic databases and web sources for documents related to the research query."
     parameters:
-      sources:
-        - arxiv
-        - semantic_scholar
-        - web
-      max_results: 30
+      contract_version: 1
+      sources: "{sources}"
+      max_results: "{max_results}"
     model_id: null
     mode: deterministic
     system_prompt_template: null
@@ -27,9 +25,11 @@ steps:
     name: "Claim and Evidence Extraction"
     description: "Extract individual claims and their supporting evidence from each retrieved document."
     parameters:
+      contract_version: 1
+      output_kind: claims
       extract_claims: true
       extract_evidence: true
-      confidence_threshold: 0.7
+      confidence_threshold: "{claim_threshold}"
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >

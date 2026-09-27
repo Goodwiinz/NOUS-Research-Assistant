@@ -1,12 +1,17 @@
 """Workflow engine that orchestrates research blueprint execution."""
 
 import asyncio
+import inspect
 import time
 from typing import Any, AsyncGenerator, Callable, Dict
 from uuid import UUID
 
 from src.schemas.research_engine import validate_blueprint_runtime
-from src.services.research_engine.step_executor import StepExecutor
+from src.services.research_engine.step_executor import (
+    ExecutionBudget,
+    StepExecutionError,
+    StepExecutor,
+)
 
 MAX_RUN_TOKENS = 50_000
 MAX_RUN_WALL_TIME_SECONDS = 15 * 60
@@ -62,6 +67,17 @@ class WorkflowEngine:
 
         started_at = self.clock() if started_at is None else started_at
         total_tokens = max(0, int(initial_total_tokens or 0))
+        prior_steps = list((context.get("stage_results") or {}).values())
+        prior_calls = sum(
+            max(0, int((item.get("usage") or {}).get("model_calls", 0)))
+            for item in prior_steps
+            if isinstance(item, dict)
+        )
+        budget = ExecutionBudget(
+            max_total_tokens=self.max_total_tokens,
+            used_tokens=total_tokens,
+            used_calls=prior_calls,
+        )
 
         yield {"event": "run_start", "run_id": str(run_id), "total_steps": len(steps)}
 
@@ -110,8 +126,24 @@ class WorkflowEngine:
                             "error": "Run wall-time budget exhausted",
                         }
                         return
+                    budget.active_step_index = idx
+                    execute = self.step_executor.execute
+                    try:
+                        parameters = inspect.signature(execute).parameters.values()
+                        accepts_budget = any(
+                            parameter.name == "budget"
+                            or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                            for parameter in parameters
+                        )
+                    except (TypeError, ValueError):
+                        accepts_budget = isinstance(self.step_executor, StepExecutor)
+                    execution = (
+                        execute(step_def, context, budget=budget)
+                        if accepts_budget
+                        else execute(step_def, context)
+                    )
                     result = await asyncio.wait_for(
-                        self.step_executor.execute(step_def, context),
+                        execution,
                         timeout=remaining_wall_time,
                     )
                 except asyncio.TimeoutError:
@@ -119,6 +151,25 @@ class WorkflowEngine:
                         "event": "run_failed",
                         "run_id": str(run_id),
                         "error": "Run wall-time budget exhausted",
+                    }
+                    return
+                except StepExecutionError as exc:
+                    consumed_tokens = max(0, int(exc.consumed_tokens))
+                    total_tokens += consumed_tokens
+                    yield {
+                        "event": "step_error",
+                        "run_id": str(run_id),
+                        "step_index": idx,
+                        "step_id": step_id,
+                        "error": str(exc),
+                        "consumed_tokens": consumed_tokens,
+                        "model_calls": max(0, int(exc.model_calls)),
+                        "batch_metadata": exc.batch_metadata,
+                    }
+                    yield {
+                        "event": "run_failed",
+                        "run_id": str(run_id),
+                        "error": f"Step {step_id} failed: {exc}",
                     }
                     return
                 except Exception as exc:
@@ -136,8 +187,11 @@ class WorkflowEngine:
                     }
                     return
 
-                # Merge step output into context for subsequent steps
-                context.update(result.output)
+                # Versioned envelopes merge only stage-owned data. Legacy
+                # custom executors retain their existing output shape.
+                from src.services.research_engine.contracts import merge_stage_output
+
+                context = merge_stage_output(context, result.output, idx)
                 total_tokens += max(0, int(result.token_count or 0))
 
                 quality_marks_data = [
@@ -155,6 +209,10 @@ class WorkflowEngine:
                     "step_index": idx,
                     "step_id": step_id,
                     "output": result.output,
+                    "step_type": step_def.get("type", ""),
+                    "inputs_hash": result.inputs_hash,
+                    "outputs_hash": result.outputs_hash,
+                    "full_prompt": result.full_prompt,
                     "quality_marks": quality_marks_data,
                     "token_count": result.token_count,
                 }

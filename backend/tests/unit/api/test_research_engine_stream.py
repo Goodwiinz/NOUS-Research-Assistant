@@ -14,13 +14,14 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from src.api.research_engine.runs import pause_run, router, stream_run
+from src.api.research_engine.runs import pause_run, resume_run, router, stream_run
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 
@@ -100,15 +101,15 @@ def _mock_db_returning(
                 step_mock.scalars.return_value.first.return_value = last_step
             results.append(step_mock)
 
+            # Prior-outputs history SELECT now happens before the atomic claim.
+            history_mock = Mock()
+            history_mock.scalars.return_value.all.return_value = []
+            results.append(history_mock)
+
             # R5-M18 claim UPDATE → rowcount=1
             claim_mock = Mock()
             claim_mock.rowcount = 1
             results.append(claim_mock)
-
-            # R5-M19 prior-outputs history SELECT
-            history_mock = Mock()
-            history_mock.scalars.return_value.all.return_value = []
-            results.append(history_mock)
 
     db.execute = AsyncMock(side_effect=results)
     # commit/refresh are no-ops in tests
@@ -763,7 +764,7 @@ class TestStreamEndpointErrors:
         assert response.status_code == 409
         stream_app.dependency_overrides.pop(get_db, None)
 
-    def test_resume_keeps_paused_status_for_step_index_recovery(
+    def test_resume_keeps_paused_status_until_stream_claims_run(
         self, stream_app, stream_client
     ):
         run_id = uuid.uuid4()
@@ -783,8 +784,125 @@ class TestStreamEndpointErrors:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["status"] == "running"
+        assert body["status"] == "paused"
+        assert run.reproducibility_manifest["continuation_requested"] is True
         stream_app.dependency_overrides.pop(get_db, None)
+
+    @pytest.mark.asyncio
+    async def test_post_resume_then_stream_claims_paused_run(self):
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="paused",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        blueprint = _make_blueprint(id=bp_id)
+        blueprint_result = Mock()
+        blueprint_result.scalars.return_value.first.return_value = blueprint
+        last_step_result = Mock()
+        last_step_result.scalars.return_value.first.return_value = None
+        history_result = Mock()
+        history_result.scalars.return_value.all.return_value = []
+        claim_result = Mock(rowcount=1)
+        db = AsyncMock()
+        db.execute = AsyncMock(
+            side_effect=[
+                blueprint_result,
+                last_step_result,
+                history_result,
+                claim_result,
+            ]
+        )
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        db.add = Mock()
+        user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+        seen_context: dict[str, Any] = {}
+
+        async def engine_run(**kwargs):
+            seen_context.update(kwargs["initial_context"])
+            yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
+
+        with (
+            patch(
+                "src.api.research_engine.runs._get_owned_run",
+                new=AsyncMock(side_effect=[run, run]),
+            ),
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+        ):
+            engine = Mock()
+            engine.run = engine_run
+            engine_cls.return_value = engine
+            resumed = await resume_run(run_id, user, db)
+            assert resumed.status.value == "paused"
+            response = await stream_run(run_id, user, db)
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        assert run.status == "completed"
+        assert "event: run_complete" in "".join(chunks)
+        assert seen_context == {}
+
+    @pytest.mark.asyncio
+    async def test_stream_claim_loser_does_not_start_resumed_run(self):
+        """A competing stream that loses the atomic claim cannot execute work."""
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="paused",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        blueprint = _make_blueprint(id=bp_id)
+        blueprint_result = Mock()
+        blueprint_result.scalars.return_value.first.return_value = blueprint
+        last_step_result = Mock()
+        last_step_result.scalars.return_value.first.return_value = None
+        history_result = Mock()
+        history_result.scalars.return_value.all.return_value = []
+        claim_result = Mock(rowcount=0)
+        db = AsyncMock()
+        db.execute = AsyncMock(
+            side_effect=[
+                blueprint_result,
+                last_step_result,
+                history_result,
+                claim_result,
+            ]
+        )
+        db.commit = AsyncMock()
+        db.rollback = AsyncMock()
+        user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        with (
+            patch(
+                "src.api.research_engine.runs._get_owned_run",
+                new=AsyncMock(return_value=run),
+            ),
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ) as admit,
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await stream_run(run_id, user, db)
+
+        assert exc_info.value.status_code == 409
+        db.rollback.assert_awaited_once()
+        db.commit.assert_not_awaited()
+        admit.assert_not_awaited()
+        engine_cls.assert_not_called()
 
     def test_stream_returns_409_for_failed_run(self, stream_app, stream_client):
         run_id = uuid.uuid4()

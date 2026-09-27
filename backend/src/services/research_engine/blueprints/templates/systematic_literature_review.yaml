@@ -1,6 +1,7 @@
 name: "Systematic Literature Review"
 description: "Conduct a systematic literature review following PRISMA-like methodology: search multiple academic databases, screen results by inclusion/exclusion criteria, extract key data, synthesize findings, verify grounding, and export a structured report."
 parameters:
+  contract_version: 1
   query: ""
   databases:
     - arxiv
@@ -22,11 +23,9 @@ steps:
     name: "Academic Database Search"
     description: "Search arxiv, Semantic Scholar, and PubMed for papers matching the research query."
     parameters:
-      sources:
-        - arxiv
-        - semantic_scholar
-        - pubmed
-      max_results_per_source: 50
+      contract_version: 1
+      sources: "{databases}"
+      max_results_per_source: "{max_results_per_source}"
     model_id: null
     mode: deterministic
     system_prompt_template: null
@@ -35,6 +34,8 @@ steps:
     name: "Title and Abstract Screening"
     description: "Screen retrieved papers by title and abstract using inclusion and exclusion criteria to determine relevance."
     parameters:
+      contract_version: 1
+      output_kind: screening
       screening_fields:
         - title
         - abstract
@@ -52,6 +53,8 @@ steps:
     name: "Data Extraction"
     description: "Extract key data fields from each included paper: title, authors, year, methodology, findings, and limitations."
     parameters:
+      contract_version: 1
+      output_kind: review_fields
       fields: "{extraction_fields}"
     model_id: "claude-sonnet-4-6"
     mode: deterministic
