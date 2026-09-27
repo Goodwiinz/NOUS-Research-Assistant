@@ -192,6 +192,7 @@ class WorkflowEngine:
                 from src.services.research_engine.contracts import (
                     canonical_stage_output_hash,
                     merge_stage_output,
+                    no_evidence_reason,
                 )
 
                 context = merge_stage_output(context, result.output, idx)
@@ -234,17 +235,13 @@ class WorkflowEngine:
                     }
                     return
 
-                # Check for quality failures
-                has_failure = any(not qm.passed for qm in result.quality_marks)
-                if has_failure and self.pause_on_quality_failure:
+                terminal_reason = no_evidence_reason(result.output)
+                if terminal_reason is not None:
                     yield {
-                        "event": "run_paused",
+                        "event": "run_complete",
                         "run_id": str(run_id),
-                        "step_index": idx,
-                        "step_id": step_id,
-                        "reason": "Quality check failed",
-                        "quality_marks": quality_marks_data,
-                        "context": context,
+                        "final_status": "no_evidence",
+                        "terminal_reason": terminal_reason,
                     }
                     return
 
@@ -257,6 +254,23 @@ class WorkflowEngine:
                     and context.get("continued_after_failure") is True
                 ):
                     review_gate = None
+                event_output_hash = (
+                    persisted_output_hash or canonical_stage_output_hash(result.output)
+                )
+                verification = result.output.get("verification")
+                if (
+                    step_def.get("type") == "verify"
+                    and isinstance(verification, dict)
+                    and verification.get("passed") is not True
+                ):
+                    yield {
+                        "event": "run_paused",
+                        "run_id": str(run_id),
+                        "pause_reason": "verification_failed",
+                        "step_index": idx,
+                        "output_hash": event_output_hash,
+                    }
+                    return
                 if review_gate in {"screening", "extraction", "final"}:
                     yield {
                         "event": "run_paused",
@@ -266,7 +280,19 @@ class WorkflowEngine:
                         "reason": "Review required",
                         "pause_reason": "review_required",
                         "review_kind": review_gate,
-                        "output_hash": persisted_output_hash,
+                        "output_hash": event_output_hash,
+                    }
+                    return
+
+                # Legacy quality-only pauses still expose a bounded descriptor.
+                has_failure = any(not qm.passed for qm in result.quality_marks)
+                if has_failure and self.pause_on_quality_failure:
+                    yield {
+                        "event": "run_paused",
+                        "run_id": str(run_id),
+                        "pause_reason": "user_paused",
+                        "step_index": idx,
+                        "output_hash": event_output_hash,
                     }
                     return
 

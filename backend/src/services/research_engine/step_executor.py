@@ -15,6 +15,7 @@ from src.services.research_engine.contracts import (
     ClaimRecord,
     SynthesisSection,
     VerificationCheck,
+    build_stage_response_contract,
     immediate_stage_envelope,
     parse_provider_json,
     resolve_parameters,
@@ -346,6 +347,13 @@ class StepExecutor:
         if stage_type == "export":
             return self._execute_contract_export(step_def, context)
         params = resolve_parameters(self._get_params(step_def), context)
+        response_contract = build_stage_response_contract(stage_type, params, context)
+        params = {
+            **params,
+            "_target_schema": response_contract.target_schema,
+        }
+        if response_contract.extraction_schema is not None:
+            params["_extraction_schema"] = response_contract.extraction_schema
         execution_context = context
         prompt_metadata: Dict[str, str] | None = None
         if self._is_daily_brief_context(context):
@@ -616,15 +624,10 @@ class StepExecutor:
             upstream["included_source_ids"] = copy.deepcopy(
                 context["included_source_ids"]
             )
-        if expected == "extract" and isinstance(context.get("extractions"), list):
-            upstream["extractions"] = copy.deepcopy(context["extractions"])
 
-        target_schema = params.get("schema") or params.get("extraction_schema")
+        target_schema = params.get("_target_schema")
         if not isinstance(target_schema, dict):
-            target_schema = {
-                "contract_version": CONTRACT_VERSION,
-                "stage_type": stage_type,
-            }
+            raise ValueError("Daily Brief stage is missing its response contract")
         remaining_tokens = (
             max(
                 0,
@@ -894,44 +897,21 @@ class StepExecutor:
                 )
             eligible = eligible[:max_documents]
 
-        schema = params.get("schema", context.get("extraction_schema", {}))
-        if output_kind == "review_fields":
-            fields = params.get(
-                "fields",
-                params.get("extraction_fields", context.get("extraction_fields", [])),
-            )
-            if not isinstance(fields, list) or not all(
-                isinstance(item, str) for item in fields
-            ):
-                raise ValueError("extraction_fields must be a list of strings")
-            properties = {}
-            for name in fields:
-                if name == "authors":
-                    properties[name] = {
-                        "anyOf": [
-                            {"type": "array", "items": {"type": "string"}},
-                            {"type": "null"},
-                        ]
-                    }
-                elif name == "year":
-                    properties[name] = {"type": ["integer", "null"]}
-                else:
-                    properties[name] = {"type": ["string", "null"]}
-            schema = {
-                "type": "object",
-                "properties": properties,
-                "required": fields,
-                "additionalProperties": False,
-            }
-        if output_kind != "claims":
-            from src.services.research_engine.contracts import validate_user_schema
-
-            validate_user_schema(schema)
+        schema_value = params.get("_extraction_schema")
+        extraction_schema: Dict[str, Any] | None = (
+            schema_value if isinstance(schema_value, dict) else None
+        )
+        if output_kind != "claims" and extraction_schema is None:
+            raise ValueError("extraction stage is missing its validated data schema")
 
         batches = self._prepare_batches(
             step_def=step_def,
-            params={**params, "output_kind": output_kind, "schema": schema},
-            context={**context, "extraction_schema": schema},
+            params={
+                **params,
+                "output_kind": output_kind,
+                "schema": extraction_schema,
+            },
+            context={**context, "extraction_schema": extraction_schema},
             stage_type="extract",
             records=eligible,
         )
@@ -1043,9 +1023,10 @@ class StepExecutor:
                         {"source_id": source_id, "part_id": part_id, "claims": retained}
                     )
                 else:
+                    assert extraction_schema is not None
                     normalized = validate_extraction_record(
                         raw,
-                        schema=schema,
+                        schema=extraction_schema,
                         source_parts=source_parts,
                     )
                     for item in normalized["evidence"]:

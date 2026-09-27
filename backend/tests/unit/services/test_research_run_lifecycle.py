@@ -369,3 +369,137 @@ async def test_release_pending_claim_restores_pristine_pending_state() -> None:
 
     assert run.status == "pending"
     assert run.started_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage_type", "review_kind", "output", "reason"),
+    [
+        (
+            "screen",
+            "screening",
+            {
+                "contract_version": 1,
+                "stage_type": "screen",
+                "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+                "screening": [],
+                "included_source_ids": [],
+                "processing_coverage": {"1": {"complete": True}},
+            },
+            "empty_screening",
+        ),
+        (
+            "extract",
+            "extraction",
+            {
+                "contract_version": 1,
+                "stage_type": "extract",
+                "usage": {"model_calls": 1, "total_tokens": 7, "batches": []},
+                "extractions": [
+                    {"source_id": "source-1", "part_id": "p0001", "claims": []}
+                ],
+                "processing_coverage": {"1": {"complete": True}},
+                "diagnostics": [],
+            },
+            "empty_extraction",
+        ),
+    ],
+)
+async def test_zero_item_gated_stage_persists_terminal_no_evidence_audit(
+    stage_type: str,
+    review_kind: str,
+    output: dict[str, object],
+    reason: str,
+) -> None:
+    run = _run()
+    session = _Session(run)
+    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+    step_definition = {
+        "id": stage_type,
+        "type": stage_type,
+        "parameters": {"contract_version": 1, "review_gate": review_kind},
+    }
+    event = {
+        "event": "step_complete",
+        "step_index": 1,
+        "step_id": stage_type,
+        "step_type": stage_type,
+        "output": output,
+        "outputs_hash": canonical_stage_output_hash(output),
+        "quality_marks": [],
+        "token_count": 7,
+    }
+
+    transition = await service.persist_step_completion(
+        run=run,
+        event=event,
+        step_definition=step_definition,
+    )
+
+    assert transition.terminal_status == "no_evidence"
+    assert transition.pause is None
+    assert run.status == "completed"
+    assert run.reproducibility_manifest["final_status"] == "no_evidence"
+    assert "pending_review" not in run.reproducibility_manifest
+    assert run.reproducibility_manifest["terminal_audit"] == {
+        "outcome": "no_evidence",
+        "reason": reason,
+        "step_index": 1,
+        "stage_type": stage_type,
+        "output_hash": canonical_stage_output_hash(output),
+        "created_at": NOW.isoformat(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_user_pause_before_first_step_uses_safe_sentinel_descriptor() -> None:
+    run = _run()
+    session = _Session(run)
+    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+
+    descriptor = await service.persist_user_pause(run=run)
+
+    assert run.status == "paused"
+    assert descriptor.pause_reason == "user_paused"
+    assert descriptor.step_index == -1
+    assert len(descriptor.output_hash) == 64
+    assert run.reproducibility_manifest["user_pause"] == {
+        "step_index": -1,
+        "output_hash": descriptor.output_hash,
+        "created_at": NOW.isoformat(),
+    }
+    assert ResearchRunLifecycleService.pause_descriptor(run) == descriptor
+
+
+@pytest.mark.asyncio
+async def test_user_pause_anchors_latest_step_and_reconnect_restores_retry_state() -> (
+    None
+):
+    run = _run()
+    output = _screen_output()
+    step = ResearchStep(
+        run_id=run.id,
+        step_index=1,
+        step_type="screen",
+        mode="deterministic",
+        output=output,
+        outputs_hash=canonical_stage_output_hash(output),
+        quality_marks=[],
+        token_count=7,
+    )
+    session = _Session(run)
+    session.persisted_steps.append(step)
+    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+
+    descriptor = await service.persist_user_pause(run=run)
+    await service.authorize_resume(run=run, actor_id=uuid4())
+    claim = await service.claim_stream(run=run)
+
+    assert descriptor.step_index == 1
+    assert descriptor.output_hash == canonical_stage_output_hash(output)
+    assert "user_pause" not in run.reproducibility_manifest
+
+    await service.release_stream_claim(run=run, claim=claim)
+
+    assert run.status == "paused"
+    assert ResearchRunLifecycleService.pause_descriptor(run) == descriptor

@@ -27,7 +27,11 @@ from src.models.research_run import RunStatus
 from src.models.research_stage_review import ResearchStageReview
 from src.models.research_step import ResearchStep
 from src.schemas.research_engine import ReviewKind, RunResumeRequest
-from src.services.research_engine.contracts import canonical_stage_output_hash
+from src.services.research_engine.contracts import (
+    canonical_json_sha256,
+    canonical_stage_output_hash,
+    no_evidence_reason,
+)
 
 PauseReason = Literal["user_paused", "review_required", "verification_failed"]
 
@@ -43,6 +47,8 @@ class PauseDescriptor:
         value = asdict(self)
         if self.review_kind is not None:
             value["review_kind"] = self.review_kind.value
+        else:
+            value.pop("review_kind", None)
         return value
 
 
@@ -69,6 +75,8 @@ class StreamClaim:
     claimed: bool
     was_paused: bool
     authorization_kind: str | None = None
+    started_at_before_claim: datetime | None = None
+    manifest_before_claim: dict[str, Any] | None = None
 
 
 class ResearchRunLifecycleError(RuntimeError):
@@ -100,6 +108,10 @@ _REVIEW_GATE_BY_STAGE: dict[str, ReviewKind] = {
     "extract": ReviewKind.EXTRACTION,
     "export": ReviewKind.FINAL,
 }
+_PAUSE_REQUESTED_KEY = "_pause_requested"
+_USER_PAUSE_SENTINEL_HASH = canonical_json_sha256(
+    {"kind": "user_pause_before_first_step", "version": 1}
+)
 
 
 def _utc_now() -> datetime:
@@ -273,15 +285,44 @@ class ResearchRunLifecycleService:
                 manifest["stage_hashes"] = stage_hashes
                 run.total_tokens = max(0, int(run.total_tokens or 0)) + token_count
 
-                pause = self._pause_after_step(
-                    run=run,
-                    stage_type=stage_type,
-                    step_index=step_index,
-                    output=output,
-                    output_hash=output_hash,
-                    params=params,
-                    manifest=manifest,
-                )
+                terminal_reason = no_evidence_reason(output)
+                pause: PauseDescriptor | None = None
+                if terminal_reason is not None:
+                    manifest.pop("pending_review", None)
+                    manifest.pop("verification_failure", None)
+                    manifest.pop("resume_authorization", None)
+                    manifest.pop("user_pause", None)
+                    manifest.pop(_PAUSE_REQUESTED_KEY, None)
+                    manifest["final_status"] = "no_evidence"
+                    manifest["terminal_audit"] = {
+                        "outcome": "no_evidence",
+                        "reason": terminal_reason,
+                        "step_index": step_index,
+                        "stage_type": stage_type,
+                        "output_hash": output_hash,
+                        "created_at": self.now().isoformat(),
+                    }
+                    run.status = RunStatus.COMPLETED.value
+                    run.completed_at = self.now()
+                else:
+                    pause = self._pause_after_step(
+                        run=run,
+                        stage_type=stage_type,
+                        step_index=step_index,
+                        output=output,
+                        output_hash=output_hash,
+                        params=params,
+                        manifest=manifest,
+                    )
+                    if pause is None and manifest.get(_PAUSE_REQUESTED_KEY):
+                        pause = self._store_user_pause(
+                            manifest,
+                            step_index=step_index,
+                            output_hash=output_hash,
+                        )
+                    elif pause is not None:
+                        manifest.pop("user_pause", None)
+                        manifest.pop(_PAUSE_REQUESTED_KEY, None)
                 if pause is not None:
                     run.status = RunStatus.PAUSED.value
                 run.reproducibility_manifest = manifest
@@ -295,6 +336,88 @@ class ResearchRunLifecycleService:
 
         assert transition is not None
         return transition
+
+    async def persist_user_pause(
+        self,
+        *,
+        run: Any,
+        step_index: int | None = None,
+        output_hash: str | None = None,
+        total_tokens: int | None = None,
+    ) -> PauseDescriptor:
+        """Persist a reloadable manual-pause anchor without research content."""
+
+        result: PauseDescriptor | None = None
+        async with self._atomic():
+            await self._lock_run(run)
+            manifest: dict[str, Any] = copy.deepcopy(run.reproducibility_manifest or {})
+
+            # A review or failed-verification gate owns the pause when it was
+            # committed at the same boundary as the user's request.
+            if isinstance(manifest.get("pending_review"), dict) or isinstance(
+                manifest.get("verification_failure"), dict
+            ):
+                manifest.pop("user_pause", None)
+                manifest.pop(_PAUSE_REQUESTED_KEY, None)
+                run.status = RunStatus.PAUSED.value
+                run.reproducibility_manifest = manifest
+                result = self.pause_descriptor(run)
+            else:
+                resolved_index = step_index
+                resolved_hash = output_hash
+                if resolved_index is None or resolved_hash is None:
+                    anchor = await self.current_user_pause_descriptor(run=run)
+                    resolved_index = anchor.step_index
+                    resolved_hash = anchor.output_hash
+                if type(resolved_index) is not int or resolved_index < -1:
+                    raise ValueError("user pause step index must be -1 or greater")
+                if not self._is_hash(resolved_hash):
+                    raise ValueError("user pause output hash must be canonical")
+                result = self._store_user_pause(
+                    manifest,
+                    step_index=resolved_index,
+                    output_hash=cast(str, resolved_hash),
+                )
+                run.status = RunStatus.PAUSED.value
+                run.reproducibility_manifest = manifest
+
+            if total_tokens is not None:
+                run.total_tokens = max(0, int(total_tokens))
+
+        if result is None:
+            raise ResearchRunLifecycleError(
+                status_code=409,
+                code="run_not_paused",
+                message="Run does not have a durable pause descriptor",
+            )
+        return result
+
+    async def current_user_pause_descriptor(self, *, run: Any) -> PauseDescriptor:
+        """Resolve the latest safe manual-pause anchor without mutating the run."""
+
+        latest = await self._load_latest_step(cast(UUID, run.id))
+        if latest is None or not isinstance(latest.output, dict):
+            return PauseDescriptor(
+                pause_reason="user_paused",
+                review_kind=None,
+                step_index=-1,
+                output_hash=_USER_PAUSE_SENTINEL_HASH,
+            )
+        return PauseDescriptor(
+            pause_reason="user_paused",
+            review_kind=None,
+            step_index=int(latest.step_index),
+            output_hash=canonical_stage_output_hash(latest.output),
+        )
+
+    def user_pause_manifest_value(self, descriptor: PauseDescriptor) -> dict[str, Any]:
+        if descriptor.pause_reason != "user_paused":
+            raise ValueError("manual pause manifest requires a user pause descriptor")
+        return {
+            "step_index": descriptor.step_index,
+            "output_hash": descriptor.output_hash,
+            "created_at": self.now().isoformat(),
+        }
 
     async def authorize_resume(
         self,
@@ -451,11 +574,22 @@ class ResearchRunLifecycleService:
                 else:
                     # A plain user pause has no content gate, but still uses a
                     # POST-created one-use authorization before GET /stream.
+                    user_pause = manifest.get("user_pause")
+                    pause_index = -1
+                    pause_hash = _USER_PAUSE_SENTINEL_HASH
+                    if isinstance(user_pause, dict):
+                        candidate_index = user_pause.get("step_index")
+                        candidate_hash = user_pause.get("output_hash")
+                        if type(candidate_index) is int and self._is_hash(
+                            candidate_hash
+                        ):
+                            pause_index = candidate_index
+                            pause_hash = cast(str, candidate_hash)
                     manifest["resume_authorization"] = self._authorization(
                         kind="user_resume",
                         actor_id=actor_id,
-                        output_hash="",
-                        step_index=-1,
+                        output_hash=pause_hash,
+                        step_index=pause_index,
                     )
                     manifest["continuation_requested"] = True
                     run.reproducibility_manifest = manifest
@@ -475,13 +609,22 @@ class ResearchRunLifecycleService:
         async with self._atomic():
             await self._lock_run(run)
             if run.status == RunStatus.PENDING.value:
+                started_at_before_claim = getattr(run, "started_at", None)
+                manifest_before_claim = copy.deepcopy(run.reproducibility_manifest)
                 run.status = RunStatus.RUNNING.value
-                run.started_at = getattr(run, "started_at", None) or self.now()
-                result = StreamClaim(claimed=True, was_paused=False)
+                run.started_at = started_at_before_claim or self.now()
+                result = StreamClaim(
+                    claimed=True,
+                    was_paused=False,
+                    started_at_before_claim=started_at_before_claim,
+                    manifest_before_claim=manifest_before_claim,
+                )
             elif run.status == RunStatus.PAUSED.value:
                 manifest: dict[str, Any] = copy.deepcopy(
                     run.reproducibility_manifest or {}
                 )
+                manifest_before_claim = copy.deepcopy(manifest)
+                started_at_before_claim = getattr(run, "started_at", None)
                 authorization = manifest.get("resume_authorization")
                 if not isinstance(authorization, dict) or authorization.get(
                     "consumed_at"
@@ -517,6 +660,7 @@ class ResearchRunLifecycleService:
                     manifest["continued_after_failure_step_index"] = authorization.get(
                         "step_index"
                     )
+                manifest.pop("user_pause", None)
                 manifest.pop("continuation_requested", None)
                 run.reproducibility_manifest = manifest
                 run.status = RunStatus.RUNNING.value
@@ -525,6 +669,8 @@ class ResearchRunLifecycleService:
                     claimed=True,
                     was_paused=True,
                     authorization_kind=kind,
+                    started_at_before_claim=started_at_before_claim,
+                    manifest_before_claim=manifest_before_claim,
                 )
             else:
                 raise ResearchRunLifecycleError(
@@ -560,9 +706,7 @@ class ResearchRunLifecycleService:
                 )
 
             if claim.was_paused:
-                manifest: dict[str, Any] = copy.deepcopy(
-                    run.reproducibility_manifest or {}
-                )
+                manifest = copy.deepcopy(claim.manifest_before_claim or {})
                 authorization = manifest.get("resume_authorization")
                 if not isinstance(authorization, dict):
                     raise ResearchRunLifecycleError(
@@ -570,13 +714,15 @@ class ResearchRunLifecycleService:
                         code="resume_authorization_required",
                         message="Paused run claim is missing its resume authorization",
                     )
-                authorization["consumed_at"] = None
-                manifest["resume_authorization"] = authorization
                 run.reproducibility_manifest = manifest
                 run.status = RunStatus.PAUSED.value
+                run.started_at = claim.started_at_before_claim
             else:
                 run.status = RunStatus.PENDING.value
-                run.started_at = None
+                run.started_at = claim.started_at_before_claim
+                run.reproducibility_manifest = copy.deepcopy(
+                    claim.manifest_before_claim
+                )
 
     @staticmethod
     def pause_descriptor(run: Any) -> PauseDescriptor | None:
@@ -645,6 +791,36 @@ class ResearchRunLifecycleService:
         )
         candidate = result.scalars().first()
         return candidate if isinstance(candidate, ResearchStep) else None
+
+    async def _load_latest_step(self, run_id: UUID) -> ResearchStep | None:
+        result = await self.session.execute(
+            select(ResearchStep)
+            .where(cast(Any, ResearchStep.run_id) == run_id)
+            .order_by(cast(Any, ResearchStep.step_index).desc())
+            .limit(1)
+        )
+        candidate = result.scalars().first()
+        return candidate if isinstance(candidate, ResearchStep) else None
+
+    def _store_user_pause(
+        self,
+        manifest: dict[str, Any],
+        *,
+        step_index: int,
+        output_hash: str,
+    ) -> PauseDescriptor:
+        manifest.pop(_PAUSE_REQUESTED_KEY, None)
+        manifest["user_pause"] = {
+            "step_index": step_index,
+            "output_hash": output_hash,
+            "created_at": self.now().isoformat(),
+        }
+        return PauseDescriptor(
+            pause_reason="user_paused",
+            review_kind=None,
+            step_index=step_index,
+            output_hash=output_hash,
+        )
 
     async def _lock_run(self, run: Any) -> None:
         if isinstance(self.session, AsyncSession):

@@ -67,28 +67,24 @@ class PromptContextBuilder:
         "search": (
             "contract_version",
             "stage_type",
-            "source_records",
             "coverage",
             "selected_sources",
         ),
         "screen": (
             "contract_version",
             "stage_type",
-            "screening",
             "included_source_ids",
             "processing_coverage",
         ),
         "extract": (
             "contract_version",
             "stage_type",
-            "extractions",
             "processing_coverage",
             "diagnostics",
         ),
         "synthesize": (
             "contract_version",
             "stage_type",
-            "synthesis",
             "processing_coverage",
             "diagnostics",
         ),
@@ -156,7 +152,10 @@ class PromptContextBuilder:
             for key in cls._UPSTREAM_KEYS[expected_upstream]
             if key in upstream_envelope
         }
-        evidence_ids = sorted(cls._evidence_ids(upstream))
+        # Evidence-bearing records are sent once through the stage's bounded
+        # batch records.  The fixed context retains only identifiers and
+        # immediate-envelope control metadata.
+        evidence_ids = sorted(cls._evidence_ids(upstream_envelope))
         payload: dict[str, Any] = {
             "prompt_context_version": cls.VERSION,
             "stage_type": stage_type,

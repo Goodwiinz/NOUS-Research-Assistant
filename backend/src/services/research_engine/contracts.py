@@ -6,6 +6,7 @@ import json
 import math
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -113,6 +114,203 @@ class VerificationCheck(StrictContract):
     claim_id: StrictStr
     status: Literal["supported", "unverified", "contradicted"]
     reason: StrictStr = Field(max_length=1000)
+
+
+@dataclass(frozen=True)
+class StageResponseContract:
+    """The exact provider response schema and any downstream data schema."""
+
+    target_schema: dict[str, Any]
+    extraction_schema: dict[str, Any] | None = None
+
+
+def _closed_object(
+    properties: Mapping[str, Any], required: list[str]
+) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": copy.deepcopy(dict(properties)),
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+def _review_fields_schema(fields: Any) -> dict[str, Any]:
+    if not isinstance(fields, list) or not all(
+        isinstance(item, str) for item in fields
+    ):
+        raise ValueError("extraction_fields must be a list of strings")
+    properties: dict[str, Any] = {}
+    for name in fields:
+        if name == "authors":
+            properties[name] = {
+                "anyOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "null"},
+                ]
+            }
+        elif name == "year":
+            properties[name] = {"type": ["integer", "null"]}
+        else:
+            properties[name] = {"type": ["string", "null"]}
+    return _closed_object(properties, fields)
+
+
+def build_stage_response_contract(
+    stage_type: str,
+    params: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> StageResponseContract:
+    """Derive once the response contract used by both prompts and validators."""
+
+    text = {"type": "string"}
+    nullable_text = {"type": ["string", "null"]}
+    if stage_type == "screen":
+        item = _closed_object(
+            {
+                "source_id": text,
+                "part_id": text,
+                "included": {"type": "boolean"},
+                "reason": {"type": "string", "maxLength": 1000},
+            },
+            ["source_id", "part_id", "included", "reason"],
+        )
+        return StageResponseContract(
+            target_schema=_closed_object(
+                {"screening": {"type": "array", "items": item}}, ["screening"]
+            )
+        )
+
+    if stage_type == "extract":
+        output_kind = str(params.get("output_kind") or "structured_data")
+        if output_kind == "claims":
+            claim = _closed_object(
+                {
+                    "claim_text": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "quote": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "page_reference": nullable_text,
+                },
+                ["claim_text", "quote", "confidence", "page_reference"],
+            )
+            record = _closed_object(
+                {
+                    "source_id": text,
+                    "part_id": text,
+                    "claims": {"type": "array", "items": claim},
+                },
+                ["source_id", "part_id", "claims"],
+            )
+            return StageResponseContract(
+                target_schema=_closed_object(
+                    {"records": {"type": "array", "items": record}}, ["records"]
+                )
+            )
+
+        if output_kind == "review_fields":
+            fields = params.get(
+                "fields",
+                params.get("extraction_fields", context.get("extraction_fields", [])),
+            )
+            extraction_schema = _review_fields_schema(fields)
+        else:
+            candidate = params.get("schema", context.get("extraction_schema", {}))
+            if not isinstance(candidate, dict):
+                raise ValueError("extraction schema must be a JSON object")
+            extraction_schema = copy.deepcopy(candidate)
+        validate_user_schema(extraction_schema)
+        evidence = _closed_object(
+            {
+                "pointer": text,
+                "quote": {"type": "string", "minLength": 1, "maxLength": 4000},
+                "page_reference": nullable_text,
+            },
+            ["pointer", "quote", "page_reference"],
+        )
+        record = _closed_object(
+            {
+                "source_id": text,
+                "part_id": text,
+                "data": extraction_schema,
+                "evidence": {"type": "array", "items": evidence},
+            },
+            ["source_id", "part_id", "data", "evidence"],
+        )
+        return StageResponseContract(
+            target_schema=_closed_object(
+                {"records": {"type": "array", "items": record}}, ["records"]
+            ),
+            extraction_schema=extraction_schema,
+        )
+
+    if stage_type == "synthesize":
+        reference = _closed_object(
+            {
+                "evidence_id": text,
+                "relation": {"enum": ["supports", "contradicts"]},
+            },
+            ["evidence_id", "relation"],
+        )
+        claim = _closed_object(
+            {
+                "claim_text": {"type": "string", "minLength": 1, "maxLength": 1000},
+                "evidence": {"type": "array", "items": reference, "maxItems": 32},
+            },
+            ["claim_text", "evidence"],
+        )
+        section = _closed_object(
+            {
+                "heading": {"type": "string", "minLength": 1, "maxLength": 120},
+                "claims": {"type": "array", "items": claim},
+            },
+            ["heading", "claims"],
+        )
+        return StageResponseContract(
+            target_schema=_closed_object(
+                {"sections": {"type": "array", "items": section}}, ["sections"]
+            )
+        )
+
+    if stage_type == "verify":
+        check = _closed_object(
+            {
+                "claim_id": text,
+                "status": {"enum": ["supported", "unverified", "contradicted"]},
+                "reason": {"type": "string", "maxLength": 1000},
+            },
+            ["claim_id", "status", "reason"],
+        )
+        return StageResponseContract(
+            target_schema=_closed_object(
+                {"checks": {"type": "array", "items": check}}, ["checks"]
+            )
+        )
+
+    raise ValueError("unsupported model stage response contract")
+
+
+def no_evidence_reason(output: Mapping[str, Any]) -> str | None:
+    """Return a bounded server-owned terminal reason for a zero-evidence stage."""
+
+    stage_type = output.get("stage_type")
+    if stage_type == "screen":
+        screening = output.get("screening")
+        if isinstance(screening, list) and not screening:
+            return "empty_screening"
+        return None
+    if stage_type != "extract":
+        return None
+    extractions = output.get("extractions")
+    if not isinstance(extractions, list):
+        return None
+    for record in extractions:
+        if not isinstance(record, Mapping):
+            continue
+        if isinstance(record.get("claims"), list) and record["claims"]:
+            return None
+        if isinstance(record.get("evidence"), list) and record["evidence"]:
+            return None
+    return "empty_extraction"
 
 
 def _reject_constant(value: str) -> None:

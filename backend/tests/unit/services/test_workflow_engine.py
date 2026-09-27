@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.research_engine.contracts import canonical_stage_output_hash
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.providers.base import (
     LLMProvider,
@@ -352,3 +353,156 @@ class TestWorkflowEngine:
 
         assert events[-1]["event"] == "run_failed"
         mock_executor.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failed_verification_pause_is_content_free_and_wins_quality_pause(
+        self,
+    ):
+        output = {
+            "contract_version": 1,
+            "stage_type": "verify",
+            "usage": {"model_calls": 1, "total_tokens": 5, "batches": []},
+            "verification": {
+                "passed": False,
+                "deterministic_passed": True,
+                "schema_passed": True,
+                "semantic_status": "failed",
+                "coverage_complete": True,
+                "claims": [],
+            },
+            "processing_coverage": {},
+        }
+        mock_executor = AsyncMock(spec=StepExecutor)
+        mock_executor.execute.return_value = StepResult(
+            output=output,
+            quality_marks=[QualityMark("semantic_verification", False, "failed")],
+        )
+        engine = WorkflowEngine(step_executor=mock_executor)
+
+        events = [
+            event
+            async for event in engine.run(
+                {"steps": [{"id": "verify", "type": "verify"}]}, uuid4()
+            )
+        ]
+        paused = next(event for event in events if event["event"] == "run_paused")
+
+        assert paused["pause_reason"] == "verification_failed"
+        assert paused["step_index"] == 0
+        assert paused["output_hash"] == canonical_stage_output_hash(output)
+        assert "context" not in paused
+        assert "quality_marks" not in paused
+
+    @pytest.mark.asyncio
+    async def test_incomplete_gated_stage_uses_review_descriptor_without_context(self):
+        output = {
+            "contract_version": 1,
+            "stage_type": "screen",
+            "usage": {"model_calls": 1, "total_tokens": 5, "batches": []},
+            "screening": [
+                {
+                    "source_id": "source-a",
+                    "part_id": "p0001",
+                    "included": True,
+                    "reason": "Matches",
+                }
+            ],
+            "included_source_ids": ["source-a"],
+            "processing_coverage": {"0": {"complete": False}},
+        }
+        mock_executor = AsyncMock(spec=StepExecutor)
+        mock_executor.execute.return_value = StepResult(
+            output=output,
+            quality_marks=[QualityMark("screening_coverage", False, "incomplete")],
+        )
+        engine = WorkflowEngine(step_executor=mock_executor)
+
+        events = [
+            event
+            async for event in engine.run(
+                {
+                    "steps": [
+                        {
+                            "id": "screen",
+                            "type": "screen",
+                            "parameters": {"review_gate": "screening"},
+                        }
+                    ]
+                },
+                uuid4(),
+            )
+        ]
+        paused = next(event for event in events if event["event"] == "run_paused")
+
+        assert paused["pause_reason"] == "review_required"
+        assert paused["review_kind"] == "screening"
+        assert paused["output_hash"] == canonical_stage_output_hash(output)
+        assert "context" not in paused
+        assert "quality_marks" not in paused
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("stage_type", "output"),
+        [
+            (
+                "screen",
+                {
+                    "contract_version": 1,
+                    "stage_type": "screen",
+                    "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+                    "screening": [],
+                    "included_source_ids": [],
+                    "processing_coverage": {"0": {"complete": True}},
+                },
+            ),
+            (
+                "extract",
+                {
+                    "contract_version": 1,
+                    "stage_type": "extract",
+                    "usage": {"model_calls": 1, "total_tokens": 5, "batches": []},
+                    "extractions": [
+                        {
+                            "source_id": "source-a",
+                            "part_id": "p0001",
+                            "claims": [],
+                        }
+                    ],
+                    "processing_coverage": {"1": {"complete": True}},
+                    "diagnostics": [],
+                },
+            ),
+        ],
+    )
+    async def test_zero_evidence_stage_completes_without_later_calls_or_review(
+        self, stage_type, output
+    ):
+        mock_executor = AsyncMock(spec=StepExecutor)
+        mock_executor.execute.side_effect = [
+            StepResult(output=output),
+            StepResult(output={"must": "not execute"}),
+        ]
+        review_kind = "screening" if stage_type == "screen" else "extraction"
+        engine = WorkflowEngine(step_executor=mock_executor)
+
+        events = [
+            event
+            async for event in engine.run(
+                {
+                    "steps": [
+                        {
+                            "id": stage_type,
+                            "type": stage_type,
+                            "parameters": {"review_gate": review_kind},
+                        },
+                        {"id": "later-paid-call", "type": "synthesize"},
+                    ]
+                },
+                uuid4(),
+            )
+        ]
+
+        assert mock_executor.execute.await_count == 1
+        assert not any(event["event"] == "run_paused" for event in events)
+        assert events[-1]["event"] == "run_complete"
+        assert events[-1]["final_status"] == "no_evidence"

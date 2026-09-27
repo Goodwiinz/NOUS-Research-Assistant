@@ -12,7 +12,8 @@ from uuid import UUID
 from anyio import CancelScope
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, update
+from sqlalchemy import cast, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
@@ -38,7 +39,10 @@ from src.services.research_engine.connectors.registry import (
     build_connectors,
     safe_capability_projection,
 )
-from src.services.research_engine.contracts import rehydrate_stage_outputs
+from src.services.research_engine.contracts import (
+    canonical_stage_output_hash,
+    rehydrate_stage_outputs,
+)
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.providers import (
     ClaudeProvider,
@@ -393,15 +397,23 @@ async def pause_run(
     # Keep the run claimed while the active stream reaches a safe boundary.
     # Publishing PAUSED here would let a second stream reclaim and replay the
     # in-flight paid step before the first stream can persist its result.
-    pause_manifest = dict(run.reproducibility_manifest or {})
-    pause_manifest[_PAUSE_REQUESTED_KEY] = True
+    lifecycle = ResearchRunLifecycleService(db)
+    pause_descriptor = await lifecycle.current_user_pause_descriptor(run=run)
+    pause_patch = {
+        _PAUSE_REQUESTED_KEY: True,
+        "user_pause": lifecycle.user_pause_manifest_value(pause_descriptor),
+    }
+    merged_manifest = func.coalesce(
+        ResearchRun.reproducibility_manifest,
+        cast({}, JSONB),
+    ).op("||")(cast(pause_patch, JSONB))
     pause_update = await db.execute(
         update(ResearchRun)
         .where(
             ResearchRun.id == run_id,
             ResearchRun.status == RunStatus.RUNNING.value,
         )
-        .values(reproducibility_manifest=pause_manifest)
+        .values(reproducibility_manifest=merged_manifest)
         .execution_options(synchronize_session=False)
     )
     if pause_update.rowcount == 0:
@@ -592,6 +604,12 @@ async def stream_run(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Blueprint exceeds a server-owned execution limit",
         )
+
+    # Resolve all fallible, non-paid execution dependencies before changing
+    # durable claim state. A setup exception must leave the run retryable.
+    organization_id = _get_verified_organization_id(current_user)
+    connectors = _build_connectors(organization_id=str(organization_id))
+
     lifecycle = ResearchRunLifecycleService(db)
     try:
         stream_claim = await lifecycle.claim_stream(run=run)
@@ -601,31 +619,30 @@ async def stream_run(
             detail = exc.message
         raise HTTPException(status_code=exc.status_code, detail=detail) from exc
 
-    manifest = dict(run.reproducibility_manifest or {})
-    if stream_claim.authorization_kind == "continue_unverified":
-        prior_outputs["continued_after_failure"] = True
-        verification = prior_outputs.get("verification")
-        if isinstance(verification, dict):
-            verification["passed"] = False
-            verification["continued_after_failure"] = True
-    blueprint_dict = {
-        "steps": blueprint.steps or [],
-        "parameters": effective_parameters,
-    }
-    total_tokens = run.total_tokens or 0
-
-    # R5-M18: claim the transition atomically — the old read-check-write let
-    # two concurrent SSE streams both pass the PENDING check and double-execute
-    # a paid run.
-    organization_id = _get_verified_organization_id(current_user)
-    connectors = _build_connectors(organization_id=str(organization_id))
-
     # Admit only after this request has won the atomic claim. Otherwise every
     # concurrent loser consumes a shared paid-work slot before receiving 409.
-    if not await admit_expensive_work(
-        user_id=current_user.id,
-        organization_id=organization_id,
-    ):
+    try:
+        if stream_claim.authorization_kind == "continue_unverified":
+            prior_outputs["continued_after_failure"] = True
+            verification = prior_outputs.get("verification")
+            if isinstance(verification, dict):
+                verification["passed"] = False
+                verification["continued_after_failure"] = True
+        blueprint_dict = {
+            "steps": blueprint.steps or [],
+            "parameters": effective_parameters,
+        }
+        total_tokens = int(run.total_tokens or 0)
+        admitted = await admit_expensive_work(
+            user_id=current_user.id,
+            organization_id=organization_id,
+        )
+    except BaseException:
+        await _run_interrupted_cleanup(
+            lifecycle.release_stream_claim(run=run, claim=stream_claim)
+        )
+        raise
+    if not admitted:
         try:
             await lifecycle.release_stream_claim(run=run, claim=stream_claim)
         except ResearchRunLifecycleError:
@@ -639,26 +656,51 @@ async def stream_run(
             detail="Too many expensive research runs; retry later",
         )
 
-    await db.refresh(run)
+    try:
+        executor = StepExecutor(providers=providers, connectors=connectors)
+        engine = WorkflowEngine(step_executor=executor)
+        await db.refresh(run)
+    except BaseException:
+        await _run_interrupted_cleanup(
+            lifecycle.release_stream_claim(run=run, claim=stream_claim)
+        )
+        raise
 
     async def event_generator():
         """Yield SSE-formatted events from the workflow engine."""
         nonlocal total_tokens
+
+        pause_anchor_index = (
+            int(last_step.step_index) if last_step is not None else None
+        )
+        pause_anchor_hash = (
+            canonical_stage_output_hash(last_step.output)
+            if last_step is not None and isinstance(last_step.output, dict)
+            else None
+        )
 
         async def recover_run(status_value: str, *, completed: bool = False) -> None:
             # Rollback also expires ORM state, so refresh before inspecting the
             # manifest or starting the recovery transaction.
             await db.rollback()
             await db.refresh(run)
+            if status_value == RunStatus.PAUSED.value:
+                await lifecycle.persist_user_pause(
+                    run=run,
+                    step_index=pause_anchor_index,
+                    output_hash=pause_anchor_hash,
+                    total_tokens=total_tokens,
+                )
+                return
             _set_pause_requested(run, False)
+            manifest = dict(run.reproducibility_manifest or {})
+            manifest.pop("user_pause", None)
+            setattr(run, "reproducibility_manifest", manifest or None)
             run.status = status_value
             run.total_tokens = total_tokens
             if completed:
                 run.completed_at = datetime.now(timezone.utc)
             await db.commit()
-
-        executor = StepExecutor(providers=providers, connectors=connectors)
-        engine = WorkflowEngine(step_executor=executor)
 
         try:
             async for event in engine.run(
@@ -679,6 +721,7 @@ async def stream_run(
             ):
                 event_type = event.get("event")
                 await db.refresh(run)
+                committed_followup: dict[str, Any] | None = None
 
                 pause_requested = _pause_requested(run) and event_type != "run_paused"
 
@@ -688,18 +731,20 @@ async def stream_run(
                     "step_complete",
                     "step_error",
                 }:
-                    _set_pause_requested(run, False)
-                    run.status = RunStatus.PAUSED.value
-                    run.total_tokens = total_tokens
-                    await db.commit()
+                    descriptor = await lifecycle.persist_user_pause(
+                        run=run,
+                        step_index=pause_anchor_index,
+                        output_hash=pause_anchor_hash,
+                        total_tokens=total_tokens,
+                    )
                     paused_event = {
                         "event": "run_paused",
                         "run_id": str(run.id),
-                        "reason": "Paused by user",
+                        **descriptor.to_dict(),
                     }
                     data = json.dumps(paused_event)
                     yield f"event: run_paused\ndata: {data}\n\n"
-                    break
+                    return
 
                 if event_type == "step_complete":
                     step_index = int(event.get("step_index") or 0)
@@ -722,17 +767,47 @@ async def stream_run(
                         source_rows=source_rows,
                     )
                     total_tokens = int(run.total_tokens or 0)
-                    if pause_requested and transition.pause is None:
-                        _set_pause_requested(run, False)
-                        run.status = RunStatus.PAUSED.value
-                        await db.commit()
+                    pause_anchor_index = int(transition.step.step_index)
+                    pause_anchor_hash = str(transition.step.outputs_hash)
+                    if transition.pause is not None:
+                        committed_followup = {
+                            "event": "run_paused",
+                            "run_id": str(run.id),
+                            **transition.pause.to_dict(),
+                        }
+                    elif transition.terminal_status == "no_evidence":
+                        committed_followup = {
+                            "event": "run_complete",
+                            "run_id": str(run.id),
+                            "final_status": "no_evidence",
+                        }
                 elif event_type == "run_paused":
-                    _set_pause_requested(run, False)
-                    run.status = RunStatus.PAUSED.value
-                    run.total_tokens = total_tokens
-                    await db.commit()
+                    supplied_index = event.get("step_index")
+                    supplied_hash = event.get("output_hash")
+                    descriptor = await lifecycle.persist_user_pause(
+                        run=run,
+                        step_index=(
+                            supplied_index
+                            if type(supplied_index) is int
+                            else pause_anchor_index
+                        ),
+                        output_hash=(
+                            str(supplied_hash)
+                            if isinstance(supplied_hash, str)
+                            else pause_anchor_hash
+                        ),
+                        total_tokens=total_tokens,
+                    )
+                    event = {
+                        "event": "run_paused",
+                        "run_id": str(run.id),
+                        **descriptor.to_dict(),
+                    }
                 elif event_type == "run_failed":
                     _set_pause_requested(run, False)
+                    manifest = dict(run.reproducibility_manifest or {})
+                    manifest.pop("user_pause", None)
+                    run.reproducibility_manifest = manifest or None
                     run.status = RunStatus.FAILED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
@@ -771,6 +846,7 @@ async def stream_run(
                     previous_manifest.pop(_CONTINUATION_REQUESTED_KEY, None)
                     previous_manifest.pop("resume_authorization", None)
                     previous_manifest.pop(_PAUSE_REQUESTED_KEY, None)
+                    previous_manifest.pop("user_pause", None)
                     if isinstance(previous_manifest.get("verification_override"), dict):
                         previous_manifest["final_status"] = "unverified"
                     run.reproducibility_manifest = {
@@ -789,15 +865,23 @@ async def stream_run(
                 data = json.dumps(event)
                 yield f"event: {event_type}\ndata: {data}\n\n"
 
-                if pause_requested:
-                    paused_event = {
+                if event_type == "step_error" and pause_requested:
+                    descriptor = await lifecycle.persist_user_pause(
+                        run=run,
+                        step_index=pause_anchor_index,
+                        output_hash=pause_anchor_hash,
+                        total_tokens=total_tokens,
+                    )
+                    committed_followup = {
                         "event": "run_paused",
                         "run_id": str(run.id),
-                        "reason": "Paused by user",
+                        **descriptor.to_dict(),
                     }
-                    data = json.dumps(paused_event)
-                    yield f"event: run_paused\ndata: {data}\n\n"
-                    break
+                if committed_followup is not None:
+                    followup_type = committed_followup["event"]
+                    data = json.dumps(committed_followup)
+                    yield f"event: {followup_type}\ndata: {data}\n\n"
+                    return
         except asyncio.CancelledError:
             # Client disconnected; persist paused state so run can resume later.
             await _run_interrupted_cleanup(recover_run(RunStatus.PAUSED.value))

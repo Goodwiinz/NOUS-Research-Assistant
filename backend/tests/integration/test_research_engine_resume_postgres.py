@@ -598,11 +598,15 @@ async def test_repeated_resume_executes_export_and_reconstructs_unverified_warni
                 if line.startswith("data: ") and '"event": "run_paused"' in line
             )
             paused_event = json.loads(paused_data)
-            assert paused_event["context"]["verification"]["passed"] is False
-            assert (
-                paused_event["context"]["verification"]["continued_after_failure"]
-                is True
-            )
+            assert paused_event["pause_reason"] == "verification_failed"
+            assert paused_event["step_index"] == 2
+            assert set(paused_event) == {
+                "event",
+                "run_id",
+                "pause_reason",
+                "step_index",
+                "output_hash",
+            }
 
             second_resume = await client.post(f"/research-engine/runs/{run_id}/resume")
             assert second_resume.status_code == 409
