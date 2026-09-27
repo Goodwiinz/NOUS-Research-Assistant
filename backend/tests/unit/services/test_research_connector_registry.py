@@ -1,6 +1,5 @@
 """Contract tests for bounded research connector selection and projection."""
 
-from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
@@ -108,8 +107,7 @@ def test_build_connectors_constructs_only_requested_canonical_connectors() -> No
 
 def test_build_connectors_preserves_legacy_default_registry() -> None:
     """Existing callers without a selection retain the internal web alias."""
-    rag_search: Callable[..., object] = _rag_search
-    connectors = registry.build_connectors(rag_search)
+    connectors = registry.build_connectors(_rag_search)
 
     assert connectors["web"] is connectors["semantic_scholar"]
     assert "rag_store" in connectors

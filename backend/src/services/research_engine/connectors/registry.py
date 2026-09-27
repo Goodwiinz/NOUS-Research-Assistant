@@ -1,7 +1,8 @@
 """One canonical provider registry for research execution and discovery."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from src.core.config import settings
 from src.services.research_engine.connectors.arxiv_connector import ArxivConnector
@@ -113,7 +114,7 @@ def normalize_connector_selection(
 
 
 def build_connectors(
-    rag_search: Callable[..., object],
+    rag_search: Callable[..., Coroutine[Any, Any, dict[str, Any]]],
     connector_ids: Sequence[str] | None = None,
 ) -> dict[str, SourceConnector]:
     """Build the legacy registry or an explicit canonical connector subset."""
