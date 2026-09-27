@@ -136,7 +136,8 @@ export async function listWorkflowLinkOptions(): Promise<Project[]> {
     (project) =>
       project.can_manage === true &&
       project.workspace_archived !== true &&
-      project.research_status !== 'archived'
+      project.research_status !== 'archived' &&
+      !project.research_engine_project_id
   );
 }
 

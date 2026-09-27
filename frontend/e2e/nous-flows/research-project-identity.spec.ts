@@ -20,7 +20,11 @@ test.skip(
   'Requires the documented same-origin mock Supabase/API harness.'
 );
 
-async function installMockedApi(page: Page): Promise<void> {
+async function installMockedApi(
+  page: Page,
+  options: { linked?: boolean } = {}
+): Promise<{ getEnableRequest: () => unknown }> {
+  let enableRequest: unknown;
   await page.route(/\/api\/v[12]\//, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -44,7 +48,7 @@ async function installMockedApi(page: Page): Promise<void> {
       name: 'Canonical research project',
       workspace_id: '44444444-4444-4444-8444-444444444444',
       research_status: 'active',
-      research_engine_project_id: ENGINE_ID,
+      research_engine_project_id: options.linked === false ? null : ENGINE_ID,
       can_edit: true,
       can_manage: true,
       workspace_archived: false,
@@ -71,6 +75,9 @@ async function installMockedApi(page: Page): Promise<void> {
       await route.fulfill({ json: { documents: [{ id: 'link-1', project_id: COLLECTION_ID, document_id: 'doc-1', document: { id: 'doc-1', title: 'Seeded source paper', filename: 'source.pdf', status: 'completed' } }], total: 1 } });
     } else if (path.endsWith('/notes')) {
       await route.fulfill({ json: { notes: [], total: 0 } });
+    } else if (request.method() === 'POST' && path === '/research-engine/projects') {
+      enableRequest = request.postDataJSON();
+      await route.fulfill({ json: { ...project, project_id: COLLECTION_ID, collection_id: COLLECTION_ID, research_engine_project_id: ENGINE_ID, blueprint_id: BLUEPRINT_ID, settings: {} } });
     } else if (path === `/research-engine/projects/${COLLECTION_ID}`) {
       await route.fulfill({ json: { ...project, project_id: COLLECTION_ID, collection_id: COLLECTION_ID, blueprint_id: BLUEPRINT_ID, settings: {} } });
     } else if (path === `/research-engine/blueprints/${BLUEPRINT_ID}`) {
@@ -97,6 +104,7 @@ async function installMockedApi(page: Page): Promise<void> {
       await route.fulfill({ json: { items: [], total: 0 } });
     }
   });
+  return { getEnableRequest: () => enableRequest };
 }
 
 async function login(page: Page): Promise<void> {
@@ -146,4 +154,22 @@ test('one canonical card retains collection identity across research surfaces', 
   await page.goto(`/research-engine/projects/${ENGINE_ID}/blueprint`);
   await expect(page).toHaveURL(`/projects/${COLLECTION_ID}?tab=workflow`);
   await expect(page.getByRole('textbox', { name: 'Blueprint name' })).toHaveValue('Seeded evidence workflow');
+});
+
+test('an owner enables an unlinked collection with its canonical id and name', async ({
+  page,
+}) => {
+  const api = await installMockedApi(page, { linked: false });
+  await login(page);
+  await page.goto(`/projects/${COLLECTION_ID}?tab=workflow`);
+
+  await page.getByRole('button', { name: 'Enable workflow' }).click();
+
+  await expect.poll(api.getEnableRequest).toEqual({
+    collection_id: COLLECTION_ID,
+    name: 'Canonical research project',
+  });
+  await expect(
+    page.getByRole('textbox', { name: 'Blueprint name' })
+  ).toHaveValue('Seeded evidence workflow');
 });

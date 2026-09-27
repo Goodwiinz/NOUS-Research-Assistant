@@ -7,7 +7,7 @@ other utilities referenced across multiple _tool_* functions.
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -18,8 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document
 from src.models.user import User
-from src.models.workspace import Workspace
-from src.services.research_engine.project_access import ResearchAction, resolve_project
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    accessible_research_workspace_ids,
+    resolve_project,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -230,20 +233,20 @@ async def _resolve_project_id(
     # Try by name (case-insensitive)
     if project_id and db and current_user:
         try:
+            workspace_ids = await accessible_research_workspace_ids(db, current_user.id)
             stmt = (
                 select(Collection.id)
-                .join(Workspace, Collection.workspace_id == Workspace.id)
                 .where(
                     Collection.name.ilike(_escape_like(project_id)),
                     Collection.is_deleted == False,
-                    Workspace.owner_id == current_user.id,
+                    Collection.workspace_id.in_(workspace_ids),
                 )
-                .limit(1)
+                .limit(2)
             )
             result = await db.execute(stmt)
-            row = result.scalar_one_or_none()
-            if row:
-                return row
+            matches = list(result.scalars().all())
+            if len(matches) == 1:
+                return cast(UUID, matches[0])
         except Exception:
             pass
 

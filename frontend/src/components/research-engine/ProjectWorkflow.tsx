@@ -38,7 +38,8 @@ export function ProjectWorkflow({
   const canManageRoles = project.can_manage === true && !archived;
 
   const ensureExtension = useMutation({
-    mutationFn: () => createProject({ collection_id: project.id }),
+    mutationFn: () =>
+      createProject({ collection_id: project.id, name: project.name }),
     onSuccess: (extension) => {
       setEnabledExtension({
         projectId: project.id,
@@ -68,7 +69,7 @@ export function ProjectWorkflow({
           <p className="mt-4 text-sm text-muted-foreground">
             Archived projects are read-only.
           </p>
-        ) : !canEdit ? (
+        ) : !canManageRoles ? (
           <p className="mt-4 text-sm text-muted-foreground">
             A project owner or administrator must enable this workflow.
           </p>

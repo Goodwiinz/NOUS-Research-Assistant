@@ -17,8 +17,6 @@ export function CreateProjectModal({
   onClose,
   onCreated,
 }: CreateProjectModalProps) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
   const [collectionId, setCollectionId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,10 +28,11 @@ export function CreateProjectModal({
   });
 
   if (!isOpen) return null;
+  const selectedCollection = collections.find(
+    (collection) => collection.id === collectionId
+  );
 
   const reset = () => {
-    setName('');
-    setDescription('');
     setCollectionId('');
     setError(null);
   };
@@ -46,12 +45,12 @@ export function CreateProjectModal({
 
   const handleSubmit = async () => {
     if (!collectionId) return;
+    if (!selectedCollection) return;
     setSubmitting(true);
     setError(null);
     try {
       await createProject({
-        name: name.trim(),
-        description: description.trim() || undefined,
+        name: selectedCollection.name,
         collection_id: collectionId,
       });
       reset();
@@ -69,7 +68,7 @@ export function CreateProjectModal({
       <div className="bg-card border border-border rounded-lg w-full max-w-xl p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-mono font-bold text-sol">
-            New Research Project
+            Enable Research Workflow
           </h2>
           <button
             onClick={handleClose}
@@ -108,32 +107,6 @@ export function CreateProjectModal({
               ))}
             </select>
           </div>
-          <div>
-            <label className="block text-xs text-muted-foreground font-mono uppercase tracking-wide mb-1">
-              Project Name *
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Transformer Architecture Survey"
-              className="w-full px-3 py-2 bg-muted border border-border rounded text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:border-primary"
-              autoFocus
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs text-muted-foreground font-mono uppercase tracking-wide mb-1">
-              Description
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Brief description of the research project"
-              rows={3}
-              className="w-full px-3 py-2 bg-muted border border-border rounded text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:border-primary resize-none"
-            />
-          </div>
         </div>
 
         <div className="flex justify-end gap-3 mt-6">
@@ -145,11 +118,11 @@ export function CreateProjectModal({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!name.trim() || submitting}
+            disabled={!selectedCollection || submitting}
             className="flex items-center gap-2 px-4 py-2 bg-sol/10 text-sol border border-sol/30 rounded font-mono text-sm hover:bg-sol/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-            Create Project
+            Enable Workflow
           </button>
         </div>
       </div>

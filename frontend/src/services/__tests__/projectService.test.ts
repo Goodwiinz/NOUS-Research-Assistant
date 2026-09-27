@@ -18,6 +18,7 @@ describe('listWorkflowLinkOptions', () => {
       ...eligible,
       id: `project-${index}`,
       can_manage: index !== 0,
+      research_engine_project_id: index === 1 ? 'already-mapped' : null,
     }));
     const list = vi
       .spyOn(projectService, 'listProjects')
@@ -32,7 +33,8 @@ describe('listWorkflowLinkOptions', () => {
 
     expect(list).toHaveBeenNthCalledWith(1, { skip: 0, limit: 100 });
     expect(list).toHaveBeenNthCalledWith(2, { skip: 100, limit: 100 });
-    expect(result).toHaveLength(100);
+    expect(result).toHaveLength(99);
+    expect(result.some((project) => project.id === 'project-1')).toBe(false);
     expect(result.at(-1)?.id).toBe('project-100');
   });
 });

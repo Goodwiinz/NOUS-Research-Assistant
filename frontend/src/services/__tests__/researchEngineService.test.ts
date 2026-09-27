@@ -51,7 +51,7 @@ describe('researchEngineService', () => {
 
   describe('createProject', () => {
     it('calls POST /projects with data', async () => {
-      const data = { collection_id: 'collection-1' };
+      const data = { collection_id: 'collection-1', name: 'Canonical project' };
       mockApi.post.mockResolvedValue({ id: '1', ...data });
       await createProject(data);
       expect(mockApi.post).toHaveBeenCalledWith(`${BASE}/projects`, data);

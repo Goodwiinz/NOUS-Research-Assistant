@@ -81,7 +81,7 @@ describe('ProjectWorkflow', () => {
             workspace_id: 'workspace-1',
             name: 'First',
             can_edit: true,
-            can_manage: false,
+            can_manage: true,
             workspace_archived: false,
             created_at: '2026-01-01T00:00:00Z',
             updated_at: '2026-01-01T00:00:00Z',
@@ -91,6 +91,12 @@ describe('ProjectWorkflow', () => {
     );
 
     screen.getByRole('button', { name: 'Enable workflow' }).click();
+    await waitFor(() =>
+      expect(createProject).toHaveBeenCalledWith({
+        collection_id: 'collection-1',
+        name: 'First',
+      })
+    );
     expect(
       await screen.findByText('Blueprint for collection-1 (editable)')
     ).toBeInTheDocument();
@@ -113,6 +119,32 @@ describe('ProjectWorkflow', () => {
     );
 
     expect(screen.queryByText(/Blueprint for collection-2/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText('A project owner or administrator must enable this workflow.')
+    ).toBeInTheDocument();
+  });
+
+  it('does not let an editor without manage capability enable a workflow', () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProjectWorkflow
+          project={{
+            id: 'collection-editor',
+            workspace_id: 'workspace-1',
+            name: 'Editor project',
+            can_edit: true,
+            can_manage: false,
+            workspace_archived: false,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          }}
+        />
+      </QueryClientProvider>
+    );
+
+    expect(
+      screen.queryByRole('button', { name: 'Enable workflow' })
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText('A project owner or administrator must enable this workflow.')
     ).toBeInTheDocument();

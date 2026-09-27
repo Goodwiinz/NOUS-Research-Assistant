@@ -4,12 +4,11 @@ import type { components } from '@/types/generated/api';
 const BASE = '/api/v1/research-engine';
 
 // Types
-export interface ProjectCreate {
+type GeneratedProjectCreate =
+  components['schemas']['src__schemas__research_engine__ProjectCreate'];
+export type ProjectCreate = Omit<GeneratedProjectCreate, 'collection_id'> & {
   collection_id: string;
-  /** Deprecated compatibility inputs; the server sources these from Collection. */
-  name?: string;
-  description?: string;
-}
+};
 
 type GeneratedProjectResponse =
   components['schemas']['src__schemas__research_engine__ProjectResponse'];

@@ -26,6 +26,7 @@ from src.api.research_engine.projects import (
 )
 from src.models import Base, Conversation, ProjectThread, Thread, Workspace
 from src.schemas.research_engine import ProjectCreate, ProjectLink, ProjectResponse
+from src.services.agent.tool_helpers import _resolve_project_id
 from src.services.research_engine.project_access import (
     ResearchAction,
     project_documents_query,
@@ -174,6 +175,96 @@ async def test_mapping_roles_org_scope_and_deleted_ancestors(
             ids,
         )
         await db.commit()
+
+        named_collection = uuid4()
+        inaccessible_collection = uuid4()
+        duplicate_accessible_collection = uuid4()
+        inaccessible_workspace = uuid4()
+        await db.execute(
+            text("""INSERT INTO workspaces
+                (id,name,is_archived,is_public,owner_id,organization_id,
+                 created_at,updated_at,is_deleted)
+                VALUES (:id,'inaccessible',false,false,:owner,:org,
+                        now(),now(),false)"""),
+            {
+                "id": inaccessible_workspace,
+                "owner": ids["k"],
+                "org": ids["o"],
+            },
+        )
+        await db.execute(
+            text("""INSERT INTO collections
+                (id,workspace_id,name,project_type,research_status,tags,is_private,
+                 created_at,updated_at,is_deleted)
+                VALUES
+                    (:named,:accessible_workspace,'Shared research','research',
+                     'active','[]',true,now(),now(),false),
+                    (:inaccessible,:inaccessible_workspace,'Shared research',
+                     'research','active','[]',true,now(),now(),false)
+                """),
+            {
+                "named": named_collection,
+                "accessible_workspace": ids["w"],
+                "inaccessible": inaccessible_collection,
+                "inaccessible_workspace": inaccessible_workspace,
+            },
+        )
+        await db.commit()
+        member = SimpleNamespace(id=ids["u"])
+        assert (
+            await _resolve_project_id(
+                "Shared research", db, member  # type: ignore[arg-type]
+            )
+            == named_collection
+        )
+        assert (
+            await _resolve_project_id(
+                str(named_collection), db, member  # type: ignore[arg-type]
+            )
+            == named_collection
+        )
+        assert (
+            (
+                await db.execute(
+                    text("""SELECT count(*) FROM research_projects
+                    WHERE collection_id IN (:named,:inaccessible)"""),
+                    {
+                        "named": named_collection,
+                        "inaccessible": inaccessible_collection,
+                    },
+                )
+            ).scalar_one()
+            == 0
+        )
+        await db.execute(
+            text("""INSERT INTO collections
+                (id,workspace_id,name,project_type,research_status,tags,is_private,
+                 created_at,updated_at,is_deleted)
+                VALUES (:id,:workspace,'Shared research','research','active','[]',
+                        true,now(),now(),false)"""),
+            {"id": duplicate_accessible_collection, "workspace": ids["w"]},
+        )
+        await db.commit()
+        assert (
+            await _resolve_project_id(
+                "Shared research", db, member  # type: ignore[arg-type]
+            )
+            is None
+        )
+        assert (
+            (
+                await db.execute(
+                    text("""SELECT count(*) FROM research_projects
+                    WHERE collection_id IN (:named,:inaccessible,:duplicate)"""),
+                    {
+                        "named": named_collection,
+                        "inaccessible": inaccessible_collection,
+                        "duplicate": duplicate_accessible_collection,
+                    },
+                )
+            ).scalar_one()
+            == 0
+        )
 
         async def link(collection_key: str) -> int:
             async with session_factory() as link_db:
