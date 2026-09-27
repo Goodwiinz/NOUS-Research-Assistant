@@ -98,9 +98,13 @@ def source_records(documents: list[SourceDocument]) -> list[dict[str, Any]]:
             **asdict(doc),
             "source_id": str(uuid4()),
             "evidence_level": (
-                ("excerpt" if doc.connector_type == "rag_store" else "full_text")
+                (
+                    "workspace_document"
+                    if doc.connector_type == "rag_store"
+                    else "full_text"
+                )
                 if doc.full_text
-                else "abstract" if doc.abstract else "metadata"
+                else "abstract" if doc.abstract else "metadata_only"
             ),
         }
         for doc in documents

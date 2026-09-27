@@ -110,6 +110,28 @@ class GroundingStatus(str, Enum):
     FAILED = "failed"
 
 
+class ConnectorFeatures(BaseModel):
+    """Safe, behavioral search features for a research connector."""
+
+    model_config = {"extra": "forbid"}
+
+    full_text: bool
+    date_filter: bool
+    cursor: bool
+
+
+class ConnectorCapabilityResponse(BaseModel):
+    """Non-sensitive connector metadata returned to setup clients."""
+
+    model_config = {"extra": "forbid"}
+
+    id: str
+    label: str
+    daily_brief_eligible: bool
+    available: bool
+    features: ConnectorFeatures
+
+
 # ============================================================================
 # Project Schemas
 # ============================================================================

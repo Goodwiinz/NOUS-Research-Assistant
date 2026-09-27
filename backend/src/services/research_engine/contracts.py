@@ -1,6 +1,7 @@
 """Typed, versioned contracts for evidence-bearing research stages."""
 
 import copy
+import hashlib
 import json
 import math
 import re
@@ -13,6 +14,45 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, Stri
 CONTRACT_VERSION = 1
 MAX_RESPONSE_BYTES = 32 * 1024
 STAGE_NAMES = {"screen", "extract", "synthesize", "verify", "export", "search"}
+EVIDENCE_LEVELS = frozenset(
+    {"full_text", "abstract", "metadata_only", "workspace_document"}
+)
+_LEGACY_EVIDENCE_LEVELS = {
+    "metadata": "metadata_only",
+    "excerpt": "workspace_document",
+}
+
+
+def canonical_json_bytes(value: object) -> bytes:
+    """Serialize a JSON value using the workflow's deterministic byte contract."""
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def canonical_json_sha256(value: object) -> str:
+    """Return the SHA-256 digest of the canonical JSON representation."""
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def canonical_stage_output_hash(output: dict[str, object]) -> str:
+    """Hash a persisted stage output using the canonical JSON contract."""
+    return canonical_json_sha256(output)
+
+
+def normalize_evidence_level(value: str | None) -> str:
+    """Normalize legacy evidence labels into the canonical vocabulary."""
+    if not isinstance(value, str):
+        return "metadata_only"
+    if value in EVIDENCE_LEVELS:
+        return value
+    if value in _LEGACY_EVIDENCE_LEVELS:
+        return _LEGACY_EVIDENCE_LEVELS[value]
+    return "metadata_only"
 
 
 class StrictContract(BaseModel):

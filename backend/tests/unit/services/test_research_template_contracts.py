@@ -9,12 +9,14 @@ from uuid import uuid4
 import pytest
 import yaml
 
+from src.services.research_engine import contracts
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
 from src.services.research_engine.contracts import (
     parse_provider_json,
     resolve_parameters,
     validate_extraction_record,
 )
+from src.services.research_engine.discovery import source_records
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.providers.base import (
     LLMProvider,
@@ -22,6 +24,7 @@ from src.services.research_engine.providers.base import (
     LLMResponse,
     ProviderConfig,
 )
+from src.services.research_engine.report_rendering import build_report
 from src.services.research_engine.step_executor import (
     ExecutionBudget,
     StepExecutionError,
@@ -279,6 +282,148 @@ class ContractProvider(LLMProvider):
 def _load_template(name: str) -> dict[str, Any]:
     with (TEMPLATE_DIR / f"{name}.yaml").open(encoding="utf-8") as handle:
         return cast(dict[str, Any], yaml.safe_load(handle))
+
+
+def test_daily_research_brief_template_has_exact_v1_contract() -> None:
+    """The bundled Daily Brief keeps its bounded topology and review gates."""
+    template = _load_template("daily_research_brief")
+
+    assert template["template_source"] == "daily_research_brief"
+    assert template["contract_version"] == 1
+    assert [step["type"] for step in template["steps"]] == [
+        "search",
+        "screen",
+        "extract",
+        "synthesize",
+        "verify",
+        "export",
+    ]
+    assert template["parameters"]["providers"] == ["openalex", "crossref"]
+    assert template["parameters"]["limit_per_provider"] == 25
+    assert template["constraints"] == {
+        "providers": {"min": 1, "max": 4},
+        "limit_per_provider": {"min": 1, "max": 50},
+    }
+    assert template["coverage"] == {"exhaustive": False}
+    assert {
+        step["type"]: step.get("parameters", {}).get("review_gate")
+        for step in template["steps"]
+        if step["type"] in {"screen", "extract", "export"}
+    } == {
+        "screen": "screening",
+        "extract": "extraction",
+        "export": "final",
+    }
+    export_step = template["steps"][-1]
+    assert export_step["parameters"]["formats"] == ["markdown", "json", "csv"]
+
+
+def test_canonical_json_is_key_order_independent_and_utf8() -> None:
+    """Reordering object keys cannot change the bytes or SHA-256 digest."""
+    left = {"z": [3, 2, 1], "a": {"question": "café"}}
+    right = {"a": {"question": "café"}, "z": [3, 2, 1]}
+
+    assert contracts.canonical_json_bytes(left) == (
+        b'{"a":{"question":"caf\xc3\xa9"},"z":[3,2,1]}'
+    )
+    assert contracts.canonical_json_sha256(left) == contracts.canonical_json_sha256(
+        right
+    )
+
+
+def test_canonical_stage_hash_covers_contract_version_and_complete_output() -> None:
+    """Changing envelope version or content must invalidate a reviewed hash."""
+    original = {
+        "contract_version": 1,
+        "stage_type": "screen",
+        "screening": [{"source_id": "s1", "included": True}],
+    }
+    reordered = {
+        "screening": [{"included": True, "source_id": "s1"}],
+        "stage_type": "screen",
+        "contract_version": 1,
+    }
+    new_version = {**original, "contract_version": 2}
+    changed_output = {
+        **original,
+        "screening": [{"source_id": "s1", "included": False}],
+    }
+
+    digest = contracts.canonical_stage_output_hash(original)
+    assert digest == contracts.canonical_stage_output_hash(reordered)
+    assert digest != contracts.canonical_stage_output_hash(new_version)
+    assert digest != contracts.canonical_stage_output_hash(changed_output)
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_canonical_json_rejects_non_finite_numbers(value: float) -> None:
+    """Canonical review hashes must never accept non-standard JSON numbers."""
+    with pytest.raises(ValueError, match="Out of range float values"):
+        contracts.canonical_json_bytes({"value": value})
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("full_text", "full_text"),
+        ("abstract", "abstract"),
+        ("metadata_only", "metadata_only"),
+        ("workspace_document", "workspace_document"),
+        ("metadata", "metadata_only"),
+        ("excerpt", "workspace_document"),
+        (None, "metadata_only"),
+    ],
+)
+def test_evidence_level_normalization_keeps_legacy_runs_readable(
+    raw: str | None, expected: str
+) -> None:
+    """Legacy evidence labels map into the bounded v1 display vocabulary."""
+    assert contracts.normalize_evidence_level(raw) == expected
+
+
+def test_new_source_records_emit_only_canonical_evidence_levels() -> None:
+    """New discovery output must not persist the legacy metadata/excerpt labels."""
+    records = source_records(
+        [
+            SourceDocument(connector_type="crossref", title="Metadata only"),
+            SourceDocument(
+                connector_type="rag_store",
+                title="Workspace source",
+                full_text="Retrieved workspace text",
+            ),
+        ]
+    )
+
+    assert [record["evidence_level"] for record in records] == [
+        "metadata_only",
+        "workspace_document",
+    ]
+
+
+def test_report_normalizes_legacy_evidence_levels_at_read_time() -> None:
+    """Persisted legacy source labels never leak into new report output."""
+    report = build_report(
+        {
+            "source_records": [
+                {
+                    "source_id": "s1",
+                    "title": "Old metadata",
+                    "evidence_level": "metadata",
+                },
+                {
+                    "source_id": "s2",
+                    "title": "Old excerpt",
+                    "evidence_level": "excerpt",
+                },
+            ]
+        }
+    )
+
+    assert [source["evidence_level"] for source in report["sources"]] == [
+        "metadata_only",
+        "workspace_document",
+    ]
 
 
 @pytest.mark.parametrize(

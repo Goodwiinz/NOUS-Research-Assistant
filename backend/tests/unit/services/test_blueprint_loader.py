@@ -1,6 +1,7 @@
 """Tests for the BlueprintLoader service."""
 
 import pytest
+import yaml
 
 from src.schemas.research_engine import BlueprintStepDefinition
 from src.services.research_engine.blueprints.loader import BlueprintLoader
@@ -33,6 +34,16 @@ class TestListTemplates:
             assert isinstance(t["step_count"], int)
             assert t["step_count"] > 0
 
+    def test_list_templates_rejects_invalid_bundled_template(self, tmp_path) -> None:
+        """Invalid bundled YAML must fail before metadata reaches callers."""
+        (tmp_path / "invalid.yaml").write_text(
+            "name: Invalid\nsteps:\n  - type: invented\n    name: Broken\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="invalid template 'invalid'"):
+            BlueprintLoader(tmp_path).list_templates()
+
 
 class TestLoadTemplate:
     """Tests for BlueprintLoader.load_template."""
@@ -57,6 +68,60 @@ class TestLoadTemplate:
         with pytest.raises(FileNotFoundError):
             loader.load_template("nonexistent_template")
 
+    def test_load_template_rejects_invalid_bundled_template(self, tmp_path) -> None:
+        """Loading a bundled template validates its complete step contract."""
+        (tmp_path / "invalid.yaml").write_text(
+            "name: Invalid\nsteps:\n  - type: search\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="invalid template 'invalid'"):
+            BlueprintLoader(tmp_path).load_template("invalid")
+
+    def test_load_template_enforces_daily_brief_semantics(self, tmp_path) -> None:
+        """A structurally valid Daily Brief cannot weaken its server bounds."""
+        template = {
+            "name": "Daily Research Brief",
+            "template_source": "daily_research_brief",
+            "contract_version": 1,
+            "parameters": {
+                "providers": ["openalex", "crossref"],
+                "limit_per_provider": 25,
+            },
+            "constraints": {
+                "providers": {"min": 1, "max": 5},
+                "limit_per_provider": {"min": 1, "max": 50},
+            },
+            "coverage": {"exhaustive": False},
+            "steps": [
+                {"type": "search", "name": "Search"},
+                {
+                    "type": "screen",
+                    "name": "Screen",
+                    "parameters": {"review_gate": "screening"},
+                },
+                {
+                    "type": "extract",
+                    "name": "Extract",
+                    "parameters": {"review_gate": "extraction"},
+                },
+                {"type": "synthesize", "name": "Synthesize"},
+                {"type": "verify", "name": "Verify"},
+                {
+                    "type": "export",
+                    "name": "Export",
+                    "parameters": {
+                        "review_gate": "final",
+                        "formats": ["markdown", "json", "csv"],
+                    },
+                },
+            ],
+        }
+        (tmp_path / "daily.yaml").write_text(yaml.safe_dump(template), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="daily_research_brief"):
+            BlueprintLoader(tmp_path).load_template("daily")
+
 
 class TestValidateTemplate:
     """Tests for BlueprintLoader.validate_template."""
@@ -67,14 +132,18 @@ class TestValidateTemplate:
         errors = loader.validate_template(template)
         assert errors == []
 
-    def test_validate_template_rejects_empty_steps(self, loader: BlueprintLoader) -> None:
+    def test_validate_template_rejects_empty_steps(
+        self, loader: BlueprintLoader
+    ) -> None:
         """Returns errors when steps list is empty."""
         template = {"name": "Test", "description": "Test", "steps": []}
         errors = loader.validate_template(template)
         assert len(errors) > 0
         assert any("empty" in e.lower() or "steps" in e.lower() for e in errors)
 
-    def test_validate_template_rejects_invalid_step_type(self, loader: BlueprintLoader) -> None:
+    def test_validate_template_rejects_invalid_step_type(
+        self, loader: BlueprintLoader
+    ) -> None:
         """Returns errors when a step has an invalid type."""
         template = {
             "name": "Test",
@@ -84,7 +153,9 @@ class TestValidateTemplate:
         errors = loader.validate_template(template)
         assert len(errors) > 0
 
-    def test_validate_template_rejects_missing_name(self, loader: BlueprintLoader) -> None:
+    def test_validate_template_rejects_missing_name(
+        self, loader: BlueprintLoader
+    ) -> None:
         """Returns errors when a step is missing a name."""
         template = {
             "name": "Test",

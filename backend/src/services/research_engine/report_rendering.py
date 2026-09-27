@@ -4,7 +4,10 @@ import re
 from typing import Any
 from urllib.parse import quote, urlparse
 
-from src.services.research_engine.contracts import CONTRACT_VERSION
+from src.services.research_engine.contracts import (
+    CONTRACT_VERSION,
+    normalize_evidence_level,
+)
 
 
 def _plain(value: Any) -> str:
@@ -38,7 +41,9 @@ def build_report(context: dict[str, Any]) -> dict[str, Any]:
                 "source_id": source_id,
                 "title": source.get("title") or "Untitled source",
                 "connector_type": source.get("connector_type"),
-                "evidence_level": source.get("evidence_level", "metadata"),
+                "evidence_level": normalize_evidence_level(
+                    source.get("evidence_level")
+                ),
                 "url": _safe_url(source.get("url")),
             }
         )

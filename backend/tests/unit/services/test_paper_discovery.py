@@ -151,7 +151,7 @@ def test_local_search_snippets_do_not_claim_full_text_access() -> None:
             )
         ]
     )
-    assert records[0]["evidence_level"] == "excerpt"
+    assert records[0]["evidence_level"] == "workspace_document"
 
 
 @pytest.mark.asyncio
