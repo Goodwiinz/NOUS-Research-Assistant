@@ -383,7 +383,15 @@ def validate_envelope(value: dict[str, Any], stage_type: str) -> dict[str, Any]:
             "sources",
             "query",
         },
-        "export": {"export", "format", "exported", "markdown", "media_type"},
+        "export": {
+            "export",
+            "format",
+            "exported",
+            "markdown",
+            "media_type",
+            "verification_output_hash",
+            "report_hash",
+        },
     }.get(stage_type)
     if allowed is None:
         raise ValueError("unknown research stage type")
@@ -619,7 +627,15 @@ def merge_stage_output(
     elif stage_type == "synthesize":
         merged["synthesis"] = copy.deepcopy(output.get("synthesis", {}))
     elif stage_type == "export":
-        for key in ("exported", "format", "markdown", "media_type", "content"):
+        for key in (
+            "exported",
+            "format",
+            "markdown",
+            "media_type",
+            "content",
+            "verification_output_hash",
+            "report_hash",
+        ):
             if key in output:
                 merged[key] = copy.deepcopy(output[key])
     elif stage_type == "verify":

@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Dict, List, Optional
 from uuid import UUID
 
 from anyio import CancelScope
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import cast, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB
@@ -24,6 +24,7 @@ from src.models.research_run import ResearchRun, RunStatus
 from src.models.research_step import ResearchStep
 from src.models.user import User
 from src.schemas.research_engine import (
+    ExportFormat,
     RunCreate,
     RunResponse,
     RunResumeRequest,
@@ -44,6 +45,10 @@ from src.services.research_engine.contracts import (
     rehydrate_stage_outputs,
 )
 from src.services.research_engine.engine import WorkflowEngine
+from src.services.research_engine.export_service import (
+    ExportService,
+    ResearchExportError,
+)
 from src.services.research_engine.providers import (
     ClaudeProvider,
     OllamaProvider,
@@ -474,6 +479,33 @@ async def get_manifest(
     return run.reproducibility_manifest or {}
 
 
+@router.get("/runs/{run_id}/export")
+async def export_run(
+    run_id: UUID,
+    format: ExportFormat = ExportFormat.MARKDOWN,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download an owner-scoped artifact for a completed research run."""
+    try:
+        artifact = await ExportService().export(
+            run_id,
+            UUID(str(current_user.id)),
+            format.value,
+            db,
+        )
+    except ResearchExportError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+        ) from exc
+    return Response(
+        content=artifact.content,
+        media_type=artifact.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{artifact.filename}"'},
+    )
+
+
 @router.get(
     "/runs/{run_id}/stream",
 )
@@ -584,6 +616,30 @@ async def stream_run(
     effective_parameters, parameter_overrides = _get_effective_parameters(
         blueprint, run
     )
+    if blueprint.template_source == "daily_research_brief":
+        prior_outputs["artifact_provenance"] = {
+            "run_id": str(run.id),
+            "blueprint_id": str(blueprint.id),
+            "blueprint_version": blueprint.version,
+            "template_source": blueprint.template_source,
+            "template_contract_version": effective_parameters.get("contract_version"),
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": None,
+            "stage_hashes": {
+                str(step.step_index): step.outputs_hash
+                for step in history
+                if isinstance(step.outputs_hash, str)
+            },
+            "models": [
+                {"step_index": step.step_index, "model_id": step.model_id}
+                for step in history
+                if isinstance(step.model_id, str) and step.model_id
+            ],
+            "review_history": manifest.get("review_history") or [],
+            "scope_confirmation": scope_confirmation or {},
+            "provider_manifest": provider_manifest or [],
+            "limitations": ["Bounded provider search; results are not exhaustive."],
+        }
     if effective_parameters.get("contract_version") == 1 and any(
         not isinstance(step.output, dict) or step.output.get("contract_version") != 1
         for step in history
@@ -888,14 +944,13 @@ async def stream_run(
             raise
         except Exception as exc:
             # If streaming fails unexpectedly, mark run as failed
-            logger.error(f"Stream error for run {run_id}: {exc}")
+            logger.error("Research stream failed for run %s", run_id)
             try:
                 await recover_run(RunStatus.FAILED.value, completed=True)
-            except Exception as recovery_exc:
+            except Exception:
                 logger.error(
-                    "Failed to persist terminal state for research run %s: %s",
+                    "Failed to persist terminal state for research run %s",
                     run_id,
-                    recovery_exc,
                 )
             error_event = json.dumps({"event": "run_failed", "error": str(exc)})
             yield f"event: run_failed\ndata: {error_event}\n\n"

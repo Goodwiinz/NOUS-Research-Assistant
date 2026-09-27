@@ -1,5 +1,7 @@
 """Export service for research engine results."""
 
+import copy
+from dataclasses import dataclass
 from typing import Any, Dict, List, cast
 from uuid import UUID
 
@@ -8,15 +10,309 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.models.research_blueprint import ResearchBlueprint
+from src.models.research_project import ResearchProject
 from src.models.research_run import ResearchRun
 from src.models.research_source import ResearchSource
 from src.models.research_step import ResearchStep
-from src.services.research_engine.contracts import rehydrate_stage_outputs
-from src.services.research_engine.report_rendering import build_report, render_markdown
+from src.schemas.research_engine import ExportFormat
+from src.services.research_engine.contracts import (
+    canonical_json_bytes,
+    canonical_stage_output_hash,
+    rehydrate_stage_outputs,
+)
+from src.services.research_engine.report_rendering import (
+    build_report,
+    render_csv,
+    render_markdown,
+)
+
+
+@dataclass(frozen=True)
+class ExportArtifact:
+    """Transport-ready bytes and safe download metadata."""
+
+    content: bytes
+    media_type: str
+    filename: str
+
+
+class ResearchExportError(RuntimeError):
+    """Stable, content-free error returned by the owned export route."""
+
+    def __init__(self, *, status_code: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+    def detail(self) -> dict[str, str]:
+        return {"code": self.code, "message": self.message}
 
 
 class ExportService:
     """Exports research run results as structured JSON reports."""
+
+    async def export(
+        self,
+        run_id: UUID,
+        owner_id: UUID,
+        format: ExportFormat | str,
+        db: AsyncSession,
+    ) -> ExportArtifact:
+        """Return an owner-scoped, deterministic artifact for a terminal run."""
+        export_format = ExportFormat(format)
+        statement = (
+            select(ResearchRun)
+            .join(
+                ResearchBlueprint,
+                cast(Any, ResearchBlueprint.id) == cast(Any, ResearchRun.blueprint_id),
+            )
+            .join(
+                ResearchProject,
+                cast(Any, ResearchProject.id)
+                == cast(Any, ResearchBlueprint.project_id),
+            )
+            .where(
+                cast(Any, ResearchRun.id) == run_id,
+                cast(Any, ResearchProject.owner_id) == owner_id,
+            )
+            .options(
+                selectinload(ResearchRun.blueprint),
+                selectinload(ResearchRun.steps),
+                selectinload(ResearchRun.sources),
+                selectinload(ResearchRun.reviews),
+            )
+        )
+        result = await db.execute(statement)
+        run = result.scalar_one_or_none()
+        if run is None:
+            raise ResearchExportError(
+                status_code=404,
+                code="run_not_found",
+                message="Run not found",
+            )
+        if run.status != "completed":
+            raise ResearchExportError(
+                status_code=409,
+                code="run_not_completed",
+                message="Run is not completed",
+            )
+
+        manifest: dict[str, Any] = (
+            cast(Dict[str, Any], run.reproducibility_manifest)
+            if isinstance(run.reproducibility_manifest, dict)
+            else {}
+        )
+        steps = sorted(run.steps, key=lambda item: int(item.step_index))
+        try:
+            context = rehydrate_stage_outputs(steps)
+        except ValueError:
+            context = {}
+        reviews = self._review_audit(run, manifest)
+        audit_context = copy.deepcopy(context)
+        audit_context["approved_review_overlays"] = copy.deepcopy(reviews)
+        context = self._apply_review_overlays(context, reviews)
+        context["scope_confirmation"] = copy.deepcopy(
+            manifest.get("scope_confirmation") or {}
+        )
+        context["provider_manifest"] = copy.deepcopy(
+            manifest.get("provider_manifest") or []
+        )
+        context["approved_review_overlays"] = copy.deepcopy(reviews)
+        context["no_evidence"] = manifest.get("final_status") == "no_evidence"
+        context["artifact_provenance"] = self._provenance(run, steps, manifest)
+
+        report = self._persisted_report(steps) or build_report(context)
+        if run.blueprint.template_source != "daily_research_brief":
+            report["final_status"] = "unverified"
+            report["warning"] = (
+                "UNVERIFIED: legacy and custom runs cannot be approved as a "
+                "Daily Research Brief."
+            )
+        elif manifest.get("final_status") == "unverified":
+            report["final_status"] = "unverified"
+            report["warning"] = (
+                "UNVERIFIED: this artifact has not passed all verification checks."
+            )
+        elif manifest.get("final_status") == "no_evidence":
+            report["final_status"] = "no_evidence"
+            report["warning"] = (
+                "NO EVIDENCE: no reader-facing research conclusion was produced."
+            )
+
+        base_name = f"daily-research-brief-{run.id}"
+        if export_format is ExportFormat.JSON:
+            return ExportArtifact(
+                content=canonical_json_bytes(report),
+                media_type="application/json",
+                filename=f"{base_name}.json",
+            )
+        if export_format is ExportFormat.MARKDOWN:
+            if report.get("final_status") == "no_evidence":
+                raise ResearchExportError(
+                    status_code=409,
+                    code="brief_not_available_no_evidence",
+                    message=(
+                        "No research brief was produced because no evidence remained."
+                    ),
+                )
+            return ExportArtifact(
+                content=render_markdown(report).encode("utf-8"),
+                media_type="text/markdown; charset=utf-8",
+                filename=f"{base_name}.md",
+            )
+        rows = self._csv_rows(audit_context)
+        return ExportArtifact(
+            content=render_csv(
+                rows, final_status=str(report.get("final_status") or "unverified")
+            ).encode("utf-8"),
+            media_type="text/csv; charset=utf-8",
+            filename=f"{base_name}.csv",
+        )
+
+    @staticmethod
+    def _persisted_report(steps: list[Any]) -> dict[str, Any] | None:
+        for step in reversed(steps):
+            output = step.output if isinstance(step.output, dict) else {}
+            if output.get("stage_type") != "export":
+                continue
+            report = output.get("exported")
+            if isinstance(report, dict):
+                return copy.deepcopy(report)
+        return None
+
+    @staticmethod
+    def _provenance(
+        run: ResearchRun, steps: list[Any], manifest: dict[str, Any]
+    ) -> dict[str, Any]:
+        stage_hashes = {
+            str(step.step_index): (
+                step.outputs_hash
+                if isinstance(step.outputs_hash, str)
+                else canonical_stage_output_hash(step.output)
+            )
+            for step in steps
+            if isinstance(step.output, dict)
+        }
+        models = [
+            {"step_index": step.step_index, "model_id": step.model_id}
+            for step in steps
+            if isinstance(step.model_id, str) and step.model_id
+        ]
+        return {
+            **copy.deepcopy(manifest),
+            "run_id": str(run.id),
+            "blueprint_id": str(run.blueprint.id),
+            "blueprint_version": run.blueprint_version,
+            "template_source": run.blueprint.template_source,
+            "template_contract_version": 1,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "stage_hashes": stage_hashes,
+            "models": models,
+            "limitations": manifest.get("limitations")
+            or ["Bounded provider search; results are not exhaustive."],
+        }
+
+    @staticmethod
+    def _review_audit(
+        run: ResearchRun, manifest: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        rows: list[Any] = run.reviews if isinstance(run.reviews, list) else []
+        audit = [
+            {
+                "review_id": str(review.id),
+                "step_index": review.step_index,
+                "review_kind": review.review_kind,
+                "output_hash": review.output_hash,
+                "decision": review.decision,
+                "decision_payload": copy.deepcopy(review.decision_payload),
+                "created_at": (
+                    review.created_at.isoformat() if review.created_at else None
+                ),
+            }
+            for review in rows
+            if review.decision == "approve"
+        ]
+        if audit:
+            return audit
+        history = manifest.get("review_history")
+        return copy.deepcopy(history) if isinstance(history, list) else []
+
+    @staticmethod
+    def _apply_review_overlays(
+        context: dict[str, Any], reviews: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        projected = copy.deepcopy(context)
+        for review in reviews:
+            payload = review.get("decision_payload")
+            items = payload.get("items") if isinstance(payload, dict) else None
+            if not isinstance(items, list):
+                continue
+            decisions = {
+                (item.get("source_id"), item.get("part_id")): item.get("decision")
+                for item in items
+                if isinstance(item, dict)
+            }
+            if review.get("review_kind") == "screening":
+                projected["included_source_ids"] = sorted(
+                    {
+                        source_id
+                        for (source_id, _part_id), decision in decisions.items()
+                        if decision == "include" and isinstance(source_id, str)
+                    }
+                )
+            elif review.get("review_kind") == "extraction":
+                extractions = projected.get("extractions")
+                if isinstance(extractions, list):
+                    projected["extractions"] = [
+                        copy.deepcopy(record)
+                        for record in extractions
+                        if isinstance(record, dict)
+                        and decisions.get(
+                            (record.get("source_id"), record.get("part_id"))
+                        )
+                        == "accept"
+                    ]
+        return projected
+
+    @staticmethod
+    def _csv_rows(context: dict[str, Any]) -> list[dict[str, Any]]:
+        sources = {
+            item.get("source_id"): item
+            for item in context.get("source_records") or []
+            if isinstance(item, dict)
+        }
+        decisions: dict[tuple[Any, Any], tuple[Any, Any]] = {}
+        for review in context.get("approved_review_overlays") or []:
+            payload: dict[str, Any] = {}
+            if isinstance(review, dict):
+                payload_value = review.get("decision_payload")
+                if isinstance(payload_value, dict):
+                    payload = payload_value
+            for item in payload.get("items") or []:
+                if isinstance(item, dict):
+                    decisions[(item.get("source_id"), item.get("part_id"))] = (
+                        item.get("decision"),
+                        item.get("reason"),
+                    )
+        rows: list[dict[str, Any]] = []
+        for extraction in context.get("extractions") or []:
+            if not isinstance(extraction, dict):
+                continue
+            decision, reason = decisions.get(
+                (extraction.get("source_id"), extraction.get("part_id")),
+                ("included", ""),
+            )
+            rows.append(
+                {
+                    "source": sources.get(extraction.get("source_id"), {}),
+                    "extraction": extraction,
+                    "decision": decision,
+                    "reason": reason,
+                }
+            )
+        return rows
 
     async def export_json(self, run_id: UUID, db: AsyncSession) -> dict:
         """Export a completed run as a structured JSON report.

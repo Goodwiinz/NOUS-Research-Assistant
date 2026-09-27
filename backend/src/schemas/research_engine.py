@@ -98,6 +98,14 @@ class StepType(str, Enum):
     EXPORT = "export"
 
 
+class ExportFormat(str, Enum):
+    """Portable formats supported by the audited research export endpoint."""
+
+    MARKDOWN = "markdown"
+    JSON = "json"
+    CSV = "csv"
+
+
 class ExecutionMode(str, Enum):
     """Execution mode for a blueprint step."""
 

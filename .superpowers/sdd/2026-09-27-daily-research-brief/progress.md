@@ -74,7 +74,7 @@
 - Task 2: complete
 - Task 3: complete
 - Task 4: complete
-- Task 5: pending
+- Task 5: complete
 - Task 6: pending
 - Task 7: pending
 - Task 8: pending
@@ -125,3 +125,13 @@
 - Fix commit: `fix(research): close lifecycle review gaps` (this commit).
 - Fix verification: 70 focused tests and the final 88-test Task 4/PostgreSQL gate passed; 180 adjacent tests and 2 real PostgreSQL race tests passed. Ruff, Black, isort, and diff checks passed. Direct MyPy comparison is unchanged at 44 legacy errors on both base and fix, with zero patch-introduced errors.
 - Task 4: complete; Task 5 has not started.
+
+## Task 5 review loop
+
+- Base: `c1608645219634ac7da8519bd82e669d21c0557d`.
+- Controller-approved seam: `contracts.py` may add only `verification_output_hash` and `report_hash` to the export-stage owned/rehydrated fields because Task 3 final approval already validates both bindings; undeclared export keys remain rejected.
+- Initial RED: the exact three-file Task 5 command stopped with 3 collection errors for the missing enum, artifact type, and observability module.
+- Review-gap RED/GREEN: explicit evidence CSV and pause/override metrics failed 2 focused tests before implementation and passed 4 afterward; self-review then proved rejected CSV audit rows were lost (1 RED) before the immutable audit-context repair (1 GREEN).
+- Final focused GREEN: 27 passed; report-rendering contracts: 35 passed; adjacent Task 3/4 tests: 93 passed; full stream regression: 31 passed.
+- Quality gates: changed-file and repo-wide Ruff passed; Black and isort passed; three added files are MyPy-clean; all seven modified legacy files match their base diagnostic counts; diff check passed.
+- Task 5: complete; Task 6 has not started.

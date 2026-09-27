@@ -1687,35 +1687,76 @@ class StepExecutor:
     def _execute_contract_export(
         self, step_def: Dict[str, Any], context: Dict[str, Any]
     ) -> StepResult:
+        from src.services.research_engine.contracts import (
+            canonical_json_bytes,
+            canonical_json_sha256,
+            canonical_stage_output_hash,
+            immediate_stage_envelope,
+        )
         from src.services.research_engine.report_rendering import (
             build_report,
+            render_csv,
             render_markdown,
         )
 
         params = self._get_params(step_def)
         export_format = params.get("format", "json")
         report = build_report(context)
+        verification_output = immediate_stage_envelope(context, "verify")
+        verification_output_hash = canonical_stage_output_hash(verification_output)
+        report_hash = canonical_json_sha256(report)
+        common = {
+            "exported": report,
+            "export": report,
+            "verification_output_hash": verification_output_hash,
+            "report_hash": report_hash,
+        }
         if export_format == "markdown":
             markdown = render_markdown(report)
             output = self._envelope(
                 "export",
                 {
+                    **common,
                     "format": "markdown",
-                    "exported": report,
-                    "export": report,
                     "markdown": markdown,
-                    "media_type": "text/markdown",
+                    "media_type": "text/markdown; charset=utf-8",
                     "content": markdown,
+                },
+            )
+        elif export_format == "csv":
+            source_by_id = {
+                item.get("source_id"): item
+                for item in context.get("source_records", [])
+                if isinstance(item, dict)
+            }
+            rows = [
+                {
+                    "source": source_by_id.get(item.get("source_id"), {}),
+                    "extraction": item,
+                    "decision": "included",
+                    "reason": "",
+                }
+                for item in context.get("extractions", [])
+                if isinstance(item, dict)
+            ]
+            csv_content = render_csv(rows, final_status=report["final_status"])
+            output = self._envelope(
+                "export",
+                {
+                    **common,
+                    "format": "csv",
+                    "media_type": "text/csv; charset=utf-8",
+                    "content": csv_content,
                 },
             )
         else:
             output = self._envelope(
                 "export",
                 {
+                    **common,
                     "format": "json",
-                    "exported": report,
-                    "export": report,
-                    "content": json.dumps(report, ensure_ascii=False),
+                    "media_type": "application/json",
+                    "content": canonical_json_bytes(report).decode("utf-8"),
                 },
             )
         self._validate_stage_envelope(output)
