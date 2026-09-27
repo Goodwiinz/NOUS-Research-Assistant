@@ -197,6 +197,7 @@ class ProjectService:
                 and_(
                     Collection.id == project_id,
                     Workspace.owner_id == user_id,
+                    Workspace.is_deleted.is_(False),
                     Collection.is_deleted.is_(False),
                 )
             )

@@ -5,6 +5,7 @@
 
 import { api } from '@/services/api-client';
 import { API_CONFIG } from '@/types/api';
+import type { components } from '@/types/generated/api';
 
 // Types
 export interface Project {
@@ -461,6 +462,12 @@ export const projectService = {
     );
   },
 
+  async listDraftReviews(projectId: string): Promise<DraftReviewListResponse> {
+    return api.get<DraftReviewListResponse>(
+      `/projects/${projectId}/drafts/reviews`
+    );
+  },
+
   /**
    * Get the current draft
    */
@@ -612,6 +619,41 @@ export interface DraftGenerationResponse {
   status: string;
   message: string;
 }
+
+type GeneratedDraftReview = components['schemas']['DraftReviewResponse'];
+type GeneratedDraftReviewPayload = components['schemas']['DraftReviewPayload'];
+export type DraftReview = Omit<GeneratedDraftReview, 'outcome' | 'review'> & {
+  outcome: 'passed' | 'blocked';
+  review: Omit<
+    GeneratedDraftReviewPayload,
+    'uncited_assertions' | 'verdicts'
+  > & {
+    uncited_assertions?: Array<{ text?: string }>;
+    verdicts?: Array<{
+      verdict?: string;
+      evidence?: string;
+      checks?: {
+        identity?: { status?: string; available?: boolean };
+        support?: { status?: string; available?: boolean };
+        publication?: {
+          status?: string;
+          available?: boolean;
+          performed?: boolean;
+          observation_status?: string;
+          observations?: Array<{
+            field?: string;
+            value?: unknown;
+            source?: string;
+          }>;
+        };
+      };
+    }>;
+  };
+};
+export type DraftReviewListResponse = Omit<
+  components['schemas']['DraftReviewListResponse'],
+  'reviews'
+> & { reviews: DraftReview[] };
 
 export interface GenerationStatus {
   task_id?: string;

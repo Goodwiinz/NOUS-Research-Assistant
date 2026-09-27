@@ -16,6 +16,11 @@ from src.models.research_run import ResearchRun
 from src.models.research_step import ResearchStep
 from src.models.user import User
 from src.schemas.research_engine import StepResponse
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    require_run,
+    require_step,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +32,7 @@ router = APIRouter(
 
 async def _verify_run_access(run_id: UUID, user_id: UUID, db: AsyncSession) -> None:
     """Verify user owns the project for this run via a single JOIN query."""
-    query = (
-        select(ResearchRun.id)
-        .join(ResearchBlueprint, ResearchBlueprint.id == ResearchRun.blueprint_id)
-        .join(ResearchProject, ResearchProject.id == ResearchBlueprint.project_id)
-        .where(
-            ResearchRun.id == run_id,
-            ResearchProject.owner_id == user_id,
-        )
-    )
-    result = await db.execute(query)
-    if not result.scalars().first():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Run not found",
-        )
+    await require_run(db, run_id, user_id, ResearchAction.REVIEW)
 
 
 @router.get(
@@ -75,21 +66,5 @@ async def get_step(
     db: AsyncSession = Depends(get_db),
 ) -> StepResponse:
     """Get a single step with ownership verification in one query."""
-    query = (
-        select(ResearchStep)
-        .join(ResearchRun, ResearchRun.id == ResearchStep.run_id)
-        .join(ResearchBlueprint, ResearchBlueprint.id == ResearchRun.blueprint_id)
-        .join(ResearchProject, ResearchProject.id == ResearchBlueprint.project_id)
-        .where(
-            ResearchStep.id == step_id,
-            ResearchProject.owner_id == current_user.id,
-        )
-    )
-    result = await db.execute(query)
-    step = result.scalars().first()
-    if not step:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Step not found",
-        )
+    step = await require_step(db, step_id, current_user.id, ResearchAction.REVIEW)
     return StepResponse.model_validate(step)

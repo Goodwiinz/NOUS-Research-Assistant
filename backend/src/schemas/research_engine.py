@@ -118,6 +118,7 @@ class GroundingStatus(str, Enum):
 class ProjectCreate(BaseModel):
     """Schema for creating a research project."""
 
+    collection_id: Optional[UUID] = None
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     settings: Dict[str, Any] = Field(default_factory=dict)
@@ -132,12 +133,19 @@ class ProjectUpdate(BaseModel):
     settings: Optional[Dict[str, Any]] = None
 
 
+class ProjectLink(BaseModel):
+    """One-time explicit link to an existing canonical Collection."""
+
+    collection_id: UUID
+
+
 class ProjectResponse(BaseModel):
     """Schema for project API responses."""
 
     model_config = {"from_attributes": True}
 
     id: UUID
+    collection_id: Optional[UUID] = None
     name: str
     description: Optional[str] = None
     status: str

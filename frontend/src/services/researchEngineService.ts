@@ -1,13 +1,13 @@
 import { api } from '@/services/api-client';
+import type { components } from '@/types/generated/api';
 
 const BASE = '/api/v1/research-engine';
 
 // Types
-export interface ProjectCreate {
-  name: string;
-  description?: string;
-  settings?: Record<string, unknown>;
-}
+export type ProjectCreate =
+  components['schemas']['src__schemas__research_engine__ProjectCreate'];
+export type ProjectResponse =
+  components['schemas']['src__schemas__research_engine__ProjectResponse'];
 
 export interface BlueprintStepDef {
   type: string;
@@ -36,6 +36,14 @@ export const createProject = (data: ProjectCreate) =>
 
 export const getProject = (id: string) =>
   api.get(`${BASE}/projects/${id}`);
+
+export const linkProject = (
+  id: string,
+  collectionId: string
+): Promise<ProjectResponse> =>
+  api.patch<ProjectResponse>(`${BASE}/projects/${id}/collection`, {
+    collection_id: collectionId,
+  });
 
 export const listTemplates = () =>
   api.get(`${BASE}/blueprints/templates`);

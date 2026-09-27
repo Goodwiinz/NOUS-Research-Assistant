@@ -386,6 +386,13 @@ class TestStreamEndpointSuccess:
                 "output": {"content": "ok"},
                 "quality_marks": [],
                 "token_count": 42,
+                "inputs_hash": "a" * 64,
+                "outputs_hash": "b" * 64,
+                "full_prompt": "permitted system prompt",
+                "model_id": "effective-model",
+                "model_version": "2026-09-01",
+                "temperature": 0.25,
+                "seed": 7,
             }
             yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
 
@@ -395,6 +402,20 @@ class TestStreamEndpointSuccess:
 
         assert response.status_code == 200
         db.add.assert_called()
+        from src.models.research_step import ResearchStep
+
+        step = next(
+            call.args[0]
+            for call in db.add.call_args_list
+            if isinstance(call.args[0], ResearchStep)
+        )
+        assert step.inputs_hash == "a" * 64
+        assert step.outputs_hash == "b" * 64
+        assert step.full_prompt == "permitted system prompt"
+        assert step.model_id == "effective-model"
+        assert step.model_version == "2026-09-01"
+        assert step.temperature == 0.25
+        assert step.seed == 7
         stream_app.dependency_overrides.pop(get_db, None)
 
     def test_stream_persists_discovered_sources_with_step(

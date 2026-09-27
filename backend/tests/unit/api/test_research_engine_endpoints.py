@@ -40,6 +40,7 @@ def _make_mock_project(**overrides):
     project.name = overrides.get("name", "Test Project")
     project.description = overrides.get("description", "A test project")
     project.owner_id = overrides.get("owner_id", uuid.uuid4())
+    project.collection_id = overrides.get("collection_id", None)
     project.status = overrides.get("status", "active")
     project.settings = overrides.get("settings", {})
     project.is_deleted = overrides.get("is_deleted", False)

@@ -15,6 +15,11 @@ from src.models.research_project import ResearchProject
 from src.models.user import User
 from src.schemas.research_engine import BlueprintCreate, BlueprintResponse
 from src.services.research_engine.blueprints.loader import BlueprintLoader
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    require_blueprint,
+    require_research_project,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,22 +51,12 @@ async def create_blueprint(
     db: AsyncSession = Depends(get_db),
 ) -> BlueprintResponse:
     """Create a blueprint for a project."""
-    # Validate project ownership
-    query = select(ResearchProject).where(
-        ResearchProject.id == project_id,
-        ResearchProject.owner_id == current_user.id,
-        ResearchProject.is_deleted == False,
+    project = await require_research_project(
+        db, project_id, current_user.id, ResearchAction.ADJUDICATE
     )
-    result = await db.execute(query)
-    project = result.scalars().first()
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
 
     blueprint = ResearchBlueprint(
-        project_id=project_id,
+        project_id=project.id,
         name=body.name,
         template_source=body.template_source,
         steps=[s.model_dump() for s in body.steps],
@@ -83,19 +78,7 @@ async def get_blueprint(
     db: AsyncSession = Depends(get_db),
 ) -> BlueprintResponse:
     """Get a single blueprint with ownership verification in one query."""
-    query = (
-        select(ResearchBlueprint)
-        .join(ResearchProject, ResearchProject.id == ResearchBlueprint.project_id)
-        .where(
-            ResearchBlueprint.id == blueprint_id,
-            ResearchProject.owner_id == current_user.id,
-        )
+    blueprint = await require_blueprint(
+        db, blueprint_id, current_user.id, ResearchAction.REVIEW
     )
-    result = await db.execute(query)
-    blueprint = result.scalars().first()
-    if not blueprint:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Blueprint not found",
-        )
     return BlueprintResponse.model_validate(blueprint)

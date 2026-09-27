@@ -10,6 +10,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from src.models.document import Document
+from src.models.draft_review import DraftReview
 from src.services.research.citation_extraction_service import CitationExtractionService
 from src.services.research.citation_verification_service import _LLMVerdict
 from src.services.research.draft_generation_service import (
@@ -305,8 +306,10 @@ async def test_end_to_end_identifier_hijacking_forces_major_despite_llm_exact():
     # mismatch short-circuits straight to MAJOR.
     structured.ainvoke.assert_not_awaited()
 
-    assert add_sink == []
-    assert bg_session.commit.await_count == 0
+    assert len(add_sink) == 1
+    assert isinstance(add_sink[0], DraftReview)
+    assert add_sink[0].outcome == "blocked"
+    assert bg_session.commit.await_count == 1
     status = DraftGenerationService.get_status("task-hijack")
     assert status["status"] == DraftGenerationStatus.FAILED
     assert "major" in status["current_step"]
@@ -344,3 +347,49 @@ def test_review_gate_rejects_passing_verdict_without_grounded_evidence():
 
     with pytest.raises(ValueError, match="grounded evidence"):
         DraftGenerationService._require_passing_citation_review(review, [1])
+
+
+def test_review_gate_rejects_uncited_factual_assertions():
+    review = {
+        "docs_skipped": 0,
+        "coverage": {"complete": True},
+        "uncited_assertions": [
+            {
+                "text": "The trial enrolled 900 participants.",
+                "citation_indices": [],
+                "support_status": "uncited",
+            }
+        ],
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "exact",
+                "evidence": "The supported result.",
+                "location": "document summary",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="uncited factual assertion"):
+        DraftGenerationService._require_passing_citation_review(review, [1])
+
+
+def test_minor_evidence_is_persisted_as_not_fully_verified():
+    citations = [{"citation_index": 1}]
+    review = {
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "minor",
+                "evidence": "The effect was smaller than stated.",
+                "location": "Page 9",
+                "page_number": 9,
+            }
+        ]
+    }
+
+    DraftGenerationService._apply_review_evidence(citations, review)
+
+    assert citations[0]["snippet"] == "The effect was smaller than stated."
+    assert "review=minor" in citations[0]["context"]
+    assert "fully_verified=False" in citations[0]["context"]

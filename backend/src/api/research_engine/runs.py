@@ -35,6 +35,11 @@ from src.services.research_engine.connectors import (
 )
 from src.services.research_engine.connectors.registry import build_connectors
 from src.services.research_engine.engine import WorkflowEngine
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    require_blueprint,
+    require_run,
+)
 from src.services.research_engine.providers import (
     ClaudeProvider,
     OllamaProvider,
@@ -61,6 +66,46 @@ def _set_pause_requested(run: ResearchRun, requested: bool) -> None:
     else:
         manifest.pop(_PAUSE_REQUESTED_KEY, None)
     run.reproducibility_manifest = manifest or None
+
+
+def _research_step_from_event(
+    run_id: UUID,
+    step_def: Dict[str, Any],
+    event: Dict[str, Any],
+) -> ResearchStep:
+    """Build the durable step row from the executor's completed-step event."""
+    params = _get_step_params(step_def)
+    model_id = (
+        event.get("model_id") or step_def.get("model_id") or params.get("model_id")
+    )
+    temperature = event.get("temperature")
+    if temperature is None:
+        temperature = step_def.get("temperature", params.get("temperature", 0.0))
+    if "seed" in event:
+        seed = event["seed"]
+    else:
+        seed = step_def.get("seed", params.get("seed"))
+    output = event.get("output")
+    if output is not None and not isinstance(output, dict):
+        output = {"value": output}
+
+    return ResearchStep(
+        run_id=run_id,
+        step_index=int(event.get("step_index") or 0),
+        step_type=str(event.get("step_type") or step_def.get("type") or "search"),
+        mode=str(step_def.get("mode") or params.get("mode") or "deterministic"),
+        inputs_hash=event.get("inputs_hash"),
+        outputs_hash=event.get("outputs_hash"),
+        full_prompt=event.get("full_prompt"),
+        model_id=str(model_id) if model_id is not None else None,
+        model_version=event.get("model_version"),
+        temperature=float(temperature),
+        seed=int(seed) if seed is not None else None,
+        output=output,
+        quality_marks=event.get("quality_marks") or [],
+        token_count=int(event.get("token_count") or 0),
+        completed_at=datetime.now(timezone.utc),
+    )
 
 
 async def _run_interrupted_cleanup(cleanup: Awaitable[None]) -> None:
@@ -97,28 +142,10 @@ async def _get_owned_run(
     run_id: UUID,
     user_id: UUID,
     db: AsyncSession,
+    action: ResearchAction = ResearchAction.REVIEW,
 ) -> ResearchRun:
-    """Fetch a run in a single query, verifying the user owns it via JOIN.
-
-    Raises 404 if the run doesn't exist or the user doesn't own it.
-    """
-    query = (
-        select(ResearchRun)
-        .join(ResearchBlueprint, ResearchBlueprint.id == ResearchRun.blueprint_id)
-        .join(ResearchProject, ResearchProject.id == ResearchBlueprint.project_id)
-        .where(
-            ResearchRun.id == run_id,
-            ResearchProject.owner_id == user_id,
-        )
-    )
-    result = await db.execute(query)
-    run = result.scalars().first()
-    if not run:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Run not found",
-        )
-    return run
+    """Resolve a run through the shared mapped-project access policy."""
+    return await require_run(db, run_id, user_id, action)
 
 
 def _get_step_params(step_def: Dict[str, Any]) -> Dict[str, Any]:
@@ -277,22 +304,9 @@ async def start_run(
     if body is None:
         body = RunCreate()
 
-    # Look up the blueprint with ownership verification in one query
-    query = (
-        select(ResearchBlueprint)
-        .join(ResearchProject, ResearchProject.id == ResearchBlueprint.project_id)
-        .where(
-            ResearchBlueprint.id == blueprint_id,
-            ResearchProject.owner_id == current_user.id,
-        )
+    blueprint = await require_blueprint(
+        db, blueprint_id, current_user.id, ResearchAction.SUPERVISE
     )
-    result = await db.execute(query)
-    blueprint = result.scalars().first()
-    if not blueprint:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Blueprint not found",
-        )
 
     # Mark blueprint as immutable
     blueprint.is_immutable = True
@@ -322,7 +336,7 @@ async def get_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Get run status."""
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.REVIEW)
     return RunResponse.model_validate(run)
 
 
@@ -336,7 +350,7 @@ async def pause_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Pause a running run."""
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.SUPERVISE)
     if run.status != RunStatus.RUNNING.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -377,7 +391,7 @@ async def resume_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Resume a paused run."""
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.SUPERVISE)
     if run.status != RunStatus.PAUSED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -398,7 +412,7 @@ async def get_manifest(
     db: AsyncSession = Depends(get_db),
 ):
     """Get reproducibility manifest for a completed run."""
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.REVIEW)
     if run.status != RunStatus.COMPLETED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -420,7 +434,7 @@ async def stream_run(
     Accepts runs in PENDING or PAUSED status. Returns 404 for missing runs,
     409 for runs in non-streamable states (completed, failed, running).
     """
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.SUPERVISE)
 
     # Only pending or paused runs can be streamed
     streamable = {RunStatus.PENDING.value, RunStatus.PAUSED.value}
@@ -628,12 +642,6 @@ async def stream_run(
                     step_def = {}
                     if 0 <= step_index < len(blueprint_dict["steps"]):
                         step_def = blueprint_dict["steps"][step_index] or {}
-
-                    params = _get_step_params(step_def)
-                    model_id = step_def.get("model_id") or params.get("model_id")
-                    mode = step_def.get("mode") or params.get("mode") or "deterministic"
-                    temperature = params.get("temperature", 0.0)
-                    seed = params.get("seed")
                     output = event.get("output")
                     if output is not None and not isinstance(output, dict):
                         output = {"value": output}
@@ -642,25 +650,7 @@ async def stream_run(
                         for source_row in research_source_rows(run_id, output):
                             db.add(source_row)
 
-                    db.add(
-                        ResearchStep(
-                            run_id=run_id,
-                            step_index=step_index,
-                            step_type=str(
-                                event.get("step_type")
-                                or step_def.get("type")
-                                or "search"
-                            ),
-                            mode=str(mode),
-                            model_id=str(model_id) if model_id is not None else None,
-                            temperature=float(temperature),
-                            seed=int(seed) if seed is not None else None,
-                            output=output,
-                            quality_marks=event.get("quality_marks") or [],
-                            token_count=int(event.get("token_count") or 0),
-                            completed_at=datetime.now(timezone.utc),
-                        )
-                    )
+                    db.add(_research_step_from_event(run_id, step_def, event))
                     total_tokens += int(event.get("token_count") or 0)
                     run.total_tokens = total_tokens
                     if pause_requested:
