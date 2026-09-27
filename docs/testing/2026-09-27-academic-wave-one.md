@@ -92,3 +92,28 @@ independent methods review, hosted CI and deployment are not established by
 these local tests. Linear tickets have not been closed. The first-wave code
 provides the prerequisites for the separately scoped writing baseline; it does
 not claim that baseline or later verified-release workflows are complete.
+
+## CI follow-up: background-draft transaction assertions
+
+The [Unit Tests producer job](https://github.com/Goodwiinz/NOUS-Research-Assistant/actions/runs/36342464599/job/108685329834)
+at `797b458edf9876188d872446570283780292ea20` failed three tests in
+`test_draft_bg_session.py`: they still expected one commit after the new durable
+review introduced two. The Release Gate failed downstream; the run had 5,826
+passing tests, 80 skips and three pre-existing non-strict XPASSes.
+
+The corrected tests verify two awaited commits and the actual write order:
+`DraftReview` is committed before adding `GeneratedDraft` and `DraftCitation`,
+which share the second commit. Constructor-session isolation, the closed
+document-fetch session during generation, and empty-input no-write assertions
+remain intact. No production behavior or CI threshold changed.
+
+Focused reproduction: three failures and four passes before the correction;
+seven passes afterward. CI-pinned Ruff, Black, isort, directory-doc checks,
+OpenAPI consistency and `git diff --check` passed. The workflow contract suite
+also passed all 161 tests.
+
+The full CI unit selection, invoked through `pytest` with two xdist workers,
+passed locally: **5,829 passed, 80 skipped, three existing non-strict XPASSes**.
+The 35% coverage threshold and all 150 measured per-file coverage floors passed.
+Selection: `backend/tests/ -c backend/pytest.ini -m "unit or not (integration or
+e2e or slow)"`. Hosted confirmation remains separate from this local result.
