@@ -101,14 +101,18 @@ def test_upgrade_creates_review_ledger_columns_foreign_keys_and_unique_gate() ->
         assert columns[required].nullable is False, required
 
     foreign_keys = {
-        tuple(element.target_fullname for element in item.elements)
+        (
+            tuple(item.column_keys),
+            tuple(element.target_fullname for element in item.elements),
+        )
         for item in items
         if isinstance(item, sa.ForeignKeyConstraint)
     }
     assert foreign_keys == {
-        ("users.id",),
-        ("organizations.id",),
-        ("research_runs.id",),
+        (("owner_id",), ("users.id",)),
+        (("organization_id",), ("organizations.id",)),
+        (("run_id",), ("research_runs.id",)),
+        (("reviewer_id",), ("users.id",)),
     }
 
     unique_constraints = {

@@ -421,6 +421,16 @@ class TestDailyBriefScopeConfirmation:
         with pytest.raises(ValidationError):
             self._valid(unexpected="value")
 
+    @pytest.mark.parametrize("confirmed", [1, 1.0, "true"])
+    def test_rejects_coerced_confirmation_values(self, confirmed):
+        with pytest.raises(ValidationError):
+            self._valid(confirmed=confirmed)
+
+    @pytest.mark.parametrize("limit", [True, 25.0, "25"])
+    def test_rejects_coerced_provider_limits(self, limit):
+        with pytest.raises(ValidationError):
+            self._valid(limit_per_provider=limit)
+
 
 class TestRunResumeRequest:
     def test_defaults_to_ordinary_resume(self):

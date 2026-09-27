@@ -322,6 +322,15 @@ class TestResearchStageReview:
         assert review.note == "Checked against the evidence."
         assert review.created_at == created_at
 
+    def test_created_at_default_is_timezone_aware_utc(self):
+        review_model = _review_model()
+        default = review_model.__table__.c.created_at.default
+
+        assert default is not None
+        created_at = default.arg(None)
+        assert created_at.tzinfo is not None
+        assert created_at.utcoffset() == timezone.utc.utcoffset(created_at)
+
     def test_table_declares_owner_review_indexes_and_unique_gate(self):
         review_model = _review_model()
         table = review_model.__table__

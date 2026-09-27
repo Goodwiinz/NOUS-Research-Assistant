@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
@@ -22,6 +22,10 @@ from .base import GUID, Base
 
 if TYPE_CHECKING:
     from .research_run import ResearchRun
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class ResearchStageReview(Base):
@@ -50,7 +54,7 @@ class ResearchStageReview(Base):
     decision_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=_utc_now, nullable=False
     )
 
     run: Mapped[ResearchRun] = relationship("ResearchRun", back_populates="reviews")

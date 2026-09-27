@@ -101,7 +101,9 @@ def _merge_template_parameters(
     defaults.update(values)
     if template.get("template_source") == "daily_research_brief":
         providers = defaults.get("providers")
-        if not isinstance(providers, list):
+        if not isinstance(providers, list) or any(
+            not isinstance(provider, str) for provider in providers
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Daily Brief providers are invalid",
@@ -110,7 +112,7 @@ def _merge_template_parameters(
             defaults["providers"] = list(
                 normalize_connector_selection(providers, daily_brief_only=True)
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Daily Brief providers are invalid",

@@ -138,6 +138,26 @@ def test_known_template_is_expanded_and_persisted_from_server_owned_steps(
     assert saved.parameters["limit_per_provider"] == 12
 
 
+@pytest.mark.parametrize("providers", [[{}], [[]], [1], [True]])
+def test_known_template_rejects_non_string_provider_elements(
+    template_api: TemplateAPI, providers: list[Any]
+) -> None:
+    client, project, created = template_api
+
+    response = client.post(
+        f"/api/v1/research-engine/blueprints/projects/{project.id}",
+        json={
+            "name": "Invalid Daily Brief",
+            "template_source": "daily_research_brief",
+            "parameters": {"providers": providers},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["message"] == "Daily Brief providers are invalid"
+    assert created == []
+
+
 @pytest.mark.parametrize("tampering", ["reorder", "remove_gate", "extra_stage"])
 def test_known_template_rejects_client_topology_changes(
     template_api: TemplateAPI, tampering: str

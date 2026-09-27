@@ -290,9 +290,16 @@ class DailyBriefScopeConfirmation(BaseModel):
         default_factory=list, max_length=25
     )
     providers: List[str] = Field(min_length=1, max_length=4)
-    limit_per_provider: int = Field(ge=1, le=50)
+    limit_per_provider: int = Field(strict=True, ge=1, le=50)
     notes: str = Field(default="", max_length=2000)
     confirmed: Literal[True]
+
+    @field_validator("confirmed", mode="before")
+    @classmethod
+    def confirmation_is_actual_true(cls, value: Any) -> Any:
+        if type(value) is not bool or value is not True:
+            raise ValueError("confirmed must be the boolean true")
+        return value
 
     @field_validator("providers")
     @classmethod
