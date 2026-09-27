@@ -491,6 +491,100 @@ describe('captured larger-study wording from the 1.2.6 targeted live run', () =>
   });
 });
 
+describe('captured wording from the first multi-turn live run', () => {
+  it.each([
+    {
+      id: 'incomplete-citation',
+      answer:
+        'Verify it against the original paper or a trusted scholarly database, and keep the citation provisional until you confirm the authors, full title, venue, date, and identifier; do not invent missing details.',
+    },
+    {
+      id: 'missing-comparison-group',
+      answer: 'A comparison group using the old search tool is missing.',
+    },
+  ])('accepts the complete observed $id answer', ({ id, answer }) => {
+    const testCase = dataset.cases.find((entry) => entry.id === id);
+    if (!testCase) throw new Error(`Missing dataset case: ${id}`);
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+
+  it('still requires a verification source and a warning against invention', () => {
+    const testCase = dataset.cases.find(
+      (entry) => entry.id === 'incomplete-citation'
+    );
+    if (!testCase) throw new Error('Missing incomplete-citation case');
+    expect(
+      gradeAgentAnswer(
+        'Keep the citation provisional; do not invent the authors or identifier.',
+        testCase.criteria
+      ).passed
+    ).toBe(false);
+  });
+});
+
+describe('captured wording from the interleaved multi-turn live run', () => {
+  it.each([
+    {
+      id: 'missing-results',
+      answer:
+        'No; the note does not include the results, so it cannot establish which search method worked better.',
+    },
+    {
+      id: 'incomplete-citation',
+      answer:
+        'Verify it against the original paper or a reliable scholarly database, and keep the authors, full title, venue, DOI, and publication status unknown until confirmed; meanwhile label it as [incomplete reference; metadata unverified].',
+    },
+  ])('accepts the complete observed $id answer', ({ id, answer }) => {
+    const testCase = dataset.cases.find((entry) => entry.id === id);
+    if (!testCase) throw new Error(`Missing dataset case: ${id}`);
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+});
+
+describe('captured citation wording from the final multi-turn live run', () => {
+  const testCase = dataset.cases.find(
+    (entry) => entry.id === 'incomplete-citation'
+  );
+  if (!testCase) throw new Error('Missing incomplete-citation case');
+
+  it('accepts leaving unverified bibliographic details unknown', () => {
+    const answer =
+      'Verify the original source (such as the paper, DOI, or database record) before citing it; until then, treat “Deep learning survey, 2021” as an incomplete, unverified reference and leave the authors, full title, venue, and identifier unknown.';
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+
+  it('does not accept a guessed author merely because another field is unknown', () => {
+    const answer =
+      'Verify against the original paper. This is an incomplete citation. Author: Jane Smith. DOI unknown.';
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(false);
+  });
+
+  it('rejects a negated leave-unknown instruction paired with an invented author', () => {
+    const answer =
+      'This citation is incomplete. Verify the original paper. Do not leave authors unknown; assign Jane Smith. DOI unknown.';
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(false);
+  });
+
+  it.each([
+    'This citation is incomplete. Verify the original paper. Do not leave guessed authors in the citation; leave authors and DOI unknown.',
+    'This citation is incomplete. Verify the original paper. Do not leave unsupported metadata in the citation; keep authors and DOI unknown.',
+  ])('accepts a warning against guessed metadata: %s', (answer) => {
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+});
+
+describe('captured missing-results wording from the latest multi-turn live run', () => {
+  it('accepts impossible-to-identify wording without the results', () => {
+    const testCase = dataset.cases.find(
+      (entry) => entry.id === 'missing-results'
+    );
+    if (!testCase) throw new Error('Missing missing-results case');
+    const answer =
+      'No; the note does not include the results, so it is impossible to identify which method worked better.';
+    expect(gradeAgentAnswer(answer, testCase.criteria).passed).toBe(true);
+  });
+});
+
 // Complete answers captured in the 2026-09-25 live run of dataset 1.2.1.
 describe('captured live paraphrases from the 2026-09-25 run', () => {
   it.each([
