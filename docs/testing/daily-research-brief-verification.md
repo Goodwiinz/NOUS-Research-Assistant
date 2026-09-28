@@ -8,11 +8,14 @@ Task 8 base: `68cc641938f43b99fa8d00e18822ccf2c62106e8`
 
 Disposition: **CERTIFICATION COMPLETE — NOT READY TO ENABLE**
 
-This record covers the local Daily Research Brief certification work. The
-candidate commit contains this file, so embedding that commit's own SHA here
-would create a self-referential hash. The exact committed candidate SHA is
-captured after the commit by `git rev-parse HEAD` in the local
-`task-8-candidate-sha.log` evidence and in the handoff.
+This record covers the local Daily Research Brief certification work and the
+independent-review follow-up. The executable follow-up is source commit
+`a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`, whose parent is the original
+certification commit `efd76079be75fdbba9eef4215c1c831d829cacb4`. This file
+and the bounded transcripts are committed in a documentation-only child. That
+two-commit provenance avoids a self-referential hash: the evidence names the
+immutable source-under-test SHA, and the final handoff names the evidence
+commit.
 
 The feature remains disabled. The live-model quality gate and authenticated
 Safety scan are blocked, dependency audits failed, and required remote and
@@ -28,10 +31,10 @@ the authorized local scope.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| PostgreSQL lifecycle integration | PASS | 5 tests passed against disposable PostgreSQL; persistence, exact hashes, review rows, reload/resume, concurrency, outcomes, and ownership paths were exercised. |
+| PostgreSQL lifecycle integration | PASS | 5 tests passed against disposable PostgreSQL; two real SSE consumers race after duplicate resumes and yield exactly one winner. Mutation RED and restored GREEN are committed. |
 | Browser/API/PostgreSQL lifecycle | PASS | 10 Playwright scenarios passed through the real browser-to-API-to-database boundary. |
 | Browser 200-row review rendering | PASS | Frozen p95 threshold `999.24 ms`; final candidate run observed p50 `565.1 ms`, p95 `647.4 ms` over 11 cold reloads. |
-| Frozen backend performance | PASS | Three consecutive full invocations passed every unchanged numeric threshold after the measured regressions were repaired. |
+| Frozen backend performance | PASS | Three consecutive exact documented pytest invocations passed every unchanged numeric threshold with the baseline-equivalent 11-observation nearest-rank method. |
 | Focused backend regression suite | PASS | 81 tests passed. |
 | Focused frontend regression suite | PASS | 5 files and 61 tests passed. |
 | Frontend type-check and full Vitest | PASS | Node `24.21.0`, pnpm `10.18.2`; 315 files and 2,368 tests passed. |
@@ -44,8 +47,9 @@ the authorized local scope.
 | Python dependency audit | FAILED | pip-audit returned 5 vulnerabilities in 4 resolved packages. |
 | Authenticated Safety scan | BLOCKED | Safety `3.8.1`; `SAFETY_API_KEY` was absent, so the authenticated database scan could not run. |
 | Anonymous legacy Safety check | FAILED | 1 active `gunicorn 22.0.0` finding; 129 findings were ignored by Safety's automatic unpinned-requirement policy. |
-| Current configured-model evaluation | BLOCKED | `ANTHROPIC_API_KEY` was absent; 9 prerequisite regressions passed and the live eval skipped with the explicit blocked reason. No citation baseline or candidate score was frozen. |
-| Final local CI script | FAILED | The final-tree rerun retained 29 repository-baseline backend failures and failed broad changed-file/debt gates inherited from the branch window. All 9 eval prerequisites and the Task 8 pause regressions passed in the full collection; no remaining failure names a Task 8 path. |
+| Fixed-corpus semantic eval | PASS | A deterministic scorer independent of pipeline/model support labels classified supported, contradictory, and unsupported cases and rejected a false self-supported claim quoting real evidence. |
+| Current configured-model evaluation | BLOCKED | `ANTHROPIC_API_KEY` was absent; 13 local prerequisite/semantic regressions passed and the live eval skipped with the explicit blocked reason. No citation baseline or candidate score was frozen. |
+| Final local CI script | FAILED | The final-tree rerun retained 29 repository-baseline backend failures and failed broad changed-file/debt gates inherited from the branch window. The Task 8 paths were repaired and passed focused reruns; no remaining failure names a Task 8 path. |
 | Candidate-SHA remote branch-rule checks | NOT RUN | Awaiting explicit repository-write authorization; no push was made solely to create checks. |
 | Production configuration and rollback drill | NOT RUN | No production environment or release controls were changed or inspected. |
 | Deploy and template/feature enablement | NOT RUN | Awaiting release authorization. |
@@ -69,7 +73,8 @@ ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" \
   backend/tests/integration/test_daily_research_brief_postgres.py
 ```
 
-Result: `5 passed, 1 warning in 4.93s`.
+Result against source `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`:
+`5 passed, 1 warning in 4.64s`.
 
 The suite proves these server-owned behaviors:
 
@@ -84,11 +89,26 @@ The suite proves these server-owned behaviors:
   canonical evidence-level semantics;
 - verification failure cannot reach final approval, and an unverified
   continuation requires the exact failed verification-output hash;
-- reconnect, idempotent replay, stale and conflicting review attempts,
-  simultaneous resumes, and duplicate submissions do not create duplicate
-  stage or review rows; and
+- reconnect, idempotent replay, stale and conflicting review attempts, and
+  duplicate submissions do not create duplicate stage or review rows;
+- after duplicate resume POSTs, two real SSE requests synchronize immediately
+  before `claim_stream`; the PostgreSQL row lock admits one `200` winner and
+  rejects one `409` loser, with exactly one stage execution, one review row,
+  one durable transition, and no remaining one-use authorization; and
 - same-organization and cross-tenant non-owners receive the same
   non-enumerating denial.
+
+The concurrency assertion is mutation-proven. Removing only
+`await self._lock_run(run)` at
+`backend/src/services/research_engine/run_lifecycle.py:685` from
+`claim_stream` made both consumers win,
+executed extraction twice, and failed with `(200, 200)` versus expected
+`(200, 409)`. That expected RED returned exit 1. Restoring the exact production
+file (SHA-256
+`7a96b08ab56709178bcff0fc23b74b164c16cf1ad13a53bafc235bb67df72ec6`)
+returned `1 passed` with exit 0. The mutation is absent from the candidate.
+Both bounded transcripts are committed with their commands and raw-capture
+digests.
 
 ## Browser boundary evidence
 
@@ -148,16 +168,16 @@ Command:
 
 ```bash
 PYTHONPATH=backend \
-DAILY_BRIEF_EVAL_MODE=candidate \
-DAILY_BRIEF_CITATION_THRESHOLD="$DAILY_BRIEF_CITATION_THRESHOLD" \
 .venv/bin/python -m pytest -c backend/pytest.ini -q \
   backend/tests/eval/test_daily_research_brief_eval.py
 ```
 
-Result: `BLOCKED`; the focused prerequisite suite returned
-`9 passed, 1 skipped, 1 warning in 3.35s`. The live test skipped because
-`ANTHROPIC_API_KEY` was absent. Mixed integration collection independently
-selected that test and returned `1 skipped, 14 deselected, 1 warning`.
+Result against source `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`:
+the local prerequisite and fixed-corpus semantic regressions are `PASS` at
+`13 passed`; the configured-model gate is separately `BLOCKED`, with `1
+skipped` because `ANTHROPIC_API_KEY` was absent. The full command returned exit
+0 with `13 passed, 1 skipped, 1 warning in 3.84s`. A skip is not a live-model
+pass.
 
 The prerequisite matrix proves that an absent key, the integration fixture
 key, and candidate mode without a frozen citation threshold all stop before a
@@ -167,16 +187,25 @@ greater-than-one thresholds fail before a call. Missing prerequisites are
 therefore reported as `BLOCKED`; invalid supplied configuration remains a test
 failure.
 
-The eval calls the configured `claude-sonnet-4-6` model through all six stages
-over fixed external evidence. It requires at least one claim and citation, zero
-unsupported material claims, exact coverage labels, grounded quotes, exact
-screen/extract coverage, the complete six-stage output sequence, verified
-claim-set equality, and exact verification/report hash reconstruction. These
-checks form `live_gate_output_readiness`; they do not claim persistence or
-review-gate compliance from YAML strings. PostgreSQL and browser tests prove
-the separate lifecycle gates.
+When credentials are present, the eval calls the configured
+`claude-sonnet-4-6` model through all six stages over fixed external evidence.
+It requires at least one claim and citation, exact coverage labels, grounded
+quotes, exact screen/extract coverage, the complete six-stage output sequence,
+verified claim-set equality, and exact verification/report hash reconstruction.
+It also applies a deterministic labeled semantic scorer that does not read or
+trust the pipeline/model's own `supported` label. Against the fixed corpus the
+scorer distinguishes supported, contradictory, and unsupported claims. Its
+adversarial regression uses a false increase claim, a real quote from evidence
+showing a decrease, and a self-reported supported label; the semantic gate
+returns zero and the claim is counted unsupported and contradictory.
 
-Citation correctness must first be measured with
+That deterministic scorer proves semantic discrimination only for the fixed
+eval evidence and labeled relations encoded by this suite. It is not a general
+entailment benchmark or a substitute for the unavailable live-provider run.
+PostgreSQL and browser evidence separately prove persistence and lifecycle
+gates; no YAML/template text is counted as gate compliance.
+
+Live citation correctness must first be measured with
 `DAILY_BRIEF_EVAL_MODE=baseline`; the resulting value then becomes the frozen
 candidate threshold. Because no live call ran, neither a citation baseline nor
 a candidate result exists. Template-only output cannot satisfy this gate.
@@ -195,11 +224,13 @@ DAILY_BRIEF_PERF_CAPTURE=1 \
 
 The numeric thresholds were frozen from the pre-optimization baseline at 20%
 headroom and were never loosened. The nearest-rank percentile function also
-stayed unchanged. The max-stage sampling policy was corrected from 11 samples,
-where nearest-rank p95 accidentally selected the maximum, to 40 measured
-samples, where p95 is rank 38. A deterministic regression locks that policy.
+stayed unchanged. The final candidate restores direct method equivalence with
+the baseline: 11 measured max-stage observations, where nearest-rank p95 is
+rank 11 (the maximum). A deterministic regression locks that exact policy.
 Each max-stage test has one complete untimed warmup, leaves GC enabled, and
 clears the controlled provider's request recording after each timed stage.
+The intervening 40-sample/rank-38 method was rejected as non-comparable and is
+not used for the final PASS.
 
 | Metric | Measured baseline | Frozen ceiling |
 | --- | ---: | ---: |
@@ -223,18 +254,19 @@ Three consecutive idle full-file invocations passed:
 
 | Metric | Run 1 | Run 2 | Run 3 | Ceiling |
 | --- | ---: | ---: | ---: | ---: |
-| Six-stage p95 (ms) | 23.138 | 23.227 | 22.343 | 35.345 |
-| Export p95 (ms) | 0.712 | 0.649 | 0.702 | 0.826 |
-| 1/2/4-provider p95 (ms) | 3.697 / 7.210 / 16.581 | 4.432 / 7.618 / 17.713 | 3.970 / 6.983 / 14.791 | 7.893 / 13.541 / 37.944 |
-| Max search/screen/extract p95 (ms) | 17.674 / 36.485 / 110.986 | 18.365 / 40.021 / 112.123 | 18.465 / 38.524 / 112.266 | 38.572 / 77.212 / 849.648 |
-| Peak traced bytes | 3,115,916 | 3,115,149 | 3,112,398 | 4,349,228 |
-| Review projection p95 (ms) | 4.760 | 6.729 | 5.744 | 9.282 |
-| Cold hydration p95 (ms) | 2.906 | 2.841 | 3.631 | 3.983 |
-| Soak lifecycle p95 (ms) | 1,187.009 | 1,364.823 | 1,299.151 | 2,068.731 |
+| Six-stage p95 (ms) | 21.320 | 23.619 | 19.402 | 35.345 |
+| Export p95 (ms) | 0.638 | 0.723 | 0.555 | 0.826 |
+| 1/2/4-provider p95 (ms) | 3.898 / 6.595 / 13.412 | 3.294 / 6.165 / 12.665 | 3.393 / 6.763 / 13.415 | 7.893 / 13.541 / 37.944 |
+| Max search/screen/extract p95 (ms) | 14.170 / 29.408 / 88.468 | 13.709 / 31.652 / 89.163 | 13.839 / 28.162 / 84.095 | 38.572 / 77.212 / 849.648 |
+| Peak traced bytes | 3,039,372 | 3,042,789 | 3,034,855 | 4,349,228 |
+| Review projection p95 (ms) | 4.767 | 5.641 | 7.071 | 9.282 |
+| Cold hydration p95 (ms) | 2.736 | 2.607 | 3.346 | 3.983 |
+| Soak lifecycle p95 (ms) | 1,179.113 | 1,104.969 | 1,251.171 | 2,068.731 |
 
-Every run produced 200 candidate rows, 25 screen batches, 25 extraction
-batches, the unchanged `1,152,543 B` max-stage payload, ten completed soak
-lifecycles, zero duplicate stage rows, and 30 unique review rows.
+Every run produced the unchanged `15,294 B` export, 200 candidate rows, 25
+screen batches, 25 extraction batches, the unchanged `1,152,543 B` max-stage
+payload, the `24,094 B` review payload, ten completed soak lifecycles, zero
+duplicate stage rows, and 30 unique review rows.
 
 Earlier failures are retained because a single favorable rerun did not prove
 stability. The initial candidate failed max-search p95 at `46.135 ms` against
@@ -271,7 +303,11 @@ corepack pnpm@10.18.2 --dir frontend exec vitest run --project unit \
   src/services/__tests__/researchEngineService.test.ts
 ```
 
-Result: 5 files and 61 tests passed in `4.53s`.
+Result against source `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`:
+5 files and 61 tests passed in `5.21s`. The manual-resume regression performs
+the resume POST, receives the still-paused intermediate GET, opens the SSE
+stream, observes the claim/start events, and reaches durable completion. This
+proves the authorization survives the backend's one-use handoff window.
 
 The exact Node 24 full checks passed:
 
@@ -331,14 +367,15 @@ Two failures initially found in Task 8 paths were treated as candidate
 failures and repaired: unavailable live-eval prerequisites now skip with an
 explicit `BLOCKED` reason before any model call, and the Task 5 pause regression
 now asserts the deliberately content-free pause descriptor rather than stale
-context. The final full collection passed all 9 eval prerequisite cases,
-skipped only the unavailable live call, and passed every Task 8 pause
-regression. Separate focused evidence is `9 passed, 1 skipped` for the eval
-file and `48 passed` for the ordered workflow/regression batch. None of the 29
-remaining backend failures names a Task 8 file. Frontend type-check, OpenAPI,
-generated types, and the Task 8 migration checks passed inside or alongside
-the run. The overall local-CI gate remains `FAILED`; the passing Task 8 paths
-do not change that classification.
+context. That full collection passed its then-current eval prerequisites,
+skipped the unavailable live call, and passed every Task 8 pause regression.
+None of the 29 remaining backend failures names a Task 8 file.
+
+The independent-review source commit came afterward and was verified with the
+focused commands recorded in the committed evidence: eval `13 passed, 1
+skipped`, PostgreSQL `5 passed`, frontend `61 passed`, Node 24 type-check, and
+three full frozen performance invocations. The broad local-CI script was not
+relabeled by those results; its classification remains `FAILED`.
 
 ## Migration evidence
 
@@ -473,12 +510,22 @@ rollback drill are `NOT RUN`. Required release sequence:
 6. enable only after an authorized release owner accepts every gate, with
    template disablement as the first rollback action.
 
-## Local evidence artifacts
+## Evidence artifacts
 
-Detailed command output is retained locally under
+The canonical independent-review evidence is committed under
+`docs/testing/evidence/daily-research-brief-task8-followup-20260928/`. Its
+index explains the two-commit provenance scheme. Bounded transcripts include
+the exact source SHA, command, exit status, salient output, and SHA-256 of the
+local raw capture for:
+
+- three separate exact documented performance invocations;
+- the stream-claim guard mutation RED and exact-file restoration GREEN; and
+- focused eval, PostgreSQL, frontend, Node 24 type-check, and formatting gates.
+
+Earlier detailed command output remains local under
 `.superpowers/sdd/2026-09-27-daily-research-brief/`. That directory ignores
-generated logs, so this committed record is the reviewable summary. Principal
-artifacts are:
+generated logs, so these older files are supplemental mutable evidence rather
+than the sole basis for the follow-up claims. Principal older artifacts are:
 
 - `task-8-postgres-integration.log`
 - `task-8-browser-max-bound-focused.log`

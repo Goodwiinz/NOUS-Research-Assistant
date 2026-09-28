@@ -1,0 +1,53 @@
+SOURCE_SHA: a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408
+
+EVAL PREREQUISITES AND DETERMINISTIC SEMANTIC GATE
+CLASSIFICATION: PASS for local regressions; BLOCKED for the configured-model call
+RAW_CAPTURE_SHA256: 0c11f0df56d5aa106b43198602eab80c44f0f817623e1bcb1ba1e33a4912945b
+EXIT_STATUS: 0
+COMMAND:
+  PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q -vv backend/tests/eval/test_daily_research_brief_eval.py
+RESULT:
+  13 passed, 1 skipped, 1 warning in 3.84s
+  SKIPPED: BLOCKED: ANTHROPIC_API_KEY is absent; live eval was not run
+  The three fixed-corpus labels (supported, contradictory, unsupported) passed.
+  A false claim that quoted real evidence and self-labeled supported failed the
+  semantic gate in its regression fixture. No live-model score is claimed.
+
+POSTGRESQL LIFECYCLE
+CLASSIFICATION: PASS
+RAW_CAPTURE_SHA256: 00a643cbc42b9a822d4b9fe26ea72e989014db3d999126f7d64997322169517b
+EXIT_STATUS: 0
+COMMAND:
+  PYTHONPATH=backend ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" .venv/bin/python -m pytest -c backend/pytest.ini -q -vv backend/tests/integration/test_daily_research_brief_postgres.py
+RESULT:
+  5 passed, 1 warning in 4.64s
+
+FRONTEND RESUME AND DAILY BRIEF REGRESSIONS
+CLASSIFICATION: PASS
+RAW_CAPTURE_SHA256: 5c27364f80717d57e9023a5e6df38799a8d11f806b1c5eeb4266aa1addb153c4
+EXIT_STATUS: 0
+COMMAND:
+  corepack pnpm@10.18.2 --dir frontend exec vitest run --project unit src/components/research-engine/__tests__/BlueprintEditor.test.tsx src/components/research-engine/__tests__/ReviewPanel.test.tsx src/components/research-engine/__tests__/RunResults.test.tsx src/components/research-engine/__tests__/RunView.test.tsx src/services/__tests__/researchEngineService.test.ts
+RESULT:
+  Test Files 5 passed (5)
+  Tests 61 passed (61)
+  Duration 5.21s
+
+NODE 24 TYPE-CHECK
+CLASSIFICATION: PASS
+NODE_VERSION: 24.21.0
+PNPM_VERSION: 10.18.2
+RAW_CAPTURE_SHA256: c5d2663a9e2a7d7af27e316b7c057dbaac1fa765ad140a412801ec551d6a4c79
+EXIT_STATUS: 0
+COMMAND:
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 --dir frontend run type-check
+RESULT:
+  tsc --noEmit completed with exit status 0
+
+SCOPED FRONTEND FORMAT/LINT
+CLASSIFICATION: PASS
+ESLINT_RAW_CAPTURE_SHA256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+PRETTIER_RAW_CAPTURE_SHA256: 17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20
+RESULT:
+  ESLint exited 0 with no output. Prettier reported both changed frontend files
+  use the expected code style and exited 0.
