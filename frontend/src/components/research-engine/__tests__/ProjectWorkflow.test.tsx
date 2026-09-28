@@ -20,6 +20,11 @@ vi.mock('../BlueprintEditor', () => ({
     </div>
   ),
 }));
+vi.mock('../ProtocolPanel', () => ({
+  ProtocolPanel: ({ projectId }: { projectId: string }) => (
+    <div>Protocol for {projectId}</div>
+  ),
+}));
 vi.mock('@/services/researchEngineService', () => ({
   createProject: vi.fn(),
   listProjectRoles: vi.fn(),
@@ -118,9 +123,13 @@ describe('ProjectWorkflow', () => {
       </QueryClientProvider>
     );
 
-    expect(screen.queryByText(/Blueprint for collection-2/)).not.toBeInTheDocument();
     expect(
-      screen.getByText('A project owner or administrator must enable this workflow.')
+      screen.queryByText(/Blueprint for collection-2/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'A project owner or administrator must enable this workflow.'
+      )
     ).toBeInTheDocument();
   });
 
@@ -146,7 +155,9 @@ describe('ProjectWorkflow', () => {
       screen.queryByRole('button', { name: 'Enable workflow' })
     ).not.toBeInTheDocument();
     expect(
-      screen.getByText('A project owner or administrator must enable this workflow.')
+      screen.getByText(
+        'A project owner or administrator must enable this workflow.'
+      )
     ).toBeInTheDocument();
   });
 });

@@ -113,6 +113,15 @@ from .evaluation import (
 
 # Research Engine models
 from .research_blueprint import ResearchBlueprint
+from .research_decision import ResearchDecisionEvent, ResearchDecisionStream
+from .research_protocol import (
+    ProtocolDeviation,
+    ProtocolRegistrationOperation,
+    ResearchProtocol,
+    ResearchProtocolVersion,
+    ResearchQuestion,
+    ResearchQuestionVersion,
+)
 from .research_project import ResearchProject
 from .research_project_role import ResearchProjectRole, ResearchProjectRoleAssignment
 from .research_run import ResearchRun, RunStatus
@@ -254,6 +263,14 @@ __all__ = [
     "IntegrityScore",
     # Research Engine models
     "ResearchProject",
+    "ResearchDecisionEvent",
+    "ResearchDecisionStream",
+    "ResearchQuestion",
+    "ResearchQuestionVersion",
+    "ResearchProtocol",
+    "ResearchProtocolVersion",
+    "ProtocolDeviation",
+    "ProtocolRegistrationOperation",
     "ResearchBlueprint",
     "ResearchRun",
     "RunStatus",

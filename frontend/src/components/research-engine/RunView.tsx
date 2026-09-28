@@ -1,6 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -63,6 +69,13 @@ const STATUS_BADGE: Record<
   },
 };
 
+const CONFORMANCE_LABEL = {
+  plan_verified: 'Plan verified',
+  conformant: 'Conformant',
+  deviated: 'Deviated',
+  legacy_unbound: 'Legacy unbound',
+} as const;
+
 async function getAuthToken(): Promise<string | null> {
   try {
     const { createClient } = await import('@/lib/supabase/client');
@@ -76,7 +89,7 @@ async function getAuthToken(): Promise<string | null> {
   }
 }
 
-export function RunView({ runId }: RunViewProps) {
+export function RunView({ runId }: RunViewProps): ReactElement {
   const router = useRouter();
   const {
     activeRun: storedRun,
@@ -91,9 +104,13 @@ export function RunView({ runId }: RunViewProps) {
   } = useResearchEngineStore();
   const activeRun = storedRun?.id === runId ? storedRun : null;
 
-  const [actionFailure, setActionFailure] = useState<{ runId: string; message: string } | null>(null);
+  const [actionFailure, setActionFailure] = useState<{
+    runId: string;
+    message: string;
+  } | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
-  const actionError = actionFailure?.runId === runId ? actionFailure.message : null;
+  const actionError =
+    actionFailure?.runId === runId ? actionFailure.message : null;
   const actionLoading = pendingAction === runId;
   const abortRef = useRef<AbortController | null>(null);
   const requestRef = useRef<{ runId: string; revision: number } | null>(null);
@@ -103,7 +120,8 @@ export function RunView({ runId }: RunViewProps) {
     const request = requestRef.current;
     if (!request || request.runId !== runId) return;
     const revision = ++request.revision;
-    const isCurrent = (): boolean => requestRef.current === request && request.revision === revision;
+    const isCurrent = (): boolean =>
+      requestRef.current === request && request.revision === revision;
     setLoading(true);
     setError(null);
     try {
@@ -139,7 +157,7 @@ export function RunView({ runId }: RunViewProps) {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const connectSSE = async () => {
+    const connectSSE = async (): Promise<void> => {
       const token = await getAuthToken();
       if (controller.signal.aborted) return;
       const headers: Record<string, string> = {
@@ -230,7 +248,7 @@ export function RunView({ runId }: RunViewProps) {
     activeRun?.total_tokens ||
     0;
 
-  const handlePause = async () => {
+  const handlePause = async (): Promise<void> => {
     const request = requestRef.current;
     setActionFailure(null);
     setPendingAction(runId);
@@ -239,14 +257,17 @@ export function RunView({ runId }: RunViewProps) {
       await fetchRun();
     } catch {
       if (requestRef.current === request) {
-        setActionFailure({ runId, message: 'Pause failed. The run may have already finished.' });
+        setActionFailure({
+          runId,
+          message: 'Pause failed. The run may have already finished.',
+        });
       }
     } finally {
       if (requestRef.current === request) setPendingAction(null);
     }
   };
 
-  const handleResume = async () => {
+  const handleResume = async (): Promise<void> => {
     const request = requestRef.current;
     setActionFailure(null);
     setPendingAction(runId);
@@ -255,7 +276,10 @@ export function RunView({ runId }: RunViewProps) {
       await fetchRun();
     } catch {
       if (requestRef.current === request) {
-        setActionFailure({ runId, message: 'Resume failed. Try again in a moment.' });
+        setActionFailure({
+          runId,
+          message: 'Resume failed. Try again in a moment.',
+        });
       }
     } finally {
       if (requestRef.current === request) setPendingAction(null);
@@ -341,6 +365,23 @@ export function RunView({ runId }: RunViewProps) {
             <p className="mt-0.5 text-xs text-muted-foreground">
               Started {new Date(activeRun.started_at).toLocaleString()}
             </p>
+          )}
+          {activeRun?.conformance_status && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-medium text-foreground">
+                Conformance: {CONFORMANCE_LABEL[activeRun.conformance_status]}
+              </span>
+              {activeRun.protocol_version_id && (
+                <span className="text-muted-foreground">
+                  Protocol {activeRun.protocol_version_id.slice(0, 8)}
+                </span>
+              )}
+              {activeRun.effective_plan_hash && (
+                <code className="text-muted-foreground">
+                  Plan {activeRun.effective_plan_hash.slice(0, 12)}
+                </code>
+              )}
+            </div>
           )}
         </div>
 

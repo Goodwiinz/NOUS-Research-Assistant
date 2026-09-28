@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, selectinload
 
 from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document
@@ -192,6 +192,48 @@ async def resolve_project(
     if collection is None:
         raise HTTPException(status_code=404, detail="Project not found")
     workspace = collection.workspace
+    if action in _MUTATING_ACTIONS:
+        # Lock order: Workspace SHARE -> Collection UPDATE -> domain aggregate.
+        # Membership/lifecycle writers take Workspace UPDATE. Distinct projects
+        # can still mutate concurrently, while revocation cannot race a commit.
+        await db.execute(
+            select(Workspace.id)
+            .where(Workspace.id == collection.workspace_id)
+            .with_for_update(read=True, of=Workspace)
+        )
+        try:
+            await lock_active_project(db, project_id)
+        except HTTPException:
+            lifecycle = (
+                await db.execute(
+                    select(Collection, Workspace)
+                    .join(Workspace, Workspace.id == Collection.workspace_id)
+                    .where(Collection.id == project_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).first()
+            if lifecycle is None or lifecycle[0].is_deleted or lifecycle[1].is_deleted:
+                raise HTTPException(status_code=404, detail="Project not found")
+            raise
+
+        lifecycle = (
+            await db.execute(
+                select(Collection, Workspace)
+                .join(Workspace, Workspace.id == Collection.workspace_id)
+                .where(Collection.id == project_id)
+                .options(selectinload(Workspace.members))
+                .execution_options(populate_existing=True)
+            )
+        ).first()
+        if lifecycle is None or lifecycle[0].is_deleted or lifecycle[1].is_deleted:
+            raise HTTPException(status_code=404, detail="Project not found")
+        collection = cast(Collection, lifecycle[0])
+        workspace = cast(Workspace, lifecycle[1])
+        if workspace.is_archived or collection.research_status == "archived":
+            raise HTTPException(
+                status_code=409, detail="Archived projects are read-only"
+            )
+
     workspace_role = _workspace_role(workspace, user_id)
     if workspace_role is None:  # Public visibility is insufficient for artifacts.
         raise HTTPException(status_code=404, detail="Project not found")
@@ -245,38 +287,6 @@ async def resolve_project(
     required = _DECISION_ROLE.get(action)
     if required is not None and required not in roles:
         raise HTTPException(status_code=403, detail=f"{required.value} role required")
-    if action in _MUTATING_ACTIONS:
-        try:
-            await lock_active_project(db, project_id)
-        except HTTPException:
-            lifecycle = (
-                await db.execute(
-                    select(Collection, Workspace)
-                    .join(Workspace, Workspace.id == Collection.workspace_id)
-                    .where(Collection.id == project_id)
-                    .execution_options(populate_existing=True)
-                )
-            ).first()
-            if lifecycle is None or lifecycle[0].is_deleted or lifecycle[1].is_deleted:
-                raise HTTPException(status_code=404, detail="Project not found")
-            raise
-
-        lifecycle = (
-            await db.execute(
-                select(Collection, Workspace)
-                .join(Workspace, Workspace.id == Collection.workspace_id)
-                .where(Collection.id == project_id)
-                .execution_options(populate_existing=True)
-            )
-        ).first()
-        if lifecycle is None or lifecycle[0].is_deleted or lifecycle[1].is_deleted:
-            raise HTTPException(status_code=404, detail="Project not found")
-        collection = cast(Collection, lifecycle[0])
-        workspace = cast(Workspace, lifecycle[1])
-        if workspace.is_archived or collection.research_status == "archived":
-            raise HTTPException(
-                status_code=409, detail="Archived projects are read-only"
-            )
 
     engine = cast(
         Optional[ResearchProject],

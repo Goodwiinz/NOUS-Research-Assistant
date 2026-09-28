@@ -157,12 +157,12 @@ describe('researchEngineService', () => {
   });
 
   describe('startRun', () => {
-    it('calls POST /blueprints/:blueprintId/runs with parameters_override', async () => {
-      const params = { temperature: 0.5 };
+    it('binds a run to an approved protocol without method overrides', async () => {
       mockApi.post.mockResolvedValue({ id: 'r1' });
-      await startRun('b1', params);
+      await startRun('b1', 'protocol-version-1');
       expect(mockApi.post).toHaveBeenCalledWith(`${BASE}/blueprints/b1/runs`, {
-        parameters_override: params,
+        protocol_version_id: 'protocol-version-1',
+        parameters_override: {},
       });
     });
   });

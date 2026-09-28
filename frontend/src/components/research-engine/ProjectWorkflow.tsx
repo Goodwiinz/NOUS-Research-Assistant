@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactElement } from 'react';
+import { useCallback, useState, type ReactElement } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Trash2, Workflow } from 'lucide-react';
 import type { Project } from '@/services/projectService';
@@ -12,6 +12,7 @@ import {
   type ResearchProjectRole,
 } from '@/services/researchEngineService';
 import { BlueprintEditor } from './BlueprintEditor';
+import { ProtocolPanel } from './ProtocolPanel';
 
 interface ProjectWorkflowProps {
   project: Project;
@@ -27,13 +28,40 @@ export function ProjectWorkflow({
     projectId: string;
     engineProjectId: string;
   } | null>(null);
+  const [approvedProtocol, setApprovedProtocol] = useState<{
+    projectId: string;
+    versionId?: string;
+  } | null>(null);
+  const [savedBlueprint, setSavedBlueprint] = useState<{
+    projectId: string;
+    blueprintId: string;
+  } | null>(null);
+  const approvedProtocolVersionId =
+    approvedProtocol?.projectId === project.id
+      ? approvedProtocol.versionId
+      : undefined;
+  const blueprintId =
+    savedBlueprint?.projectId === project.id
+      ? savedBlueprint.blueprintId
+      : undefined;
+  const handleBlueprintSaved = useCallback(
+    (savedId: string) =>
+      setSavedBlueprint({ projectId: project.id, blueprintId: savedId }),
+    [project.id]
+  );
+  const handleApprovedProtocolChange = useCallback(
+    (versionId?: string) =>
+      setApprovedProtocol({ projectId: project.id, versionId }),
+    [project.id]
+  );
   const engineProjectId =
     project.research_engine_project_id ??
     (enabledExtension?.projectId === project.id
       ? enabledExtension.engineProjectId
       : null);
   const archived =
-    project.research_status === 'archived' || project.workspace_archived === true;
+    project.research_status === 'archived' ||
+    project.workspace_archived === true;
   const canEdit = project.can_edit === true && !archived;
   const canManageRoles = project.can_manage === true && !archived;
 
@@ -108,6 +136,14 @@ export function ProjectWorkflow({
         key={project.id}
         projectId={project.id}
         readOnly={!canEdit}
+        approvedProtocolVersionId={approvedProtocolVersionId}
+        onBlueprintSaved={handleBlueprintSaved}
+      />
+      <ProtocolPanel
+        projectId={project.id}
+        blueprintId={blueprintId}
+        readOnly={!canEdit}
+        onApprovedVersionChange={handleApprovedProtocolChange}
       />
       <ProjectRoles
         projectId={project.id}

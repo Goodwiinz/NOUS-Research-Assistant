@@ -80,6 +80,9 @@ def _make_mock_run(**overrides):
     run.started_at = overrides.get("started_at", None)
     run.completed_at = overrides.get("completed_at", None)
     run.total_tokens = overrides.get("total_tokens", 0)
+    run.protocol_version_id = overrides.get("protocol_version_id", uuid.uuid4())
+    run.effective_plan_hash = overrides.get("effective_plan_hash", "a" * 64)
+    run.conformance_status = overrides.get("conformance_status", "plan_verified")
     run.created_at = overrides.get("created_at", now)
     run.updated_at = overrides.get("updated_at", now)
     return run
@@ -428,6 +431,8 @@ class TestStartRun:
             engine=SimpleNamespace(id=blueprint.project_id),
             collection=SimpleNamespace(id=uuid.uuid4()),
         )
+        protocol_version_id = uuid.uuid4()
+        run.protocol_version_id = protocol_version_id
         with (
             patch(
                 "src.api.research_engine.runs.require_blueprint",
@@ -437,13 +442,54 @@ class TestStartRun:
                 "src.api.research_engine.runs.resolve_engine_project_context",
                 AsyncMock(return_value=context),
             ),
+            patch(
+                "src.api.research_engine.runs.create_approved_run",
+                AsyncMock(return_value=run),
+            ),
         ):
             response = client.post(
                 f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
-                json={},
+                json={"protocol_version_id": str(protocol_version_id)},
             )
 
         assert response.status_code == 201
         body = response.json()
         assert body["status"] == "pending"
+        assert body["protocol_version_id"] == str(protocol_version_id)
         assert "id" in body
+
+    @pytest.mark.parametrize("request_options", [{}, {"json": {}}])
+    def test_start_run_without_approved_protocol_returns_409(
+        self, client, mock_db, mock_current_user, request_options
+    ):
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(id=blueprint_id)
+        context = SimpleNamespace(
+            engine=SimpleNamespace(id=blueprint.project_id),
+            collection=SimpleNamespace(id=uuid.uuid4()),
+        )
+        with (
+            patch(
+                "src.api.research_engine.runs.require_blueprint",
+                AsyncMock(return_value=blueprint),
+            ),
+            patch(
+                "src.api.research_engine.runs.resolve_engine_project_context",
+                AsyncMock(return_value=context),
+            ),
+            patch(
+                "src.api.research_engine.runs.create_approved_run",
+                AsyncMock(
+                    side_effect=HTTPException(
+                        status_code=409, detail="approved_protocol_required"
+                    )
+                ),
+            ),
+        ):
+            response = client.post(
+                f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+                **request_options,
+            )
+
+        assert response.status_code == 409
+        assert "approved_protocol_required" in response.text
