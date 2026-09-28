@@ -10153,6 +10153,11 @@
             "title": "Can Edit",
             "type": "boolean"
           },
+          "can_manage": {
+            "default": false,
+            "title": "Can Manage",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",

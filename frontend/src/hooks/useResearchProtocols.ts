@@ -12,6 +12,7 @@ import {
   researchProtocolService,
   type ProtocolApprovalRequest,
   type ProtocolApprovalResponse,
+  type ProtocolDeviationCreate,
   type ProtocolRegistrationCreate,
   type ProtocolRegistrationResponse,
   type ProtocolDeviationResponse,
@@ -94,6 +95,11 @@ export interface ResearchProtocolActions {
     Error,
     { protocolId: string; body: ProtocolRegistrationCreate }
   >;
+  recordDeviation: UseMutationResult<
+    ProtocolDeviationResponse,
+    Error,
+    { protocolId: string; body: ProtocolDeviationCreate }
+  >;
 }
 
 function useProtocolMutation<TVariables, TResult>(
@@ -152,6 +158,12 @@ export function useProtocolActions(projectId: string): ResearchProtocolActions {
       ProtocolRegistrationResponse
     >(projectId, ({ protocolId, body }) =>
       researchProtocolService.recordRegistration(protocolId, body)
+    ),
+    recordDeviation: useProtocolMutation<
+      { protocolId: string; body: ProtocolDeviationCreate },
+      ProtocolDeviationResponse
+    >(projectId, ({ protocolId, body }) =>
+      researchProtocolService.recordDeviation(protocolId, body)
     ),
   };
 }
