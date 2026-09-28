@@ -160,7 +160,9 @@ assert _direct_arxiv_search_query(content) is None
         capture_output=True,
         env=environment,
         text=True,
-        timeout=5,
+        # The assertion guards against non-termination in the hyphen parser;
+        # allow headroom for the research-agent module's cold imports on CI.
+        timeout=20,
     )
 
 

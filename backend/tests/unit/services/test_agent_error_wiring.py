@@ -3,6 +3,7 @@
 import asyncio
 import json
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -28,12 +29,24 @@ class TestErrorRecoveryWiring:
         # via arxiv_service to avoid 2x wall-clock amplification). Use
         # search_documents which still receives the outer retry_transient.
         tc = {"name": "search_documents", "args": {"query": "test"}, "id": "tc1"}
-        config = {"configurable": {"user_id": "u1"}}
+        config = {
+            "configurable": {
+                "user_id": "u1",
+                "organization_id": "org1",
+                "thread_id": "thread1",
+            }
+        }
+        operation_context = {
+            "tool_operation_protocol_version": 1,
+            "tool_operation_turn_id": "turn1",
+        }
 
         with patch(
             "src.services.agent.graph.execute_tool", side_effect=mock_execute_tool
         ):
-            result = await _execute_single_tool(tc, config, {})
+            result = await _execute_single_tool(
+                tc, config, {}, operation_context=operation_context
+            )
 
         assert result["error_increment"] == 0  # Transient retry succeeded
         assert call_count == 2
@@ -43,24 +56,42 @@ class TestErrorRecoveryWiring:
         """Recoverable errors from payloads should include suggestion."""
         from src.services.agent.graph import _execute_single_tool
 
+        document_id = str(uuid4())
+
         async def mock_execute_tool(**kwargs):
-            return {"error": "Document abc123 not found"}
+            return {"error": f"Document {document_id} not found"}
 
         tc = {
             "name": "add_document_to_project",
-            "args": {"document_id": "abc123"},
+            "args": {
+                "document_id": document_id,
+                "project_id": str(uuid4()),
+            },
             "id": "tc2",
         }
-        config = {"configurable": {"user_id": "u1"}}
+        config = {
+            "configurable": {
+                "user_id": str(uuid4()),
+                "organization_id": str(uuid4()),
+                "thread_id": str(uuid4()),
+            }
+        }
+        operation_context = {
+            "tool_operation_protocol_version": 1,
+            "tool_operation_turn_id": str(uuid4()),
+        }
 
         with patch(
             "src.services.agent.graph.execute_tool", side_effect=mock_execute_tool
         ):
-            result = await _execute_single_tool(tc, config, {})
+            result = await _execute_single_tool(
+                tc, config, {}, operation_context=operation_context
+            )
 
         content = json.loads(result["message"].content)
-        assert content["error_type"] == "recoverable"
-        assert "ingest" in content["suggestion"].lower()
+        assert content["error"] == f"Document {document_id} not found"
+        assert result["error_info"]["category"] == "recoverable"
+        assert "ingest" in result["error_info"]["suggestion"].lower()
         # Error payloads must not carry LangChain's default status="success" —
         # that mislabeled every failure in traces and status-branching code.
         assert result["message"].status == "error"

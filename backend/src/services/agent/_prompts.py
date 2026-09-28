@@ -409,7 +409,7 @@ def _runtime_model_line(model_override: str | None) -> str:
     if deployment == "model-router":
         return (
             "Runtime model: routed deployment `model-router`; "
-            "underlying model is unknown."
+            "underlying model is selected per request and is unknown here."
         )
     return f"Runtime model: routed via Azure deployment `{deployment}`."
 
