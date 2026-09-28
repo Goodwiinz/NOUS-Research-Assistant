@@ -142,8 +142,7 @@ def test_real_connector_source_metadata_drives_json_markdown_and_csv() -> None:
 
 
 def test_pubmed_connector_preserves_bibliographic_date_and_journal() -> None:
-    documents = PubMedConnector()._parse_articles(
-        """
+    documents = PubMedConnector()._parse_articles("""
         <PubmedArticleSet><PubmedArticle><MedlineCitation>
           <PMID>12345678</PMID><Article>
             <ArticleTitle>PubMed source</ArticleTitle>
@@ -153,8 +152,7 @@ def test_pubmed_connector_preserves_bibliographic_date_and_journal() -> None:
         </MedlineCitation><PubmedData><ArticleIdList>
           <ArticleId IdType="doi">10.1000/pubmed</ArticleId>
         </ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>
-        """
-    )
+        """)
 
     assert documents[0].metadata["publication_date"] == "2023-07-01"
     assert documents[0].metadata["journal"] == "Journal Name"
@@ -268,6 +266,74 @@ def test_canonical_bibliography_values_win_over_conflicting_provenance() -> None
 
     assert source["publication_year"] == 2024
     assert source["journal"] == "Canonical Journal"
+
+
+def test_prepare_sources_export_prefers_direct_doi_and_filters_opaque_identifiers() -> (
+    None
+):
+    """Legacy nested metadata cannot let retained provider internals reach readers."""
+    document = SourceDocument(
+        connector_type="openalex",
+        external_id="https://openalex.org/W-SAFE-IDENTIFIERS",
+        title="Canonical identifier source",
+        abstract="Canonical abstract evidence.",
+        url="https://doi.org/10.5555/canonical",
+        metadata={
+            "metadata": {"doi": "https://doi.org/10.5555/canonical"},
+            "identifiers": {
+                "doi": "10.5555/conflicting-provenance",
+                "provider_trace": "opaque-provider-trace",
+                "patient_id": "opaque-patient-id",
+            },
+        },
+    )
+    records = source_records(prepare_sources([document]))
+    assert len(records) == 1
+    source_id = records[0]["source_id"]
+    extraction = {
+        "source_id": source_id,
+        "part_id": "p0001",
+        "data": {"finding": "Canonical finding"},
+        "evidence": [
+            {
+                "evidence_id": "e0001",
+                "part_id": "p0001",
+                "pointer": "abstract:0-27",
+                "quote": "Canonical abstract evidence.",
+            }
+        ],
+    }
+    report = build_report(
+        {
+            "contract_version": 1,
+            "source_records": records,
+            "extractions": [extraction],
+            "verification": {"passed": True, "claims": []},
+        }
+    )
+    source = report["sources"][0]
+
+    assert source["doi"] == "10.5555/canonical"
+    assert source["identifiers"] == {
+        "doi": "https://doi.org/10.5555/canonical",
+        "openalex": "W-SAFE-IDENTIFIERS",
+    }
+
+    markdown = render_markdown(report)
+    csv_text = render_csv(
+        [{"source": records[0], "extraction": extraction}],
+        final_status="verified",
+    )
+    csv_row = next(csv.DictReader(io.StringIO(csv_text)))
+    assert "10\\.5555/canonical" in markdown
+    assert "10.5555/canonical" in csv_row["bibliography"]
+
+    reader_output = json.dumps(report, sort_keys=True) + markdown + csv_text
+    assert "10.5555/conflicting-provenance" not in reader_output
+    assert "provider_trace" not in reader_output
+    assert "opaque-provider-trace" not in reader_output
+    assert "patient_id" not in reader_output
+    assert "opaque-patient-id" not in reader_output
 
 
 def test_bridged_provider_cluster_uses_retained_bibliography() -> None:

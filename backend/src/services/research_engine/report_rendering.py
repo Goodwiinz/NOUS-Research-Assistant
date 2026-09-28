@@ -42,6 +42,16 @@ _PROVENANCE_BIBLIOGRAPHY_FIELDS = (
     "url",
 )
 
+_READER_SAFE_IDENTIFIER_KINDS = (
+    "doi",
+    "pmid",
+    "pmcid",
+    "arxiv",
+    "openalex",
+    "semantic_scholar",
+    "rag_store",
+)
+
 
 def _has_metadata_value(value: Any) -> bool:
     if isinstance(value, str):
@@ -75,6 +85,16 @@ def _provenance_snapshots(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _reader_identifiers(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        kind: identifier.strip()
+        for kind in _READER_SAFE_IDENTIFIER_KINDS
+        if isinstance((identifier := value.get(kind)), str) and identifier.strip()
+    }
+
+
 def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
     """Return canonical metadata enriched from retained provider snapshots."""
 
@@ -82,8 +102,15 @@ def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     metadata = _flatten_metadata(value)
-    identifiers = metadata.get("identifiers")
-    merged_identifiers = dict(identifiers) if isinstance(identifiers, dict) else {}
+    merged_identifiers = _reader_identifiers(metadata.get("identifiers"))
+    # Direct canonical fields take precedence over retained provider snapshots,
+    # including legacy records whose normalized identifier map is incomplete.
+    for kind in _READER_SAFE_IDENTIFIER_KINDS:
+        identifier = metadata.get(kind)
+        if isinstance(identifier, str) and identifier.strip():
+            merged_identifiers[kind] = identifier.strip()
+        elif isinstance((identifier := source.get(kind)), str) and identifier.strip():
+            merged_identifiers.setdefault(kind, identifier.strip())
     for snapshot in _provenance_snapshots(value):
         candidate = _flatten_metadata(snapshot)
         for key in _PROVENANCE_BIBLIOGRAPHY_FIELDS:
@@ -91,17 +118,18 @@ def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
                 candidate.get(key)
             ):
                 metadata[key] = candidate[key]
-        candidate_identifiers = candidate.get("identifiers")
-        if isinstance(candidate_identifiers, dict):
-            for kind, identifier in candidate_identifiers.items():
-                if _has_metadata_value(identifier):
-                    merged_identifiers.setdefault(kind, identifier)
-        for kind in ("doi", "pmid", "pmcid", "arxiv", "openalex"):
+        for kind, identifier in _reader_identifiers(
+            candidate.get("identifiers")
+        ).items():
+            merged_identifiers.setdefault(kind, identifier)
+        for kind in _READER_SAFE_IDENTIFIER_KINDS:
             identifier = candidate.get(kind)
-            if _has_metadata_value(identifier):
-                merged_identifiers.setdefault(kind, identifier)
+            if isinstance(identifier, str) and identifier.strip():
+                merged_identifiers.setdefault(kind, identifier.strip())
     if merged_identifiers:
         metadata["identifiers"] = merged_identifiers
+    else:
+        metadata.pop("identifiers", None)
     return metadata
 
 
@@ -155,7 +183,7 @@ def _source_projection(source: dict[str, Any]) -> dict[str, Any]:
         "doi": _source_doi(source),
         "journal": metadata.get("journal"),
         "publication_type": metadata.get("publication_type"),
-        "identifiers": dict(identifiers) if isinstance(identifiers, dict) else {},
+        "identifiers": _reader_identifiers(identifiers),
         "connector_type": source.get("connector_type"),
         "evidence_level": normalize_evidence_level(
             source.get("evidence_level") or metadata.get("evidence_level")
