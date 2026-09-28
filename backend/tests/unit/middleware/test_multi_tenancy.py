@@ -440,10 +440,54 @@ async def test_protected_path_without_authorization_is_401_and_never_opens_db():
     assert response.status_code == 401
     assert hits == [], "protected route handler must not run without auth"
     db_factory.assert_not_called()
+    assert response.headers["WWW-Authenticate"] == "Bearer"
 
     body = response.json()
     assert body["error"]["message"] == "Not authenticated"
     assert body["error"]["status_code"] == 401
+    assert body["error"]["type"] == "authentication_error"
+
+
+@pytest.mark.parametrize(
+    "auth_header",
+    [
+        "Basic dXNlcjpwYXNz",  # wrong scheme entirely
+        "Bearer",  # bare scheme, no token (no trailing space)
+    ],
+)
+@pytest.mark.asyncio
+async def test_non_bearer_scheme_is_401_and_never_opens_db(auth_header):
+    """Review I7: only ``Bearer <token>`` may proceed past the gate. Any other
+    Authorization value (``Basic ...``, a bare ``Bearer``, ...) could never
+    resolve a tenant, so it is 401'd BEFORE the per-request DB session opens —
+    same immediate rejection as a missing header."""
+    from starlette.testclient import TestClient
+
+    db_factory = MagicMock(
+        side_effect=AssertionError(
+            "must not open a DB session for a non-Bearer scheme"
+        )
+    )
+    with patch("src.middleware.multi_tenancy.AsyncSessionLocal", db_factory):
+        app = _i7_app()
+        hits = []
+
+        @app.get("/api/v1/threads")
+        async def threads_endpoint():
+            hits.append(1)
+            return {"ok": True}
+
+        client = TestClient(app)
+        response = client.get(
+            "/api/v1/threads", headers={"Authorization": auth_header}
+        )
+
+    assert response.status_code == 401
+    assert hits == [], "protected route handler must not run without a Bearer token"
+    db_factory.assert_not_called()
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    body = response.json()
+    assert body["error"]["message"] == "Not authenticated"
     assert body["error"]["type"] == "authentication_error"
 
 
@@ -575,6 +619,7 @@ async def test_invalid_token_on_protected_path_returns_401_never_500():
 
     assert response.status_code == 401
     assert hits == []
+    assert response.headers["WWW-Authenticate"] == "Bearer"
     body = response.json()
     assert body["error"]["type"] == "authentication_error"
     # No internals: only the stable message is exposed.

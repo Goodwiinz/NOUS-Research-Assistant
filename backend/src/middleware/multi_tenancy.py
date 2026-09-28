@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 # ``_SKIP_PATH_REGEXES`` — auth-establishment routes. These run BEFORE a tenant
 # context can exist (login/register/refresh, CLI device flow). Skipping tenant
 # resolution for them is required for auth to work at all.
+# Trailing-slash variants (e.g. ``/api/v1/auth/login/``) match none of these
+# exact entries and fail closed with a 401 — the app sets
+# ``redirect_slashes=False``, so no slash-normalizing 307 happens first.
 #
 # ``_MIDDLEWARE_EXEMPT_PATH_REGEXES`` — routes exempt from middleware tenant
 # resolution because they perform their own authentication (public metadata OR
@@ -148,10 +151,17 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         # never carry tenant context. The old code fell through to
         # ``call_next`` here, so tenant isolation depended on every endpoint
         # separately raising 401. Return 401 immediately — BEFORE the
-        # per-request DB session below is opened.
-        if not request.headers.get("Authorization", ""):
+        # per-request DB session below is opened. Only the Bearer scheme can
+        # proceed (JWT routes and the exempt-listed API-key routes both carry
+        # Bearer credentials); any other scheme (``Basic``, a bare ``Bearer``
+        # with no token, ...) could never resolve a tenant anyway, so it is
+        # rejected here rather than after opening the session.
+        if not request.headers.get("Authorization", "").startswith("Bearer "):
             return error_response(
-                401, "Not authenticated", "authentication_error"
+                401,
+                "Not authenticated",
+                "authentication_error",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
         try:
@@ -175,6 +185,7 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
                         401,
                         "Could not validate credentials",
                         "authentication_error",
+                        headers={"WWW-Authenticate": "Bearer"},
                     )
                 await self._validate_tenant_access(tenant_info["organization_id"], db)
 
