@@ -159,12 +159,8 @@ def _validate_native_request(
             raise ValueError("invalid command approval actions")
     elif body.method == "item/fileChange/requestApproval":
         allowed = {"threadId", "turnId", "itemId", "reason", "startedAtMs", "grantRoot"}
-        if set(p) - allowed:
+        if set(p) - allowed or p.get("grantRoot") is not None:
             raise ValueError("unsupported file approval fields")
-        if p.get("grantRoot") is not None and not isinstance(p["grantRoot"], str):
-            raise ValueError("invalid file approval target")
-        if p.get("grantRoot") is not None and len(p["grantRoot"]) > 1000:
-            raise ValueError("file approval target exceeds limit")
         if p.get("reason") is not None and not isinstance(p["reason"], str):
             raise ValueError("invalid file approval reason")
     elif body.method == "item/tool/requestUserInput":
@@ -358,7 +354,6 @@ async def ingest_native_request(
                 else (
                     {
                         "reason": target.get("reason"),
-                        "grant_root": target.get("grantRoot"),
                     }
                     if body.method.endswith("fileChange/requestApproval")
                     else {"questions": target["questions"]}

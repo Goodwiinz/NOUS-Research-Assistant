@@ -59,7 +59,6 @@ test("allows one-shot file approval and required input callbacks", () => {
           threadId: "session-1",
           turnId: "turn-1",
           itemId: "item-1",
-          grantRoot: "/workspace",
         },
       }),
     ).kind,
@@ -80,6 +79,23 @@ test("allows one-shot file approval and required input callbacks", () => {
     ).kind,
     "request",
   );
+  for (const grantRoot of ["/outside-workspace", ""]) {
+    assert.throws(
+      () =>
+        nativeRequestBody(
+          request({
+            method: "item/fileChange/requestApproval",
+            params: {
+              threadId: "session-1",
+              turnId: "turn-1",
+              itemId: "item-1",
+              grantRoot,
+            },
+          }),
+        ),
+      /root changes are unsupported/,
+    );
+  }
 });
 
 test("rejects persistent permission changes and unknown request kinds", () => {

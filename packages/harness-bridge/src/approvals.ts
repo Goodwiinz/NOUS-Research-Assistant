@@ -34,9 +34,9 @@ export function nativeRequestBody(event: AdapterEvent): ProducerBody {
   } else if (event.method === "item/fileChange/requestApproval") {
     if (
       !only(["threadId", "turnId", "itemId", "reason", "startedAtMs", "grantRoot"]) ||
-      (p.grantRoot != null && typeof p.grantRoot !== "string")
+      p.grantRoot != null
     )
-      throw new Error("invalid file approval target");
+      throw new Error("file approval root changes are unsupported");
   } else if (event.method === "item/tool/requestUserInput") {
     if (
       !only(["threadId", "turnId", "itemId", "questions", "isBlocking", "autoResolutionMs"]) ||

@@ -459,8 +459,7 @@ export class CodexAdapter implements HarnessAdapter {
       if (
         !supported ||
         !record(p) ||
-        (message.method !== "item/fileChange/requestApproval" &&
-          p.grantRoot != null) ||
+        p.grantRoot != null ||
         p.proposedExecpolicyAmendment != null ||
         p.proposedNetworkPolicyAmendments != null ||
         p.networkApprovalContext != null

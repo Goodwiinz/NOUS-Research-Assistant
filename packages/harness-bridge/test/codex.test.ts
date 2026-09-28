@@ -423,7 +423,7 @@ for (const method of [
                   cwd: server.root,
                 }
               : method.includes("fileChange")
-                ? { grantRoot: server.root }
+                ? {}
               : {}),
           }),
     };
@@ -481,6 +481,16 @@ for (const request of [
       itemId: "i",
       questions: [{}],
       isBlocking: true,
+    },
+  },
+  {
+    method: "item/fileChange/requestApproval",
+    params: {
+      threadId: "s",
+      turnId: "t",
+      itemId: "i",
+      startedAtMs: 1,
+      grantRoot: "/outside-workspace",
     },
   },
 ])

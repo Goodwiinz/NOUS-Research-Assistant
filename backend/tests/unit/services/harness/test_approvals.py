@@ -257,3 +257,72 @@ async def test_unknown_native_request_kind_rejected(
     }
     with pytest.raises(ValueError, match="unsupported"):
         await ingest_native_request(db, context, BridgeEvent.model_validate(values))
+
+
+@pytest.mark.parametrize("grant_root", ["/outside-workspace", ""])
+async def test_file_approval_cannot_expand_workspace(
+    db: AsyncSession,
+    context: IntegrationContext,
+    live_command: Any,
+    grant_root: str,
+) -> None:
+    values = {
+        "deviceId": DEVICE,
+        "runId": UUID(live_command.run_id),
+        "commandId": live_command.id,
+        "workspaceId": LOCAL,
+        "generation": live_command.generation,
+        "sourceId": "approval-source",
+        "sourceSeq": 1,
+        "body": {
+            "kind": "request",
+            "sessionId": "native-session",
+            "turnId": "native-turn",
+            "itemId": "item-file",
+            "requestId": 9,
+            "method": "item/fileChange/requestApproval",
+            "params": {
+                "threadId": "native-session",
+                "turnId": "native-turn",
+                "itemId": "item-file",
+                "grantRoot": grant_root,
+            },
+        },
+    }
+    with pytest.raises(ValueError, match="unsupported file approval fields"):
+        await ingest_native_request(db, context, BridgeEvent.model_validate(values))
+
+
+async def test_workspace_local_file_approval_remains_supported(
+    db: AsyncSession,
+    context: IntegrationContext,
+    live_command: Any,
+) -> None:
+    values = {
+        "deviceId": DEVICE,
+        "runId": UUID(live_command.run_id),
+        "commandId": live_command.id,
+        "workspaceId": LOCAL,
+        "generation": live_command.generation,
+        "sourceId": "approval-source",
+        "sourceSeq": 1,
+        "body": {
+            "kind": "request",
+            "sessionId": "native-session",
+            "turnId": "native-turn",
+            "itemId": "item-file",
+            "requestId": 9,
+            "method": "item/fileChange/requestApproval",
+            "params": {
+                "threadId": "native-session",
+                "turnId": "native-turn",
+                "itemId": "item-file",
+            },
+        },
+    }
+    request_id = await ingest_native_request(
+        db, context, BridgeEvent.model_validate(values)
+    )
+    request = await db.get(HarnessNativeRequest, request_id)
+    assert request is not None
+    assert request.method == "item/fileChange/requestApproval"
