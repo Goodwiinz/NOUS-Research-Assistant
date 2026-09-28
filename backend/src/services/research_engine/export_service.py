@@ -20,6 +20,7 @@ from src.schemas.research_engine import ExportFormat
 from src.services.research_engine.contracts import (
     canonical_json_bytes,
     canonical_json_sha256,
+    canonical_markdown_content,
     canonical_stage_output_hash,
     rehydrate_stage_outputs,
 )
@@ -300,15 +301,7 @@ class ExportService:
 
     @staticmethod
     def _persisted_markdown(output: dict[str, Any] | None) -> str | None:
-        if not isinstance(output, dict):
-            return None
-        markdown = output.get("markdown")
-        if isinstance(markdown, str):
-            return markdown
-        content = output.get("content")
-        if output.get("format") == "markdown" and isinstance(content, str):
-            return content
-        return None
+        return canonical_markdown_content(output)
 
     @classmethod
     def _is_trusted_verified_daily_brief(
@@ -326,6 +319,7 @@ class ExportService:
             or not isinstance(export_output, dict)
             or export_output.get("contract_version") != 1
             or export_output.get("stage_type") != "export"
+            or canonical_markdown_content(export_output) is None
         ):
             return False
         report = export_output.get("exported")

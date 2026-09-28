@@ -155,3 +155,20 @@
   introduced diagnostics.
 - Scoped self-review: all seven findings ADDRESSED; no unresolved Critical or
   Important issue; Task 6 has not started.
+- Review round 3 found two remaining Important gaps: contiguous non-object
+  persisted outputs were skipped during reconstruction, and final approval did
+  not require a canonical persisted Markdown payload even though verified
+  downloads must serve its exact bytes.
+- Fix round 3 started from `9c120f85eaf71c4f28df1324b6b908e1af20f91a`.
+  Its focused RED was `18 failed`; focused GREEN was `18 passed`. The final
+  Task 5 gate passed `49`, Task 3/4/template adjacency passed `102`, workflow
+  passed `26`, stream/security passed `33`, discovery passed `15`, and
+  deterministic rendering passed `9`.
+- Fix round 3 keeps explicit `{}` output as a tested legacy no-op, rejects all
+  non-object output with `export_reconstruction_failed`, and makes final review
+  plus verified download trust require matching string `markdown`/`content`
+  fields under `format=markdown`. Exact empty-string bytes remain supported.
+- Fix round 3 quality gates: changed-file and repo-wide Ruff passed; Black and
+  isort passed; MyPy is unchanged at `18` diagnostics on both base and repair;
+  diff check passed. Commit: `fix(research): fail closed on audited export
+  corruption` (this commit). Task 6 has not started.

@@ -45,6 +45,19 @@ def canonical_stage_output_hash(output: dict[str, object]) -> str:
     return canonical_json_sha256(output)
 
 
+def canonical_markdown_content(output: Mapping[str, Any] | None) -> str | None:
+    """Return the exact persisted Markdown only for its canonical envelope."""
+    if not isinstance(output, Mapping) or output.get("format") != "markdown":
+        return None
+    markdown = output.get("markdown")
+    content = output.get("content")
+    if not isinstance(markdown, str) or not isinstance(content, str):
+        return None
+    if markdown != content:
+        return None
+    return markdown
+
+
 def normalize_evidence_level(value: str | None) -> str:
     """Normalize legacy evidence labels into the canonical vocabulary."""
     if not isinstance(value, str):
@@ -721,8 +734,11 @@ def rehydrate_stage_outputs(steps: list[Any]) -> dict[str, Any]:
     context: dict[str, Any] = {}
     for step in ordered:
         output = step.output
-        if isinstance(output, dict):
-            context = merge_stage_output(context, output, int(step.step_index))
+        if not isinstance(output, dict):
+            raise ValueError("persisted research step output is not an object")
+        # An explicit empty object is a valid legacy no-op; non-objects are
+        # corruption and must never be silently omitted from reconstruction.
+        context = merge_stage_output(context, output, int(step.step_index))
     return context
 
 

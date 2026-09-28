@@ -546,6 +546,12 @@ def test_export_contract_owns_hash_bindings_and_rehydrates_them() -> None:
     assert context["report_hash"] == "b" * 64
 
 
+def test_rehydrate_accepts_explicit_empty_legacy_output() -> None:
+    context = rehydrate_stage_outputs([SimpleNamespace(step_index=0, output={})])
+
+    assert context == {}
+
+
 def test_export_contract_still_rejects_undeclared_top_level_fields() -> None:
     envelope = {
         "contract_version": 1,
@@ -1021,6 +1027,38 @@ async def test_legacy_json_export_refuses_noncontiguous_persisted_history() -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("malformed_output", [None, [], "persisted corruption"])
+@pytest.mark.parametrize("exporter", ["v1", "legacy"])
+async def test_exporters_reject_malformed_contiguous_persisted_output(
+    malformed_output: object,
+    exporter: str,
+) -> None:
+    run, step, _source = _make_run(status="completed")
+    step.output = malformed_output
+    run.steps = [step]
+    observer = ResearchObservability()
+    service = ExportService(observer=observer)
+
+    with pytest.raises(ResearchExportError) as raised:
+        if exporter == "v1":
+            await service.export(
+                run.id,
+                uuid4(),
+                ExportFormat.JSON,
+                _mock_db_for_run(run),
+            )
+        else:
+            await service.export_json(run.id, _mock_db_for_run(run))
+
+    assert raised.value.status_code == 500
+    assert raised.value.code == "export_reconstruction_failed"
+    assert run.status == "completed"
+    metrics = observer.snapshot()["counters"]
+    assert metrics["rehydration_errors"]["invalid_history"] == 1
+    assert metrics["exports"]["json:failed:reconstruction"] == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("missing", ["terminal_status", "scope", "final_review"])
 async def test_verified_daily_export_requires_all_durable_trust_evidence(
     missing: str,
@@ -1040,6 +1078,50 @@ async def test_verified_daily_export_requires_all_durable_trust_evidence(
     payload = json.loads(artifact.content)
     assert payload["final_status"] == "unverified"
     assert "UNVERIFIED" in payload["warning"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "json_format",
+        "missing_markdown",
+        "non_string_markdown",
+        "missing_content",
+        "non_string_content",
+        "mismatched_content",
+    ],
+)
+async def test_verified_markdown_requires_exact_canonical_persisted_bytes(
+    corruption: str,
+) -> None:
+    run = _trusted_daily_export_run(markdown="# REVIEWED MARKDOWN\n")
+    export_step = run.steps[-1]
+    output = export_step.output
+    if corruption == "json_format":
+        output["format"] = "json"
+    elif corruption == "missing_markdown":
+        output.pop("markdown")
+    elif corruption == "non_string_markdown":
+        output["markdown"] = {"not": "bytes"}
+    elif corruption == "missing_content":
+        output.pop("content")
+    elif corruption == "non_string_content":
+        output["content"] = ["not", "bytes"]
+    else:
+        output["content"] = "# DIFFERENT MARKDOWN\n"
+    export_step.outputs_hash = canonical_stage_output_hash(output)
+    run.reviews[0].output_hash = export_step.outputs_hash
+
+    artifact = await ExportService().export(
+        run.id,
+        uuid4(),
+        ExportFormat.MARKDOWN,
+        _mock_db_for_run(run),
+    )
+
+    assert artifact.content != b"# REVIEWED MARKDOWN\n"
+    assert b"UNVERIFIED" in artifact.content
 
 
 @pytest.mark.asyncio

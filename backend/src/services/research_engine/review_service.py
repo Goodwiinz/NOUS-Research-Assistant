@@ -35,6 +35,7 @@ from src.schemas.research_engine import (
 )
 from src.services.research_engine.contracts import (
     canonical_json_sha256,
+    canonical_markdown_content,
     canonical_stage_output_hash,
 )
 from src.services.research_engine.observability import (
@@ -711,6 +712,9 @@ class ResearchReviewService:
         export_step: ResearchStep,
         export_output: Mapping[str, Any],
     ) -> None:
+        if canonical_markdown_content(export_output) is None:
+            raise self._payload_incomplete()
+
         result = await self.session.execute(
             select(ResearchStep)
             .where(

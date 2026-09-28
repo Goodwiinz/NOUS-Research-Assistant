@@ -143,8 +143,11 @@ def _export_output(
         "contract_version": 1,
         "stage_type": "export",
         "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
-        "format": "json",
+        "format": "markdown",
         "exported": report,
+        "markdown": "# Reviewed Daily Brief\n",
+        "content": "# Reviewed Daily Brief\n",
+        "media_type": "text/markdown; charset=utf-8",
         "verification_output_hash": (
             canonical_stage_output_hash(verification_output)
             if valid_verification_hash
@@ -1055,6 +1058,70 @@ async def test_final_approval_accepts_exact_verified_export_bindings(
 
     assert response.decision.value == "approve"
     assert response.decision_payload == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "json_format",
+        "missing_markdown",
+        "non_string_markdown",
+        "missing_content",
+        "non_string_content",
+        "mismatched_content",
+    ],
+)
+async def test_final_approval_rejects_export_without_canonical_markdown_bytes(
+    db: AsyncSession,
+    corruption: str,
+) -> None:
+    verification = _verification_output()
+    export = _export_output(verification)
+    if corruption == "json_format":
+        export["format"] = "json"
+    elif corruption == "missing_markdown":
+        export.pop("markdown")
+    elif corruption == "non_string_markdown":
+        export["markdown"] = {"not": "bytes"}
+    elif corruption == "missing_content":
+        export.pop("content")
+    elif corruption == "non_string_content":
+        export["content"] = ["not", "bytes"]
+    else:
+        export["content"] = "# Different Daily Brief\n"
+    owner_id, organization_id, run, export_step = await _seed_gate(
+        db, output=export, review_kind="final", step_index=5
+    )
+    db.add(
+        ResearchStep(
+            id=uuid4(),
+            run_id=run.id,
+            step_index=4,
+            step_type="verify",
+            mode="deterministic",
+            output=verification,
+            outputs_hash=canonical_stage_output_hash(verification),
+        )
+    )
+    await db.commit()
+    service_module = _review_module()
+
+    with pytest.raises(service_module.ResearchReviewError) as error:
+        await service_module.ResearchReviewService(db).submit_review(
+            run_id=run.id,
+            step_index=export_step.step_index,
+            owner_id=owner_id,
+            organization_id=organization_id,
+            reviewer_id=owner_id,
+            request=_request(
+                kind="final",
+                output_hash=canonical_stage_output_hash(export),
+                payload={},
+            ),
+        )
+
+    assert error.value.code == "review_payload_incomplete"
 
 
 @pytest.mark.asyncio

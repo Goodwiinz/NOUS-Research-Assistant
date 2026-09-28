@@ -238,3 +238,61 @@ Results: `15 passed, 1 warning in 4.95s` and
   intentionally replaces raw exception text.
 - No Task 6 source, generated contract, client, UI, deployment, or remote state
   was changed.
+
+## Remaining Important repair — 2026-09-28
+
+The final scoped review identified two persisted-artifact trust gaps. Both now
+fail closed without changing legacy readable-export behavior:
+
+1. Reconstruction rejects every contiguous persisted step whose `output` is
+   not a JSON object. Both the v1 and legacy exporters return the stable,
+   content-free `export_reconstruction_failed` error, leave the run unchanged,
+   and emit the existing aggregate reconstruction metrics. An explicit empty
+   object remains a deliberately supported legacy no-op and has a direct
+   contract regression.
+2. Final approval and verified-download trust share one canonical Markdown
+   predicate: the export must declare `format=markdown`, `markdown` and
+   `content` must both be strings, and their values must be identical. The
+   exact final-review hash still binds the whole export envelope. Missing,
+   non-string, mismatched, or JSON-formatted content cannot be labeled trusted
+   or silently served as alternate verified bytes. A legitimately persisted
+   empty string remains byte-exact and trusted.
+
+### Final repair TDD and verification
+
+The focused regression command selected 18 direct cases. Before production
+changes it reported `18 failed in 7.29s`: six malformed-history cases, six
+download-trust cases, and six final-approval cases. After the shared contract
+repair, the same batch reported `18 passed in 5.57s`. The explicit empty-object
+legacy contract test then passed `1/1`.
+
+The exact Task 5 command was rerun after all test changes:
+
+```text
+PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q backend/tests/unit/services/test_export_service.py backend/tests/unit/services/test_research_observability.py backend/tests/unit/api/test_research_engine_exports.py
+```
+
+Result: `49 passed, 2 warnings in 10.94s`.
+
+Adjacent gates:
+
+- Task 3/4/template review command: `102 passed, 3 warnings in 12.99s`.
+- Workflow engine: `26 passed, 1 warning in 5.36s`.
+- Stream/security: `33 passed, 1 warning in 5.88s`.
+- Paper discovery: `15 passed, 1 warning in 4.99s`.
+- Deterministic rendering: `9 passed, 1 warning in 4.77s`.
+
+Static and self-review evidence:
+
+- Ruff on all five changed Python paths and repo-wide `backend/src`: passed.
+- Black: `5 files would be left unchanged`.
+- isort: passed after normalizing the two new imports.
+- MyPy on the five changed Python paths reports the same `18 errors in 2
+  files` at base `9c120f85e` and in the repaired tree; zero diagnostics were
+  introduced.
+- `git diff --check`: passed.
+- The test diff adds assertions only; the review fixture changed from a JSON
+  export to the canonical Markdown envelope now required for successful final
+  approval. Existing approval, exact-empty-byte, workflow, stream, review,
+  template, discovery, and determinism behavior remains green.
+- No Task 6 source or generated artifacts were changed.
