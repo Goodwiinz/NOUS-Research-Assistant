@@ -61,6 +61,7 @@ RUNTIME_FIELDS = {
     "configuration",
     "authenticated",
     "real_provider",
+    "source_attestation",
 }
 ARTIFACT_FIELDS = {
     "draft",
@@ -163,6 +164,13 @@ def _validate_retained_trial_shape(bundle_path: Path, trial: dict[str, Any]) -> 
     _reject_unknown_fields(bundle_path, trial, TRIAL_FIELDS, "trial")
     runtime = trial.get("runtime")
     _reject_unknown_fields(bundle_path, runtime, RUNTIME_FIELDS, "runtime")
+    if isinstance(runtime, dict) and runtime.get("source_attestation") is not None:
+        _reject_unknown_fields(
+            bundle_path,
+            runtime["source_attestation"],
+            ARTIFACT_RECORD_FIELDS,
+            "runtime.source_attestation",
+        )
     verdicts = trial.get("verdicts")
     _reject_unknown_fields(bundle_path, verdicts, set(VERDICTS), "verdicts")
     artifacts = trial.get("artifacts")
@@ -265,6 +273,38 @@ def _verify_source_checkout(source_sha: str) -> None:
         )
     if tracked_changes:
         raise EvidenceError("executed source checkout has tracked modifications")
+
+
+def _git_tree_sha(source_sha: str) -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", f"{source_sha}^{{tree}}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        raise EvidenceError(f"cannot resolve source tree for {source_sha}") from exc
+
+
+def _verify_source_attestation(
+    bundle_path: Path, runtime: dict[str, Any], source_sha: str
+) -> None:
+    path = _verify_declared_artifact(bundle_path, runtime.get("source_attestation"))
+    attestation = _load_json(path)
+    empty_diff_digest = f"sha256:{hashlib.sha256(b'').hexdigest()}"
+    if (
+        not isinstance(attestation, dict)
+        or attestation.get("run_id") != runtime.get("run_id")
+        or attestation.get("source_sha") != source_sha
+        or attestation.get("git_tree") != _git_tree_sha(source_sha)
+        or attestation.get("tracked_diff_sha256") != empty_diff_digest
+        or attestation.get("runner_image") != runtime.get("runner_image")
+    ):
+        raise EvidenceError(
+            f"{bundle_path.name}: runner source attestation is not bound to the clean source tree"
+        )
 
 
 def _source_sha() -> str:
@@ -527,9 +567,20 @@ def _verify_objective_artifacts(
 
     review_path = _verify_declared_artifact(bundle_path, artifacts.get("review"))
     review = _load_json(review_path)
+    review_content = review.get("candidate_content")
+    review_content_hash = (
+        hashlib.sha256(review_content.encode("utf-8")).hexdigest()
+        if isinstance(review_content, str)
+        else None
+    )
     if review.get("outcome") != "passed" or not review.get("id"):
         raise EvidenceError(f"{bundle_path.name}: persisted passing review is required")
-    if review.get("candidate_content_hash") != draft_digest.removeprefix("sha256:"):
+    if (
+        review_content != draft_content
+        or review_content_hash != draft_digest.removeprefix("sha256:")
+        or review.get("candidate_content_hash") != review_content_hash
+        or review.get("project_id") != draft.get("project_id")
+    ):
         raise EvidenceError(
             f"{bundle_path.name}: review is not bound to the saved draft"
         )
@@ -564,6 +615,7 @@ def _verify_objective_artifacts(
             f"{bundle_path.name}: saved citation identities do not reconcile"
         )
     citation_rows: dict[str, dict[str, Any]] = {}
+    citation_row_ids: set[str] = set()
     for row in citations:
         if not isinstance(row, dict):
             raise EvidenceError(f"{bundle_path.name}: citation rows must be objects")
@@ -571,6 +623,15 @@ def _verify_objective_artifacts(
             raise EvidenceError(
                 f"{bundle_path.name}: citation rows require document ids"
             )
+        if not row.get("id") or row.get("draft_id") != draft.get("id"):
+            raise EvidenceError(
+                f"{bundle_path.name}: citation rows are not bound to the retained draft"
+            )
+        if str(row["id"]) in citation_row_ids:
+            raise EvidenceError(
+                f"{bundle_path.name}: duplicate persisted citation row identities"
+            )
+        citation_row_ids.add(str(row["id"]))
         metadata_source = row.get("metadata_source")
         if metadata_source not in {"citation", "document_fallback"}:
             raise EvidenceError(
@@ -798,7 +859,11 @@ def _verify_semantic_artifacts(
         if isinstance(results, list)
         else {}
     )
-    truth_is_bound = set(retained_results) == set(frozen_fixtures)
+    truth_is_bound = (
+        isinstance(results, list)
+        and len(results) == len(retained_results) == len(frozen_fixtures)
+        and set(retained_results) == set(frozen_fixtures)
+    )
     if truth_is_bound:
         for fixture_id, fixture in frozen_fixtures.items():
             result = retained_results[fixture_id]
@@ -814,6 +879,7 @@ def _verify_semantic_artifacts(
         or calibration.get("outcome") != "passed"
         or calibration.get("reviewer") != adjudication.get("reviewer")
         or calibration.get("verifier") != adjudication.get("verifier")
+        or adjudication.get("verifier") != runtime.get("verifier")
         or calibration.get("fixture_digest") != runtime["calibration_digest"]
         or adjudication.get("calibration_id") != calibration.get("id")
         or not truth_is_bound
@@ -970,12 +1036,16 @@ def _validate_runtime_identity(
         raise EvidenceError(f"{bundle_path.name}: pinned tool versions are required")
     _reject_sensitive_configuration(runtime["configuration"])
     _reject_sensitive_configuration(runtime["env_flags"], "runtime.env_flags")
+    _verify_source_attestation(bundle_path, runtime, source_sha)
 
 
 def _evidence_identities(
     bundle_path: Path, trial: dict[str, Any], verdicts: dict[str, str]
 ) -> set[tuple[str, str]]:
     identities = {("run", str(trial["runtime"]["run_id"]))}
+    source_record = trial["runtime"].get("source_attestation")
+    if isinstance(source_record, dict) and source_record.get("sha256"):
+        identities.add(("source_attestation", str(source_record["sha256"])))
     artifacts = trial.get("artifacts")
     if not isinstance(artifacts, dict):
         return identities
@@ -1073,6 +1143,26 @@ def validate_trial(
     return key, verdicts
 
 
+def _runtime_manifest(runtime: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: runtime[field]
+        for field in (
+            "source_sha",
+            "provider",
+            "model",
+            "runner_image",
+            "verifier",
+            "calibration_digest",
+            "harness_digest",
+            "tool_versions",
+            "env_flags",
+            "configuration",
+            "authenticated",
+            "real_provider",
+        )
+    }
+
+
 def collect(
     protocol_path: Path, trials_dir: Path, output_path: Path, source_sha: str
 ) -> dict[str, Any]:
@@ -1087,12 +1177,23 @@ def collect(
 
     observed: dict[tuple[str, int], dict[str, str]] = {}
     evidence_owners: dict[tuple[str, str], tuple[str, int]] = {}
+    runtime_manifest: dict[str, Any] | None = None
+    runtime_manifest_digest: str | None = None
     trials = []
     for bundle_path in bundles:
         trial = _load_json(bundle_path)
         if not isinstance(trial, dict):
             raise EvidenceError(f"{bundle_path}: trial bundle must be an object")
         key, verdicts = validate_trial(bundle_path, trial, state, source_sha)
+        manifest = _runtime_manifest(trial["runtime"])
+        manifest_digest = _canonical_digest(manifest)
+        if runtime_manifest_digest is None:
+            runtime_manifest = manifest
+            runtime_manifest_digest = manifest_digest
+        elif manifest_digest != runtime_manifest_digest:
+            raise EvidenceError(
+                f"{bundle_path.name}: runtime manifest differs across retained trials"
+            )
         if key in observed:
             raise EvidenceError(f"duplicate retained trial: {key[0]}/{key[1]}")
         observed[key] = verdicts
@@ -1175,6 +1276,8 @@ def collect(
             name: state["corpus_digests"][name] for name in ("development", "held_out")
         },
         "calibration_digest": state["calibration_digest"],
+        "runtime_manifest": runtime_manifest,
+        "runtime_manifest_digest": runtime_manifest_digest,
         "sample_size": len(observed),
         "sample_sizes": sample_sizes,
         "product_passes": product_passes,

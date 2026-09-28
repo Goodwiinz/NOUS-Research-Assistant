@@ -28,8 +28,12 @@ after snapshots to the retained current draft id, version and content hash.
 The runtime record identifies a unique run, authenticated real-provider
 journey, provider, model, digest-pinned runner image, verifier, harness and fixture digests,
 pinned tool versions, executed environment flags and redacted model
-configuration. Authorization and objective evidence remain required when those
-dimensions pass even if a judge or infrastructure component is unavailable.
+configuration. Every run retains an attestation binding its run and runner
+image to the declared commit tree and an empty tracked diff. All trials in one
+result must share the same provider, model, runner, verifier, tools,
+configuration and environment manifest. Authorization and objective evidence
+remain required when those dimensions pass even if a judge or infrastructure
+component is unavailable.
 Durable run, draft, review, adjudication, calibration and authorization
 identities and draft/citation/download checksums cannot be reused across planned
 trials. The retained trial schema is closed: undeclared runtime fields or
@@ -63,7 +67,8 @@ recomputes the protocol, corpus, harness, task and artifact digests. It opens th
 downloaded LaTeX ZIP, reconciles every saved `[Doc N]` marker with the exact
 saved Markdown and transformed LaTeX manuscript bodies, `\cite{docN}` and
 parsed BibTeX metadata, and rejects duplicate persisted citation indices. It
-binds the persisted review and independent adjudication to the run, task and
+binds every persisted citation row and the recomputed passing-review candidate
+to the draft and project, binds independent adjudication to the run, task and
 draft content hash, verifies retained judge results against the frozen
 calibration truth fixtures, and requires authorization
 probes to name the exact collaborator, outsider, owning project, foreign

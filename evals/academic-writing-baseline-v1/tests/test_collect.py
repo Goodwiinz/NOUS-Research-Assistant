@@ -47,6 +47,10 @@ def _runtime(
         "configuration": {"temperature": 0},
         "authenticated": True,
         "real_provider": True,
+        "source_attestation": {
+            "path": "source-attestation.json",
+            "sha256": "sha256:" + "0" * 64,
+        },
     }
 
 
@@ -70,7 +74,9 @@ def _success_bundle(
             "id": f"review-{run_id}",
             "run_id": run_id,
             "draft_id": f"draft-{run_id}",
+            "project_id": f"project-{run_id}",
             "outcome": "passed",
+            "candidate_content": draft.read_text(encoding="utf-8"),
             "candidate_content_hash": digest.removeprefix("sha256:"),
         },
     )
@@ -79,6 +85,8 @@ def _success_bundle(
         citations,
         [
             {
+                "id": f"draft-citation-{run_id}",
+                "draft_id": f"draft-{run_id}",
                 "citation_index": 2,
                 "document_id": "document-2",
                 "citation_id": "citation-2",
@@ -262,6 +270,18 @@ def _bind_trial_to_protocol(
             "runtime": _runtime(state, task_id, source_sha, run_id),
         }
     )
+    attestation_path = bundle_path.parent / "source-attestation.json"
+    _write_json(
+        attestation_path,
+        {
+            "run_id": run_id,
+            "source_sha": source_sha,
+            "git_tree": COLLECT._git_tree_sha(source_sha),
+            "tracked_diff_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
+            "runner_image": trial["runtime"]["runner_image"],
+        },
+    )
+    trial["runtime"]["source_attestation"] = _record(attestation_path)
     artifacts = trial.get("artifacts") or {}
     adjudication_record = artifacts.get("adjudication")
     if isinstance(adjudication_record, dict):
@@ -361,6 +381,19 @@ def test_markdown_body_and_bibliography_must_match_retained_evidence(
         COLLECT._verify_success_artifacts(bundle_path, trial)
 
 
+def test_passing_review_recomputes_candidate_and_project(tmp_path: Path) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    record = trial["artifacts"]["review"]
+    path = bundle_path.parent / record["path"]
+    review = COLLECT._load_json(path)
+    review["candidate_content"] = "Fabricated reviewed text."
+    _write_json(path, review)
+    record["sha256"] = COLLECT._file_digest(path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="not bound to the saved draft"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
 def test_bibtex_metadata_must_match_canonical_citation_rows(tmp_path: Path) -> None:
     bundle_path, trial = _success_bundle(tmp_path)
     latex_record = trial["artifacts"]["exports"]["latex"]
@@ -413,6 +446,19 @@ def test_duplicate_citation_indices_are_rejected(tmp_path: Path) -> None:
     record["sha256"] = COLLECT._file_digest(path)
 
     with pytest.raises(COLLECT.EvidenceError, match="duplicate persisted"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
+def test_citation_rows_bind_to_retained_draft(tmp_path: Path) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    record = trial["artifacts"]["citations"]
+    path = bundle_path.parent / record["path"]
+    rows = COLLECT._load_json(path)
+    rows[0]["draft_id"] = "unrelated-draft"
+    _write_json(path, rows)
+    record["sha256"] = COLLECT._file_digest(path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="not bound to the retained draft"):
         COLLECT._verify_success_artifacts(bundle_path, trial)
 
 
@@ -500,12 +546,45 @@ def test_semantic_pass_requires_bound_calibration(tmp_path: Path) -> None:
         COLLECT._verify_success_artifacts(bundle_path, trial)
 
 
+def test_semantic_evidence_rejects_duplicate_results_and_wrong_verifier(
+    tmp_path: Path,
+) -> None:
+    bundle_path, trial = _success_bundle(tmp_path, bundle_name="duplicate-result")
+    record = trial["artifacts"]["calibration"]
+    path = bundle_path.parent / record["path"]
+    calibration = COLLECT._load_json(path)
+    calibration["results"].append(dict(calibration["results"][-1]))
+    _write_json(path, calibration)
+    record["sha256"] = COLLECT._file_digest(path)
+    with pytest.raises(COLLECT.EvidenceError, match="calibration evidence"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+    bundle_path, trial = _success_bundle(tmp_path, bundle_name="wrong-verifier")
+    record = trial["artifacts"]["adjudication"]
+    path = bundle_path.parent / record["path"]
+    adjudication = COLLECT._load_json(path)
+    adjudication["verifier"] = "other-verifier"
+    _write_json(path, adjudication)
+    record["sha256"] = COLLECT._file_digest(path)
+    calibration_record = trial["artifacts"]["calibration"]
+    calibration_path = bundle_path.parent / calibration_record["path"]
+    calibration = COLLECT._load_json(calibration_path)
+    calibration["verifier"] = "other-verifier"
+    _write_json(calibration_path, calibration)
+    calibration_record["sha256"] = COLLECT._file_digest(calibration_path)
+    with pytest.raises(COLLECT.EvidenceError, match="calibration evidence"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
 def test_product_pass_requires_authenticated_real_provider(tmp_path: Path) -> None:
     protocol = COLLECT._load_json(TASK_DIR / "protocol.json")
     state = COLLECT.validate_protocol(protocol)
     bundle_path, trial = _success_bundle(tmp_path)
     task_id = "dev-canonical-comparison"
-    _bind_trial_to_protocol(bundle_path, trial, state, task_id, 101, "a" * 40, "run-1")
+    source_sha = COLLECT._source_sha()
+    _bind_trial_to_protocol(
+        bundle_path, trial, state, task_id, 101, source_sha, "run-1"
+    )
     trial["runtime"]["authenticated"] = False
     trial["passed"] = True
     trial["verdicts"] = {
@@ -516,7 +595,32 @@ def test_product_pass_requires_authenticated_real_provider(tmp_path: Path) -> No
     }
 
     with pytest.raises(COLLECT.EvidenceError, match="authenticated real-provider"):
-        COLLECT.validate_trial(bundle_path, trial, state, "a" * 40)
+        COLLECT.validate_trial(bundle_path, trial, state, source_sha)
+
+
+def test_runner_source_attestation_binds_commit_tree(tmp_path: Path) -> None:
+    protocol = COLLECT._load_json(TASK_DIR / "protocol.json")
+    state = COLLECT.validate_protocol(protocol)
+    bundle_path, trial = _success_bundle(tmp_path)
+    source_sha = COLLECT._source_sha()
+    _bind_trial_to_protocol(
+        bundle_path,
+        trial,
+        state,
+        "dev-canonical-comparison",
+        101,
+        source_sha,
+        "run-1",
+    )
+    record = trial["runtime"]["source_attestation"]
+    path = bundle_path.parent / record["path"]
+    attestation = COLLECT._load_json(path)
+    attestation["git_tree"] = "0" * 40
+    _write_json(path, attestation)
+    record["sha256"] = COLLECT._file_digest(path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="source attestation"):
+        COLLECT._verify_source_attestation(bundle_path, trial["runtime"], source_sha)
 
 
 def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) -> None:
@@ -581,15 +685,10 @@ def test_collect_rejects_reused_run_identity(
     protocol = COLLECT._load_json(protocol_path)
     state = COLLECT.validate_protocol(protocol)
     trials_dir = tmp_path / "trials"
-    source_sha = "a" * 40
+    source_sha = COLLECT._source_sha()
     for index, (task_id, seed) in enumerate(sorted(state["expected"])):
         run_id = "reused-run" if index < 2 else f"run-{index}"
-        trial = {
-            "task_id": task_id,
-            "seed": seed,
-            "cohort": state["cohorts"][task_id],
-            "task_digest": COLLECT._canonical_digest(state["tasks"][task_id]),
-            "runtime": _runtime(state, task_id, source_sha, run_id),
+        trial: dict[str, Any] = {
             "passed": False,
             "verdicts": {
                 "objective": "failed",
@@ -599,9 +698,48 @@ def test_collect_rejects_reused_run_identity(
             },
             "failure_reason": "objective artifact check failed",
         }
-        _write_json(trials_dir / f"trial-{index:02d}" / "trial.json", trial)
+        bundle_path = trials_dir / f"trial-{index:02d}" / "trial.json"
+        _bind_trial_to_protocol(
+            bundle_path, trial, state, task_id, seed, source_sha, run_id
+        )
+        _write_json(bundle_path, trial)
 
-    with pytest.raises(COLLECT.EvidenceError, match="reused run evidence"):
+    with pytest.raises(
+        COLLECT.EvidenceError, match=r"reused (run|source_attestation) evidence"
+    ):
+        COLLECT.collect(protocol_path, trials_dir, tmp_path / "result.json", source_sha)
+
+
+def test_collect_rejects_mixed_runtime_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(COLLECT, "_verify_source_checkout", lambda _: None)
+    protocol_path = TASK_DIR / "protocol.json"
+    protocol = COLLECT._load_json(protocol_path)
+    state = COLLECT.validate_protocol(protocol)
+    trials_dir = tmp_path / "trials"
+    source_sha = COLLECT._source_sha()
+    for index, (task_id, seed) in enumerate(sorted(state["expected"])):
+        run_id = f"run-{index}"
+        trial: dict[str, Any] = {
+            "verdicts": {
+                "objective": "failed",
+                "semantic": "not_run",
+                "authorization": "not_run",
+                "infrastructure": "passed",
+            },
+            "failure_reason": "objective artifact check failed",
+            "passed": False,
+        }
+        bundle_path = trials_dir / f"trial-{index:02d}" / "trial.json"
+        _bind_trial_to_protocol(
+            bundle_path, trial, state, task_id, seed, source_sha, run_id
+        )
+        if index == 1:
+            trial["runtime"]["configuration"]["temperature"] = 0.5
+        _write_json(bundle_path, trial)
+
+    with pytest.raises(COLLECT.EvidenceError, match="runtime manifest differs"):
         COLLECT.collect(protocol_path, trials_dir, tmp_path / "result.json", source_sha)
 
 
@@ -638,7 +776,7 @@ def test_collect_reports_every_denominator_without_scoring_unavailable_runtime(
     protocol = COLLECT._load_json(protocol_path)
     state = COLLECT.validate_protocol(protocol)
     trials_dir = tmp_path / "trials"
-    source_sha = "a" * 40
+    source_sha = COLLECT._source_sha()
 
     expected = sorted(state["expected"])
     for index, (task_id, seed) in enumerate(expected):
