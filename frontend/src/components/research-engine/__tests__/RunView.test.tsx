@@ -864,11 +864,39 @@ describe('RunView durable run state', () => {
     ).toHaveTextContent(/latest run state could not be loaded/i);
   });
 
-  it('reconstructs a manual pause with only the ordinary resume action', async () => {
-    vi.mocked(getRun).mockResolvedValue(
-      run({ status: 'paused', pause_reason: 'user_paused' })
-    );
+  it('claims and completes a manual resume after the refresh still reports user_paused', async () => {
+    const userPaused = run({ status: 'paused', pause_reason: 'user_paused' });
+    vi.mocked(getRun)
+      .mockResolvedValueOnce(userPaused)
+      // POST /resume only mints the one-use authorization. Until the SSE GET
+      // claims it, durable state still carries the original manual pause.
+      .mockResolvedValueOnce(userPaused)
+      .mockResolvedValue(run({ status: 'completed' }));
     vi.mocked(listSteps).mockResolvedValue([persistedStep()]);
+    vi.mocked(resumeRun).mockResolvedValue(userPaused);
+    const encoder = new TextEncoder();
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `event: run_started\ndata: ${JSON.stringify({ run_id: RUN_ID })}\n\n` +
+                  `event: run_complete\ndata: ${JSON.stringify({
+                    run_id: RUN_ID,
+                    final_status: 'verified',
+                  })}\n\n`
+              )
+            );
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }
+      )
+    );
 
     render(<RunView runId={RUN_ID} />);
 
@@ -880,6 +908,18 @@ describe('RunView durable run state', () => {
     ).not.toBeInTheDocument();
     fireEvent.click(resume);
     await waitFor(() => expect(resumeRun).toHaveBeenCalledWith(RUN_ID));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        `/api/v1/research-engine/runs/${RUN_ID}/stream`,
+        expect.any(Object)
+      )
+    );
+    await waitFor(() =>
+      expect(useResearchEngineStore.getState().activeRun?.status).toBe(
+        'completed'
+      )
+    );
+    expect(useResearchEngineStore.getState().finalStatus).toBe('verified');
   });
 
   it('opens the stream after an approved-review resume stays durably paused until claimed', async () => {

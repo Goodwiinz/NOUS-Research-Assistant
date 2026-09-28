@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -32,6 +33,186 @@ _TEMPLATE_PATH = (
     / "templates"
     / "daily_research_brief.yaml"
 )
+
+_SEMANTIC_TOKEN_ALIASES = {
+    "adults": "participant",
+    "adult": "participant",
+    "participants": "participant",
+    "decreased": "decrease",
+    "decreases": "decrease",
+    "declined": "decrease",
+    "declines": "decrease",
+    "lowered": "decrease",
+    "lowers": "decrease",
+    "reduced": "decrease",
+    "reduces": "decrease",
+    "increased": "increase",
+    "increases": "increase",
+    "raised": "increase",
+    "raises": "increase",
+    "scores": "score",
+    "trials": "study",
+    "trial": "study",
+    "intervention": "treatment",
+}
+_SEMANTIC_DISCOURSE_TOKENS = {
+    "across",
+    "also",
+    "and",
+    "among",
+    "approximately",
+    "by",
+    "compared",
+    "controlled",
+    "evidence",
+    "findings",
+    "found",
+    "in",
+    "of",
+    "points",
+    "point",
+    "report",
+    "reported",
+    "reports",
+    "showed",
+    "shows",
+    "study",
+    "than",
+    "that",
+    "the",
+    "to",
+    "was",
+    "were",
+    "with",
+}
+
+
+def _semantic_tokens(text: str) -> set[str]:
+    return {
+        _SEMANTIC_TOKEN_ALIASES.get(token, token)
+        for token in re.findall(r"[a-z]+", text.lower())
+    }
+
+
+def _semantic_signature(text: str) -> dict[str, Any]:
+    lowered = text.lower()
+    tokens = _semantic_tokens(text)
+    directions: set[str] = set()
+    if "decrease" in tokens:
+        directions.add("decrease")
+    if "increase" in tokens:
+        directions.add("increase")
+    if re.search(
+        r"\b(?:no|without) (?:measured )?(?:effect|change|difference)\b", lowered
+    ):
+        directions.add("no_effect")
+    if re.search(
+        r"\b(?:did not|didn't|does not|doesn't) (?:decrease|reduce|lower)\b", lowered
+    ):
+        directions.add("not_decrease")
+    return {
+        "tokens": tokens,
+        "directions": directions,
+        "point_values": {
+            float(value)
+            for value in re.findall(r"\b(\d+(?:\.\d+)?)\s+points?\b", lowered)
+        },
+        "sample_sizes": {
+            int(value)
+            for value in re.findall(r"\b(\d+)\s+(?:adults?|participants?)\b", lowered)
+        },
+        "mentions_score": "score" in tokens,
+        "mentions_randomized": "randomized" in tokens or "randomised" in tokens,
+        "mentions_observational": "observational" in tokens,
+        "mentions_small": "small" in tokens,
+        "mentions_large": "large" in tokens,
+        "mentions_control": "control" in tokens,
+    }
+
+
+def _semantic_entailment_label(claim_text: str, evidence_texts: list[str]) -> str:
+    """Classify a claim against the fixed source text without model self-grades."""
+
+    claim = _semantic_signature(claim_text)
+    evidence = _semantic_signature(" ".join(evidence_texts))
+    if not evidence_texts or not claim["mentions_score"]:
+        return "unsupported"
+    claim_directions = cast(set[str], claim["directions"])
+    evidence_directions = cast(set[str], evidence["directions"])
+    if not claim_directions:
+        return "unsupported"
+    if {
+        "increase",
+        "no_effect",
+        "not_decrease",
+    } & claim_directions and "decrease" in evidence_directions:
+        return "contradictory"
+    if "decrease" in claim_directions and "increase" in evidence_directions:
+        return "contradictory"
+    if not claim_directions <= evidence_directions:
+        return "unsupported"
+
+    for key in ("point_values", "sample_sizes"):
+        claim_values = cast(set[float] | set[int], claim[key])
+        evidence_values = cast(set[float] | set[int], evidence[key])
+        if claim_values and not claim_values <= evidence_values:
+            return "contradictory" if evidence_values else "unsupported"
+    if claim["mentions_observational"] and evidence["mentions_randomized"]:
+        return "contradictory"
+    if claim["mentions_large"] and evidence["mentions_small"]:
+        return "contradictory"
+    for key in ("mentions_randomized", "mentions_small", "mentions_control"):
+        if claim[key] and not evidence[key]:
+            return "unsupported"
+
+    claim_tokens = cast(set[str], claim["tokens"])
+    evidence_tokens = cast(set[str], evidence["tokens"])
+    unsupported_tokens = claim_tokens - evidence_tokens - _SEMANTIC_DISCOURSE_TOKENS
+    if unsupported_tokens:
+        return "unsupported"
+    return "supported"
+
+
+def _semantic_claim_assessments(context: dict[str, Any]) -> list[str]:
+    source_text_by_id = {
+        record["source_id"]: record.get("full_text") or record.get("abstract") or ""
+        for record in context["source_records"]
+    }
+    evidence_source_by_id = {
+        item["evidence_id"]: extraction["source_id"]
+        for extraction in context["extractions"]
+        for item in extraction.get("evidence", [])
+    }
+    return [
+        _semantic_entailment_label(
+            str(claim.get("claim_text") or ""),
+            [
+                source_text_by_id.get(evidence_source_by_id.get(evidence_id), "")
+                for evidence_id in {
+                    reference.get("evidence_id")
+                    for reference in claim.get("evidence", [])
+                    if isinstance(reference, dict)
+                    and isinstance(reference.get("evidence_id"), str)
+                }
+            ],
+        )
+        for claim in context["synthesis"]["claims"]
+    ]
+
+
+def _semantic_gate_metrics(context: dict[str, Any]) -> dict[str, float | int]:
+    assessments = _semantic_claim_assessments(context)
+    return {
+        "unsupported_material_claims": sum(
+            label != "supported" for label in assessments
+        ),
+        "contradictory_material_claims": assessments.count("contradictory"),
+        "semantic_entailment_gate": (
+            1.0
+            if assessments and all(label == "supported" for label in assessments)
+            else 0.0
+        ),
+    }
 
 
 def _live_anthropic_key() -> str | None:
@@ -187,6 +368,15 @@ def _quality_metrics(
         for extraction in context["extractions"]
         for item in extraction["evidence"]
     }
+    evidence_source_by_id = {
+        item["evidence_id"]: extraction["source_id"]
+        for extraction in context["extractions"]
+        for item in extraction["evidence"]
+    }
+    source_text_by_id = {
+        record["source_id"]: record.get("full_text") or record.get("abstract") or ""
+        for record in records
+    }
     checks = {item["claim_id"]: item for item in context["verification"]["claims"]}
     claims = context["synthesis"]["claims"]
     citations = [
@@ -196,13 +386,18 @@ def _quality_metrics(
     ]
     correct_citations = sum(
         reference["evidence_id"] in evidence
-        and checks.get(claim["claim_id"], {}).get("status") == "supported"
+        and _semantic_entailment_label(
+            str(claim.get("claim_text") or ""),
+            [
+                source_text_by_id.get(
+                    evidence_source_by_id.get(reference["evidence_id"]), ""
+                )
+            ],
+        )
+        == "supported"
         for claim, reference in citations
     )
-    unsupported_claims = sum(
-        checks.get(claim["claim_id"], {}).get("status") != "supported"
-        for claim in claims
-    )
+    semantic_metrics = _semantic_gate_metrics(context)
     configured_gates = [
         step["parameters"]["review_gate"]
         for step in run["template"]["steps"]
@@ -239,10 +434,6 @@ def _quality_metrics(
         (item.get("source_id"), item.get("part_id"))
         for item in extraction_output.get("extractions", [])
         if isinstance(item, dict)
-    }
-    source_text_by_id = {
-        record["source_id"]: record.get("full_text") or record.get("abstract") or ""
-        for record in records
     }
     grounded_quotes = all(
         isinstance(item.get("quote"), str)
@@ -286,7 +477,7 @@ def _quality_metrics(
         "citation_correctness": (
             correct_citations / len(citations) if citations else 0.0
         ),
-        "unsupported_material_claims": unsupported_claims,
+        **semantic_metrics,
         "live_gate_output_readiness": 1.0 if live_gate_output_readiness else 0.0,
         "coverage_label_correctness": correct_labels / len(expected_labels),
         "export_hash_reconstruction": (
@@ -312,6 +503,8 @@ async def test_current_configured_model_meets_frozen_quality_gates() -> None:
     assert metrics["claim_count"] > 0
     assert metrics["citation_count"] > 0
     assert metrics["unsupported_material_claims"] == 0
+    assert metrics["contradictory_material_claims"] == 0
+    assert metrics["semantic_entailment_gate"] == 1.0
     assert metrics["live_gate_output_readiness"] == 1.0
     assert metrics["coverage_label_correctness"] == 1.0
     assert metrics["export_hash_reconstruction"] == 1.0
@@ -386,6 +579,8 @@ async def test_live_eval_prerequisite_matrix_stops_before_model_call(
             "claim_count": 1,
             "citation_count": 1,
             "unsupported_material_claims": 0,
+            "contradictory_material_claims": 0,
+            "semantic_entailment_gate": 1.0,
             "live_gate_output_readiness": 1.0,
             "coverage_label_correctness": 1.0,
             "export_hash_reconstruction": 1.0,
@@ -423,3 +618,99 @@ async def test_invalid_supplied_threshold_fails_before_model_call(
     with pytest.raises(pytest.fail.Exception):
         await test_current_configured_model_meets_frozen_quality_gates()
     assert calls == 0
+
+
+@pytest.mark.parametrize(
+    ("claim_text", "evidence_text", "expected"),
+    [
+        (
+            "The treatment reduced the measured score by 4.0 points among "
+            "42 adults compared with control.",
+            "In a randomized study of 42 adults, the treatment reduced the "
+            "measured score by 4.0 points compared with control.",
+            "supported",
+        ),
+        (
+            "The treatment increased the measured score by 4.0 points among "
+            "42 adults compared with control.",
+            "In a randomized study of 42 adults, the treatment reduced the "
+            "measured score by 4.0 points compared with control.",
+            "contradictory",
+        ),
+        (
+            "The treatment reduced anxiety by 4.0 points among 42 adults.",
+            "In a randomized study of 42 adults, the treatment reduced the "
+            "measured score by 4.0 points compared with control.",
+            "unsupported",
+        ),
+    ],
+    ids=["supported", "contradictory", "unsupported"],
+)
+async def test_fixed_evidence_semantic_entailment_labels(
+    claim_text: str,
+    evidence_text: str,
+    expected: str,
+) -> None:
+    """The deterministic scorer distinguishes the fixed corpus semantics."""
+
+    assert _semantic_entailment_label(claim_text, [evidence_text]) == expected
+
+
+async def test_semantic_gate_rejects_false_claim_with_real_quote_and_self_grade() -> (
+    None
+):
+    """A real quote and model-provided supported label cannot approve a false claim."""
+
+    source_text = (
+        "In a randomized study of 42 adults, the treatment reduced the measured "
+        "score by 4.0 points compared with control."
+    )
+    context = {
+        "source_records": [
+            {
+                "source_id": "source-1",
+                "title": "Controlled randomized treatment study",
+                "abstract": source_text,
+            }
+        ],
+        "extractions": [
+            {
+                "source_id": "source-1",
+                "evidence": [
+                    {
+                        "evidence_id": "e0001",
+                        "quote": source_text,
+                    }
+                ],
+            }
+        ],
+        "synthesis": {
+            "claims": [
+                {
+                    "claim_id": "c0001",
+                    "claim_text": (
+                        "The treatment increased the measured score by 4.0 points "
+                        "among 42 adults compared with control."
+                    ),
+                    "evidence": [{"evidence_id": "e0001", "relation": "supports"}],
+                }
+            ]
+        },
+        # This is the same pipeline/model's self-grade and is deliberately ignored.
+        "verification": {
+            "claims": [
+                {
+                    "claim_id": "c0001",
+                    "status": "supported",
+                    "evidence_ids": ["e0001"],
+                }
+            ]
+        },
+    }
+
+    assert _semantic_claim_assessments(context) == ["contradictory"]
+    assert _semantic_gate_metrics(context) == {
+        "unsupported_material_claims": 1,
+        "contradictory_material_claims": 1,
+        "semantic_entailment_gate": 0.0,
+    }

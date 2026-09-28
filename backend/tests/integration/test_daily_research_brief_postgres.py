@@ -82,6 +82,10 @@ class _PersistedLifecycle:
     review_hashes: tuple[str, ...]
     manifest: dict[str, Any]
     status: str
+    stream_race_statuses: tuple[tuple[int, int], ...]
+    stream_race_stage_counts: tuple[int, ...]
+    stream_race_review_counts: tuple[int, ...]
+    stream_race_provider_call_deltas: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -633,8 +637,43 @@ async def _daily_brief_lifecycle(
             "_build_connectors",
             lambda **_kwargs: {"openalex": connector},
         )
+        race_claim_enabled = False
+        race_claim_arrivals = 0
+        race_both_at_claim = asyncio.Event()
+        race_claim_release = asyncio.Event()
+        original_claim_stream = ResearchRunLifecycleService.claim_stream
+
+        async def synchronized_claim_stream(
+            lifecycle: ResearchRunLifecycleService, *, run: Any
+        ) -> Any:
+            nonlocal race_claim_arrivals
+            if race_claim_enabled:
+                race_claim_arrivals += 1
+                if race_claim_arrivals == 2:
+                    race_both_at_claim.set()
+                await race_claim_release.wait()
+            return await original_claim_stream(lifecycle, run=run)
+
+        monkeypatch.setattr(
+            ResearchRunLifecycleService,
+            "claim_stream",
+            synchronized_claim_stream,
+        )
+
+        race_admission_enabled = False
+        race_admitted_count = 0
+        race_first_admitted = asyncio.Event()
+        race_second_admitted = asyncio.Event()
+        race_admission_release = asyncio.Event()
 
         async def admitted(**_kwargs: Any) -> bool:
+            nonlocal race_admitted_count
+            if race_admission_enabled:
+                race_admitted_count += 1
+                race_first_admitted.set()
+                if race_admitted_count > 1:
+                    race_second_admitted.set()
+                await race_admission_release.wait()
             return True
 
         monkeypatch.setattr(runs_module, "admit_expensive_work", admitted)
@@ -643,13 +682,22 @@ async def _daily_brief_lifecycle(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             gate_hashes: list[str] = []
+            stream_race_statuses: list[tuple[int, int]] = []
+            stream_race_stage_counts: list[int] = []
+            stream_race_review_counts: list[int] = []
+            stream_race_provider_call_deltas: list[int] = []
             for expected_kind in ("screening", "extraction", "final"):
-                streamed = await client.get(f"/research-engine/runs/{run_id}/stream")
-                assert streamed.status_code == 200, streamed.text
-                assert "event: run_paused" in streamed.text
+                if expected_kind == "screening":
+                    streamed = await client.get(
+                        f"/research-engine/runs/{run_id}/stream"
+                    )
+                    assert streamed.status_code == 200, streamed.text
+                    assert "event: run_paused" in streamed.text
 
                 # A new transport proves the gate is reconstructed from durable
-                # PostgreSQL state rather than the preceding SSE connection.
+                # PostgreSQL state rather than the preceding SSE connection. For
+                # later gates, that preceding connection is the winning member of
+                # the two-consumer stream race below.
                 async with AsyncClient(
                     transport=ASGITransport(app=app), base_url="http://reload"
                 ) as reloaded_client:
@@ -744,6 +792,117 @@ async def _daily_brief_lifecycle(
                         200,
                     ]
 
+                    async def stream_once(label: str) -> Any:
+                        async with AsyncClient(
+                            transport=ASGITransport(
+                                app=app, raise_app_exceptions=False
+                            ),
+                            base_url=f"http://stream-claim-{label}",
+                        ) as stream_client:
+                            return await stream_client.get(
+                                f"/research-engine/runs/{run_id}/stream"
+                            )
+
+                    # Stop both requests immediately before claim_stream so both
+                    # have observed the same paused run and one-use authorization.
+                    # Hold the winner at admission while the locked loser resolves.
+                    # Removing claim_stream's _lock_run guard makes both requests
+                    # reach admission and is proven by the committed mutation RED.
+                    race_claim_enabled = True
+                    race_claim_arrivals = 0
+                    race_both_at_claim = asyncio.Event()
+                    race_claim_release = asyncio.Event()
+                    race_admission_enabled = True
+                    race_admitted_count = 0
+                    race_first_admitted = asyncio.Event()
+                    race_second_admitted = asyncio.Event()
+                    race_admission_release = asyncio.Event()
+                    provider_calls_before = len(provider.requests)
+                    stream_tasks = (
+                        asyncio.create_task(stream_once("first")),
+                        asyncio.create_task(stream_once("second")),
+                    )
+                    await asyncio.wait_for(race_both_at_claim.wait(), timeout=5)
+                    race_claim_release.set()
+                    await asyncio.wait_for(race_first_admitted.wait(), timeout=5)
+                    second_admission_waiter = asyncio.create_task(
+                        race_second_admitted.wait()
+                    )
+                    try:
+                        finished, _ = await asyncio.wait(
+                            {*stream_tasks, second_admission_waiter},
+                            timeout=5,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        assert finished, "second stream neither lost nor double-claimed"
+                    finally:
+                        race_admission_release.set()
+                        race_claim_enabled = False
+                        race_admission_enabled = False
+                    raced = await asyncio.gather(*stream_tasks)
+                    if not second_admission_waiter.done():
+                        second_admission_waiter.cancel()
+                        await asyncio.gather(
+                            second_admission_waiter, return_exceptions=True
+                        )
+
+                    status_values = sorted(response.status_code for response in raced)
+                    assert len(status_values) == 2
+                    statuses = (status_values[0], status_values[1])
+                    assert statuses == (200, 409)
+                    successful = next(
+                        response for response in raced if response.status_code == 200
+                    )
+                    rejected = next(
+                        response for response in raced if response.status_code == 409
+                    )
+                    assert "event: run_paused" in successful.text
+                    assert rejected.json()["detail"] == (
+                        "Run was just claimed by another stream"
+                    )
+
+                    expected_next_kind = (
+                        "extraction" if expected_kind == "screening" else "final"
+                    )
+                    expected_stage_count = 3 if expected_kind == "screening" else 6
+                    expected_review_count = 1 if expected_kind == "screening" else 2
+                    expected_provider_calls = 1 if expected_kind == "screening" else 2
+                    async with factory() as race_db:
+                        stage_count = int(
+                            await race_db.scalar(
+                                select(func.count())
+                                .select_from(ResearchStep)
+                                .where(ResearchStep.run_id == run_id)
+                            )
+                            or 0
+                        )
+                        review_count = int(
+                            await race_db.scalar(
+                                select(func.count())
+                                .select_from(ResearchStageReview)
+                                .where(ResearchStageReview.run_id == run_id)
+                            )
+                            or 0
+                        )
+                        durable_run = await race_db.get(ResearchRun, run_id)
+                    assert durable_run is not None
+                    durable_manifest = cast(
+                        dict[str, Any], durable_run.reproducibility_manifest
+                    )
+                    assert durable_run.status == "paused"
+                    assert durable_manifest["pending_review"]["review_kind"] == (
+                        expected_next_kind
+                    )
+                    assert "resume_authorization" not in durable_manifest
+                    assert stage_count == expected_stage_count
+                    assert review_count == expected_review_count
+                    provider_call_delta = len(provider.requests) - provider_calls_before
+                    assert provider_call_delta == expected_provider_calls
+                    stream_race_statuses.append(statuses)
+                    stream_race_stage_counts.append(stage_count)
+                    stream_race_review_counts.append(review_count)
+                    stream_race_provider_call_deltas.append(provider_call_delta)
+
         async with factory() as db:
             persisted_steps = list(
                 (
@@ -798,6 +957,12 @@ async def _daily_brief_lifecycle(
                 review_hashes=tuple(review.output_hash for review in reviews),
                 manifest=cast(dict[str, Any], run.reproducibility_manifest),
                 status=run.status,
+                stream_race_statuses=tuple(stream_race_statuses),
+                stream_race_stage_counts=tuple(stream_race_stage_counts),
+                stream_race_review_counts=tuple(stream_race_review_counts),
+                stream_race_provider_call_deltas=tuple(
+                    stream_race_provider_call_deltas
+                ),
             )
     finally:
         monkeypatch.undo()
@@ -839,6 +1004,10 @@ async def test_controlled_lifecycle_persists_each_stage_exactly_once() -> None:
         )
         assert persisted.review_hashes == persisted.gate_hashes
         assert len(set(persisted.review_ids)) == 3
+        assert persisted.stream_race_statuses == ((200, 409), (200, 409))
+        assert persisted.stream_race_stage_counts == (3, 6)
+        assert persisted.stream_race_review_counts == (1, 2)
+        assert persisted.stream_race_provider_call_deltas == (1, 2)
         assert [
             item["review_id"] for item in persisted.manifest["review_history"]
         ] == list(persisted.review_ids)

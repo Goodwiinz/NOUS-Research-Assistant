@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import statistics
@@ -50,7 +49,7 @@ _TEMPLATE_PATH = (
 )
 _RUNS = 31
 _FANOUT_RUNS = 21
-_MAX_STAGE_RUNS = 40
+_MAX_STAGE_RUNS = 11
 _SOAK_RUNS = 10
 
 # Captured before freezing on 2026-09-28. Latency thresholds are the observed
@@ -303,11 +302,11 @@ async def test_controlled_six_stage_latency_baseline() -> None:
 async def test_max_stage_sample_policy_uses_nearest_rank_p95() -> None:
     ordered_samples = [float(value) for value in range(1, _MAX_STAGE_RUNS + 1)]
 
-    # With 40 samples, nearest-rank p95 is rank 38. The two slowest samples do
-    # not silently turn this gate into a maximum; a third slow sample does.
-    assert _percentile(ordered_samples, 0.95) == 38.0
-    assert _percentile(([0.0] * 38) + [1.0, 2.0], 0.95) == 0.0
-    assert _percentile(([0.0] * 37) + [1.0, 2.0, 3.0], 0.95) == 1.0
+    # The frozen baseline used 11 samples, so nearest-rank p95 is deliberately
+    # the maximum. Candidate runs must use the identical policy and cannot
+    # discard slow tail observations by increasing the sample count.
+    assert _percentile(ordered_samples, 0.95) == 11.0
+    assert _percentile(([0.0] * 10) + [1.0], 0.95) == 1.0
 
 
 async def test_provider_fanout_and_max_batch_latency_are_bounded() -> None:
@@ -461,26 +460,3 @@ async def test_repeated_postgres_reconnect_lifecycle_soak() -> None:
     assert metrics["completed"] == _SOAK_RUNS
     assert metrics["unique_review_rows"] == _SOAK_RUNS * 3
     assert metrics["lifecycle_p95_ms"] <= _FROZEN_THRESHOLDS["soak_lifecycle_p95_ms"]
-
-
-async def _run_script() -> None:
-    await test_max_stage_sample_policy_uses_nearest_rank_p95()
-    await test_controlled_six_stage_latency_baseline()
-    await test_provider_fanout_and_max_batch_latency_are_bounded()
-    await test_max_bound_and_review_payload_are_bounded()
-    await test_cold_persisted_hydration_latency_is_bounded()
-    await test_repeated_postgres_reconnect_lifecycle_soak()
-    print(
-        "DAILY_BRIEF_PERF_FROZEN="
-        + json.dumps(
-            {
-                "baseline": _MEASURED_BASELINE,
-                "thresholds": _FROZEN_THRESHOLDS,
-            },
-            sort_keys=True,
-        )
-    )
-
-
-if __name__ == "__main__":
-    asyncio.run(_run_script())

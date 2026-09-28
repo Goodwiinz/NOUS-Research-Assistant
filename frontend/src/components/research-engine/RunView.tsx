@@ -162,7 +162,11 @@ export function RunView({ runId }: RunViewProps): ReactElement {
           return false;
         }
         hydrateRun(run, steps);
-        if (run.status !== 'paused' || run.pause_reason !== null) {
+        const waitingForAuthorizedStreamClaim =
+          resumeAuthorizedRef.current &&
+          run.status === 'paused' &&
+          (run.pause_reason === null || run.pause_reason === 'user_paused');
+        if (!waitingForAuthorizedStreamClaim) {
           markResumeAuthorized(false);
         }
 
