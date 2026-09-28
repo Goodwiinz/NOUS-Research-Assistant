@@ -500,11 +500,14 @@ def validate_extraction_record(
     schema: dict[str, Any],
     source_parts: Mapping[tuple[str, str], str],
     trusted_pages: Mapping[tuple[str, str], set[str]] | None = None,
+    validator: Draft202012Validator | None = None,
 ) -> dict[str, Any]:
     """Validate schema conformity and exact, same-source quote provenance."""
     parsed = ExtractionRecord.model_validate(record)
-    validator = validate_user_schema(schema)
-    errors = list(validator.iter_errors(parsed.data))
+    compiled_validator = (
+        validator if validator is not None else validate_user_schema(schema)
+    )
+    errors = list(compiled_validator.iter_errors(parsed.data))
     if errors:
         raise ValueError("extracted data does not match the required schema")
     part_key = (parsed.source_id, parsed.part_id)
@@ -706,11 +709,9 @@ def merge_stage_output(
     return merged
 
 
-def immediate_stage_envelope(
+def _latest_stage_envelope(
     context: Mapping[str, Any], expected_stage_type: str
-) -> dict[str, Any]:
-    """Return a copy of the latest persisted envelope for one upstream stage."""
-
+) -> Mapping[str, Any]:
     stage_results = context.get("stage_results")
     if not isinstance(stage_results, Mapping):
         raise ValueError("research stage is missing its immediate upstream envelope")
@@ -726,7 +727,23 @@ def immediate_stage_envelope(
             ordered.append((numeric_index, value))
     if not ordered:
         raise ValueError("research stage is missing its immediate upstream envelope")
-    return copy.deepcopy(dict(max(ordered, key=lambda item: item[0])[1]))
+    return max(ordered, key=lambda item: item[0])[1]
+
+
+def immediate_stage_envelope(
+    context: Mapping[str, Any], expected_stage_type: str
+) -> dict[str, Any]:
+    """Return a deep copy of the latest persisted upstream envelope."""
+
+    return copy.deepcopy(dict(_latest_stage_envelope(context, expected_stage_type)))
+
+
+def _immediate_stage_envelope_view(
+    context: Mapping[str, Any], expected_stage_type: str
+) -> dict[str, Any]:
+    """Return a shallow snapshot for the read-only Daily Brief prompt projection."""
+
+    return dict(_latest_stage_envelope(context, expected_stage_type))
 
 
 def rehydrate_stage_outputs(steps: list[Any]) -> dict[str, Any]:

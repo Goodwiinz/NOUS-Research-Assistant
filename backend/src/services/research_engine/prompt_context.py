@@ -147,11 +147,17 @@ class PromptContextBuilder:
             selected_capabilities.append(projected)
         selected_capabilities.sort(key=lambda item: str(item.get("id", "")))
 
-        upstream = {
-            key: copy.deepcopy(upstream_envelope[key])
-            for key in cls._UPSTREAM_KEYS[expected_upstream]
-            if key in upstream_envelope
-        }
+        upstream: dict[str, Any] = {}
+        for key in cls._UPSTREAM_KEYS[expected_upstream]:
+            if key not in upstream_envelope:
+                continue
+            value = upstream_envelope[key]
+            if key == "processing_coverage":
+                upstream[key] = cls._processing_coverage_summary(value)
+            elif key == "diagnostics":
+                upstream[key] = cls._reason_counts(value)
+            else:
+                upstream[key] = copy.deepcopy(value)
         # Evidence-bearing records are sent once through the stage's bounded
         # batch records.  The fixed context retains only identifiers and
         # immediate-envelope control metadata.
@@ -191,6 +197,48 @@ class PromptContextBuilder:
             for child in value:
                 found.update(cls._evidence_ids(child))
         return found
+
+    @classmethod
+    def _processing_coverage_summary(cls, value: Any) -> dict[str, Any]:
+        """Project batch-sized coverage metadata to bounded deterministic counts."""
+
+        if not isinstance(value, Mapping):
+            return {}
+        summary: dict[str, Any] = {}
+        for stage_key in sorted(value, key=str):
+            coverage = value[stage_key]
+            if not isinstance(coverage, Mapping):
+                continue
+            projected: dict[str, Any] = {}
+            if isinstance(coverage.get("complete"), bool):
+                projected["complete"] = coverage["complete"]
+            for source_key in (
+                "seen_source_ids",
+                "processed_source_ids",
+                "excluded_source_ids",
+                "source_parts",
+            ):
+                items = coverage.get(source_key)
+                if isinstance(items, list):
+                    projected[source_key.removesuffix("_ids") + "_count"] = len(items)
+            projected["omitted_reason_counts"] = cls._reason_counts(
+                coverage.get("omitted")
+            )
+            summary[str(stage_key)] = projected
+        return summary
+
+    @staticmethod
+    def _reason_counts(value: Any) -> dict[str, int]:
+        if not isinstance(value, list):
+            return {}
+        counts: dict[str, int] = {}
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            reason = item.get("reason")
+            if isinstance(reason, str) and reason:
+                counts[reason] = counts.get(reason, 0) + 1
+        return {reason: counts[reason] for reason in sorted(counts)}
 
 
 __all__ = ["PromptContext", "PromptContextBuilder"]

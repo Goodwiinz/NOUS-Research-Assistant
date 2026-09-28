@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -107,6 +108,37 @@ function pendingScreeningReview(): PendingReviewResponse {
       ],
     },
   };
+}
+
+function acceptedScreeningReview(): PendingReviewResponse {
+  const review = pendingScreeningReview();
+  review.descriptor = {
+    ...review.descriptor!,
+    status: 'approved',
+  };
+  review.accepted_review = {
+    id: '77777777-7777-4777-8777-777777777777',
+    run_id: RUN_ID,
+    step_index: 1,
+    stage_type: 'screen',
+    review_kind: 'screening',
+    reviewer_id: '88888888-8888-4888-8888-888888888888',
+    output_hash: 'a'.repeat(64),
+    decision: 'approve',
+    decision_payload: {
+      items: [
+        {
+          source_id: 'source-a',
+          part_id: 'p0001',
+          decision: 'include',
+        },
+      ],
+    },
+    note: null,
+    created_at: '2026-09-27T11:00:00Z',
+    replay: false,
+  };
+  return review;
 }
 
 function projectedReview(
@@ -689,6 +721,86 @@ describe('RunView durable run state', () => {
     expect(alert).not.toHaveTextContent(/has been refreshed/i);
   });
 
+  it('keeps the stale-review notice visible while replacing the durable review', async () => {
+    const changedReview = pendingScreeningReview();
+    changedReview.descriptor = {
+      ...changedReview.descriptor!,
+      output_hash: 'b'.repeat(64),
+    };
+    changedReview.stage_output = {
+      screening: [
+        {
+          source_id: 'source-a',
+          part_id: 'p0001',
+          included: true,
+          reason: 'Server-side revised reason',
+        },
+      ],
+    };
+    vi.mocked(getRun)
+      .mockResolvedValueOnce(
+        run({
+          status: 'paused',
+          pause_reason: 'review_required',
+          review_kind: 'screening',
+          step_index: 1,
+          output_hash: 'a'.repeat(64),
+        })
+      )
+      .mockResolvedValueOnce(
+        run({
+          status: 'paused',
+          pause_reason: 'review_required',
+          review_kind: 'screening',
+          step_index: 1,
+          output_hash: 'b'.repeat(64),
+        })
+      );
+    vi.mocked(listSteps).mockResolvedValue([
+      persistedStep({
+        output: {
+          source_records: [
+            {
+              source_id: 'source-a',
+              title: 'Persisted source title',
+              evidence_level: 'abstract',
+            },
+          ],
+        },
+      }),
+    ]);
+    vi.mocked(getPendingReview)
+      .mockResolvedValueOnce(pendingScreeningReview())
+      .mockResolvedValueOnce(changedReview);
+    vi.mocked(submitReview).mockRejectedValue(
+      new APIErrorClass({
+        message: 'stale output',
+        status_code: 409,
+        type: 'http_error',
+      })
+    );
+
+    render(<RunView runId={RUN_ID} />);
+
+    const group = await screen.findByRole('group', {
+      name: /persisted source title/i,
+    });
+    fireEvent.click(within(group).getByRole('radio', { name: /include/i }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /approve screening review/i })
+    );
+
+    expect(
+      await screen.findByRole('alert', { name: /review changed/i })
+    ).toHaveTextContent(/current review has been refreshed/i);
+    expect(screen.getByText(/server-side revised reason/i)).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole('group', { name: /persisted source title/i })
+      ).getByRole('radio', { name: /unresolved/i })
+    ).toBeChecked();
+  });
+
   it('reports an accepted review whose durable reload failed', async () => {
     vi.mocked(getRun)
       .mockResolvedValueOnce(
@@ -768,6 +880,107 @@ describe('RunView durable run state', () => {
     ).not.toBeInTheDocument();
     fireEvent.click(resume);
     await waitFor(() => expect(resumeRun).toHaveBeenCalledWith(RUN_ID));
+  });
+
+  it('opens the stream after an approved-review resume stays durably paused until claimed', async () => {
+    const approvedPause = run({
+      status: 'paused',
+      pause_reason: 'review_required',
+      review_kind: 'screening',
+      step_index: 1,
+      output_hash: 'a'.repeat(64),
+    });
+    const authorizedPause = run({
+      status: 'paused',
+      pause_reason: null,
+      review_kind: null,
+      step_index: null,
+      output_hash: null,
+    });
+    vi.mocked(getRun)
+      .mockResolvedValueOnce(approvedPause)
+      .mockResolvedValueOnce(authorizedPause)
+      .mockResolvedValue(
+        run({
+          status: 'paused',
+          pause_reason: 'review_required',
+          review_kind: 'extraction',
+          step_index: 2,
+          output_hash: 'b'.repeat(64),
+        })
+      );
+    vi.mocked(listSteps).mockResolvedValue([persistedStep()]);
+    vi.mocked(getPendingReview)
+      .mockResolvedValueOnce(acceptedScreeningReview())
+      .mockResolvedValueOnce(projectedReview('extraction', 'b'.repeat(64)));
+    vi.mocked(resumeRun).mockResolvedValue(authorizedPause);
+    const encoder = new TextEncoder();
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    let streamSignal!: AbortSignal;
+    vi.mocked(fetch).mockImplementation(async (_input, init) => {
+      streamSignal = init?.signal as AbortSignal;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            streamController = controller;
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }
+      );
+    });
+
+    render(<RunView runId={RUN_ID} />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /resume approved run/i })
+    );
+    await waitFor(() => expect(resumeRun).toHaveBeenCalledWith(RUN_ID));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        `/api/v1/research-engine/runs/${RUN_ID}/stream`,
+        expect.any(Object)
+      )
+    );
+
+    await act(async () => {
+      streamController.enqueue(
+        encoder.encode(
+          `event: run_started\ndata: ${JSON.stringify({ run_id: RUN_ID })}\n\n`
+        )
+      );
+    });
+    await waitFor(() =>
+      expect(useResearchEngineStore.getState().activeRun?.status).toBe(
+        'running'
+      )
+    );
+
+    // Clearing the one-use resume authorization on run_started must not tear
+    // down the stream that claimed it; durable running state now owns it.
+    expect(streamSignal.aborted).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      streamController.enqueue(
+        encoder.encode(
+          `event: run_paused\ndata: ${JSON.stringify({
+            run_id: RUN_ID,
+            pause_reason: 'review_required',
+            review_kind: 'extraction',
+            step_index: 2,
+            output_hash: 'b'.repeat(64),
+          })}\n\n`
+        )
+      );
+      streamController.close();
+    });
+    await waitFor(() =>
+      expect(vi.mocked(getRun).mock.calls.length).toBeGreaterThanOrEqual(3)
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('keeps ordinary resume separate from exact-hash unverified continuation', async () => {

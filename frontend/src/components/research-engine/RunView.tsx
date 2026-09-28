@@ -138,118 +138,137 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     message: string;
   } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [resumeAuthorized, setResumeAuthorized] = useState(false);
+  const resumeAuthorizedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const requestRef = useRef(0);
+  const markResumeAuthorized = useCallback((authorized: boolean): void => {
+    resumeAuthorizedRef.current = authorized;
+    setResumeAuthorized(authorized);
+  }, []);
 
-  const refreshRun = useCallback(async (): Promise<boolean> => {
-    const requestId = ++requestRef.current;
-    try {
-      const [run, steps] = await Promise.all([getRun(runId), listSteps(runId)]);
-      if (
-        requestRef.current !== requestId ||
-        useResearchEngineStore.getState().activeRunId !== runId
-      ) {
-        return false;
-      }
-      hydrateRun(run, steps);
-
-      if (run.status === 'paused' && run.pause_reason === 'review_required') {
-        // Never leave a prior review visible while refreshing its server-owned
-        // descriptor and output.
-        setPendingReview(null);
-        try {
-          const review = await getPendingReview(runId);
-          if (
-            requestRef.current === requestId &&
-            useResearchEngineStore.getState().activeRunId === runId
-          ) {
-            setPendingReview(review);
-          }
-        } catch {
-          if (
-            requestRef.current === requestId &&
-            useResearchEngineStore.getState().activeRunId === runId
-          ) {
-            setActionError({
-              runId,
-              message: 'The pending review could not be loaded. Try again.',
-            });
-          }
+  const refreshRun = useCallback(
+    async (preservePendingReview = false): Promise<boolean> => {
+      const requestId = ++requestRef.current;
+      try {
+        const [run, steps] = await Promise.all([
+          getRun(runId),
+          listSteps(runId),
+        ]);
+        if (
+          requestRef.current !== requestId ||
+          useResearchEngineStore.getState().activeRunId !== runId
+        ) {
           return false;
         }
-      } else {
-        setPendingReview(null);
-      }
+        hydrateRun(run, steps);
+        if (run.status !== 'paused' || run.pause_reason !== null) {
+          markResumeAuthorized(false);
+        }
 
-      if (run.status === 'completed') {
-        void getRunManifest(runId)
-          .then((manifest) => {
-            const value = asRecord(manifest)?.final_status;
+        if (run.status === 'paused' && run.pause_reason === 'review_required') {
+          // Never leave a prior review visible while refreshing its server-owned
+          // descriptor and output.
+          if (!preservePendingReview) setPendingReview(null);
+          try {
+            const review = await getPendingReview(runId);
             if (
-              value === 'verified' ||
-              value === 'unverified' ||
-              value === 'no_evidence'
+              requestRef.current === requestId &&
+              useResearchEngineStore.getState().activeRunId === runId
             ) {
-              mergeRunEvent({
-                event: 'run_complete',
-                run_id: runId,
-                final_status: value,
+              setPendingReview(review);
+            }
+          } catch {
+            if (
+              requestRef.current === requestId &&
+              useResearchEngineStore.getState().activeRunId === runId
+            ) {
+              setActionError({
+                runId,
+                message: 'The pending review could not be loaded. Try again.',
               });
             }
-          })
-          .catch(() => {
-            // Older runs may not carry the new manifest fields. Persisted step
-            // output remains available and is used as the presentation fallback.
-          });
-      }
-      return true;
-    } catch {
-      if (
-        requestRef.current !== requestId ||
-        useResearchEngineStore.getState().activeRunId !== runId
-      ) {
+            return false;
+          }
+        } else {
+          setPendingReview(null);
+        }
+
+        if (run.status === 'completed') {
+          void getRunManifest(runId)
+            .then((manifest) => {
+              const value = asRecord(manifest)?.final_status;
+              if (
+                value === 'verified' ||
+                value === 'unverified' ||
+                value === 'no_evidence'
+              ) {
+                mergeRunEvent({
+                  event: 'run_complete',
+                  run_id: runId,
+                  final_status: value,
+                });
+              }
+            })
+            .catch(() => {
+              // Older runs may not carry the new manifest fields. Persisted step
+              // output remains available and is used as the presentation fallback.
+            });
+        }
+        return true;
+      } catch {
+        if (
+          requestRef.current !== requestId ||
+          useResearchEngineStore.getState().activeRunId !== runId
+        ) {
+          return false;
+        }
+        setError('The run could not be loaded. Try again.');
+        setLoading(false);
         return false;
       }
-      setError('The run could not be loaded. Try again.');
-      setLoading(false);
-      return false;
-    }
-  }, [
-    runId,
-    hydrateRun,
-    mergeRunEvent,
-    setError,
-    setLoading,
-    setPendingReview,
-  ]);
+    },
+    [
+      runId,
+      hydrateRun,
+      mergeRunEvent,
+      setError,
+      setLoading,
+      setPendingReview,
+      markResumeAuthorized,
+    ]
+  );
 
   useEffect(() => {
     let cancelled = false;
     requestRef.current += 1;
     abortRef.current?.abort();
-    resetRun(runId);
     queueMicrotask(() => {
-      if (!cancelled) void refreshRun();
+      if (cancelled) return;
+      markResumeAuthorized(false);
+      resetRun(runId);
+      void refreshRun();
     });
     return () => {
       cancelled = true;
       requestRef.current += 1;
       abortRef.current?.abort();
     };
-  }, [refreshRun, resetRun, runId]);
+  }, [markResumeAuthorized, refreshRun, resetRun, runId]);
+
+  const runStatus = activeRun?.status;
+  const shouldStream =
+    activeRunId === runId &&
+    activeRun?.id === runId &&
+    !isLoading &&
+    (runStatus === 'running' || runStatus === 'pending' || resumeAuthorized);
 
   // Persisted run and step state is complete before newer SSE notifications
-  // are attached. The store makes replayed notifications idempotent.
+  // are attached. The store makes replayed notifications idempotent. A resume
+  // POST only mints a one-use claim: the durable row stays paused until this
+  // stream consumes it.
   useEffect(() => {
-    const runStatus = activeRun?.status;
-    if (
-      activeRunId !== runId ||
-      activeRun?.id !== runId ||
-      isLoading ||
-      (runStatus !== 'running' && runStatus !== 'pending')
-    ) {
-      return;
-    }
+    if (!shouldStream) return;
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -306,6 +325,15 @@ export function RunView({ runId }: RunViewProps): ReactElement {
                       });
 
                       if (
+                        currentEventType === 'run_started' ||
+                        currentEventType === 'run_paused' ||
+                        currentEventType === 'run_complete' ||
+                        currentEventType === 'run_failed'
+                      ) {
+                        markResumeAuthorized(false);
+                      }
+
+                      if (
                         currentEventType === 'step_complete' ||
                         currentEventType === 'step_error' ||
                         currentEventType === 'run_complete' ||
@@ -341,7 +369,9 @@ export function RunView({ runId }: RunViewProps): ReactElement {
         if (
           controller.signal.aborted ||
           latest.activeRunId !== runId ||
-          (latestStatus !== 'running' && latestStatus !== 'pending')
+          (latestStatus !== 'running' &&
+            latestStatus !== 'pending' &&
+            !resumeAuthorizedRef.current)
         ) {
           return;
         }
@@ -366,21 +396,17 @@ export function RunView({ runId }: RunViewProps): ReactElement {
       controller.abort();
       abortRef.current = null;
     };
-  }, [
-    runId,
-    activeRun?.id,
-    activeRun?.status,
-    activeRunId,
-    isLoading,
-    mergeRunEvent,
-    refreshRun,
-  ]);
+  }, [runId, markResumeAuthorized, mergeRunEvent, refreshRun, shouldStream]);
 
-  const refreshReviewState = useCallback(async (): Promise<void> => {
-    if (!(await refreshRun())) {
-      throw new Error('The durable run state could not be refreshed.');
-    }
-  }, [refreshRun]);
+  const refreshReviewState = useCallback(
+    async (options?: { resumeAuthorized?: boolean }): Promise<void> => {
+      if (options?.resumeAuthorized) markResumeAuthorized(true);
+      if (!(await refreshRun(true))) {
+        throw new Error('The durable run state could not be refreshed.');
+      }
+    },
+    [markResumeAuthorized, refreshRun]
+  );
 
   const steps: StepData[] = runSteps.map((step) => ({
     stepIndex: step.step_index,
@@ -429,6 +455,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     setActionLoading(true);
     try {
       await resumeRun(runId);
+      markResumeAuthorized(true);
       if (!(await refreshRun())) throw new Error('Refresh failed');
     } catch {
       setActionError({
@@ -449,6 +476,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
         continue_unverified: true,
         output_hash: activeRun.output_hash,
       });
+      markResumeAuthorized(true);
       if (!(await refreshRun())) throw new Error('Refresh failed');
     } catch {
       setActionError({
@@ -657,7 +685,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
         activeRun.pause_reason === 'review_required' &&
         pendingReview?.pending && (
           <ReviewPanel
-            key={`${runId}:${pendingReview.descriptor?.step_index}:${pendingReview.descriptor?.output_hash}`}
+            key={`${runId}:${pendingReview.descriptor?.step_index}`}
             runId={runId}
             review={pendingReview}
             sourceRecords={sourceRecords}

@@ -114,6 +114,14 @@ export const getRunExportUrl = (
   format: ResearchExportFormat
 ): string => `${BASE}/runs/${runId}/export?${new URLSearchParams({ format })}`;
 
+export const downloadRunExport = (
+  runId: string,
+  format: ResearchExportFormat
+): Promise<void> =>
+  api.download(
+    `/research-engine/runs/${runId}/export?${new URLSearchParams({ format })}`
+  );
+
 export const getRunManifest = (runId: string): Promise<unknown> =>
   api.get<unknown>(`${BASE}/runs/${runId}/manifest`);
 

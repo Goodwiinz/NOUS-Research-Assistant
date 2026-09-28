@@ -1,7 +1,10 @@
 """Discovery must retain evidence, identify duplicates, and report coverage."""
 
+import copy
 import json
-from typing import Any
+from dataclasses import asdict
+from datetime import datetime, timezone
+from typing import Any, Callable
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -11,6 +14,134 @@ import pytest
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.step_executor import StepExecutor
+
+
+class _FrozenDateTime:
+    @classmethod
+    def now(cls, tz=None):
+        return datetime(2026, 9, 28, 6, 0, tzinfo=tz)
+
+
+def _reference_prepare_sources(
+    documents: list[SourceDocument],
+) -> list[SourceDocument]:
+    """Copy the original full-scan algorithm as an equivalence oracle."""
+    from src.services.research_engine.discovery import _identifiers
+
+    merged: list[SourceDocument] = []
+    now = datetime(2026, 9, 28, 6, 0, tzinfo=timezone.utc).isoformat()
+    for original in documents:
+        if not original.title.strip():
+            continue
+        source = copy.deepcopy(original)
+        ids = _identifiers(source)
+        provenance = {**asdict(source), "retrieved_at": now}
+        source.metadata["identifiers"] = ids
+        source.metadata["provenance"] = [provenance]
+        for candidate in list(merged):
+            if (candidate.connector_type == "rag_store") != (
+                source.connector_type == "rag_store"
+            ):
+                continue
+            other = candidate.metadata["identifiers"]
+            shared = ids.keys() & other.keys()
+            if not shared or any(ids[key] != other[key] for key in shared):
+                continue
+            ids = {**other, **ids}
+            candidate.metadata["identifiers"] = ids
+            candidate.metadata["provenance"].extend(source.metadata["provenance"])
+            for attribute in ("abstract", "full_text", "url", "authors"):
+                if not getattr(candidate, attribute):
+                    setattr(candidate, attribute, getattr(source, attribute))
+            source = candidate
+            merged.remove(candidate)
+        source.compute_hash()
+        merged.append(source)
+    return merged
+
+
+def _unique_identifier_documents() -> list[SourceDocument]:
+    return [
+        SourceDocument(
+            connector_type="openalex",
+            external_id=f"https://openalex.org/W{index}",
+            title=f"Unique paper {index}",
+            abstract=f"Controlled abstract {index}",
+        )
+        for index in range(200)
+    ]
+
+
+def _three_provider_bridge_documents() -> list[SourceDocument]:
+    return [
+        SourceDocument(
+            connector_type="crossref",
+            external_id="10.1234/bridge",
+            title="Crossref bridge",
+        ),
+        SourceDocument(
+            connector_type="pubmed",
+            external_id="12345",
+            title="PubMed bridge",
+        ),
+        SourceDocument(
+            connector_type="openalex",
+            external_id="W-BRIDGE",
+            title="OpenAlex bridge",
+            metadata={"doi": "10.1234/bridge", "pmid": "12345"},
+        ),
+    ]
+
+
+def _conflicting_identifier_documents() -> list[SourceDocument]:
+    return [
+        SourceDocument(
+            connector_type="openalex",
+            external_id="W1",
+            title="First conflict",
+            metadata={"doi": "10.1234/first", "pmid": "999"},
+        ),
+        SourceDocument(
+            connector_type="semantic_scholar",
+            external_id="S2",
+            title="Second conflict",
+            metadata={"doi": "10.1234/second", "pmid": "999"},
+        ),
+    ]
+
+
+def _arxiv_revision_documents() -> list[SourceDocument]:
+    return [
+        SourceDocument(
+            connector_type="arxiv",
+            external_id=f"https://arxiv.org/abs/2401.12345v{revision}",
+            title="Revision-sensitive paper",
+        )
+        for revision in (1, 2)
+    ]
+
+
+def _local_public_partition_documents() -> list[SourceDocument]:
+    return [
+        SourceDocument(
+            connector_type="crossref",
+            external_id="10.1234/shared",
+            title="Public record",
+        ),
+        SourceDocument(
+            connector_type="rag_store",
+            external_id="workspace-1",
+            title="Workspace copy one",
+            metadata={"doi": "10.1234/shared"},
+        ),
+        SourceDocument(
+            connector_type="rag_store",
+            external_id="workspace-1",
+            title="Workspace copy two",
+            abstract="Workspace evidence",
+            metadata={"doi": "10.1234/shared"},
+        ),
+    ]
 
 
 @pytest.mark.asyncio
@@ -137,6 +268,37 @@ def test_identifier_bridge_merges_three_providers_but_not_conflicting_dois() -> 
     assert len(results) == 2
     assert len(results[0].metadata["provenance"]) == 3
     assert results[1].metadata["identifiers"]["doi"] == "10.1234/different"
+
+
+@pytest.mark.parametrize(
+    ("case_name", "documents_factory", "expected_count"),
+    [
+        ("200 unique identifiers", _unique_identifier_documents, 200),
+        ("three-provider bridge", _three_provider_bridge_documents, 1),
+        ("conflicting shared identifiers", _conflicting_identifier_documents, 2),
+        ("arxiv revisions", _arxiv_revision_documents, 2),
+        ("rag_store/public isolation", _local_public_partition_documents, 2),
+    ],
+)
+def test_prepare_sources_fast_path_matches_original_full_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    case_name: str,
+    documents_factory: Callable[[], list[SourceDocument]],
+    expected_count: int,
+) -> None:
+    from src.services.research_engine import discovery
+
+    monkeypatch.setattr(discovery, "datetime", _FrozenDateTime)
+    documents = documents_factory()
+
+    expected = _reference_prepare_sources(documents)
+    actual = discovery.prepare_sources(documents)
+
+    assert len(actual) == expected_count, case_name
+    assert [asdict(source) for source in actual] == [
+        asdict(source) for source in expected
+    ]
+    assert all(source.content_hash for source in actual)
 
 
 def test_local_search_snippets_do_not_claim_full_text_access() -> None:

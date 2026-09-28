@@ -29,7 +29,7 @@ interface ReviewPanelProps {
   runId: string;
   review: PendingReviewResponse;
   sourceRecords: ReviewSourceRecord[];
-  onRefresh: () => void | Promise<void>;
+  onRefresh: (options?: { resumeAuthorized?: boolean }) => void | Promise<void>;
 }
 
 type DraftDecision = {
@@ -136,9 +136,16 @@ export function ReviewPanel({
   onRefresh,
 }: ReviewPanelProps): ReactElement | null {
   const descriptor = review.descriptor;
-  const [drafts, setDrafts] = useState<DraftDecision[]>(() =>
-    initialDrafts(review)
-  );
+  const reviewIdentity = `${descriptor?.output_hash ?? 'none'}:${review.accepted_review?.id ?? 'pending'}`;
+  const serverDrafts = useMemo(() => initialDrafts(review), [review]);
+  const [draftState, setDraftState] = useState<{
+    reviewIdentity: string;
+    drafts: DraftDecision[];
+  }>(() => ({ reviewIdentity, drafts: serverDrafts }));
+  const drafts =
+    draftState.reviewIdentity === reviewIdentity
+      ? draftState.drafts
+      : serverDrafts;
   const [submitting, setSubmitting] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [error, setError] = useState<{
@@ -193,13 +200,20 @@ export function ReviewPanel({
     partId: string,
     update: Partial<DraftDecision>
   ): void => {
-    setDrafts((current) =>
-      current.map((draft) =>
-        draft.source_id === sourceId && draft.part_id === partId
-          ? { ...draft, ...update }
-          : draft
-      )
-    );
+    setDraftState((current) => {
+      const currentDrafts =
+        current.reviewIdentity === reviewIdentity
+          ? current.drafts
+          : serverDrafts;
+      return {
+        reviewIdentity,
+        drafts: currentDrafts.map((draft) =>
+          draft.source_id === sourceId && draft.part_id === partId
+            ? { ...draft, ...update }
+            : draft
+        ),
+      };
+    });
   };
 
   const payload = (): Record<string, unknown> => {
@@ -268,7 +282,7 @@ export function ReviewPanel({
     setResuming(true);
     try {
       await resumeRun(runId);
-      await onRefresh();
+      await onRefresh({ resumeAuthorized: true });
     } catch {
       setError({
         label: 'Resume failed',

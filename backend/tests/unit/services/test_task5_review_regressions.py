@@ -325,6 +325,40 @@ def test_token_reservation_uses_full_input_bytes_plus_framing_and_output() -> No
 
 
 @pytest.mark.asyncio
+async def test_batch_accounting_snapshots_keep_length_with_shared_metadata() -> None:
+    snapshots: list[list[dict[str, Any]]] = []
+    executor: StepExecutor
+
+    def respond(_request: LLMRequest) -> str:
+        snapshots.append(executor._last_call_accounting[2])
+        return '{"records":[]}'
+
+    provider = CallbackProvider(respond)
+    executor = StepExecutor(connectors={}, providers={"test-model": provider})
+    batches = [
+        {
+            "index": index,
+            "input_bytes": 100,
+            "input_hash": f"input-{index}",
+            "source_ids": [f"source-{index}"],
+            "part_ids": ["p0001"],
+            "prompt": '{"records":[]}',
+            "system_prompt": "controlled",
+        }
+        for index in range(3)
+    ]
+
+    _, _, final_usage = await executor._complete_batches(
+        provider, batches, {}, budget=None
+    )
+
+    assert [len(snapshot) for snapshot in snapshots] == [0, 1, 2]
+    assert snapshots[1][0] == final_usage[0]
+    assert snapshots[1][0] is final_usage[0]
+    assert snapshots[2] == final_usage[:2]
+
+
+@pytest.mark.asyncio
 async def test_16000_byte_request_cannot_dispatch_with_less_than_8000_tokens() -> None:
     provider = CallbackProvider(lambda _request: '{"records":[]}')
     executor = StepExecutor(connectors={}, providers={"test-model": provider})
@@ -874,7 +908,7 @@ async def test_inside_stage_budget_failure_carries_paid_batches_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_direct_paused_event_carries_continued_after_failure_context() -> None:
+async def test_direct_quality_pause_does_not_expose_continued_failure_context() -> None:
     class PauseExecutor(StepExecutor):
         async def execute(
             self, step_def: dict[str, Any], context: dict[str, Any], **_: Any
@@ -900,14 +934,18 @@ async def test_direct_paused_event_carries_continued_after_failure_context() -> 
             uuid4(),
             initial_context={
                 "contract_version": 1,
+                "continued_after_failure": True,
                 "verification": {"passed": False, "continued_after_failure": True},
             },
         )
     ]
 
     paused = next(event for event in events if event["event"] == "run_paused")
-    assert paused["context"]["verification"]["passed"] is False
-    assert paused["context"]["verification"]["continued_after_failure"] is True
+    assert paused["pause_reason"] == "user_paused"
+    assert paused["step_index"] == 0
+    assert paused["output_hash"]
+    assert "context" not in paused
+    assert "quality_marks" not in paused
 
 
 def test_structured_prompt_records_are_packed_only_at_object_boundaries() -> None:

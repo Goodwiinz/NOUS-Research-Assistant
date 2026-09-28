@@ -77,7 +77,7 @@
 - Task 5: complete
 - Task 6: complete
 - Task 7: complete
-- Task 8: pending
+- Task 8: complete — certification recorded; feature remains disabled
 
 ## Task 1 review loop
 
@@ -271,3 +271,50 @@
   `70`; TypeScript, scoped lint/formatting, both quality ratchets, and diff
   checks pass.
 - Task 7: complete.
+
+## Task 8 certification
+
+- Base: `68cc641938f43b99fa8d00e18822ccf2c62106e8`.
+- Added real PostgreSQL, Playwright browser-boundary, live configured-model,
+  and frozen performance evidence for the Daily Research Brief lifecycle.
+- PostgreSQL passed `5` integration tests; the final browser suite passed all
+  `10` lifecycle scenarios with review p50 `565.1 ms` and p95 `647.4 ms`;
+  focused frontend passed `61` tests; the exact Node 24
+  type-check and full frontend suite passed `2,368` tests; and the combined
+  optimization regression suite passed `81` backend tests.
+- Numeric performance baselines and 20% ceilings were frozen before
+  optimization and never loosened. Max-stage sampling was corrected from 11
+  samples (nearest-rank p95 accidentally selected the maximum) to 40 measured
+  samples (rank 38), with one warmup and GC enabled. Three consecutive final
+  full-file invocations passed every frozen ceiling, including 200 candidate
+  rows, 25 screen/extract batches, ten completed PostgreSQL lifecycles, zero
+  duplicate stage rows, and 30 unique review rows per invocation.
+- Earlier performance failures remain preserved. The repairs remove measured
+  request/executor cycles, quadratic source/coverage and usage-snapshot work,
+  repeated schema compilation, unnecessary discovery scans for provably unique
+  identifiers, and a private prompt-view deep copy while retaining public
+  envelope isolation and exact behavior.
+- OpenAPI/types and the disposable migration upgrade/downgrade/upgrade cycle
+  pass. Bandit and candidate Gitleaks pass as separate source/secret scans.
+- The dependency gate fails: pnpm audit reports `21` advisories and pip-audit
+  reports `5` vulnerabilities in `4` resolved packages. The authenticated
+  Safety scan is blocked by absent credentials; its anonymous fallback also
+  reports one active finding. Full `frontend validate` fails on the existing
+  all-tree lint debt even though the exact type-check/full test commands pass.
+- The current configured-model eval is blocked because `ANTHROPIC_API_KEY` is
+  absent. Its nine prerequisite regressions pass, including no-call checks for
+  missing credentials and a missing candidate threshold. No mocked/template-
+  only result is counted and no citation baseline is frozen. Authenticated
+  Safety is separately blocked because `SAFETY_API_KEY` is absent.
+- Final local CI is `FAILED`: `29` repository-baseline backend tests and broad
+  inherited branch-window/debt gates remain red. Its final tree passed `6,293`
+  backend tests, all nine eval prerequisites, and every Task 8 pause regression;
+  no remaining failure names a Task 8 path.
+- Remote candidate-SHA checks remain `NOT RUN` pending repository-write
+  authorization. Production configuration, deploy, feature/template
+  enablement, and rollback drill remain `NOT RUN` pending release authority.
+  No push, pull request, deployment, or production change was made.
+- Durable details: `docs/testing/daily-research-brief-verification.md` and
+  `task-8-report.md`. Exact candidate SHA is captured only after commit to
+  avoid a self-referential committed hash.
+- Task 8: complete with a negative ship decision; the feature stays disabled.

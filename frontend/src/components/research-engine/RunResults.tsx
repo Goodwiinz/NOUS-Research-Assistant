@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -6,7 +6,7 @@ import {
   FileQuestion,
 } from 'lucide-react';
 import {
-  getRunExportUrl,
+  downloadRunExport,
   type RunResponse,
   type StepResponse,
 } from '@/services/researchEngineService';
@@ -63,7 +63,23 @@ function countLabel(count: number, singular: string): string {
 function providerResults(
   artifact: Record<string, unknown>
 ): Record<string, unknown>[] {
-  return records(record(artifact.coverage)?.provider_results);
+  const coverage = record(artifact.coverage);
+  const projected = records(coverage?.provider_results);
+  if (projected.length > 0) return projected;
+
+  const providers = record(coverage?.providers);
+  return Object.entries(providers ?? {}).flatMap(([provider, value]) => {
+    const details = record(value);
+    return details
+      ? [
+          {
+            provider,
+            ...details,
+            returned_count: details.returned,
+          },
+        ]
+      : [];
+  });
 }
 
 function providerSucceeded(result: Record<string, unknown>): boolean {
@@ -170,7 +186,7 @@ function inferFinalStatus(
   return noEvidence ? 'no_evidence' : null;
 }
 
-function DownloadLink({
+function DownloadButton({
   runId,
   format,
   label,
@@ -179,14 +195,38 @@ function DownloadLink({
   format: 'markdown' | 'json' | 'csv';
   label: string;
 }): ReactElement {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [error, setError] = useState(false);
+
+  const download = async (): Promise<void> => {
+    setIsDownloading(true);
+    setError(false);
+    try {
+      await downloadRunExport(runId, format);
+    } catch {
+      setError(true);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   return (
-    <a
-      href={getRunExportUrl(runId, format)}
-      className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-    >
-      <Download aria-hidden="true" className="h-4 w-4" />
-      {label}
-    </a>
+    <span className="inline-flex flex-col gap-1">
+      <button
+        type="button"
+        disabled={isDownloading}
+        onClick={() => void download()}
+        className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+      >
+        <Download aria-hidden="true" className="h-4 w-4" />
+        {isDownloading ? 'Downloading…' : label}
+      </button>
+      {error && (
+        <span role="alert" className="text-xs text-destructive">
+          Download failed. Try again.
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -235,12 +275,12 @@ export function RunResults({
           </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-3" aria-label="Audit downloads">
-          <DownloadLink
+          <DownloadButton
             runId={run.id}
             format="json"
             label="Download audit JSON"
           />
-          <DownloadLink
+          <DownloadButton
             runId={run.id}
             format="csv"
             label="Download extraction CSV"
@@ -320,19 +360,19 @@ export function RunResults({
       )}
 
       <div className="mt-4 flex flex-wrap gap-3" aria-label="Brief downloads">
-        <DownloadLink
+        <DownloadButton
           runId={run.id}
           format="markdown"
           label={
             unverified ? 'Download unverified Markdown' : 'Download Markdown'
           }
         />
-        <DownloadLink
+        <DownloadButton
           runId={run.id}
           format="json"
           label={unverified ? 'Download unverified JSON' : 'Download JSON'}
         />
-        <DownloadLink
+        <DownloadButton
           runId={run.id}
           format="csv"
           label={unverified ? 'Download unverified CSV' : 'Download CSV'}

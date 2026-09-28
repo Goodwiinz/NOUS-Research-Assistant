@@ -1,10 +1,23 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   RunResponse,
   StepResponse,
 } from '@/services/researchEngineService';
+import { downloadRunExport } from '@/services/researchEngineService';
 import { RunResults } from '../RunResults';
+
+vi.mock('@/services/researchEngineService', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('@/services/researchEngineService')>();
+  return {
+    ...original,
+    downloadRunExport: vi.fn(),
+  };
+});
+
+const mockDownloadRunExport = vi.mocked(downloadRunExport);
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -38,15 +51,13 @@ function exportStep(finalStatus: 'verified' | 'unverified'): StepResponse {
         coverage: {
           partial: true,
           exhaustive: false,
-          provider_results: [
-            { provider: 'openalex', returned_count: 3 },
-            {
-              provider: 'crossref',
+          providers: {
+            openalex: { status: 'ok', returned: 3, limit: 25 },
+            crossref: {
               status: 'failed',
               error_type: 'TimeoutError',
-              returned_count: 0,
             },
-          ],
+          },
         },
         included_source_ids: ['source-a'],
         screening: [
@@ -89,7 +100,13 @@ function exportStep(finalStatus: 'verified' | 'unverified'): StepResponse {
 }
 
 describe('RunResults', () => {
-  it('labels a verified brief and exposes accessible API download links', () => {
+  beforeEach(() => {
+    mockDownloadRunExport.mockReset();
+    mockDownloadRunExport.mockResolvedValue();
+  });
+
+  it('labels a verified brief and downloads through the authenticated API client', async () => {
+    const user = userEvent.setup();
     render(<RunResults run={run()} steps={[exportStep('verified')]} />);
 
     expect(
@@ -101,18 +118,17 @@ describe('RunResults', () => {
     expect(screen.getByText('1 accepted extraction')).toBeInTheDocument();
     expect(screen.getByText('1 rejected extraction')).toBeInTheDocument();
     expect(screen.getByText('1 of 2 claims verified')).toBeInTheDocument();
-    for (const [label, format] of [
-      ['Markdown', 'markdown'],
-      ['JSON', 'json'],
-      ['CSV', 'csv'],
-    ] as const) {
-      expect(
-        screen.getByRole('link', { name: `Download ${label}` })
-      ).toHaveAttribute(
-        'href',
-        `/api/v1/research-engine/runs/${RUN_ID}/export?format=${format}`
-      );
-    }
+    expect(
+      screen.getByRole('button', { name: 'Download Markdown' })
+    ).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Download JSON' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Download CSV' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Download JSON' }));
+
+    await waitFor(() =>
+      expect(mockDownloadRunExport).toHaveBeenCalledWith(RUN_ID, 'json')
+    );
   });
 
   it('keeps an overridden result visibly unverified in the result and downloads', () => {
@@ -125,11 +141,8 @@ describe('RunResults', () => {
       /verification did not pass/i
     );
     expect(
-      screen.getByRole('link', { name: /download unverified markdown/i })
-    ).toHaveAttribute(
-      'href',
-      `/api/v1/research-engine/runs/${RUN_ID}/export?format=markdown`
-    );
+      screen.getByRole('button', { name: /download unverified markdown/i })
+    ).toBeEnabled();
   });
 
   it('shows a no-evidence outcome with audit downloads but no research brief', () => {
@@ -159,19 +172,13 @@ describe('RunResults', () => {
       screen.getByText(/no sources met the inclusion criteria/i)
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('link', { name: /markdown/i })
+      screen.queryByRole('button', { name: /markdown/i })
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole('link', { name: /download audit json/i })
-    ).toHaveAttribute(
-      'href',
-      `/api/v1/research-engine/runs/${RUN_ID}/export?format=json`
-    );
+      screen.getByRole('button', { name: /download audit json/i })
+    ).toBeEnabled();
     expect(
-      screen.getByRole('link', { name: /download extraction csv/i })
-    ).toHaveAttribute(
-      'href',
-      `/api/v1/research-engine/runs/${RUN_ID}/export?format=csv`
-    );
+      screen.getByRole('button', { name: /download extraction csv/i })
+    ).toBeEnabled();
   });
 });

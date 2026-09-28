@@ -59,6 +59,7 @@ def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
     Original provider snapshots are retained so enrichment does not erase origin.
     """
     merged: list[SourceDocument] = []
+    seen_identity_pairs: set[tuple[str, str, str]] = set()
     now = datetime.now(timezone.utc).isoformat()
     for original in documents:
         if not original.title.strip():
@@ -68,6 +69,16 @@ def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
         provenance = {**asdict(source), "retrieved_at": now}
         source.metadata["identifiers"] = ids
         source.metadata["provenance"] = [provenance]
+        partition = "local" if source.connector_type == "rag_store" else "public"
+        identity_pairs = {(partition, kind, value) for kind, value in ids.items()}
+        # A merge requires at least one exact identifier match in the same
+        # local/public partition. Cluster identifiers only grow, so a source
+        # with no previously seen pair cannot match any existing candidate.
+        if seen_identity_pairs.isdisjoint(identity_pairs):
+            source.compute_hash()
+            merged.append(source)
+            seen_identity_pairs.update(identity_pairs)
+            continue
         # Local documents remain distinct from public metadata even with a DOI.
         for candidate in list(merged):
             if (candidate.connector_type == "rag_store") != (
@@ -88,6 +99,9 @@ def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
             merged.remove(candidate)
         source.compute_hash()
         merged.append(source)
+        seen_identity_pairs.update(
+            (partition, kind, value) for kind, value in ids.items()
+        )
     return merged
 
 

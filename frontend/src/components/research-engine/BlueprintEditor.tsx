@@ -60,6 +60,13 @@ export interface BlueprintEditorProps {
   projectId: string;
 }
 
+function confirmedScopeParameters(
+  confirmation: DailyBriefScopeConfirmation
+): Record<string, unknown> {
+  const { confirmed: _confirmed, ...parameters } = confirmation;
+  return parameters;
+}
+
 async function loadProjectBlueprint(projectId: string): Promise<{
   project: EditorProject;
   blueprint?: BlueprintResponse;
@@ -256,7 +263,10 @@ export function BlueprintEditor({
     setError(null);
     try {
       const run = await startRun(blueprint.id, {
-        parameters_override: globalParams,
+        parameters_override:
+          templateSource === 'daily_research_brief' && scopeConfirmation
+            ? confirmedScopeParameters(scopeConfirmation)
+            : globalParams,
         ...(templateSource === 'daily_research_brief'
           ? { scope_confirmation: scopeConfirmation }
           : {}),

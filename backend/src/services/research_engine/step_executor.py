@@ -7,7 +7,8 @@ import json
 import re
 from dataclasses import dataclass, field
 from string import Template
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from types import MappingProxyType
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, cast
 
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
 from src.services.research_engine.contracts import (
@@ -15,12 +16,14 @@ from src.services.research_engine.contracts import (
     ClaimRecord,
     SynthesisSection,
     VerificationCheck,
+    _immediate_stage_envelope_view,
     build_stage_response_contract,
     immediate_stage_envelope,
     parse_provider_json,
     resolve_parameters,
     validate_extraction_record,
     validate_screening,
+    validate_user_schema,
 )
 from src.services.research_engine.discovery import search_sources, source_records
 from src.services.research_engine.prompt_batches import (
@@ -147,6 +150,17 @@ class ExecutionBudget:
 class StepExecutor:
     """Dispatches and executes individual workflow steps."""
 
+    _LEGACY_HANDLER_NAMES: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "search": "_execute_search",
+            "screen": "_execute_screen",
+            "extract": "_execute_extract",
+            "synthesize": "_execute_synthesize",
+            "export": "_execute_export",
+            "verify": "_execute_verify",
+        }
+    )
+
     def __init__(
         self,
         connectors: Dict[str, SourceConnector],
@@ -154,14 +168,6 @@ class StepExecutor:
     ) -> None:
         self.connectors = connectors
         self.providers = providers
-        self._handlers: Dict[str, Callable[..., Awaitable[StepResult]]] = {
-            "search": self._execute_search,
-            "screen": self._execute_screen,
-            "extract": self._execute_extract,
-            "synthesize": self._execute_synthesize,
-            "export": self._execute_export,
-            "verify": self._execute_verify,
-        }
         self._last_call_accounting: tuple[int, int, List[Dict[str, Any]]] = (0, 0, [])
 
     async def execute(
@@ -183,10 +189,13 @@ class StepExecutor:
             return await self._execute_contract_stage(
                 step_def, context, str(step_type), budget
             )
-        handler = self._handlers.get(step_type)
-        if handler is None:
+        handler_name = self._LEGACY_HANDLER_NAMES.get(step_type)
+        if handler_name is None:
             raise ValueError(f"Unknown step type: {step_type}")
-        return await handler(step_def, context)
+        return cast(
+            StepResult,
+            await getattr(self, handler_name)(step_def, context),
+        )
 
     def _get_params(self, step_def: Dict) -> Dict:
         """Get step parameters, checking both 'params' and 'parameters' keys."""
@@ -363,8 +372,10 @@ class StepExecutor:
                 params=params,
                 budget=budget,
             )
-            execution_context = copy.deepcopy(context)
-            execution_context["_daily_brief_prompt_context"] = built.payload
+            execution_context = {
+                **context,
+                "_daily_brief_prompt_context": built.payload,
+            }
             prompt_metadata = built.persistence_metadata()
         model_id = step_def.get("model_id") or params.get("model_id", "")
         provider = self.providers.get(str(model_id))
@@ -613,7 +624,7 @@ class StepExecutor:
             "verify": "synthesize",
         }[stage_type]
         try:
-            upstream = immediate_stage_envelope(context, expected)
+            upstream = _immediate_stage_envelope_view(context, expected)
         except ValueError as exc:
             raise ValueError(
                 "Daily Brief stage is missing its immediate upstream envelope"
@@ -689,7 +700,7 @@ class StepExecutor:
                 self._last_call_accounting = (
                     total_tokens,
                     calls,
-                    copy.deepcopy(batch_usage),
+                    list(batch_usage),
                 )
                 try:
                     response = await provider.complete(request)
@@ -724,7 +735,7 @@ class StepExecutor:
                 self._last_call_accounting = (
                     total_tokens,
                     calls,
-                    copy.deepcopy(batch_usage),
+                    list(batch_usage),
                 )
                 responses.append((batch, parse_provider_json(response.content), tokens))
             return responses, total_tokens, batch_usage
@@ -791,32 +802,28 @@ class StepExecutor:
             )
         source_parts: Dict[tuple[str, str], str] = {}
         part_coverage: List[Dict[str, Any]] = []
+        source_by_id = {source.get("source_id"): source for source in source_records}
+        end_offset_by_source: Dict[str, int] = {}
         for batch in batches:
             for record in batch["records"]:
                 source_parts[(record["source_id"], record["part_id"])] = record["text"]
-                source = next(
-                    item
-                    for item in source_records
-                    if item.get("source_id") == record["source_id"]
-                )
+                source_id = record["source_id"]
+                source = source_by_id[source_id]
                 original = source.get("full_text") or source.get("abstract") or ""
-                earlier = [
-                    item
-                    for item in part_coverage
-                    if item["source_id"] == record["source_id"]
-                ]
-                offset = max((item["end_char"] for item in earlier), default=0)
+                offset = end_offset_by_source.get(source_id, 0)
                 start = original.find(record["text"], offset)
                 if start < 0:
                     start = offset
+                end = start + len(record["text"])
                 part_coverage.append(
                     {
-                        "source_id": record["source_id"],
+                        "source_id": source_id,
                         "part_id": record["part_id"],
                         "start_char": start,
-                        "end_char": start + len(record["text"]),
+                        "end_char": end,
                     }
                 )
+                end_offset_by_source[source_id] = end
         responses, total_tokens, batch_usage = await self._complete_batches(
             provider, batches, params, budget
         )
@@ -903,6 +910,11 @@ class StepExecutor:
         )
         if output_kind != "claims" and extraction_schema is None:
             raise ValueError("extraction stage is missing its validated data schema")
+        extraction_validator = (
+            validate_user_schema(extraction_schema)
+            if extraction_schema is not None
+            else None
+        )
 
         batches = self._prepare_batches(
             step_def=step_def,
@@ -923,27 +935,27 @@ class StepExecutor:
         source_parts: Dict[tuple[str, str], str] = {}
         source_part_coverage: List[Dict[str, Any]] = []
         source_by_id = {source.get("source_id"): source for source in all_sources}
+        end_offset_by_source: Dict[str, int] = {}
         for batch in batches:
             for record in batch["records"]:
                 key = (record["source_id"], record["part_id"])
                 source_parts[key] = record["text"]
                 source = source_by_id[key[0]]
                 original = source.get("full_text") or source.get("abstract") or ""
-                earlier = [
-                    item for item in source_part_coverage if item["source_id"] == key[0]
-                ]
-                offset = max((item["end_char"] for item in earlier), default=0)
+                offset = end_offset_by_source.get(key[0], 0)
                 start = original.find(record["text"], offset)
                 if start < 0:
                     start = offset
+                end = start + len(record["text"])
                 source_part_coverage.append(
                     {
                         "source_id": key[0],
                         "part_id": key[1],
                         "start_char": start,
-                        "end_char": start + len(record["text"]),
+                        "end_char": end,
                     }
                 )
+                end_offset_by_source[key[0]] = end
 
         responses, total_tokens, batch_usage = await self._complete_batches(
             provider, batches, params, budget
@@ -1028,6 +1040,7 @@ class StepExecutor:
                         raw,
                         schema=extraction_schema,
                         source_parts=source_parts,
+                        validator=extraction_validator,
                     )
                     for item in normalized["evidence"]:
                         evidence_counter += 1

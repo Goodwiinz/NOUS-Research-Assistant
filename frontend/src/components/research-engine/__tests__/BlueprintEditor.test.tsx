@@ -244,7 +244,14 @@ describe('BlueprintEditor loading', () => {
     fireEvent.click(start);
 
     expect(startRun).toHaveBeenCalledWith('blueprint-1', {
-      parameters_override: parameters,
+      parameters_override: {
+        research_question: 'What changed?',
+        inclusion_criteria: ['Peer reviewed'],
+        exclusion_criteria: [],
+        providers: ['openalex', 'crossref'],
+        limit_per_provider: 25,
+        notes: '',
+      },
       scope_confirmation: {
         confirmed: true,
         research_question: 'What changed?',

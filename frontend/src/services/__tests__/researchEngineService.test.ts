@@ -15,6 +15,7 @@ import {
   resumeRun,
   getPendingReview,
   submitReview,
+  downloadRunExport,
   getRunExportUrl,
   getRunManifest,
   listSteps,
@@ -26,6 +27,7 @@ vi.mock('../api-client', () => ({
   api: {
     get: vi.fn(),
     post: vi.fn(),
+    download: vi.fn(),
   },
 }));
 
@@ -206,6 +208,18 @@ describe('researchEngineService', () => {
     it('builds the owned export endpoint for a generated export format', () => {
       expect(getRunExportUrl('r1', 'csv')).toBe(
         `${BASE}/runs/r1/export?format=csv`
+      );
+    });
+  });
+
+  describe('downloadRunExport', () => {
+    it('downloads through the authenticated API client with a base-relative path', async () => {
+      mockApi.download.mockResolvedValue();
+
+      await downloadRunExport('r1', 'json');
+
+      expect(mockApi.download).toHaveBeenCalledWith(
+        '/research-engine/runs/r1/export?format=json'
       );
     });
   });
