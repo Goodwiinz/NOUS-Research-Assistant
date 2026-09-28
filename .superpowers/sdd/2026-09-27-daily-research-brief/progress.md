@@ -76,7 +76,7 @@
 - Task 4: complete
 - Task 5: complete
 - Task 6: complete
-- Task 7: pending
+- Task 7: complete
 - Task 8: pending
 
 ## Task 1 review loop
@@ -230,3 +230,25 @@
   Prettier, and diff checks pass. Commit: `fix(research-ui): ignore stale
   blueprint saves` (this commit). Task 7 remains untouched.
 - Task 6: complete.
+
+## Task 7 implementation
+
+- Base: `db4de656948ff44fd8e40d2bb0e69ebb0e9d024a`.
+- Initial RED: all four requested Task 7 files failed before production edits;
+  the store/RunView interfaces were absent and the review/result modules did
+  not exist. The follow-up citation/count/reconnect batch was RED at
+  `3 failed, 13 passed`.
+- Added the single persisted-first run store owner, durable hydration before
+  SSE, idempotent UUID/run-index reconciliation, run-switch isolation, stream
+  reconnect, all persisted pause-state paths, exact-hash unverified
+  continuation, and server-authoritative review refresh.
+- Added original-record screening/extraction/final review panels with local
+  drafts and strict decision validation, plus distinct verified, unverified,
+  and no-evidence results using only owned API download URLs.
+- Focused GREEN: `22 passed` across four files. Adjacent research-engine GREEN:
+  `54 passed` across eight files. TypeScript, scoped ESLint, changed Prettier,
+  lint-debt ratchet, exclusion ratchet, and diff checks pass.
+- Full frontend lint remains the advisory unrelated baseline: final all-tree
+  scan `113` errors and `1,961` warnings, below the committed `116`/`2,003`
+  ratchet. Every Task 7 path is clean.
+- Task 7: complete.

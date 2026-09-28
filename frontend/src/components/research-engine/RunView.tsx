@@ -1,6 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -9,14 +15,23 @@ import {
   Play,
   AlertCircle,
   Coins,
+  ShieldAlert,
 } from 'lucide-react';
-import { getRun, pauseRun, resumeRun } from '@/services/researchEngineService';
+import {
+  getPendingReview,
+  getRun,
+  getRunManifest,
+  listSteps,
+  pauseRun,
+  resumeRun,
+} from '@/services/researchEngineService';
 import {
   useResearchEngineStore,
-  type ResearchRun,
   type RunStepEvent,
 } from '@/store/research-engine-store';
 import { StepProgress, type StepData } from './StepProgress';
+import { ReviewPanel, type ReviewSourceRecord } from './ReviewPanel';
+import { RunResults } from './RunResults';
 
 interface RunViewProps {
   runId: string;
@@ -63,6 +78,23 @@ const STATUS_BADGE: Record<
   },
 };
 
+const SSE_RECONNECT_DELAY_MS = 1_000;
+
+function waitForReconnect(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timeoutId);
+      resolve();
+    };
+    const timeoutId = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, SSE_RECONNECT_DELAY_MS);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 async function getAuthToken(): Promise<string | null> {
   try {
     const { createClient } = await import('@/lib/supabase/client');
@@ -76,140 +108,265 @@ async function getAuthToken(): Promise<string | null> {
   }
 }
 
-export function RunView({ runId }: RunViewProps) {
+export function RunView({ runId }: RunViewProps): ReactElement {
   const router = useRouter();
   const {
+    activeRunId,
     activeRun,
-    setActiveRun,
-    runEvents,
-    addRunEvent,
-    clearRunEvents,
+    runSteps,
+    pendingReview,
+    finalStatus,
+    hydrateRun,
+    mergeRunEvent,
+    setPendingReview,
+    resetRun,
     setLoading,
     isLoading,
     setError,
     error,
   } = useResearchEngineStore();
 
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{
+    runId: string;
+    message: string;
+  } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const requestRef = useRef(0);
 
-  // Fetch run details on mount
-  const fetchRun = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const refreshRun = useCallback(async () => {
+    const requestId = ++requestRef.current;
     try {
-      const data = (await getRun(runId)) as ResearchRun;
-      setActiveRun(data);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to load run details'
-      );
-    } finally {
+      const [run, steps] = await Promise.all([getRun(runId), listSteps(runId)]);
+      if (
+        requestRef.current !== requestId ||
+        useResearchEngineStore.getState().activeRunId !== runId
+      ) {
+        return;
+      }
+      hydrateRun(run, steps);
+
+      if (run.status === 'paused' && run.pause_reason === 'review_required') {
+        // Never leave a prior review visible while refreshing its server-owned
+        // descriptor and output.
+        setPendingReview(null);
+        try {
+          const review = await getPendingReview(runId);
+          if (
+            requestRef.current === requestId &&
+            useResearchEngineStore.getState().activeRunId === runId
+          ) {
+            setPendingReview(review);
+          }
+        } catch {
+          if (
+            requestRef.current === requestId &&
+            useResearchEngineStore.getState().activeRunId === runId
+          ) {
+            setActionError({
+              runId,
+              message: 'The pending review could not be loaded. Try again.',
+            });
+          }
+        }
+      } else {
+        setPendingReview(null);
+      }
+
+      if (run.status === 'completed') {
+        void getRunManifest(runId)
+          .then((manifest) => {
+            const value = asRecord(manifest)?.final_status;
+            if (
+              value === 'verified' ||
+              value === 'unverified' ||
+              value === 'no_evidence'
+            ) {
+              mergeRunEvent({
+                event: 'run_complete',
+                run_id: runId,
+                final_status: value,
+              });
+            }
+          })
+          .catch(() => {
+            // Older runs may not carry the new manifest fields. Persisted step
+            // output remains available and is used as the presentation fallback.
+          });
+      }
+    } catch {
+      if (
+        requestRef.current !== requestId ||
+        useResearchEngineStore.getState().activeRunId !== runId
+      ) {
+        return;
+      }
+      setError('The run could not be loaded. Try again.');
       setLoading(false);
     }
-  }, [runId, setActiveRun, setLoading, setError]);
+  }, [
+    runId,
+    hydrateRun,
+    mergeRunEvent,
+    setError,
+    setLoading,
+    setPendingReview,
+  ]);
 
   useEffect(() => {
-    clearRunEvents();
-    fetchRun();
+    let cancelled = false;
+    requestRef.current += 1;
+    abortRef.current?.abort();
+    resetRun(runId);
+    queueMicrotask(() => {
+      if (!cancelled) void refreshRun();
+    });
     return () => {
-      setActiveRun(null);
-      clearRunEvents();
+      cancelled = true;
+      requestRef.current += 1;
+      abortRef.current?.abort();
     };
-  }, [fetchRun, clearRunEvents, setActiveRun]);
+  }, [refreshRun, resetRun, runId]);
 
-  // Connect to SSE stream when run is running
+  // Persisted run and step state is complete before newer SSE notifications
+  // are attached. The store makes replayed notifications idempotent.
   useEffect(() => {
     const runStatus = activeRun?.status;
-    if (runStatus !== 'running' && runStatus !== 'pending') return;
+    if (
+      activeRunId !== runId ||
+      activeRun?.id !== runId ||
+      isLoading ||
+      (runStatus !== 'running' && runStatus !== 'pending')
+    ) {
+      return;
+    }
 
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const connectSSE = async () => {
-      const token = await getAuthToken();
-      const headers: Record<string, string> = {
-        Accept: 'text/event-stream',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      try {
-        const response = await fetch(
-          `/api/v1/research-engine/runs/${runId}/stream`,
-          {
-            method: 'GET',
-            headers,
-            signal: controller.signal,
-          }
-        );
-
-        if (!response.ok || !response.body) return;
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let currentEventType: string | null = null;
+    const connectSSE = async (): Promise<void> => {
+      while (!controller.signal.aborted) {
+        const token = await getAuthToken();
+        const headers: Record<string, string> = {
+          Accept: 'text/event-stream',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
 
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+          const response = await fetch(
+            `/api/v1/research-engine/runs/${runId}/stream`,
+            {
+              method: 'GET',
+              headers,
+              signal: controller.signal,
+            }
+          );
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() ?? '';
+          if (!response.ok || !response.body) return;
 
-            for (const line of lines) {
-              const trimmed = line.trim();
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let currentEventType: string | null = null;
 
-              if (trimmed.startsWith('event: ')) {
-                currentEventType = trimmed.slice(7).trim();
-              } else if (trimmed.startsWith('data: ') && currentEventType) {
-                try {
-                  const parsed = JSON.parse(trimmed.slice(6)) as RunStepEvent;
-                  addRunEvent({
-                    ...parsed,
-                    event: currentEventType,
-                  });
+          try {
+            while (!controller.signal.aborted) {
+              const { done, value } = await reader.read();
+              if (done) break;
 
-                  // Refresh the persisted status after lifecycle events.
-                  if (
-                    currentEventType === 'run_complete' ||
-                    currentEventType === 'run_failed' ||
-                    currentEventType === 'run_paused'
-                  ) {
-                    fetchRun();
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() ?? '';
+
+              for (const line of lines) {
+                const trimmed = line.trim();
+
+                if (trimmed.startsWith('event: ')) {
+                  currentEventType = trimmed.slice(7).trim();
+                } else if (trimmed.startsWith('data: ') && currentEventType) {
+                  try {
+                    const parsed = JSON.parse(trimmed.slice(6)) as RunStepEvent;
+                    mergeRunEvent({
+                      ...parsed,
+                      event: currentEventType,
+                      run_id: parsed.run_id ?? runId,
+                    });
+
+                    if (
+                      currentEventType === 'step_complete' ||
+                      currentEventType === 'step_error' ||
+                      currentEventType === 'run_complete' ||
+                      currentEventType === 'run_failed' ||
+                      currentEventType === 'run_paused'
+                    ) {
+                      void refreshRun();
+                    }
+                  } catch {
+                    // Skip a malformed notification; persisted hydration stays
+                    // authoritative and the next refresh can recover it.
                   }
-                } catch {
-                  // skip malformed JSON
+                  currentEventType = null;
                 }
-                currentEventType = null;
               }
             }
+          } finally {
+            reader.releaseLock();
           }
-        } finally {
-          reader.releaseLock();
-        }
-      } catch (err) {
-        if ((err as Error).name !== 'AbortError') {
+        } catch (err) {
+          if ((err as Error).name === 'AbortError') return;
           console.error('SSE stream error:', err);
+        }
+
+        await waitForReconnect(controller.signal);
+        const latest = useResearchEngineStore.getState();
+        if (
+          controller.signal.aborted ||
+          latest.activeRunId !== runId ||
+          (latest.activeRun?.status !== 'running' &&
+            latest.activeRun?.status !== 'pending')
+        ) {
+          return;
         }
       }
     };
 
-    connectSSE();
+    void connectSSE();
 
     return () => {
       controller.abort();
       abortRef.current = null;
     };
-  }, [runId, activeRun?.status, addRunEvent, fetchRun]);
+  }, [
+    runId,
+    activeRun?.id,
+    activeRun?.status,
+    activeRunId,
+    isLoading,
+    mergeRunEvent,
+    refreshRun,
+  ]);
 
-  // Build step data from events
-  const steps: StepData[] = buildStepsFromEvents(runEvents);
+  const steps: StepData[] = runSteps.map((step) => ({
+    stepIndex: step.step_index,
+    stepName: step.step_name,
+    stepType: step.step_type,
+    status: step.status,
+    mode: step.mode,
+    tokenCount: step.token_count,
+    qualityMarks: step.quality_marks.map((mark) => ({
+      check_type: mark.check_type,
+      passed: mark.passed,
+      details: mark.details ?? undefined,
+    })),
+    output: step.output,
+    sources: step.sources,
+    prompt: step.prompt,
+    errorMessage: step.error_message,
+  }));
+
+  const sourceRecords = collectSourceRecords(runSteps);
 
   // Total tokens from events or run data
   const totalTokens =
@@ -217,28 +374,54 @@ export function RunView({ runId }: RunViewProps) {
     activeRun?.total_tokens ||
     0;
 
-  const handlePause = async () => {
+  const handlePause = async (): Promise<void> => {
     setActionError(null);
     setActionLoading(true);
     try {
       await pauseRun(runId);
-      await fetchRun();
+      await refreshRun();
     } catch {
-      setActionError('Pause failed. The run may have already finished.'); // R6-L21
+      setActionError({
+        runId,
+        message: 'Pause failed. The run may have already finished.',
+      }); // R6-L21
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleResume = async () => {
+  const handleResume = async (): Promise<void> => {
     setActionError(null);
     setActionLoading(true);
     try {
       await resumeRun(runId);
-      await fetchRun();
+      await refreshRun();
     } catch {
-      setActionError('Resume failed. Try again in a moment.'); // R6-L21
-      // ignore
+      setActionError({
+        runId,
+        message: 'Resume failed. Try again in a moment.',
+      }); // R6-L21
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleContinueUnverified = async (): Promise<void> => {
+    if (!activeRun?.output_hash) return;
+    setActionError(null);
+    setActionLoading(true);
+    try {
+      await resumeRun(runId, {
+        continue_unverified: true,
+        output_hash: activeRun.output_hash,
+      });
+      await refreshRun();
+    } catch {
+      setActionError({
+        runId,
+        message:
+          'Unverified continuation failed. Refresh the run and review the current verification result.',
+      });
     } finally {
       setActionLoading(false);
     }
@@ -286,7 +469,7 @@ export function RunView({ runId }: RunViewProps) {
         </div>
         <button
           type="button"
-          onClick={() => fetchRun()}
+          onClick={() => refreshRun()}
           className="rounded text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           Retry
@@ -361,34 +544,103 @@ export function RunView({ runId }: RunViewProps) {
             Pause
           </button>
         )}
-        {activeRun?.status === 'paused' && (
-          <button
-            type="button"
-            onClick={handleResume}
-            disabled={actionLoading}
-            className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
-          >
-            {actionLoading ? (
-              <Loader2
-                aria-hidden="true"
-                className="h-3.5 w-3.5 animate-spin"
-              />
-            ) : (
-              <Play aria-hidden="true" className="h-3.5 w-3.5" />
-            )}
-            Resume
-          </button>
-        )}
+        {activeRun?.status === 'paused' &&
+          activeRun.pause_reason !== 'review_required' &&
+          activeRun.pause_reason !== 'verification_failed' && (
+            <button
+              type="button"
+              onClick={handleResume}
+              disabled={actionLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
+            >
+              {actionLoading ? (
+                <Loader2
+                  aria-hidden="true"
+                  className="h-3.5 w-3.5 animate-spin"
+                />
+              ) : (
+                <Play aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
+              Resume
+            </button>
+          )}
       </div>
 
-      {actionError && (
+      {actionError?.runId === runId && (
         <div
           role="alert"
           className="mb-4 rounded-md border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200"
         >
-          {actionError}
+          {actionError.message}
         </div>
       )}
+
+      {activeRun?.status === 'paused' &&
+        activeRun.pause_reason === 'verification_failed' && (
+          <section className="mb-6 rounded-xl border border-(--nous-helios)/30 bg-(--nous-helios)/10 p-5">
+            <div className="flex items-start gap-3">
+              <ShieldAlert
+                aria-hidden="true"
+                className="mt-0.5 h-5 w-5 shrink-0 text-(--nous-helios)"
+              />
+              <div className="min-w-0 flex-1">
+                <h2 className="font-semibold text-foreground">
+                  Verification failed
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Continuing creates a visibly unverified draft bound to this
+                  exact verification result. It cannot receive final approval.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleContinueUnverified}
+                  disabled={actionLoading || !activeRun.output_hash}
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-(--nous-helios)/40 bg-background px-4 py-2 text-sm font-medium text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {actionLoading ? (
+                    <Loader2
+                      aria-hidden="true"
+                      className="h-4 w-4 animate-spin"
+                    />
+                  ) : (
+                    <Play aria-hidden="true" className="h-4 w-4" />
+                  )}
+                  Continue with an unverified draft
+                </button>
+                {!activeRun.output_hash && (
+                  <p role="alert" className="mt-2 text-sm text-foreground">
+                    Refresh the run to load the verification result hash.
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+      {activeRun?.status === 'paused' &&
+        activeRun.pause_reason === 'review_required' &&
+        pendingReview?.pending && (
+          <ReviewPanel
+            key={`${runId}:${pendingReview.descriptor?.step_index}:${pendingReview.descriptor?.output_hash}`}
+            runId={runId}
+            review={pendingReview}
+            sourceRecords={sourceRecords}
+            onRefresh={refreshRun}
+          />
+        )}
+
+      {activeRun?.status === 'paused' &&
+        activeRun.pause_reason === 'review_required' &&
+        pendingReview !== null &&
+        !pendingReview.pending && (
+          <div
+            role="alert"
+            className="mb-6 rounded-xl border border-border bg-card p-4 text-sm text-foreground"
+          >
+            The server did not return a current review gate. Refresh the run
+            before continuing.
+          </div>
+        )}
 
       {/* Steps list */}
       {steps.length === 0 && !isLoading ? (
@@ -411,53 +663,38 @@ export function RunView({ runId }: RunViewProps) {
           ))}
         </div>
       )}
+
+      {activeRun && (
+        <RunResults
+          run={activeRun}
+          steps={runSteps}
+          finalStatus={finalStatus}
+        />
+      )}
     </div>
   );
 }
 
-/**
- * Build a list of StepData from the stream of RunStepEvents.
- * Events with the same step_index are merged together, with later events
- * overwriting earlier fields.
- */
-function buildStepsFromEvents(events: RunStepEvent[]): StepData[] {
-  const stepMap = new Map<number, StepData>();
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
 
-  for (const evt of events) {
-    const idx = evt.step_index;
-    if (idx === undefined || idx === null) continue;
-
-    const existing = stepMap.get(idx);
-
-    const stepStatus = (() => {
-      switch (evt.event) {
-        case 'step_start':
-          return 'running' as const;
-        case 'step_complete':
-          return 'complete' as const;
-        case 'step_error':
-          return 'error' as const;
-        default:
-          return existing?.status ?? ('pending' as const);
-      }
-    })();
-
-    const merged: StepData = {
-      stepIndex: idx,
-      stepName: evt.step_name ?? existing?.stepName ?? `Step ${idx + 1}`,
-      stepType: evt.step_type ?? existing?.stepType ?? 'unknown',
-      status: stepStatus,
-      mode: (evt.mode as StepData['mode']) ?? existing?.mode,
-      tokenCount: evt.token_count ?? existing?.tokenCount ?? 0,
-      qualityMarks: evt.quality_marks ?? existing?.qualityMarks ?? [],
-      output: evt.output ?? existing?.output,
-      sources: evt.sources ?? existing?.sources,
-      prompt: evt.prompt ?? existing?.prompt,
-      errorMessage: evt.error_message ?? existing?.errorMessage,
-    };
-
-    stepMap.set(idx, merged);
+function collectSourceRecords(
+  steps: ReturnType<typeof useResearchEngineStore.getState>['runSteps']
+): ReviewSourceRecord[] {
+  const byId = new Map<string, ReviewSourceRecord>();
+  for (const step of steps) {
+    if (step.step_type !== 'search') continue;
+    const output = asRecord(step.output);
+    const records = output?.source_records;
+    if (!Array.isArray(records)) continue;
+    for (const item of records) {
+      const source = asRecord(item);
+      if (!source || typeof source.source_id !== 'string') continue;
+      byId.set(source.source_id, source as ReviewSourceRecord);
+    }
   }
-
-  return Array.from(stepMap.values()).sort((a, b) => a.stepIndex - b.stepIndex);
+  return [...byId.values()];
 }
