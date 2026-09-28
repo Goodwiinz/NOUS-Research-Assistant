@@ -529,6 +529,57 @@ async def test_semantic_scholar_follows_next_offset(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("max_results", [0, 201])
+async def test_semantic_scholar_rejects_result_limits_outside_provider_bounds(
+    max_results: int,
+) -> None:
+    from src.services.research_engine.connectors.semantic_scholar_connector import (
+        SemanticScholarConnector,
+    )
+
+    with pytest.raises(ValueError, match="between 1 and 200"):
+        await SemanticScholarConnector().search("test", max_results=max_results)
+
+
+@pytest.mark.asyncio
+async def test_semantic_scholar_trace_captures_each_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.services.research_engine.connectors import provider_http
+    from src.services.research_engine.connectors.base import SearchTrace
+    from src.services.research_engine.connectors.semantic_scholar_connector import (
+        SemanticScholarConnector,
+    )
+
+    monkeypatch.setattr(provider_http, "wait_for_slot", AsyncMock())
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        offset = int(request.url.params.get("offset", 0))
+        if offset == 0:
+            return httpx.Response(200, json={"data": [{"paperId": "first"}], "next": 1})
+        return httpx.Response(200, json={"data": [{"paperId": "second"}]})
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: client_class(transport=httpx.MockTransport(respond), **kw),
+    )
+    trace = SearchTrace(
+        execution_id=str(uuid4()), provider="semantic_scholar", requested_limit=2
+    )
+
+    docs = await SemanticScholarConnector().search(
+        "test", max_results=2, search_trace=trace
+    )
+
+    assert [doc.external_id for doc in docs] == ["first", "second"]
+    assert len(trace.pages) == 2
+    assert trace.pages[0]["response"]["has_more"] is True
+    assert trace.pages[1]["response"]["has_more"] is False
+
+
+@pytest.mark.asyncio
 async def test_semantic_scholar_never_returns_more_than_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

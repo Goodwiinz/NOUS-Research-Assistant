@@ -16,7 +16,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
+import httpx
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -41,7 +43,13 @@ class _Resp:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            raise AssertionError(f"unexpected raise_for_status {self.status_code}")
+            request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+            response = httpx.Response(self.status_code, request=request)
+            raise httpx.HTTPStatusError(
+                f"unexpected status {self.status_code}",
+                request=request,
+                response=response,
+            )
 
 
 class _Client:
@@ -71,12 +79,13 @@ def _reset() -> None:
 
 
 async def test_search_reserves_a_rate_slot_before_calling_arxiv() -> None:
+    from src.services.arxiv import arxiv_service
     from src.services.research_engine.connectors.arxiv_connector import ArxivConnector
 
     slot = AsyncMock(return_value=0.0)
     with (
         patch("httpx.AsyncClient", _Client),
-        patch("src.services.arxiv.arxiv_service._acquire_arxiv_rate_slot", slot),
+        patch.object(arxiv_service, "_acquire_arxiv_rate_slot", slot),
     ):
         docs = await ArxivConnector().search("transformers", max_results=1)
 
@@ -88,12 +97,14 @@ async def test_search_reserves_a_rate_slot_before_calling_arxiv() -> None:
 
 
 async def test_uses_https_not_plain_http() -> None:
+    from src.services.arxiv import arxiv_service
     from src.services.research_engine.connectors.arxiv_connector import ArxivConnector
 
     with (
         patch("httpx.AsyncClient", _Client),
-        patch(
-            "src.services.arxiv.arxiv_service._acquire_arxiv_rate_slot",
+        patch.object(
+            arxiv_service,
+            "_acquire_arxiv_rate_slot",
             AsyncMock(return_value=0.0),
         ),
     ):
@@ -104,6 +115,7 @@ async def test_uses_https_not_plain_http() -> None:
 
 async def test_429_is_retried_after_reserving_another_slot() -> None:
     """A retry that skips the gate is the burst the gate exists to prevent."""
+    from src.services.arxiv import arxiv_service
     from src.services.research_engine.connectors.arxiv_connector import ArxivConnector
 
     limited = _Resp(status_code=429, text="")
@@ -113,13 +125,98 @@ async def test_429_is_retried_after_reserving_another_slot() -> None:
     slot = AsyncMock(return_value=0.0)
     with (
         patch("httpx.AsyncClient", _Client),
-        patch("src.services.arxiv.arxiv_service._acquire_arxiv_rate_slot", slot),
+        patch.object(arxiv_service, "_acquire_arxiv_rate_slot", slot),
     ):
         docs = await ArxivConnector().search("transformers")
 
     assert slot.await_count == 2, "the retry must reserve its own slot"
     assert len(_Client.calls) == 2
     assert len(docs) == 1
+
+
+async def test_search_trace_records_request_response_and_rate_wait() -> None:
+    from src.services.arxiv import arxiv_service
+    from src.services.research_engine.connectors import arxiv_connector
+    from src.services.research_engine.connectors.arxiv_connector import ArxivConnector
+    from src.services.research_engine.connectors.base import SearchTrace
+
+    checkpoints: list[dict[str, Any]] = []
+
+    async def checkpoint(
+        provider: str, execution_id: str, page: dict[str, Any]
+    ) -> None:
+        checkpoints.append(page)
+
+    trace = SearchTrace(
+        execution_id=str(uuid4()),
+        provider="arxiv",
+        requested_limit=2,
+        on_page_update=checkpoint,
+    )
+    slot = AsyncMock(return_value=0.25)
+    sleep = AsyncMock()
+    response_text = _FEED.replace(
+        "</feed>",
+        '<opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">2</opensearch:totalResults></feed>',
+    )
+    _Client.responses = [_Resp(text=response_text)]
+
+    with (
+        patch("httpx.AsyncClient", _Client),
+        patch.object(arxiv_service, "_acquire_arxiv_rate_slot", slot),
+        patch.object(arxiv_connector.asyncio, "sleep", sleep),
+    ):
+        docs = await ArxivConnector().search(
+            "transformers", max_results=2, search_trace=trace
+        )
+
+    assert len(docs) == 1
+    slot.assert_awaited_once()
+    sleep.assert_awaited_once_with(0.25)
+    assert checkpoints[0]["page_status"] == "requested"
+    assert checkpoints[-1]["page_status"] == "completed"
+    assert trace.pages[0]["response"]["has_more"] is True
+
+
+async def test_http_failure_is_recorded_in_search_trace() -> None:
+    from src.services.arxiv import arxiv_service
+    from src.services.research_engine.connectors.arxiv_connector import ArxivConnector
+    from src.services.research_engine.connectors.base import SearchTrace
+
+    trace = SearchTrace(execution_id=str(uuid4()), provider="arxiv", requested_limit=1)
+    _Client.responses = [_Resp(status_code=503, text="")]
+
+    with (
+        patch("httpx.AsyncClient", _Client),
+        patch.object(
+            arxiv_service,
+            "_acquire_arxiv_rate_slot",
+            AsyncMock(return_value=0.0),
+        ),
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        await ArxivConnector().search("transformers", search_trace=trace)
+
+    assert trace.pages[0]["page_status"] == "failed"
+    assert trace.pages[0]["response"]["error_type"] == "HTTPStatusError"
+
+
+async def test_http_failure_without_trace_still_raises() -> None:
+    from src.services.arxiv import arxiv_service
+    from src.services.research_engine.connectors.arxiv_connector import ArxivConnector
+
+    _Client.responses = [_Resp(status_code=503, text="")]
+
+    with (
+        patch("httpx.AsyncClient", _Client),
+        patch.object(
+            arxiv_service,
+            "_acquire_arxiv_rate_slot",
+            AsyncMock(return_value=0.0),
+        ),
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        await ArxivConnector().search("transformers")
 
 
 def test_parser_is_defusedxml_not_stdlib() -> None:
