@@ -1059,6 +1059,88 @@ async def test_exporters_reject_malformed_contiguous_persisted_output(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("exporter", ["v1", "legacy"])
+@pytest.mark.parametrize(
+    ("persisted_output", "accepted"),
+    [
+        pytest.param({}, True, id="explicit-empty-legacy-output"),
+        pytest.param(
+            {"contract_version": 1},
+            False,
+            id="missing-stage-type",
+        ),
+        pytest.param(
+            {"stage_type": "search"},
+            False,
+            id="missing-contract-version",
+        ),
+        pytest.param(
+            {"contract_version": 1, "stage_type": "unknown"},
+            False,
+            id="unknown-stage-type",
+        ),
+        pytest.param(
+            {"contract_version": 1, "stage_type": 7},
+            False,
+            id="non-string-stage-type",
+        ),
+        pytest.param(
+            {"contract_version": 1, "stage_type": []},
+            False,
+            id="unhashable-stage-type",
+        ),
+        pytest.param(
+            {
+                "contract_version": 1,
+                "stage_type": "search",
+                "usage": {"model_calls": "one", "total_tokens": 0, "batches": []},
+                "source_records": [],
+                "coverage": {"exhaustive": False},
+                "selected_sources": [],
+            },
+            False,
+            id="malformed-envelope-fields",
+        ),
+    ],
+)
+async def test_exporters_validate_canonical_looking_persisted_outputs(
+    persisted_output: dict[str, object],
+    accepted: bool,
+    exporter: str,
+) -> None:
+    run, step, _source = _make_run(status="completed")
+    step.output = copy.deepcopy(persisted_output)
+    run.steps = [step]
+    observer = ResearchObservability()
+    service = ExportService(observer=observer)
+
+    async def export() -> object:
+        if exporter == "v1":
+            return await service.export(
+                run.id,
+                uuid4(),
+                ExportFormat.JSON,
+                _mock_db_for_run(run),
+            )
+        return await service.export_json(run.id, _mock_db_for_run(run))
+
+    if accepted:
+        assert await export()
+        assert run.status == "completed"
+        return
+
+    with pytest.raises(ResearchExportError) as raised:
+        await export()
+
+    assert raised.value.status_code == 500
+    assert raised.value.code == "export_reconstruction_failed"
+    assert run.status == "completed"
+    metrics = observer.snapshot()["counters"]
+    assert metrics["rehydration_errors"]["invalid_history"] == 1
+    assert metrics["exports"]["json:failed:reconstruction"] == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("missing", ["terminal_status", "scope", "final_review"])
 async def test_verified_daily_export_requires_all_durable_trust_evidence(
     missing: str,

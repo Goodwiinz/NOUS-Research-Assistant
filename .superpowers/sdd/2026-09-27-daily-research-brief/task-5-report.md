@@ -296,3 +296,24 @@ Static and self-review evidence:
   approval. Existing approval, exact-empty-byte, workflow, stream, review,
   template, discovery, and determinism behavior remains green.
 - No Task 6 source or generated artifacts were changed.
+
+## Parser-boundary repair — 2026-09-28
+
+Canonical-looking persisted objects can no longer fall through the legacy
+merge path. An object containing either `contract_version` or `stage_type` now
+requires a string, known stage type and must pass the existing canonical
+envelope validator. Missing markers, unknown or unhashable stage types, and
+malformed envelope metadata therefore reach both exporters as the stable
+`export_reconstruction_failed` response. Marker-free legacy objects retain
+their existing behavior, while `{}` is an explicit no-op. The remaining
+rehydration set-membership check was changed to equality-based tuple membership
+so unhashable persisted values cannot leak a raw `TypeError` there.
+
+The new 14-case v1/legacy adversarial matrix first reported `10 failed, 4
+passed in 5.73s`; after the repair it reported `14 passed in 4.95s`. Final
+verification was Task 5 `63 passed, 2 warnings in 10.45s`, Task 3/4/template
+`102 passed, 3 warnings in 11.77s`, and stream/security `33 passed, 1 warning
+in 5.50s`. Changed-path and repo-wide Ruff, Black, isort, and diff checks pass.
+MyPy reports the same `14 errors in 1 file` for the two changed Python paths at
+base `cacd70946` and in the repaired tree, with zero introduced diagnostics.
+No Task 6 work was performed.

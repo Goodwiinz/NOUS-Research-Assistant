@@ -172,3 +172,12 @@
   isort passed; MyPy is unchanged at `18` diagnostics on both base and repair;
   diff check passed. Commit: `fix(research): fail closed on audited export
   corruption` (this commit). Task 6 has not started.
+- Review round 4 found one remaining Important parser-boundary gap: malformed
+  canonical markers could be treated as legacy success or leak an unhashable
+  `stage_type` as raw `TypeError`.
+- Fix round 4 starts from `cacd70946f65325e6897220abd8bc299b673f707`.
+  Its 14-case matrix moved from `10 failed, 4 passed` to `14 passed`; final
+  gates are Task 5 `63`, Task 3/4/template `102`, and stream/security `33`, all
+  passing. Ruff, Black, isort, diff, and unchanged `14`-diagnostic MyPy delta
+  checks pass. Commit: `fix(research): validate persisted stage markers` (this
+  commit). Task 6 has not started.

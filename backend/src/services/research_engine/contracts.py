@@ -371,6 +371,8 @@ def _validate_finite_numbers(value: Any) -> None:
 
 def validate_envelope(value: dict[str, Any], stage_type: str) -> dict[str, Any]:
     """Validate common envelope metadata and its stage-owned top-level keys."""
+    if not isinstance(stage_type, str):
+        raise ValueError("research stage envelope type must be a string")
     if value.get("contract_version") != CONTRACT_VERSION:
         raise ValueError("unsupported research contract version")
     if value.get("stage_type") != stage_type:
@@ -589,10 +591,9 @@ def merge_stage_output(
 ) -> dict[str, Any]:
     """Merge only declared stage outputs while preserving completed evidence."""
     merged = copy.deepcopy(context)
-    if (
-        output.get("contract_version") != CONTRACT_VERSION
-        or output.get("stage_type") not in STAGE_NAMES
-    ):
+    if not output:
+        return merged
+    if "contract_version" not in output and "stage_type" not in output:
         previous_verification = merged.get("verification")
         merged.update(copy.deepcopy(output))
         incoming_verification = merged.get("verification")
@@ -609,7 +610,11 @@ def merge_stage_output(
             )
             merged["verification"] = preserved
         return merged
-    stage_type = output["stage_type"]
+    stage_type = output.get("stage_type")
+    if not isinstance(stage_type, str):
+        raise ValueError("research stage envelope type must be a string")
+    if stage_type not in STAGE_NAMES:
+        raise ValueError("unknown research stage type")
     validate_envelope(output, stage_type)
     merged["contract_version"] = CONTRACT_VERSION
     stage_results = copy.deepcopy(merged.get("stage_results", {}))
@@ -683,7 +688,7 @@ def merge_stage_output(
                 previous.get("schema_passed", True)
                 and current.get("schema_passed", True)
             )
-            if previous.get("semantic_status") in {"failed", "unverified"}:
+            if previous.get("semantic_status") in ("failed", "unverified"):
                 current["semantic_status"] = previous["semantic_status"]
             current["coverage_complete"] = bool(
                 previous.get("coverage_complete", False)
