@@ -50,6 +50,7 @@ for await (const line of readline.createInterface({input:process.stdin})) {
    send({id:41,method:c.request.method,params:c.request.params});
    send({method:'turn/completed',params:{threadId:'s',turn:{id:'t',status:'completed',items:[],error:null}}});
  }
+ if(m.method==='thread/read') send({id:m.id,result:{thread:c.history || {id:'s',turns:[]}}});
  if(m.method==='turn/interrupt') send({id:m.id,result:{}});
 }
 `;
@@ -699,4 +700,104 @@ test("native callback identity history fails closed at its resource bound", asyn
     /callback identity capacity exceeded/,
   );
   await rejected;
+});
+
+test("pinned full history matches client command identity and recovers text", async (t) => {
+  const { server, adapter } = setup(t);
+  server.configure({
+    history: {
+      id: "s",
+      turns: [
+        {
+          id: "t",
+          itemsView: "full",
+          status: "completed",
+          items: [
+            { type: "userMessage", clientId: "command", id: "u", content: [] },
+            { type: "agentMessage", id: "a", text: "answer" },
+          ],
+        },
+      ],
+    },
+  });
+  assert.deepEqual(await adapter.inspectTurn("s", "command"), {
+    state: "completed",
+    sessionId: "s",
+    turnId: "t",
+    assistantText: "answer",
+  });
+  assert.deepEqual(
+    server.calls("thread/read").map((m: any) => m.params),
+    [{ threadId: "s", includeTurns: true }],
+  );
+});
+for (const history of [
+  { id: "foreign", turns: [] },
+  {
+    id: "s",
+    turns: [
+      {
+        id: "t",
+        itemsView: "summary",
+        status: "completed",
+        items: [{ type: "userMessage", clientId: "command" }],
+      },
+    ],
+  },
+  {
+    id: "s",
+    turns: [
+      {
+        id: "t",
+        itemsView: "full",
+        status: "completed",
+        items: [{ type: "userMessage", clientId: "different" }],
+      },
+    ],
+  },
+])
+  test(`history without exact full native identity remains unknown ${JSON.stringify(history)}`, async (t) => {
+    const { server, adapter } = setup(t);
+    server.configure({ history });
+    assert.deepEqual(await adapter.inspectTurn("s", "command"), {
+      state: "unknown",
+      sessionId: "s",
+      turnId: null,
+    });
+  });
+
+test("history reconciliation uses a fresh reader after native transport loss without another start", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.configure({ mode: "exit" });
+  await adapter.startSession(options);
+  const controller = new AbortController();
+  const consume = (async () => {
+    try {
+      for await (const _event of adapter.events(controller.signal)) {
+      }
+    } catch {}
+  })();
+  await assert.rejects(adapter.startTurn("s", "hello", "command"));
+  await consume;
+  server.configure({
+    history: {
+      id: "s",
+      turns: [
+        {
+          id: "t",
+          itemsView: "full",
+          status: "completed",
+          items: [
+            { type: "userMessage", clientId: "command" },
+            { type: "agentMessage", text: "recovered" },
+          ],
+        },
+      ],
+    },
+  });
+  assert.equal(
+    (await adapter.inspectTurn("s", "command")).assistantText,
+    "recovered",
+  );
+  assert.equal(server.calls("turn/start").length, 1);
 });

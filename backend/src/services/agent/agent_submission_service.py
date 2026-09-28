@@ -70,7 +70,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional, cast
+from typing import Any, Literal, Optional, cast
 from uuid import UUID, uuid4
 
 from asyncpg.exceptions import ConnectionDoesNotExistError
@@ -1067,6 +1067,7 @@ async def finalize_submission(
     error_code: Optional[str] = None,
     error: Optional[str] = None,
     run_metadata: Optional[dict[str, Any]] = None,
+    provider: Literal["nous", "codex"] = "nous",
 ) -> bool:
     """Move the run to *status* at the end of the turn and commit.
 
@@ -1125,13 +1126,13 @@ async def finalize_submission(
                 .where(
                     AgentRun.job_id == run_id,
                     AgentRun.status.notin_(_TERMINAL_RUN_STATUSES),
-                    AgentRun.execution_provider == "nous",
+                    AgentRun.execution_provider == provider,
                     # A producer that observed the durable stop marker must
                     # acknowledge it as cancelled; it may never publish a
                     # late completed/failed transition over ``stopping``.
                     *(
                         []
-                        if status == JobStatus.CANCELLED
+                        if status == JobStatus.CANCELLED or provider == "codex"
                         else [AgentRun.status != JobStatus.STOPPING.value]
                     ),
                 )
@@ -1172,6 +1173,14 @@ async def finalize_submission(
                     logger.debug(
                         "finalize_submission: ledger already closed for %s", run_id
                     )
+            if provider == "codex" and status in TERMINAL_JOB_STATUSES:
+                from src.models.harness_session import HarnessSession
+
+                await db.execute(
+                    update(HarnessSession)
+                    .where(HarnessSession.run_id == run_id)
+                    .values(workspace_locked=False)
+                )
             await db.commit()
             return True
         except Exception as exc:

@@ -65,6 +65,15 @@ export interface HarnessAdapter {
     id: NativeRequestId,
     response: NativeResponse,
   ): Promise<void>;
+  inspectTurn(sessionId: string, commandId: string): Promise<NativeObservation>;
   closeSession(): Promise<void>;
   events(signal: AbortSignal): AsyncIterable<AdapterEvent>;
 }
+
+export type NativeObservation = {
+  state: "unknown" | "running" | "completed" | "failed" | "interrupted";
+  sessionId: string;
+  turnId: string | null;
+  // Only full pinned-schema history with an exact clientId match supplies text.
+  assistantText?: string;
+};

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { Journal } from "./journal.ts";
+import { connectBridge } from "./connection.ts";
+import { CodexAdapter } from "./adapters/codex.ts";
 import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { realpath, stat } from "node:fs/promises";
@@ -209,6 +212,97 @@ export async function addWorkspace(
   );
   return { workspaceId, root };
 }
+export async function runBridge(
+  stateDir: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const store = new CredentialStore(stateDir);
+  const value = await store.readLocal("connection");
+  if (
+    !record(value) ||
+    !uuid(value.deviceId) ||
+    !Array.isArray(value.workspaces) ||
+    typeof value.apiUrl !== "string" ||
+    typeof value.credentialHandle !== "string"
+  )
+    throw new Error("connect this device first");
+  const state = value as LocalState;
+  const adapters = new Map<string, CodexAdapter>();
+  const journal = new Journal(
+    join(stateDir, "journal.sqlite"),
+    (workspaceId) => {
+      const workspace = state.workspaces.find((w) => w.id === workspaceId);
+      if (!workspace) throw new Error("unregistered local workspace");
+      return {
+        cwd: workspace.root,
+        workspaceId,
+        policy: {
+          sandbox: "workspace-write",
+          approvalPolicy: "on-request",
+          reviewer: "user",
+          networkAccess: false,
+          writableRoots: [workspace.root],
+        },
+      };
+    },
+  );
+  const adapterFor = (_workspaceId: string, runId: string): CodexAdapter => {
+    let adapter = adapters.get(runId);
+    if (!adapter) {
+      adapter = new CodexAdapter();
+      adapters.set(runId, adapter);
+    }
+    return adapter;
+  };
+  const url = new URL(apiBase(state.apiUrl) + "/harness/connect");
+  url.protocol = "wss:";
+  try {
+    while (!signal.aborted) {
+      // Local native evidence and the expiry watchdog must work even while the
+      // network is unavailable or authentication cannot open a new connection.
+      for (const c of journal.activeCommands()) {
+        if (journal.state(c.commandId) === "recovering")
+          try {
+            await journal.reconcile(
+              c.commandId,
+              adapterFor(c.workspaceId, c.runId),
+            );
+          } catch {
+            journal.quarantine(c.commandId);
+          }
+      }
+      try {
+        await connectBridge({
+          url: url.href,
+          deviceId: state.deviceId,
+          credentials: await store.load(state.credentialHandle),
+          journal,
+          signal,
+          adapterFor,
+        });
+      } catch {
+        if (!signal.aborted)
+          console.error(
+            "Bridge disconnected; preserving journal and workspace ownership.",
+          );
+      }
+      if (!signal.aborted)
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", done);
+            resolve();
+          };
+          const timer = setTimeout(done, 5000);
+          signal.addEventListener("abort", done, { once: true });
+        });
+    }
+  } finally {
+    // No local unlock on shutdown: app-server children may outlive this process.
+    for (const adapter of adapters.values()) await adapter.closeSession();
+    journal.close();
+  }
+}
 async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -235,9 +329,14 @@ async function main(): Promise<void> {
     });
   else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
-  else
+  else if (positionals.join(" ") === "run") {
+    const controller = new AbortController();
+    process.once("SIGINT", () => controller.abort());
+    process.once("SIGTERM", () => controller.abort());
+    await runBridge(stateDir, controller.signal);
+  } else
     throw new Error(
-      "Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME | workspace add --root PATH [--label NAME]",
+      "Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME | workspace add --root PATH [--label NAME] | run",
     );
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

@@ -49,6 +49,7 @@ from src.api.documents import (
     table_extraction_router,
 )
 from src.api.evidence.router import router as evidence_router
+from src.api.harness import router as harness_router
 from src.api.infrastructure import evaluation_router, workers_router
 from src.api.integrations import router as integrations_router
 from src.api.quality import (
@@ -567,6 +568,7 @@ app.add_middleware(AgentDisconnectSignalMiddleware)
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(cli_auth_router, prefix="/api/v1")
 app.include_router(integrations_router, prefix="/api/v1")
+app.include_router(harness_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")

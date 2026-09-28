@@ -12,10 +12,12 @@
   "exports": {
     ".": "./src/contracts.ts",
     "./codex": "./src/adapters/codex.ts",
-    "./credentials": "./src/credentials.ts"
+    "./credentials": "./src/credentials.ts",
+    "./journal": "./src/journal.ts",
+    "./connection": "./src/connection.ts"
   },
   "scripts": {
-    "test": "node --import tsx --test",
+    "test": "node --experimental-sqlite --import tsx --test",
     "type-check": "tsc --noEmit",
     "start": "node --import tsx src/cli.ts"
   },

@@ -167,7 +167,14 @@ async def record_observation(
         )
         if run is None or session is None:
             raise IntegrationAccessDenied()
-        if not JobStatus(run.status).is_terminal:
+        # Delivery commits terminal native evidence before projecting the
+        # assistant row. A sweeper's unknown observation must not erase that
+        # sealed evidence while its idempotent projection is being retried.
+        if not JobStatus(run.status).is_terminal and session.observation not in {
+            "completed",
+            "failed",
+            "interrupted",
+        }:
             now = datetime.now(timezone.utc)
             session.observation = observation
             session.observed_at = now

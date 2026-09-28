@@ -14,6 +14,7 @@ import type {
   NativeResponse,
   NativeSession,
   NativeTurn,
+  NativeObservation,
   SessionOptions,
 } from "../contracts.ts";
 import {
@@ -52,12 +53,15 @@ const sameRoots = (a: unknown, b: string[]) =>
 /** Local executable selection is trusted startup configuration, never a remote command. */
 export class CodexAdapter implements HarnessAdapter {
   private rpc?: JsonRpcProcess;
+  private transportFailed = false;
+  private historyReader?: CodexAdapter;
   private boot?: Promise<void>;
   private queue = new BoundedQueue<AdapterEvent>(32);
   private consuming = false;
   private session?: { id: string; options: SessionOptions };
   private opening = false;
   private observedTurnId?: string;
+  private recoveredTarget?: { sessionId: string; turnId: string };
   private active?: string; // 'starting' also quarantines ambiguous native acceptance.
   private requests = new Map<
     NativeRequestId,
@@ -108,7 +112,10 @@ export class CodexAdapter implements HarnessAdapter {
         this.executable.command,
         [...(this.executable.args ?? []), "app-server"],
         (m) => this.receive(m),
-        (e) => this.queue.fail(e),
+        (e) => {
+          this.transportFailed = true;
+          this.queue.fail(e);
+        },
       );
       const reply = await this.rpc.call("initialize", {
         clientInfo: { name: "nous_harness_bridge", version: "0.1.0" },
@@ -282,7 +289,14 @@ export class CodexAdapter implements HarnessAdapter {
     return { id: reply.turn.id };
   }
   async interruptTurn(sessionId: string, turnId: string): Promise<void> {
-    if (this.session?.id !== sessionId || this.active !== turnId)
+    if (this.transportFailed && this.historyReader)
+      return this.historyReader.interruptTurn(sessionId, turnId);
+    if (
+      (this.session?.id !== sessionId ||
+        (this.active !== turnId && this.observedTurnId !== turnId)) &&
+      (this.recoveredTarget?.sessionId !== sessionId ||
+        this.recoveredTarget?.turnId !== turnId)
+    )
       throw new Error("unknown active turn");
     await this.rpc!.call("turn/interrupt", { threadId: sessionId, turnId });
     // Receipt is not terminal evidence. Keep active until turn/completed.
@@ -340,7 +354,71 @@ export class CodexAdapter implements HarnessAdapter {
         );
     }
   }
+  async inspectTurn(
+    sessionId: string,
+    commandId: string,
+  ): Promise<NativeObservation> {
+    if (this.transportFailed) {
+      // A dead app-server is not evidence its native child stopped. Open only a
+      // history reader; do not resume a session or issue another turn/start.
+      await this.historyReader?.closeSession();
+      this.historyReader = new CodexAdapter(this.executable);
+      return this.historyReader.inspectTurn(sessionId, commandId);
+    }
+    await this.initialize();
+    const reply = await this.rpc!.call("thread/read", {
+      threadId: sessionId,
+      includeTurns: true,
+    });
+    const unknown: NativeObservation = {
+      state: "unknown",
+      sessionId,
+      turnId: null,
+    };
+    if (
+      !record(reply) ||
+      !record(reply.thread) ||
+      reply.thread.id !== sessionId ||
+      !Array.isArray(reply.thread.turns)
+    )
+      return unknown;
+    const matches = reply.thread.turns.filter(
+      (turn: any) =>
+        record(turn) &&
+        turn.itemsView === "full" &&
+        Array.isArray(turn.items) &&
+        turn.items.some(
+          (item: any) =>
+            record(item) &&
+            item.type === "userMessage" &&
+            item.clientId === commandId,
+        ),
+    );
+    if (matches.length !== 1) return unknown;
+    const turn = matches[0];
+    if (
+      !string(turn.id) ||
+      !["inProgress", "completed", "failed", "interrupted"].includes(
+        turn.status,
+      )
+    )
+      return unknown;
+    const texts = turn.items.filter(
+      (item: any) => item.type === "agentMessage",
+    );
+    if (texts.some((item: any) => typeof item.text !== "string"))
+      return unknown;
+    if (turn.status === "inProgress")
+      this.recoveredTarget = { sessionId, turnId: turn.id };
+    return {
+      state: turn.status === "inProgress" ? "running" : turn.status,
+      sessionId,
+      turnId: turn.id,
+      assistantText: texts.map((item: any) => item.text).join(""),
+    };
+  }
   async closeSession(): Promise<void> {
+    await this.historyReader?.closeSession();
     this.requests.clear();
     this.seenRequestIds.clear();
     this.seenRequestIdBytes = 0;
