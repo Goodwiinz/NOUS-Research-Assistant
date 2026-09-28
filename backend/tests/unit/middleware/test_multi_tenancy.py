@@ -179,7 +179,7 @@ async def test_agent_stream_path_sets_tenant_context():
         "/docs/oauth2-redirect",
         "/redoc",
         "/openapi.json",
-        # enumerated public API routes (PUBLIC_PATH_REGEXES)
+        # enumerated exempt routes (_MIDDLEWARE_EXEMPT_PATH_REGEXES)
         "/",
         "/api/v1/arxiv/search",
         "/api/v1/arxiv/tracking/stats",
@@ -191,6 +191,9 @@ async def test_agent_stream_path_sets_tenant_context():
         "/api/v1/analytics/behavior/health",
         "/api/v1/analytics/performance/health",
         "/api/v1/analytics/recommendations/health",
+        # endpoint-level API-key-auth routes (audit I7 Decision 1)
+        "/api/v1/search/authenticated/hybrid",
+        "/api/v1/search/authenticated/health",
     ],
 )
 def test_should_skip_tenant_validation_matches_mounted_paths(path):
@@ -235,8 +238,9 @@ def test_should_skip_tenant_validation_matches_mounted_paths(path):
         "/api/v1/auth/refresh/callback",
         "/api/v1/cli-authX/start",
         "/api/v2/threads",
-        # PUBLIC_PATH_REGEXES look-alikes: exemptions are exact-route only, so
-        # sibling routes (all authenticated) keep tenant validation.
+        # _MIDDLEWARE_EXEMPT_PATH_REGEXES look-alikes: exemptions are
+        # exact-route only, so sibling routes (all authenticated) keep tenant
+        # validation.
         "/api/v1/arxiv/searchX",
         "/api/v1/arxiv/search/extra",
         "/api/v1/arxiv/ingest",  # authenticated sibling of the public search
@@ -249,6 +253,11 @@ def test_should_skip_tenant_validation_matches_mounted_paths(path):
         "/api/v1/search-quality/metrics/types/all",
         "/api/v1/analytics/quality/healthX",
         "/api/v1/analytics/behavior/health/summary",
+        # API-key-auth route look-alikes stay behind the gate too.
+        "/api/v1/search/authenticated",
+        "/api/v1/search/authenticated/hybridX",
+        "/api/v1/search/authenticated/healthX",
+        "/api/v1/search/authenticated/hybrid/extra",
     ],
 )
 def test_should_skip_tenant_validation_does_not_overmatch(path):
@@ -475,9 +484,9 @@ def test_skip_list_paths_reachable_without_token(path):
     assert len(reached) == 1, f"{path} must reach exactly its own handler"
 
 
-# (method, path) for every PUBLIC_PATH_REGEXES exemption. Each public route
-# must be reachable WITHOUT an Authorization header through the real
-# middleware — no 401 from the fail-closed gate.
+# (method, path) for every _MIDDLEWARE_EXEMPT_PATH_REGEXES "public metadata"
+# exemption. Each public route must be reachable WITHOUT an Authorization
+# header through the real middleware — no 401 from the fail-closed gate.
 _PUBLIC_ROUTE_STUBS = [
     ("get", "/", "root"),
     ("get", "/docs", "docs"),
@@ -503,8 +512,11 @@ def test_public_path_exemptions_reachable_without_token(method, path, label):
     fail-closed tenant gate: reachable with no token, handler actually runs.
 
     PROBE_EXEMPT_PATHS (/health, /health/readiness) are covered by
-    ``test_skip_list_paths_reachable_without_token`` above; this list is
-    PUBLIC_PATH_REGEXES only.
+    ``test_skip_list_paths_reachable_without_token`` above; this list is the
+    public-metadata entries of _MIDDLEWARE_EXEMPT_PATH_REGEXES only. The
+    endpoint-level API-key-auth exemptions have their own dedicated tests
+    below (their real handlers 401 without a key, so a token-less 200 stub
+    here would misrepresent the contract).
     """
     from starlette.testclient import TestClient
 
@@ -644,3 +656,127 @@ async def test_non_http_scope_passes_through_untouched():
     await middleware(scope, receive, send)
 
     downstream.assert_awaited_once_with(scope, receive, send)
+
+
+# ===========================================================================
+# Audit I7 Decision 1: endpoint-level API-key-auth exemptions.
+#
+# POST /api/v1/search/authenticated/hybrid and GET
+# /api/v1/search/authenticated/health authenticate via Depends(get_api_key_data)
+# (src/core/api_key_auth.py:199) — an API key carried as a Bearer credential,
+# verified against hashed DB records. They are NOT JWT routes, so the
+# middleware's JWT tenant resolution would 401 every valid API-key request;
+# they are exempt from the middleware and rely on their own auth.
+# ============================================================================
+
+_API_KEY_ROUTE_STUBS = [
+    ("post", "/api/v1/search/authenticated/hybrid", "hybrid"),
+    ("get", "/api/v1/search/authenticated/health", "health"),
+]
+
+
+@pytest.mark.parametrize("method,path,label", _API_KEY_ROUTE_STUBS)
+def test_api_key_route_with_key_passes_middleware_to_endpoint(method, path, label):
+    """A request carrying an API key (Bearer scheme) must pass through the
+    middleware's fail-closed gate and reach the endpoint, which performs its
+    own authentication. The stub stands in for the real handler."""
+    from starlette.testclient import TestClient
+
+    app = _i7_app()
+    reached = []
+
+    def handler():
+        reached.append(label)
+        return {"ok": True}
+
+    getattr(app, method)(path)(handler)
+
+    client = TestClient(app)
+    response = getattr(client, method)(
+        path, headers={"Authorization": "Bearer rag_validapikey000000000000"}
+    )
+
+    assert response.status_code == 200
+    assert reached == [label], f"{path} must reach its own handler"
+
+
+@pytest.mark.parametrize(
+    "method,path", [(m, p) for m, p, _ in _API_KEY_ROUTE_STUBS]
+)
+def test_api_key_route_without_key_rejected_by_endpoint_not_middleware(
+    method, path
+):
+    """Without a key, the rejection must come from the ENDPOINT's own auth
+    dependency, not the middleware tenant gate.
+
+    The stub registers the real ``api_key_security`` HTTPBearer scheme used by
+    ``get_api_key_data``. Shapes distinguish the two layers:
+      * endpoint auth => FastAPI HTTPException => ``{"detail": ...}`` (401)
+      * middleware gate => ``error_response`` => ``{"error": {...}}`` (401)
+    """
+    from fastapi import Depends
+    from starlette.testclient import TestClient
+
+    from src.core.api_key_auth import api_key_security
+
+    app = _i7_app()
+    reached = []
+
+    def handler(
+        credentials=Depends(api_key_security),  # noqa: B008 - test stub
+    ):
+        reached.append(path)
+        return {"ok": True}
+
+    getattr(app, method)(path)(handler)
+
+    client = TestClient(app)
+    response = getattr(client, method)(path)
+
+    assert response.status_code == 401
+    assert reached == [], "handler must not run when the API key is missing"
+    body = response.json()
+    assert "detail" in body, "must be the endpoint's HTTPException shape"
+    assert "error" not in body, "must NOT be the middleware error_response shape"
+
+
+# ===========================================================================
+# Audit I7 Decision 2: families that were effectively open before the
+# fail-closed gate stay behind it until endpoint-level auth lands (tracked
+# separately in the audit ledger). Representative path per family:
+#   * /api/v1/arxiv/bulk/*        (api/arxiv/arxiv_bulk.py:26,93)
+#   * /api/v1/arxiv/llm-bulk/*    (api/arxiv/arxiv_llm_bulk.py:29,132)
+#   * /api/v1/connectors/*        (api/connectors/router.py:82,116)
+#   * research-engine blueprints  (api/research_engine ... templates)
+# ============================================================================
+
+_DECISION2_FAMILIES = [
+    ("post", "/api/v1/arxiv/bulk/start"),
+    ("post", "/api/v1/arxiv/llm-bulk/start"),
+    ("post", "/api/v1/connectors/search"),
+    ("get", "/api/v1/research-engine/blueprints/templates"),
+]
+
+
+@pytest.mark.parametrize("method,path", _DECISION2_FAMILIES)
+def test_effectively_open_families_stay_behind_fail_closed_gate(method, path):
+    """No token on these routes => middleware 401, handler never runs."""
+    from starlette.testclient import TestClient
+
+    app = _i7_app()
+    reached = []
+
+    def handler():
+        reached.append(path)
+        return {"ok": True}
+
+    getattr(app, method)(path)(handler)
+
+    client = TestClient(app)
+    response = getattr(client, method)(path)
+
+    assert response.status_code == 401
+    assert reached == [], f"{path} handler must not run without a token"
+    body = response.json()
+    assert body["error"]["message"] == "Not authenticated"
+    assert body["error"]["type"] == "authentication_error"

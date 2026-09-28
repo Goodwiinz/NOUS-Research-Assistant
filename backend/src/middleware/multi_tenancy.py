@@ -51,11 +51,12 @@ logger = logging.getLogger(__name__)
 # context can exist (login/register/refresh, CLI device flow). Skipping tenant
 # resolution for them is required for auth to work at all.
 #
-# ``PUBLIC_PATH_REGEXES`` — deliberately anonymous routes (verified by scanning
-# ``src/api/`` for endpoints with no auth dependency and by reading each
-# handler). Everything NOT listed here is fail-closed: no Authorization header
-# => 401, unresolvable token => 401. Do not add entries without verifying the
-# endpoint has no auth dependency and exposes no tenant data.
+# ``_MIDDLEWARE_EXEMPT_PATH_REGEXES`` — routes exempt from middleware tenant
+# resolution because they perform their own authentication (public metadata OR
+# endpoint-level API-key auth). Everything NOT listed here is fail-closed: no
+# Authorization header => 401, unresolvable token => 401. Do not add entries
+# without verifying the route authenticates itself (endpoint-level auth
+# dependency) or exposes only public, tenant-free metadata.
 _SKIP_PATH_REGEXES = (
     # POST /api/v1/auth/login — establishes identity; no tenant context yet.
     re.compile(r"^/api/v1/auth/login$"),
@@ -68,10 +69,13 @@ _SKIP_PATH_REGEXES = (
     re.compile(r"^/api/v1/cli-auth/"),
 )
 
-# Deliberately anonymous routes. Each entry: one route, one reason it is
-# public. Anchored on purpose — a prefix match here would re-open the I7
-# look-alike bypass for every sibling route.
-PUBLIC_PATH_REGEXES = (
+# Routes exempt from middleware tenant resolution because they perform their
+# own authentication: either deliberately anonymous public metadata, or
+# endpoint-level auth that is not the middleware's Bearer JWT (e.g. API keys).
+# Each entry: one route, one reason it is exempt. Anchored on purpose — a
+# prefix match here would re-open the I7 look-alike bypass for every sibling
+# route.
+_MIDDLEWARE_EXEMPT_PATH_REGEXES = (
     # GET / — static welcome/version metadata served by main.py (no tenant data).
     re.compile(r"^/$"),
     # GET /docs — Swagger UI page served by FastAPI (static HTML).
@@ -105,6 +109,15 @@ PUBLIC_PATH_REGEXES = (
     re.compile(r"^/api/v1/analytics/performance/health$"),
     # GET /api/v1/analytics/recommendations/health — recommendations health.
     re.compile(r"^/api/v1/analytics/recommendations/health$"),
+    # POST /api/v1/search/authenticated/hybrid — endpoint-level API-key auth
+    # (Depends(get_api_key_data), src/core/api_key_auth.py), not a JWT Bearer
+    # token; the middleware's JWT verification would 401 every valid API-key
+    # request. The dependency fully authenticates (prefix + hash + active +
+    # expiry + rate limit) and the endpoint enforces org scoping itself.
+    re.compile(r"^/api/v1/search/authenticated/hybrid$"),
+    # GET /api/v1/search/authenticated/health — same endpoint-level API-key
+    # auth contract as /authenticated/hybrid.
+    re.compile(r"^/api/v1/search/authenticated/health$"),
 )
 
 
@@ -198,8 +211,8 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         resolution (issue #1003).
 
         Audit I7: matching is done with anchored regexes (see
-        ``_SKIP_PATH_REGEXES`` and ``PUBLIC_PATH_REGEXES``) instead of
-        ``startswith`` so look-alike paths (``/docsX``,
+        ``_SKIP_PATH_REGEXES`` and ``_MIDDLEWARE_EXEMPT_PATH_REGEXES``) instead
+        of ``startswith`` so look-alike paths (``/docsX``,
         ``/api/v1/auth/refreshXYZ``, ...) can never bypass tenant validation.
         Probe paths stay an exact-match set lookup.
         """
@@ -209,7 +222,7 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if any(pattern.match(path) for pattern in _SKIP_PATH_REGEXES):
             return True
-        return any(pattern.match(path) for pattern in PUBLIC_PATH_REGEXES)
+        return any(pattern.match(path) for pattern in _MIDDLEWARE_EXEMPT_PATH_REGEXES)
 
     async def _extract_tenant_info(
         self, request: Request, db: Optional[AsyncSession] = None
