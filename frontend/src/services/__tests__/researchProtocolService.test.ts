@@ -85,4 +85,23 @@ describe('researchProtocolService', () => {
       approval
     );
   });
+
+  it('records protocol deviations against the selected protocol', async () => {
+    vi.mocked(api.post).mockResolvedValue({ id: 'deviation-1' });
+    const deviation = {
+      protocol_version_id: 'version-1',
+      run_id: 'run-1',
+      output_reference: 'step-1',
+      observed_difference: 'One additional database was searched',
+      rationale: 'The primary index was unavailable',
+      disposition: 'documented',
+    };
+
+    await researchProtocolService.recordDeviation('protocol-1', deviation);
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/v1/research-engine/protocols/protocol-1/deviations',
+      deviation
+    );
+  });
 });

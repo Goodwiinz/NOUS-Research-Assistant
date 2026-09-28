@@ -108,7 +108,7 @@ export function ProtocolPanel(props: ProtocolPanelProps): ReactElement {
     protocolOptions[0];
   return (
     <ProtocolPanelContent
-      key={`${question?.current_version_id ?? 'no-question'}:${protocol?.current_draft_version_id ?? 'no-protocol'}`}
+      key={`${question?.id ?? 'no-question'}:${protocol?.id ?? 'no-protocol'}:${question?.current_version_id ?? 'no-question-version'}:${protocol?.current_draft_version_id ?? 'no-draft-version'}`}
       {...props}
       question={question}
       protocol={protocol}
@@ -243,9 +243,23 @@ function ProtocolPanelContent({
   const [registrationProvider, setRegistrationProvider] = useState('');
   const [registrationId, setRegistrationId] = useState('');
   const [registrationUrl, setRegistrationUrl] = useState('');
+  const [registrationReceipt, setRegistrationReceipt] = useState('');
+  const [deviationVersionId, setDeviationVersionId] = useState('');
+  const [deviationRunId, setDeviationRunId] = useState('');
+  const [deviationOutputReference, setDeviationOutputReference] = useState('');
+  const [deviationDifference, setDeviationDifference] = useState('');
+  const [deviationRationale, setDeviationRationale] = useState('');
+  const [deviationDisposition, setDeviationDisposition] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const approvalAttempt = useRef<{ fingerprint: string; key: string }>();
   const registrationAttempt = useRef<{ fingerprint: string; key: string }>();
+  const deviationVersions = versions.filter(
+    (version) =>
+      version.status === 'approved' || version.status === 'superseded'
+  );
+  const deviationVersion =
+    deviationVersions.find((version) => version.id === deviationVersionId) ??
+    approvedVersion;
 
   useEffect(() => {
     onApprovedVersionChange(
@@ -352,9 +366,29 @@ function ProtocolPanelContent({
       !protocol ||
       !approvedVersion ||
       !registrationProvider.trim() ||
-      !registrationId.trim()
+      !registrationId.trim() ||
+      !registrationReceipt.trim()
     )
       return;
+    let receipt: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(registrationReceipt);
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        Array.isArray(parsed) ||
+        Object.keys(parsed).length === 0
+      ) {
+        throw new Error('Receipt must be a non-empty JSON object.');
+      }
+      receipt = parsed as Record<string, unknown>;
+    } catch {
+      setFormError(
+        'Enter the external registry receipt as a non-empty JSON object.'
+      );
+      return;
+    }
+    setFormError(null);
     const fingerprint = JSON.stringify({
       protocolId: protocol.id,
       versionId: approvedVersion.id,
@@ -362,6 +396,7 @@ function ProtocolPanelContent({
       provider: registrationProvider.trim(),
       externalIdentifier: registrationId.trim(),
       url: registrationUrl.trim() || null,
+      receipt,
       actorUserId,
     });
     registrationAttempt.current = idempotencyKeyFor(
@@ -378,7 +413,7 @@ function ProtocolPanelContent({
           provider: registrationProvider.trim(),
           external_identifier: registrationId.trim(),
           url: registrationUrl.trim() || null,
-          receipt: null,
+          receipt,
           status: 'registered',
           failure_reason: null,
           idempotency_key: registrationAttempt.current.key,
@@ -389,6 +424,42 @@ function ProtocolPanelContent({
           setRegistrationProvider('');
           setRegistrationId('');
           setRegistrationUrl('');
+          setRegistrationReceipt('');
+        },
+      }
+    );
+  };
+
+  const recordDeviation = (): void => {
+    if (
+      !protocol ||
+      !deviationVersion ||
+      !deviationRunId.trim() ||
+      !deviationDifference.trim() ||
+      !deviationRationale.trim() ||
+      !deviationDisposition.trim()
+    )
+      return;
+    setFormError(null);
+    actions.recordDeviation.mutate(
+      {
+        protocolId: protocol.id,
+        body: {
+          protocol_version_id: deviationVersion.id,
+          run_id: deviationRunId.trim(),
+          output_reference: deviationOutputReference.trim() || null,
+          observed_difference: deviationDifference.trim(),
+          rationale: deviationRationale.trim(),
+          disposition: deviationDisposition.trim(),
+        },
+      },
+      {
+        onSuccess: () => {
+          setDeviationRunId('');
+          setDeviationOutputReference('');
+          setDeviationDifference('');
+          setDeviationRationale('');
+          setDeviationDisposition('');
         },
       }
     );
@@ -683,7 +754,7 @@ function ProtocolPanelContent({
             Approved version {approvedVersion.version}
           </h3>
           <p className="mt-1 break-all text-xs text-muted-foreground">
-            Effective plan hash: {approvedVersion.content_hash}
+            Protocol content hash: {approvedVersion.content_hash}
           </p>
           {!approvedVersionMatchesBlueprint && (
             <p className="mt-2 text-sm text-destructive">
@@ -719,8 +790,8 @@ function ProtocolPanelContent({
               </li>
             ))}
           </ul>
-          {!readOnly && protocol.can_edit && (
-            <div className="mt-3 grid gap-2 md:grid-cols-3">
+          {!readOnly && protocol.can_manage && (
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
               <input
                 aria-label="Registry provider"
                 value={registrationProvider}
@@ -744,12 +815,20 @@ function ProtocolPanelContent({
                 placeholder="Receipt URL (optional)"
                 className="rounded-md border border-border bg-background px-3 py-2 text-sm"
               />
+              <textarea
+                aria-label="External registration receipt (JSON)"
+                value={registrationReceipt}
+                onChange={(event) => setRegistrationReceipt(event.target.value)}
+                placeholder='External receipt JSON, for example {"record_id":"..."}'
+                className="min-h-20 rounded-md border border-border bg-background px-3 py-2 text-sm md:col-span-2"
+              />
               <button
                 type="button"
                 onClick={recordRegistration}
                 disabled={
                   !registrationProvider.trim() ||
                   !registrationId.trim() ||
+                  !registrationReceipt.trim() ||
                   actions.register.isPending
                 }
                 className="rounded-md border border-border px-3 py-2 text-sm disabled:opacity-50"
@@ -761,25 +840,106 @@ function ProtocolPanelContent({
         </details>
       )}
 
-      {protocol && (deviations.data?.length ?? 0) > 0 && (
+      {protocol && approvedVersion && (
         <details>
           <summary className="cursor-pointer text-sm font-medium">
-            Recorded deviations ({deviations.data?.length})
+            Protocol deviations ({deviations.data?.length ?? 0})
           </summary>
-          <ul className="mt-2 space-y-2 text-sm">
-            {deviations.data?.map((deviation) => (
-              <li
-                key={deviation.id}
-                className="rounded border border-border p-2"
+          {(deviations.data?.length ?? 0) > 0 ? (
+            <ul className="mt-2 space-y-2 text-sm">
+              {deviations.data?.map((deviation) => (
+                <li
+                  key={deviation.id}
+                  className="rounded border border-border p-2"
+                >
+                  <strong>{deviation.disposition}</strong>:{' '}
+                  {deviation.observed_difference}
+                  <p className="text-xs text-muted-foreground">
+                    {deviation.rationale}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">
+              No deviations have been recorded for this protocol.
+            </p>
+          )}
+          {!readOnly && protocol.can_edit && deviationVersions.length > 0 && (
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <label className="text-xs font-medium text-muted-foreground">
+                Protocol version
+                <select
+                  aria-label="Deviation protocol version"
+                  value={deviationVersion?.id ?? ''}
+                  onChange={(event) =>
+                    setDeviationVersionId(event.target.value)
+                  }
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+                >
+                  {deviationVersions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      Version {version.version} ({version.status})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <input
+                aria-label="Deviation run ID"
+                value={deviationRunId}
+                onChange={(event) => setDeviationRunId(event.target.value)}
+                placeholder="Run ID"
+                className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+              />
+              <input
+                aria-label="Deviation output reference (optional)"
+                value={deviationOutputReference}
+                onChange={(event) =>
+                  setDeviationOutputReference(event.target.value)
+                }
+                placeholder="Output step ID (optional)"
+                className="rounded-md border border-border bg-background px-3 py-2 text-sm md:col-span-2"
+              />
+              <textarea
+                aria-label="Observed protocol difference"
+                value={deviationDifference}
+                onChange={(event) => setDeviationDifference(event.target.value)}
+                placeholder="Observed difference"
+                className="min-h-20 rounded-md border border-border bg-background px-3 py-2 text-sm"
+              />
+              <textarea
+                aria-label="Deviation rationale"
+                value={deviationRationale}
+                onChange={(event) => setDeviationRationale(event.target.value)}
+                placeholder="Rationale"
+                className="min-h-20 rounded-md border border-border bg-background px-3 py-2 text-sm"
+              />
+              <input
+                aria-label="Deviation disposition"
+                value={deviationDisposition}
+                onChange={(event) =>
+                  setDeviationDisposition(event.target.value)
+                }
+                placeholder="Disposition"
+                className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={recordDeviation}
+                disabled={
+                  !deviationVersion ||
+                  !deviationRunId.trim() ||
+                  !deviationDifference.trim() ||
+                  !deviationRationale.trim() ||
+                  !deviationDisposition.trim() ||
+                  actions.recordDeviation.isPending
+                }
+                className="rounded-md border border-border px-3 py-2 text-sm disabled:opacity-50"
               >
-                <strong>{deviation.disposition}</strong>:{' '}
-                {deviation.observed_difference}
-                <p className="text-xs text-muted-foreground">
-                  {deviation.rationale}
-                </p>
-              </li>
-            ))}
-          </ul>
+                Record deviation
+              </button>
+            </div>
+          )}
         </details>
       )}
 
