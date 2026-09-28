@@ -49,6 +49,10 @@ vi.mock('@/services/researchEngineService', async (importOriginal) => {
 });
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
+const OTHER_RUN_ID = '22222222-2222-4222-8222-222222222222';
+
+type NonFinalReviewKind = 'screening' | 'extraction';
+type ProjectionMismatch = 'missing' | 'run' | 'index' | 'stage' | 'hash';
 
 function run(overrides: Partial<RunResponse> = {}): RunResponse {
   return {
@@ -103,6 +107,91 @@ function pendingScreeningReview(): PendingReviewResponse {
       ],
     },
   };
+}
+
+function projectedReview(
+  reviewKind: NonFinalReviewKind,
+  outputHash: string
+): PendingReviewResponse {
+  const screening = reviewKind === 'screening';
+  return {
+    pending: true,
+    descriptor: {
+      run_id: RUN_ID,
+      step_index: screening ? 1 : 2,
+      stage_type: screening ? 'screen' : 'extract',
+      review_kind: reviewKind,
+      contract_version: 1,
+      output_hash: outputHash,
+      status: 'pending',
+    },
+    stage_output: {
+      contract_version: 1,
+      stage_type: screening ? 'screen' : 'extract',
+      review_projection: {
+        projected: true,
+        truncated: true,
+        identity_complete: true,
+      },
+      ...(screening
+        ? {
+            screening: [
+              {
+                source_id: 'source-a',
+                part_id: 'p0001',
+                included: true,
+              },
+            ],
+          }
+        : {
+            extractions: [{ source_id: 'source-a', part_id: 'p0001' }],
+          }),
+    },
+  };
+}
+
+function projectedReviewStep(
+  reviewKind: NonFinalReviewKind,
+  outputHash: string,
+  mismatch: ProjectionMismatch
+): StepResponse | null {
+  if (mismatch === 'missing') return null;
+  const screening = reviewKind === 'screening';
+  const expectedIndex = screening ? 1 : 2;
+  const expectedStage = screening ? 'screen' : 'extract';
+  return persistedStep({
+    id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    run_id: mismatch === 'run' ? OTHER_RUN_ID : RUN_ID,
+    step_index: mismatch === 'index' ? expectedIndex + 1 : expectedIndex,
+    step_type:
+      mismatch === 'stage' ? (screening ? 'extract' : 'screen') : expectedStage,
+    outputs_hash: mismatch === 'hash' ? 'e'.repeat(64) : outputHash,
+    output: screening
+      ? {
+          contract_version: 1,
+          stage_type: 'screen',
+          screening: [
+            {
+              source_id: 'source-a',
+              part_id: 'p0001',
+              included: true,
+              reason: 'This private persisted reason must remain hidden.',
+            },
+          ],
+        }
+      : {
+          contract_version: 1,
+          stage_type: 'extract',
+          extractions: [
+            {
+              source_id: 'source-a',
+              part_id: 'p0001',
+              data: { private_result: 'must remain hidden' },
+              evidence: [{ quote: 'Private mismatched evidence.' }],
+            },
+          ],
+        },
+  });
 }
 
 describe('RunView durable run state', () => {
@@ -493,6 +582,61 @@ describe('RunView durable run state', () => {
       screen.queryByText(/cannot receive final approval/i)
     ).not.toBeInTheDocument();
   });
+
+  it.each(
+    (['screening', 'extraction'] as const).flatMap((reviewKind) =>
+      (['missing', 'run', 'index', 'stage', 'hash'] as const).map(
+        (mismatch) => [reviewKind, mismatch] as const
+      )
+    )
+  )(
+    'blocks an unresolved projected %s review with a %s persisted-step match',
+    async (reviewKind, mismatch) => {
+      const outputHash = 'd'.repeat(64);
+      const screening = reviewKind === 'screening';
+      const candidate = projectedReviewStep(reviewKind, outputHash, mismatch);
+      vi.mocked(getRun).mockResolvedValue(
+        run({
+          status: 'paused',
+          pause_reason: 'review_required',
+          review_kind: reviewKind,
+          step_index: screening ? 1 : 2,
+          output_hash: outputHash,
+        })
+      );
+      vi.mocked(listSteps).mockResolvedValue(candidate ? [candidate] : []);
+      vi.mocked(getPendingReview).mockResolvedValue(
+        projectedReview(reviewKind, outputHash)
+      );
+
+      render(<RunView runId={RUN_ID} />);
+
+      const group = await screen.findByRole('group', {
+        name: screening ? /source-a/i : /extraction from source-a/i,
+      });
+      fireEvent.click(
+        within(group).getByRole('radio', {
+          name: screening ? /include/i : /accept/i,
+        })
+      );
+      const approve = screen.getByRole('button', {
+        name: new RegExp(`approve ${reviewKind} review`, 'i'),
+      });
+      expect(approve).toBeDisabled();
+      fireEvent.click(approve);
+      expect(submitReview).not.toHaveBeenCalled();
+      expect(
+        screen.getByText(
+          /complete persisted review output could not be verified/i
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          /private persisted reason|private mismatched evidence/i
+        )
+      ).not.toBeInTheDocument();
+    }
+  );
 
   it('does not claim a stale review was refreshed when durable reload fails', async () => {
     vi.mocked(getRun)

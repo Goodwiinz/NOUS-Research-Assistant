@@ -157,6 +157,8 @@ export function ReviewPanel({
   const finalVerification = record(finalArtifact?.verification);
   const finalChecks = finalVerification?.claims ?? finalArtifact?.claims;
   const projectedOutput = isProjectedOutput(stageOutput);
+  const unresolvedNonFinalProjection =
+    projectedOutput && descriptor?.review_kind !== 'final';
   const reviewItems = descriptor
     ? records(
         stageOutput?.[
@@ -169,7 +171,8 @@ export function ReviewPanel({
   const approvalBlocked =
     descriptor?.review_kind === 'final'
       ? finalStatusValue !== 'verified'
-      : drafts.length === 0 ||
+      : unresolvedNonFinalProjection ||
+        drafts.length === 0 ||
         drafts.some(
           (draft) =>
             draft.decision === 'unresolved' ||
@@ -212,6 +215,7 @@ export function ReviewPanel({
   };
 
   const submit = async (decision: 'approve' | 'decline'): Promise<void> => {
+    if (decision === 'approve' && unresolvedNonFinalProjection) return;
     setError(null);
     setSubmitting(true);
     const request = {
@@ -326,6 +330,16 @@ export function ReviewPanel({
         >
           This artifact cannot receive final approval because verification did
           not finish with a verified result.
+        </div>
+      )}
+
+      {unresolvedNonFinalProjection && (
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-(--nous-helios)/30 bg-(--nous-helios)/10 p-3 text-sm text-foreground"
+        >
+          The complete persisted review output could not be verified against
+          this pending review. Refresh the run before approving it.
         </div>
       )}
 

@@ -262,4 +262,12 @@
   recover only exact-hash persisted outputs, stream decisions follow refreshed
   durable state with a three-attempt cap, and review submissions never report a
   failed refresh as successful.
+- Final projection-guard RED: all ten screening/extraction cases failed when an
+  unresolved projection had no persisted candidate or a run, index, stage, or
+  hash mismatch (`10 failed, 12 passed` in RunView).
+- Final GREEN: unresolved non-final projections now show a safe refresh message
+  and cannot approve or call the review submission API. Exact matches remain
+  approvable. Focused Task 7 passed `38` tests and the adjacent batch passed
+  `70`; TypeScript, scoped lint/formatting, both quality ratchets, and diff
+  checks pass.
 - Task 7: complete.

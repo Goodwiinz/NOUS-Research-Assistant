@@ -175,3 +175,32 @@ Lint-debt ratchet:          passed (113 errors, 1,961 warnings; baseline 116/2,0
 TypeScript exclusions:      passed (21 baselined exclusions)
 git diff --check:           passed
 ```
+
+### Unresolved non-final projections
+
+A final review found that a correctly unreconciled screening or extraction
+projection still allowed approval after the reviewer selected positive draft
+decisions. A table-driven RunView regression covered both review kinds with no
+candidate step and with otherwise matching candidates whose run ID, step
+index, stage type, or output hash differed. Before the production change, all
+ten cases failed because approval became enabled (`10 failed, 12 passed`).
+
+`ReviewPanel` now treats the remaining non-final projection marker as an
+unresolved durability boundary. It shows a safe refresh message, keeps approval
+disabled regardless of local draft choices, and defensively refuses an approve
+submission. Exact hash-bound recovery still replaces the projection with the
+full persisted output and remains approvable. Final projection handling is
+unchanged.
+
+Final evidence for this review round:
+
+```text
+Focused Task 7:             4 files, 38 passed
+Adjacent research-engine:  8 files, 70 passed
+Frontend type-check:        passed
+Scoped ESLint:              passed
+Changed Prettier:           passed
+Lint-debt ratchet:          passed (113 errors, 1,961 warnings; baseline 116/2,003)
+TypeScript exclusions:      passed (21 baselined exclusions)
+git diff --check:           passed
+```
