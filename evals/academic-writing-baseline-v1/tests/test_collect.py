@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -108,7 +109,10 @@ def _success_bundle(
     )
     latex = bundle / "download.zip"
     with zipfile.ZipFile(latex, "w") as archive:
-        archive.writestr("draft.tex", r"Supported claim \cite{doc2}.")
+        archive.writestr(
+            "draft.tex",
+            COLLECT._expected_latex_document(draft.read_text(encoding="utf-8")),
+        )
         archive.writestr("references.bib", bibliography)
     task_digest = "sha256:" + "b" * 64
     fixture_digest = "sha256:" + "e" * 64
@@ -148,8 +152,20 @@ def _success_bundle(
             "run_id": run_id,
             "draft_id": f"draft-{run_id}",
             "checks": {
-                "collaborator_download": 200,
-                "foreign_project_download": 404,
+                "collaborator_download": {
+                    "status": 200,
+                    "principal_id": f"collaborator-{run_id}",
+                    "project_id": f"project-{run_id}",
+                    "resource_type": "draft_export",
+                    "resource_id": f"draft-{run_id}",
+                },
+                "foreign_project_download": {
+                    "status": 404,
+                    "principal_id": f"outsider-{run_id}",
+                    "project_id": f"foreign-project-{run_id}",
+                    "resource_type": "draft_export",
+                    "resource_id": f"draft-{run_id}",
+                },
             },
         },
     )
@@ -175,6 +191,7 @@ def _success_bundle(
             "draft": {
                 **_record(draft),
                 "id": f"draft-{run_id}",
+                "project_id": f"project-{run_id}",
                 "version": 3,
                 "content_sha256": digest,
             },
@@ -306,12 +323,58 @@ def test_bibtex_metadata_must_match_canonical_citation_rows(tmp_path: Path) -> N
     latex_record = trial["artifacts"]["exports"]["latex"]
     latex_path = bundle_path.parent / latex_record["path"]
     with zipfile.ZipFile(latex_path, "w") as archive:
-        archive.writestr("draft.tex", r"Supported claim \cite{doc2}.")
+        archive.writestr(
+            "draft.tex",
+            COLLECT._expected_latex_document(
+                (bundle_path.parent / "draft.md").read_text(encoding="utf-8")
+            ),
+        )
         archive.writestr("references.bib", "@article{doc2, title={Fabricated title}}")
     latex_record["sha256"] = COLLECT._file_digest(latex_path)
 
     with pytest.raises(COLLECT.EvidenceError, match="differs from canonical metadata"):
         COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
+def test_latex_body_must_match_retained_draft(tmp_path: Path) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    latex_record = trial["artifacts"]["exports"]["latex"]
+    latex_path = bundle_path.parent / latex_record["path"]
+    with zipfile.ZipFile(latex_path, "w") as archive:
+        archive.writestr(
+            "draft.tex",
+            COLLECT._expected_latex_document(
+                "## Result\n\nUnrelated stale claim [Doc 2]."
+            ),
+        )
+        archive.writestr(
+            "references.bib",
+            (bundle_path.parent / "download.md")
+            .read_text(encoding="utf-8")
+            .split("```bibtex\n", 1)[1]
+            .rsplit("\n```", 1)[0],
+        )
+    latex_record["sha256"] = COLLECT._file_digest(latex_path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="not the retained draft"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
+def test_duplicate_citation_indices_are_rejected(tmp_path: Path) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    record = trial["artifacts"]["citations"]
+    path = bundle_path.parent / record["path"]
+    rows = COLLECT._load_json(path)
+    rows.append({**rows[0], "document_id": "document-duplicate"})
+    _write_json(path, rows)
+    record["sha256"] = COLLECT._file_digest(path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="duplicate persisted"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
+def test_bibtex_escape_normalization_preserves_canonical_metadata() -> None:
+    assert COLLECT._normalized_text(r"Journal of R\&D") == "Journal of R&D"
 
 
 def test_infrastructure_failure_remains_independent_of_completed_gates(
@@ -359,6 +422,21 @@ def test_each_passed_dimension_requires_its_own_evidence(tmp_path: Path) -> None
 
     with pytest.raises(COLLECT.EvidenceError, match="artifact record"):
         COLLECT._verify_passed_artifacts(bundle_path, trial, verdicts)
+
+
+def test_authorization_probes_bind_exact_principals_and_projects(
+    tmp_path: Path,
+) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    record = trial["artifacts"]["authorization"]
+    path = bundle_path.parent / record["path"]
+    authorization = COLLECT._load_json(path)
+    authorization["checks"]["foreign_project_download"]["project_id"] = "project-run-1"
+    _write_json(path, authorization)
+    record["sha256"] = COLLECT._file_digest(path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="foreign-project denial"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
 
 
 def test_semantic_pass_requires_bound_calibration(tmp_path: Path) -> None:
@@ -423,8 +501,33 @@ def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) 
         {"temperature": 0, "provider": {"api_key": "", "region": "eastus"}}
     )
 
+    bundle_path, trial = _success_bundle(tmp_path)
+    trial["runtime"] = _runtime(state, task_id, "a" * 40, "run-1")
+    trial["runtime"]["request_headers"] = {"Authorization": "Bearer secret"}
+    trial.update(
+        {
+            "task_id": task_id,
+            "seed": 101,
+            "cohort": state["cohorts"][task_id],
+            "task_digest": COLLECT._canonical_digest(state["tasks"][task_id]),
+            "passed": False,
+            "verdicts": {
+                "objective": "failed",
+                "semantic": "not_run",
+                "authorization": "not_run",
+                "infrastructure": "passed",
+            },
+            "failure_reason": "objective evidence incomplete",
+        }
+    )
+    with pytest.raises(COLLECT.EvidenceError, match="unsupported retained field"):
+        COLLECT.validate_trial(bundle_path, trial, state, "a" * 40)
 
-def test_collect_rejects_reused_run_identity(tmp_path: Path) -> None:
+
+def test_collect_rejects_reused_run_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(COLLECT, "_verify_source_checkout", lambda _: None)
     protocol_path = TASK_DIR / "protocol.json"
     protocol = COLLECT._load_json(protocol_path)
     state = COLLECT.validate_protocol(protocol)
@@ -453,9 +556,35 @@ def test_collect_rejects_reused_run_identity(tmp_path: Path) -> None:
         COLLECT.collect(protocol_path, trials_dir, tmp_path / "result.json", source_sha)
 
 
+def test_reused_download_artifact_is_rejected(tmp_path: Path) -> None:
+    first_path, first = _success_bundle(tmp_path, bundle_name="first", run_id="run-1")
+    second_path, second = _success_bundle(
+        tmp_path, bundle_name="second", run_id="run-2"
+    )
+    second["artifacts"]["exports"]["markdown"]["sha256"] = first["artifacts"][
+        "exports"
+    ]["markdown"]["sha256"]
+    first_ids = COLLECT._evidence_identities(
+        first_path,
+        first,
+        {"objective": "passed", "semantic": "passed", "authorization": "passed"},
+    )
+    second_ids = COLLECT._evidence_identities(
+        second_path,
+        second,
+        {"objective": "passed", "semantic": "passed", "authorization": "passed"},
+    )
+    assert (
+        "markdown_artifact",
+        first["artifacts"]["exports"]["markdown"]["sha256"],
+    ) in (first_ids & second_ids)
+
+
 def test_collect_reports_every_denominator_without_scoring_unavailable_runtime(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(COLLECT, "_verify_source_checkout", lambda _: None)
     protocol_path = TASK_DIR / "protocol.json"
     protocol = COLLECT._load_json(protocol_path)
     state = COLLECT.validate_protocol(protocol)
@@ -523,4 +652,46 @@ def test_collect_reports_every_denominator_without_scoring_unavailable_runtime(
         "judge_unavailable": 1,
         "not_run": 13,
     }
+    assert report["by_kind"]["canonical"]["sample_size"] == 5
+    assert report["by_kind"]["near_boundary"]["sample_size"] == 9
+    assert report["canonical_semantic_acceptance"] == {
+        "passes": 0,
+        "required": 4,
+        "met": False,
+    }
     assert json.loads(output.read_text(encoding="utf-8"))["sample_size"] == 14
+
+
+def test_source_checkout_requires_exact_clean_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "collector@example.test"],
+        cwd=repository,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Collector Test"],
+        cwd=repository,
+        check=True,
+    )
+    tracked = repository / "tracked.txt"
+    tracked.write_text("clean\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repository, check=True)
+    source_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setattr(COLLECT, "ROOT", repository)
+
+    COLLECT._verify_source_checkout(source_sha)
+    tracked.write_text("dirty\n", encoding="utf-8")
+    with pytest.raises(COLLECT.EvidenceError, match="tracked modifications"):
+        COLLECT._verify_source_checkout(source_sha)

@@ -25,12 +25,14 @@ review and binds both the before and after snapshots to the retained current
 draft id, version and content hash.
 
 The runtime record identifies a unique run, authenticated real-provider
-journey, provider, model, runner image, verifier, harness and fixture digests,
+journey, provider, model, digest-pinned runner image, verifier, harness and fixture digests,
 pinned tool versions, executed environment flags and redacted model
 configuration. Authorization and objective evidence remain required when those
 dimensions pass even if a judge or infrastructure component is unavailable.
 Durable run, draft, review, adjudication, calibration and authorization
-identities cannot be reused across planned trials.
+identities and draft/citation/download checksums cannot be reused across planned
+trials. The retained trial schema is closed: undeclared runtime fields or
+artifact descriptor fields are rejected rather than copied into the report.
 
 The trial file uses four independent verdicts:
 
@@ -53,15 +55,20 @@ python3 evals/academic-writing-baseline-v1/collect.py \
   --source-sha "$(git rev-parse HEAD)"
 ```
 
-The collector recomputes the protocol, corpus, harness, task and artifact
-digests. It opens the downloaded LaTeX ZIP, reconciles every saved `[Doc N]`
-marker with the exact saved Markdown body, `\cite{docN}` and parsed BibTeX
-metadata, binds the persisted review and independent adjudication to the run,
-task and draft content hash, verifies judge calibration and the
-collaborator/foreign-project authorization checks, and rejects a failed-revision
-proof if either snapshot differs from the current valid artifact. Secret-shaped
-runtime configuration, environment, authorization-header and cookie fields are
-rejected before a result can be written.
+The collector verifies that `--source-sha` is the clean checked-out commit, then
+recomputes the protocol, corpus, harness, task and artifact digests. It opens the
+downloaded LaTeX ZIP, reconciles every saved `[Doc N]` marker with the exact
+saved Markdown and transformed LaTeX manuscript bodies, `\cite{docN}` and
+parsed BibTeX metadata, and rejects duplicate persisted citation indices. It
+binds the persisted review and independent adjudication to the run, task and
+draft content hash, verifies judge calibration, and requires authorization
+probes to name the exact collaborator, outsider, owning project, foreign
+project, resource type and draft. A failed-revision proof is rejected if either
+snapshot differs from the current valid artifact. Secret-shaped runtime
+configuration, environment, authorization-header and cookie fields are rejected
+before a result can be written. The report publishes canonical and
+near-boundary verdicts separately, including the declared four-of-five
+canonical semantic threshold.
 
 Generated trials and results are ignored by Git. Preserve accepted evidence in
 the authorized evaluation artifact store and commit only a dated, redacted

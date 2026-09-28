@@ -32,6 +32,44 @@ SENSITIVE_KEY_RE = re.compile(
 BIBTEX_FENCE_RE = re.compile(
     r"```(?:bibtex|biblatex)\s*\n(?P<body>.*?)\n```", re.DOTALL | re.IGNORECASE
 )
+SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}")
+TRIAL_FIELDS = {
+    "task_id",
+    "seed",
+    "cohort",
+    "task_digest",
+    "runtime",
+    "passed",
+    "verdicts",
+    "failure_reason",
+    "artifacts",
+    "invalid_revision",
+}
+RUNTIME_FIELDS = {
+    "run_id",
+    "source_sha",
+    "provider",
+    "model",
+    "runner_image",
+    "verifier",
+    "fixture_digest",
+    "harness_digest",
+    "tool_versions",
+    "env_flags",
+    "configuration",
+    "authenticated",
+    "real_provider",
+}
+ARTIFACT_FIELDS = {
+    "draft",
+    "review",
+    "adjudication",
+    "calibration",
+    "authorization",
+    "citations",
+    "exports",
+}
+ARTIFACT_RECORD_FIELDS = {"path", "sha256"}
 
 
 class EvidenceError(ValueError):
@@ -103,6 +141,128 @@ def _reject_sensitive_configuration(value: Any, path: str = "configuration") -> 
     elif isinstance(value, list):
         for index, child in enumerate(value):
             _reject_sensitive_configuration(child, f"{path}[{index}]")
+
+
+def _reject_unknown_fields(
+    bundle_path: Path, value: Any, allowed: set[str], path: str
+) -> None:
+    if not isinstance(value, dict):
+        raise EvidenceError(f"{bundle_path.name}: {path} must be an object")
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise EvidenceError(
+            f"{bundle_path.name}: unsupported retained field(s) in {path}: "
+            f"{', '.join(unknown)}"
+        )
+
+
+def _validate_retained_trial_shape(bundle_path: Path, trial: dict[str, Any]) -> None:
+    """Keep the published report on an explicit, credential-safe schema."""
+    _reject_unknown_fields(bundle_path, trial, TRIAL_FIELDS, "trial")
+    runtime = trial.get("runtime")
+    _reject_unknown_fields(bundle_path, runtime, RUNTIME_FIELDS, "runtime")
+    verdicts = trial.get("verdicts")
+    _reject_unknown_fields(bundle_path, verdicts, set(VERDICTS), "verdicts")
+    artifacts = trial.get("artifacts")
+    if artifacts is not None:
+        _reject_unknown_fields(bundle_path, artifacts, ARTIFACT_FIELDS, "artifacts")
+        draft = artifacts.get("draft")
+        if draft is not None:
+            _reject_unknown_fields(
+                bundle_path,
+                draft,
+                ARTIFACT_RECORD_FIELDS
+                | {"id", "project_id", "version", "content_sha256"},
+                "artifacts.draft",
+            )
+        for name in (
+            "review",
+            "adjudication",
+            "calibration",
+            "authorization",
+            "citations",
+        ):
+            record = artifacts.get(name)
+            if record is not None:
+                _reject_unknown_fields(
+                    bundle_path,
+                    record,
+                    ARTIFACT_RECORD_FIELDS,
+                    f"artifacts.{name}",
+                )
+        exports = artifacts.get("exports")
+        if exports is not None:
+            _reject_unknown_fields(
+                bundle_path, exports, {"markdown", "latex"}, "artifacts.exports"
+            )
+            for name in ("markdown", "latex"):
+                record = exports.get(name)
+                if record is not None:
+                    _reject_unknown_fields(
+                        bundle_path,
+                        record,
+                        ARTIFACT_RECORD_FIELDS,
+                        f"artifacts.exports.{name}",
+                    )
+    proof = trial.get("invalid_revision")
+    if proof is not None:
+        _reject_unknown_fields(
+            bundle_path,
+            proof,
+            {"attempted", "outcome", "review_id", "review", "before", "after"},
+            "invalid_revision",
+        )
+        if proof.get("review") is not None:
+            _reject_unknown_fields(
+                bundle_path,
+                proof["review"],
+                ARTIFACT_RECORD_FIELDS,
+                "invalid_revision.review",
+            )
+        for name in ("before", "after"):
+            snapshot = proof.get(name)
+            if snapshot is not None:
+                _reject_unknown_fields(
+                    bundle_path,
+                    snapshot,
+                    {"draft_id", "version", "content_sha256"},
+                    f"invalid_revision.{name}",
+                )
+
+
+def _verify_source_checkout(source_sha: str) -> None:
+    if SOURCE_SHA_RE.fullmatch(source_sha) is None:
+        raise EvidenceError("source SHA must be a full lowercase Git commit SHA")
+    try:
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{source_sha}^{{commit}}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        tracked_changes = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        raise EvidenceError(f"cannot verify executed source checkout: {exc}") from exc
+    if head != source_sha:
+        raise EvidenceError(
+            f"executed source checkout is {head}, not declared {source_sha}"
+        )
+    if tracked_changes:
+        raise EvidenceError("executed source checkout has tracked modifications")
 
 
 def _source_sha() -> str:
@@ -284,6 +444,8 @@ def _verify_draft_artifact(bundle_path: Path, trial: dict[str, Any]) -> dict[str
     draft = artifacts.get("draft")
     if not isinstance(draft, dict) or not draft.get("id"):
         raise EvidenceError(f"{bundle_path.name}: exact saved draft id is required")
+    if not draft.get("project_id"):
+        raise EvidenceError(f"{bundle_path.name}: exact saved project id is required")
     if not isinstance(draft.get("version"), int) or draft["version"] < 1:
         raise EvidenceError(f"{bundle_path.name}: saved draft version is invalid")
     draft_path = _verify_declared_artifact(bundle_path, draft)
@@ -332,8 +494,21 @@ def _verify_objective_artifacts(
     citations = _load_json(citation_path)
     if not isinstance(citations, list) or not citations:
         raise EvidenceError(f"{bundle_path.name}: persisted citations are required")
+    citation_indices = [
+        row.get("citation_index") for row in citations if isinstance(row, dict)
+    ]
+    if len(citation_indices) != len(citations) or any(
+        not isinstance(index, int) or index < 1 for index in citation_indices
+    ):
+        raise EvidenceError(
+            f"{bundle_path.name}: citation rows require positive integer indices"
+        )
+    if len(set(citation_indices)) != len(citation_indices):
+        raise EvidenceError(
+            f"{bundle_path.name}: duplicate persisted citation indices are forbidden"
+        )
     citation_markers = sorted(
-        {str(row.get("citation_index")) for row in citations if isinstance(row, dict)},
+        (str(index) for index in citation_indices),
         key=int,
     )
     if citation_markers != markers:
@@ -420,13 +595,58 @@ def _verify_objective_artifacts(
             raise EvidenceError(
                 f"{bundle_path.name}: LaTeX/BibTeX lost canonical doc{marker}"
             )
+    if tex != _expected_latex_document(draft_content):
+        raise EvidenceError(
+            f"{bundle_path.name}: LaTeX manuscript is not the retained draft"
+        )
     _verify_bibtex_metadata(bundle_path, bib, citation_rows)
 
     _verify_invalid_revision(bundle_path, trial.get("invalid_revision"), draft)
 
 
+def _expected_latex_document(markdown_content: str) -> str:
+    escaped = re.sub(r"([\\{}$&%#^_~])", r"\\\1", markdown_content)
+    latex = re.sub(
+        r"^## (\d+\.\s)?(.+)$", r"\\section{\2}", escaped, flags=re.MULTILINE
+    )
+    latex = re.sub(r"^### (.+)$", r"\\subsection{\1}", latex, flags=re.MULTILINE)
+    latex = re.sub(r"\[Doc (\d+)\]", r"\\cite{doc\1}", latex)
+    title = markdown_content.split("\n")[0].replace("## ", "")
+    title = re.sub(r"([\\{}$&%#^_~])", r"\\\1", title)
+    return f"""\\documentclass{{article}}
+\\usepackage{{natbib}}
+\\usepackage{{hyperref}}
+
+\\title{{{title}}}
+\\author{{Generated by Research Assistant}}
+\\date{{\\today}}
+
+\\begin{{document}}
+
+\\maketitle
+
+{latex}
+
+\\bibliographystyle{{plain}}
+\\bibliography{{references}}
+
+\\end{{document}}
+"""
+
+
 def _normalized_text(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+    text = str(value or "")
+    for escaped, literal in (
+        (r"\&", "&"),
+        (r"\%", "%"),
+        (r"\#", "#"),
+        (r"\_", "_"),
+        (r"\$", "$"),
+        (r"\{", "{"),
+        (r"\}", "}"),
+    ):
+        text = text.replace(escaped, literal)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _verify_bibtex_metadata(
@@ -547,11 +767,35 @@ def _verify_authorization_artifacts(
             f"{bundle_path.name}: authorization evidence is not bound to the run and draft"
         )
     checks = authorization.get("checks")
-    if not isinstance(checks, dict) or checks.get("collaborator_download") != 200:
+    if not isinstance(checks, dict):
+        raise EvidenceError(f"{bundle_path.name}: authorization checks are required")
+    collaborator = checks.get("collaborator_download")
+    foreign = checks.get("foreign_project_download")
+    expected_resource = {
+        "resource_type": "draft_export",
+        "resource_id": draft.get("id"),
+    }
+    if (
+        not isinstance(collaborator, dict)
+        or collaborator.get("status") != 200
+        or not collaborator.get("principal_id")
+        or collaborator.get("project_id") != draft.get("project_id")
+        or any(
+            collaborator.get(key) != value for key, value in expected_resource.items()
+        )
+    ):
         raise EvidenceError(
             f"{bundle_path.name}: collaborator download authorization is unproven"
         )
-    if checks.get("foreign_project_download") != 404:
+    if (
+        not isinstance(foreign, dict)
+        or foreign.get("status") != 404
+        or not foreign.get("principal_id")
+        or foreign.get("principal_id") == collaborator.get("principal_id")
+        or not foreign.get("project_id")
+        or foreign.get("project_id") == draft.get("project_id")
+        or any(foreign.get(key) != value for key, value in expected_resource.items())
+    ):
         raise EvidenceError(f"{bundle_path.name}: foreign-project denial is unproven")
 
 
@@ -648,12 +892,26 @@ def _evidence_identities(
     draft = artifacts.get("draft")
     if isinstance(draft, dict) and draft.get("id"):
         identities.add(("draft", str(draft["id"])))
+        if draft.get("sha256"):
+            identities.add(("draft_artifact", str(draft["sha256"])))
     artifact_names: list[str] = []
     if verdicts["objective"] == "passed":
         artifact_names.extend(("review",))
+        citations = artifacts.get("citations")
+        if isinstance(citations, dict) and citations.get("sha256"):
+            identities.add(("citations_artifact", str(citations["sha256"])))
+        exports = artifacts.get("exports")
+        if isinstance(exports, dict):
+            for name in ("markdown", "latex"):
+                record = exports.get(name)
+                if isinstance(record, dict) and record.get("sha256"):
+                    identities.add((f"{name}_artifact", str(record["sha256"])))
         proof = trial.get("invalid_revision") or {}
         if proof.get("review_id"):
             identities.add(("blocked_review", str(proof["review_id"])))
+        blocked_record = proof.get("review")
+        if isinstance(blocked_record, dict) and blocked_record.get("sha256"):
+            identities.add(("blocked_review_artifact", str(blocked_record["sha256"])))
     if verdicts["semantic"] == "passed":
         artifact_names.extend(("adjudication", "calibration"))
     if verdicts["authorization"] == "passed":
@@ -681,6 +939,7 @@ def validate_trial(
     protocol_state: dict[str, Any],
     source_sha: str,
 ) -> tuple[tuple[str, int], dict[str, str]]:
+    _validate_retained_trial_shape(bundle_path, trial)
     task_id = trial.get("task_id")
     seed = trial.get("seed")
     if not isinstance(task_id, str) or not isinstance(seed, int):
@@ -727,6 +986,7 @@ def validate_trial(
 def collect(
     protocol_path: Path, trials_dir: Path, output_path: Path, source_sha: str
 ) -> dict[str, Any]:
+    _verify_source_checkout(source_sha)
     protocol = _load_json(protocol_path)
     if not isinstance(protocol, dict):
         raise EvidenceError("protocol must be a JSON object")
@@ -784,6 +1044,37 @@ def collect(
             state["cohorts"][task_id] == "held_out" for task_id, _ in observed
         ),
     }
+
+    def summarize_kind(kind: str) -> dict[str, Any]:
+        selected = {
+            key: verdicts
+            for key, verdicts in observed.items()
+            if state["kinds"][key] == kind
+        }
+        passes = sum(
+            all(verdicts[name] == "passed" for name in VERDICTS)
+            for verdicts in selected.values()
+        )
+        kind_unscored = sum(
+            verdicts["infrastructure"] == "failed"
+            or verdicts["semantic"] == "judge_unavailable"
+            for verdicts in selected.values()
+        )
+        return {
+            "sample_size": len(selected),
+            "product_passes": passes,
+            "product_failures": len(selected) - passes - kind_unscored,
+            "unscored": kind_unscored,
+            "dimensions": {
+                name: dict(Counter(value[name] for value in selected.values()))
+                for name in VERDICTS
+            },
+        }
+
+    by_kind = {kind: summarize_kind(kind) for kind in ("canonical", "near_boundary")}
+    canonical_semantic_passes = by_kind["canonical"]["dimensions"]["semantic"].get(
+        "passed", 0
+    )
     report = {
         "schema_version": "1.0",
         "protocol_id": protocol.get("id"),
@@ -799,6 +1090,12 @@ def collect(
         "product_failures": len(observed) - product_passes - unscored,
         "unscored": unscored,
         "dimensions": dimensions,
+        "by_kind": by_kind,
+        "canonical_semantic_acceptance": {
+            "passes": canonical_semantic_passes,
+            "required": 4,
+            "met": canonical_semantic_passes >= 4,
+        },
         "trials": trials,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
