@@ -1,5 +1,9 @@
 """Offline audit probes. No network, real tool execution, or database writes."""
 
+# mypy: ignore-errors
+# These probes intentionally use dynamic mocks and ad-hoc payloads; production
+# modules remain covered by the normal type-checking gate.
+
 import asyncio
 import json
 from unittest.mock import AsyncMock, patch

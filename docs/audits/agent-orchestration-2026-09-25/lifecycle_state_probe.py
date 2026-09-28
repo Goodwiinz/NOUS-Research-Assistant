@@ -1,3 +1,7 @@
+# mypy: ignore-errors
+# These standalone probes intentionally use dynamic database wrappers and are
+# not production modules; production code remains covered by the normal gate.
+
 import asyncio
 import sys
 from datetime import datetime, timezone

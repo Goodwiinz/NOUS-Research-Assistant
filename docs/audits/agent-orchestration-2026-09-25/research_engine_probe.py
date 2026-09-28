@@ -1,5 +1,9 @@
 """Offline research-engine blueprint contract probe. No network or DB calls."""
 
+# mypy: ignore-errors
+# These probes intentionally use dynamic fixtures and optional YAML stubs;
+# production modules remain covered by the normal type-checking gate.
+
 import asyncio
 import json
 from pathlib import Path
