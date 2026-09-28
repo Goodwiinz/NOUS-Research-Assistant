@@ -108,6 +108,7 @@ def _ensure_draft_metrics() -> None:
 class DraftGenerationService:
     """Service for generating literature review drafts"""
 
+    _BIBLIOGRAPHY_FORMATS = frozenset({"bibtex", "apa", "ieee", "mla"})
     _DOCUMENT_CONTEXT_BUDGET = 32_000
     _MAX_SOURCE_DOCUMENTS = 50
     _MAX_INSTRUCTIONS_CHARS = 8_000
@@ -2036,12 +2037,15 @@ Key takeaways include the importance of continued investigation and the potentia
         if format == "markdown":
             content = draft.content
             if include_bibliography:
-                # Add bibliography section
                 citations = await self.get_draft_citations(project_id, draft_id)
                 if citations:
-                    content += "\n\n## References\n\n"
-                    for c in citations:
-                        content += f"[Doc {c.citation_index}] {c.snippet}\n\n"
+                    try:
+                        references = self._generate_markdown_references(
+                            citations, bib_format
+                        )
+                    except ValueError as exc:
+                        return {"error": str(exc)}
+                    content += f"\n\n## References\n\n{references}\n"
 
             return {
                 "format": "markdown",
@@ -2136,6 +2140,14 @@ Key takeaways include the importance of continued investigation and the potentia
 
     def _generate_bib_entries(self, citations: List[DraftCitation]) -> str:
         """Generate BibTeX entries for citations"""
+        canonical_citations, keys = self._canonical_citation_records(citations)
+        return BibliographyService.format_bibtex(canonical_citations, keys=keys)
+
+    @staticmethod
+    def _canonical_citation_records(
+        citations: List[DraftCitation],
+    ) -> Tuple[List[Any], List[str]]:
+        """Resolve saved citations to canonical metadata and stable ``docN`` keys."""
         canonical_citations = []
         keys = []
         for c in citations:
@@ -2159,4 +2171,36 @@ Key takeaways include the importance of continued investigation and the potentia
             canonical_citations.append(canonical)
             keys.append(f"doc{c.citation_index}")
 
-        return BibliographyService.format_bibtex(canonical_citations, keys=keys)
+        return canonical_citations, keys
+
+    def _generate_markdown_references(
+        self, citations: List[DraftCitation], bib_format: str
+    ) -> str:
+        """Render canonical Markdown references without reusing evidence snippets."""
+        normalized_format = (bib_format or "").strip().lower()
+        if normalized_format not in self._BIBLIOGRAPHY_FORMATS:
+            supported = ", ".join(sorted(self._BIBLIOGRAPHY_FORMATS))
+            raise ValueError(
+                f"Unsupported bibliography format: {bib_format}. Supported: {supported}"
+            )
+
+        canonical_citations, keys = self._canonical_citation_records(citations)
+        if normalized_format == "bibtex":
+            bibliography = BibliographyService.format_bibtex(
+                canonical_citations, keys=keys
+            )
+            return f"```bibtex\n{bibliography.rstrip()}\n```"
+
+        formatter = {
+            "apa": BibliographyService.format_apa,
+            "ieee": BibliographyService.format_ieee,
+            "mla": BibliographyService.format_mla,
+        }[normalized_format]
+        references = []
+        for citation, key in zip(canonical_citations, keys):
+            formatted = formatter([citation]).strip()
+            if normalized_format == "ieee" and formatted.startswith("[1]"):
+                formatted = formatted[3:].lstrip()
+            index = key.removeprefix("doc")
+            references.append(f"[Doc {index}] {formatted}".rstrip())
+        return "\n\n".join(references)

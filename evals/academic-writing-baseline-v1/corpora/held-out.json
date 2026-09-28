@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "cohort": "held_out",
+  "tasks": [
+    {
+      "id": "held-contradictory-sources",
+      "condition": "contradictory_sources",
+      "instruction": "Represent the disagreement without collapsing it into a false consensus.",
+      "calibration": ["contradiction"],
+      "documents": [{"title": "Positive Result", "content": "The registered endpoint increased."}, {"title": "Negative Result", "content": "The same registered endpoint did not increase."}]
+    },
+    {
+      "id": "held-late-page-evidence",
+      "condition": "late_page_evidence",
+      "instruction": "Ground the conclusion in the late-page result and retain its source location.",
+      "calibration": ["late_page"],
+      "documents": [{"title": "Long Report", "content": "Pages 1-19 contain background. Page 20 reports the preregistered null result."}]
+    },
+    {
+      "id": "held-eleven-sources",
+      "condition": "more_than_ten_sources",
+      "instruction": "Synthesize eleven sources without dropping cited identities or reusing evidence as titles.",
+      "calibration": ["source_count_boundary"],
+      "documents": [{"title": "Source 01", "content": "Finding 01."}, {"title": "Source 02", "content": "Finding 02."}, {"title": "Source 03", "content": "Finding 03."}, {"title": "Source 04", "content": "Finding 04."}, {"title": "Source 05", "content": "Finding 05."}, {"title": "Source 06", "content": "Finding 06."}, {"title": "Source 07", "content": "Finding 07."}, {"title": "Source 08", "content": "Finding 08."}, {"title": "Source 09", "content": "Finding 09."}, {"title": "Source 10", "content": "Finding 10."}, {"title": "Source 11", "content": "Finding 11."}]
+    },
+    {
+      "id": "held-hijacked-id",
+      "condition": "foreign_project_identifier",
+      "instruction": "Reject a valid identifier from another project and retain the authorized project boundary.",
+      "calibration": ["authorization", "hijacked_id"],
+      "documents": [{"title": "Authorized Record", "content": "This is the only authorized source."}]
+    },
+    {
+      "id": "held-sparse-citations",
+      "condition": "sparse_citation_indices",
+      "instruction": "Preserve non-contiguous Doc 2 and Doc 11 identities through the saved draft and both exports.",
+      "calibration": ["sparse_indices", "downloaded_exports"],
+      "documents": [{"title": "Quoted {Result} α", "authors": ["Sofía Kovalevskaya"], "year": 2022, "content": "Evidence for Doc 2."}, {"title": "Boundary Record β", "authors": ["Emmy Noether"], "year": 2024, "content": "Evidence for Doc 11."}]
+    }
+  ]
+}

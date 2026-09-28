@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import Response
+from fastapi import HTTPException, Response
 from pybtex.database import parse_string
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -22,7 +22,7 @@ from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.draft_citation import DraftCitation
 from src.models.generated_draft import GeneratedDraft
 from src.models.organization import Organization
-from src.models.workspace import Workspace
+from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 
 
 @pytest.mark.asyncio
@@ -76,6 +76,36 @@ async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata(
                 text("UPDATE users SET organization_id=:org WHERE id=:user"),
                 {"org": organization.id, "user": user_id},
             )
+            collaborator_id = uuid4()
+            outsider_id = uuid4()
+            foreign_organization = Organization(
+                name=f"Foreign bibliography {uuid4()}", storage_limit_bytes=1_000_000
+            )
+            db.add(foreign_organization)
+            await db.flush()
+            await db.execute(
+                text("""
+                    INSERT INTO users
+                        (id, email, password_hash, first_name, last_name, role,
+                         is_active, login_count, organization_id, created_at,
+                         updated_at, is_deleted)
+                    VALUES
+                        (:collaborator, :collaborator_email, 'unused', 'Test',
+                         'Collaborator', 'USER', true, 0, :organization,
+                         now(), now(), false),
+                        (:outsider, :outsider_email, 'unused', 'Test', 'Outsider',
+                         'USER', true, 0, :foreign_organization,
+                         now(), now(), false)
+                    """),
+                {
+                    "collaborator": collaborator_id,
+                    "collaborator_email": f"{collaborator_id}@example.test",
+                    "outsider": outsider_id,
+                    "outsider_email": f"{outsider_id}@example.test",
+                    "organization": organization.id,
+                    "foreign_organization": foreign_organization.id,
+                },
+            )
             workspace = Workspace(
                 name="Bibliography workspace",
                 owner_id=user_id,
@@ -83,11 +113,19 @@ async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata(
             )
             db.add(workspace)
             await db.flush()
+            db.add(
+                WorkspaceMember(
+                    workspace_id=workspace.id,
+                    user_id=collaborator_id,
+                    role=WorkspaceRole.VIEWER,
+                    invited_by_id=user_id,
+                )
+            )
             project = Collection(workspace_id=workspace.id, name="Artifact project")
             db.add(project)
             await db.flush()
             document = Document(
-                title='Canonical "Quoted" {Result}',
+                title='Canonical "Quoted" {Result} α',
                 filename="paper.pdf",
                 file_path="paper.pdf",
                 file_size_bytes=123,
@@ -102,7 +140,7 @@ async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata(
             citation = Citation(
                 document_id=document.id,
                 document_title=document.title,
-                authors=["Ada Lovelace", "Grace Hopper"],
+                authors=["Sofía Kovalevskaya", "Grace Hopper"],
                 year=2026,
                 venue="Journal of R&D",
                 doi="10.1000/example",
@@ -134,6 +172,16 @@ async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata(
             )
             await db.commit()
 
+            markdown_response = await export_draft(
+                project_id=project.id,
+                draft_id=draft.id,
+                format="markdown",
+                include_bibliography=True,
+                bib_format="apa",
+                current_user=SimpleNamespace(id=collaborator_id),
+                db=db,
+            )
+
             response = await export_draft(
                 project_id=project.id,
                 draft_id=draft.id,
@@ -144,6 +192,28 @@ async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata(
                 db=db,
             )
 
+            with pytest.raises(HTTPException) as denied:
+                await export_draft(
+                    project_id=project.id,
+                    draft_id=draft.id,
+                    format="markdown",
+                    include_bibliography=True,
+                    bib_format="apa",
+                    current_user=SimpleNamespace(id=outsider_id),
+                    db=db,
+                )
+
+        assert isinstance(markdown_response, Response)
+        markdown = bytes(markdown_response.body).decode()
+        assert "Grounded result [Doc 4]." in markdown
+        assert "[Doc 4]" in markdown
+        assert 'Canonical "Quoted" {Result} α' in markdown
+        assert "Kovalevskaya" in markdown
+        assert "2026" in markdown
+        assert "Journal of R&D" in markdown
+        assert "https://doi.org/10.1000/example" in markdown
+        assert "This quote is evidence" not in markdown
+        assert denied.value.status_code == 404
         assert isinstance(response, Response)
         with zipfile.ZipFile(io.BytesIO(bytes(response.body))) as archive:
             tex_name = next(
@@ -156,9 +226,9 @@ async def test_downloaded_latex_bibliography_matches_saved_draft_and_metadata(
         entry = parsed.entries["doc4"]
         assert "Grounded result [Doc 4]." == draft.content.split("\n\n", 1)[1]
         assert r"Grounded result \cite{doc4}." in latex
-        assert entry.fields["title"] == 'Canonical "Quoted" {Result}'
+        assert entry.fields["title"] == 'Canonical "Quoted" {Result} α'
         assert [str(person) for person in entry.persons["author"]] == [
-            "Lovelace, Ada",
+            "Kovalevskaya, Sofía",
             "Hopper, Grace",
         ]
         assert entry.fields["year"] == "2026"
