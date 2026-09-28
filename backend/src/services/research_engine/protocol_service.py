@@ -11,6 +11,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.research_blueprint import ResearchBlueprint
@@ -252,9 +253,31 @@ async def create_protocol(
 ) -> ResearchProtocol:
     await _question_version(db, data.question_version_id, context.collection.id)
     blueprint = await _blueprint(db, data.blueprint_id, context.collection.id)
+    existing_id = await db.scalar(
+        select(ResearchProtocol.id)
+        .where(
+            ResearchProtocol.collection_id == context.collection.id,
+            ResearchProtocol.name == data.name,
+        )
+        .limit(1)
+    )
+    if existing_id is not None:
+        raise HTTPException(status_code=409, detail="Protocol name already exists")
     protocol = ResearchProtocol(collection_id=context.collection.id, name=data.name)
     db.add(protocol)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        original = exc.orig
+        constraint_name = getattr(
+            getattr(original, "diag", None), "constraint_name", None
+        ) or getattr(original, "constraint_name", None)
+        if constraint_name == "uq_research_protocol_name":
+            raise HTTPException(
+                status_code=409, detail="Protocol name already exists"
+            ) from exc
+        raise
     snapshot = data.snapshot.model_dump(mode="json")
     execution_plan = blueprint_execution_plan(blueprint)
     version = ResearchProtocolVersion(

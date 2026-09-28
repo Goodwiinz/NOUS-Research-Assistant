@@ -291,6 +291,7 @@ class ResearchProtocolResponse(BaseModel):
     current_approved_version_id: Optional[UUID] = None
     versions: List[ResearchProtocolVersionResponse] = Field(default_factory=list)
     can_edit: bool = False
+    can_manage: bool = False
     can_approve: bool = False
     created_at: datetime
     updated_at: datetime
