@@ -3711,6 +3711,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/harness/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Native Request */
+        get: operations["read_native_request_api_v1_harness_requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/harness/requests/{request_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Native Request */
+        post: operations["decide_native_request_api_v1_harness_requests__request_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices": {
         parameters: {
             query?: never;
@@ -12189,6 +12223,25 @@ export interface components {
          * @enum {string}
          */
         MetricTimeRange: "1h" | "24h" | "7d" | "30d" | "90d";
+        /**
+         * NativeDecision
+         * @description A strict one-time decision, or exact answers to native questions.
+         */
+        NativeDecision: {
+            /** Allow */
+            allow?: boolean | null;
+            /** Answers */
+            answers?: {
+                [key: string]: string[];
+            } | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "decision" | "answers";
+            /** Targethash */
+            targetHash?: string | null;
+        };
         /**
          * NoteListResponse
          * @description Paginated list of notes.
@@ -22211,6 +22264,72 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_native_request_api_v1_harness_requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_native_request_api_v1_harness_requests__request_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NativeDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

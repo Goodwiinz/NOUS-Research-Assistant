@@ -27,6 +27,17 @@ export type BridgeCommand = BridgeIdentity & {
       };
 };
 export type ProducerBody =
+  | { kind: "command_ack"; approvalRecordId: string }
+  | {
+      kind: "request";
+      sessionId: string;
+      turnId: string;
+      itemId: string;
+      requestId: NativeRequestId;
+      approvalId?: string;
+      method: string;
+      params: Record<string, unknown>;
+    }
   | { kind: "event"; eventType: "assistant.delta"; payload: { text: string } }
   | {
       kind: "event";

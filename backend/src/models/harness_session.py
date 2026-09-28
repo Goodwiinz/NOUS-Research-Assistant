@@ -127,3 +127,54 @@ class HarnessReceipt(Base):
             unique=True,
         ),
     )
+
+
+class HarnessNativeRequest(Base):
+    """One exact, expiring Codex callback and its browser decision/outbox."""
+
+    __tablename__ = "harness_native_requests"
+    id: Mapped[UUID] = mapped_column(GUID(), primary_key=True, default=uuid4)
+    run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("harness_sessions.run_id"), nullable=False
+    )
+    command_id: Mapped[UUID] = mapped_column(
+        GUID(), ForeignKey("harness_commands.id"), nullable=False
+    )
+    actor_id: Mapped[UUID] = mapped_column(GUID(), nullable=False)
+    organization_id: Mapped[UUID] = mapped_column(GUID(), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(GUID(), nullable=False)
+    device_id: Mapped[UUID] = mapped_column(GUID(), nullable=False)
+    workspace_id: Mapped[UUID] = mapped_column(GUID(), nullable=False)
+    grant_id: Mapped[UUID] = mapped_column(GUID(), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    item_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_id_type: Mapped[str] = mapped_column(String(8), nullable=False)
+    request_id_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    approval_id: Mapped[str | None] = mapped_column(String(255))
+    method: Mapped[str] = mapped_column(String(80), nullable=False)
+    target: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    target_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    response_command_id: Mapped[UUID | None] = mapped_column(GUID())
+
+    __table_args__ = (
+        Index("ix_harness_native_request_owner", "actor_id", "expires_at"),
+        Index("ix_harness_native_request_run", "run_id", "generation"),
+        Index(
+            "uq_harness_native_callback",
+            "run_id",
+            "generation",
+            "session_id",
+            "turn_id",
+            "item_id",
+            "request_id_type",
+            "request_id_value",
+            unique=True,
+        ),
+    )

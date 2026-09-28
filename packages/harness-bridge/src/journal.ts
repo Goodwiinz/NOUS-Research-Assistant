@@ -19,6 +19,7 @@ import {
   type BridgeCommand,
   type BridgeEvent,
 } from "./connection.ts";
+import { nativeRequestBody } from "./approvals.ts";
 
 type Row = {
   id: string;
@@ -393,9 +394,18 @@ export class Journal {
         // Empty interrupt acknowledgement is not terminal evidence.
       } else {
         await adapter.respondToRequest(b.requestId, b.response);
-        this.db
-          .prepare("UPDATE commands SET state='delivered' WHERE id=?")
-          .run(command.commandId);
+        const owner = this.owner(command);
+        if (!owner) throw new Error("response owner disappeared");
+        this.tx(() => {
+          this.db
+            .prepare("UPDATE commands SET state='delivered' WHERE id=?")
+            .run(command.commandId);
+          this.append(
+            owner.id,
+            { kind: "command_ack", approvalRecordId: b.approvalRecordId },
+            command.commandId,
+          );
+        });
       }
     } catch (error) {
       retainInterruptClaim =
@@ -439,7 +449,11 @@ export class Journal {
           .run(command.commandId, interruptOwner);
     }
   }
-  private append(id: string, body: BridgeEvent["body"]): BridgeEvent {
+  private append(
+    id: string,
+    body: BridgeEvent["body"],
+    eventCommandId?: string,
+  ): BridgeEvent {
     return this.tx(() => {
       const row = this.row(id);
       if (!row) throw new Error("unknown command");
@@ -447,6 +461,7 @@ export class Journal {
       const { expiresAt, body: ignored, ...identity } = command;
       const event: BridgeEvent = {
         ...identity,
+        ...(eventCommandId ? { commandId: eventCommandId } : {}),
         sourceId: command.commandId,
         sourceSeq: row.seq + 1,
         body,
@@ -620,11 +635,7 @@ export class Journal {
               },
             },
       );
-    else {
-      // Native approval binding/decisions are handled by Task 5. Do not turn an
-      // unvalidated native request dictionary into a durable approval record.
-      this.quarantine(id);
-    }
+    else this.append(id, nativeRequestBody(event));
   }
   async reconcile(id: string, adapter: HarnessAdapter): Promise<void> {
     const row = this.row(id);

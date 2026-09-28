@@ -422,6 +422,8 @@ for (const method of [
                   command: "pwd",
                   cwd: server.root,
                 }
+              : method.includes("fileChange")
+                ? { grantRoot: server.root }
               : {}),
           }),
     };
@@ -470,16 +472,6 @@ for (const request of [
   {
     method: "item/commandExecution/requestApproval",
     params: { threadId: "s", turnId: "t", itemId: "i", startedAtMs: "invalid" },
-  },
-  {
-    method: "item/fileChange/requestApproval",
-    params: {
-      threadId: "s",
-      turnId: "t",
-      itemId: "i",
-      startedAtMs: 1,
-      grantRoot: "/",
-    },
   },
   {
     method: "item/tool/requestUserInput",

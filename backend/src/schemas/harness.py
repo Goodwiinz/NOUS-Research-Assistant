@@ -117,10 +117,31 @@ class Observation(WireModel):
     turnId: str | None = Field(max_length=255)
 
 
+class NativeRequest(WireModel):
+    """Typed envelope for a validated one-shot native callback."""
+
+    kind: Literal["request"]
+    sessionId: str = Field(min_length=1, max_length=255)
+    turnId: str = Field(min_length=1, max_length=255)
+    itemId: str = Field(min_length=1, max_length=255)
+    requestId: StrictStr | Annotated[StrictInt, Field(ge=-(2**53 - 1), le=2**53 - 1)]
+    approvalId: str | None = Field(default=None, max_length=255)
+    method: str = Field(min_length=1, max_length=80)
+    params: dict[str, Any]
+
+
+class NativeResponseAck(WireModel):
+    kind: Literal["command_ack"]
+    approvalRecordId: UUID
+
+
 class BridgeEvent(Envelope):
     sourceId: str = Field(min_length=1, max_length=128)
     sourceSeq: int = Field(ge=1, le=2**53 - 1, strict=True)
-    body: Annotated[ProducerEvent | Observation, Field(discriminator="kind")]
+    body: Annotated[
+        ProducerEvent | Observation | NativeRequest | NativeResponseAck,
+        Field(discriminator="kind"),
+    ]
     _wire_digest: str = PrivateAttr(default="")
 
     @model_validator(mode="wrap")
