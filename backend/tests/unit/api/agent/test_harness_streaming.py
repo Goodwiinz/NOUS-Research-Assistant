@@ -99,6 +99,7 @@ async def test_external_stream_disconnect_only_ends_observation(
         return []
 
     async def disconnect_after_first_read() -> bool:
+        request.disconnect_checks += 1
         return request.disconnect_checks >= 3
 
     setattr(request, "is_disconnected", disconnect_after_first_read)
