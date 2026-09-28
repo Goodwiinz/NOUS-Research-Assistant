@@ -9,15 +9,59 @@ interface HarnessSelectorProps {
   disabled?: boolean;
 }
 
-function requestLabel(request: {
-  method: string;
-  target: Record<string, unknown>;
-}): string {
-  const target = request.target;
-  if (typeof target.command === 'string') return target.command;
-  if (typeof target.reason === 'string') return target.reason;
-  if (Array.isArray(target.questions)) return 'Codex is asking for input';
-  return 'Codex needs permission to continue';
+function requestTitle(method: string): string {
+  switch (method) {
+    case 'item/commandExecution/requestApproval':
+      return 'Codex requests command execution';
+    case 'item/fileChange/requestApproval':
+      return 'Codex requests file changes';
+    case 'item/tool/requestUserInput':
+      return 'Codex needs your input';
+    default:
+      return 'Codex requests permission';
+  }
+}
+
+function requestTargetRows(
+  method: string,
+  target: Record<string, unknown>
+): Array<[string, string]> {
+  const fields =
+    method === 'item/commandExecution/requestApproval'
+      ? ['command', 'cwd', 'reason', 'kind', 'itemId']
+      : method === 'item/fileChange/requestApproval'
+        ? ['reason', 'itemId']
+        : [];
+  return fields.flatMap((field) => {
+    const value = target[field];
+    return typeof value === 'string' && value.length > 0
+      ? [
+          [
+            field === 'cwd'
+              ? 'Working directory'
+              : field === 'itemId'
+                ? 'Item reference'
+                : field,
+            value,
+          ],
+        ]
+      : [];
+  });
+}
+
+function hasReviewableTarget(
+  method: string,
+  target: Record<string, unknown>
+): boolean {
+  if (method === 'item/fileChange/requestApproval') {
+    return typeof target.reason === 'string' && target.reason.trim().length > 0;
+  }
+  if (method === 'item/commandExecution/requestApproval') {
+    return (
+      typeof target.command === 'string' && target.command.trim().length > 0
+    );
+  }
+  return false;
 }
 
 export function HarnessSelector({
@@ -166,14 +210,26 @@ export function HarnessSelector({
           role="alertdialog"
           aria-label="Codex permission request"
         >
-          <p className="text-sm font-medium">
-            {Array.isArray(request.target.questions)
-              ? 'Codex needs your input'
-              : 'Allow Codex to continue?'}
-          </p>
-          <p className="mt-1 break-words text-xs text-(--nous-fg-2)">
-            {requestLabel(request)}
-          </p>
+          <p className="text-sm font-medium">{requestTitle(request.method)}</p>
+          {requestTargetRows(request.method, request.target).length > 0 && (
+            <dl className="mt-2 space-y-1 text-xs">
+              {requestTargetRows(request.method, request.target).map(
+                ([label, value]) => (
+                  <div key={label}>
+                    <dt className="font-medium text-(--nous-fg-2)">{label}</dt>
+                    <dd className="whitespace-pre-wrap break-words">{value}</dd>
+                  </div>
+                )
+              )}
+            </dl>
+          )}
+          {request.method === 'item/fileChange/requestApproval' &&
+            !hasReviewableTarget(request.method, request.target) && (
+              <p className="mt-2 text-xs text-(--nous-fg-2)">
+                Target details are unavailable, so this request cannot be
+                approved here.
+              </p>
+            )}
           {Array.isArray(request.target.questions) ? (
             <div className="mt-3 space-y-2">
               {(request.target.questions as Array<Record<string, unknown>>).map(
@@ -234,7 +290,10 @@ export function HarnessSelector({
               </button>
               <button
                 type="button"
-                disabled={busyRequestId === request.id}
+                disabled={
+                  busyRequestId === request.id ||
+                  !hasReviewableTarget(request.method, request.target)
+                }
                 onClick={() => void decide(request.id, true)}
                 className="rounded bg-(--nous-sol) px-3 py-1 text-xs text-white focus-visible:outline focus-visible:outline-2"
               >

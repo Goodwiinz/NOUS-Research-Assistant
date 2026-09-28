@@ -1232,12 +1232,16 @@ export function useChatStreaming(
               }
               runIdByThreadRef.current[currentThreadId] = runId;
               useAgentActivityStore.getState().setRunId(currentThreadId, runId);
-              harnessConnection.receive({ type: 'accepted', runId });
+              const stopPending = isStoppedByUser();
+              harnessConnection.receive({
+                type: stopPending ? 'stopping' : 'accepted',
+                runId,
+              });
               // Stop can race the accepted frame while the server is still
               // opening the response. Once the producer gives us its exact
               // identity, issue the fenced command instead of losing the
               // durable stop behind the local abort.
-              if (isStoppedByUser()) {
+              if (stopPending) {
                 void requestDurableStop(currentThreadId, runId);
               }
             },
@@ -2242,11 +2246,17 @@ export function useChatStreaming(
     if (
       harnessConnection.executionProvider === 'codex' &&
       normalRunStop &&
-      runThread &&
-      expectedRunId
+      runThread
     ) {
       harnessConnection.receive({ type: 'stopping' });
-      void requestDurableStop(runThread, expectedRunId);
+      if (expectedRunId) {
+        void requestDurableStop(runThread, expectedRunId);
+      } else {
+        // Acceptance may reach the browser before it carries the durable run
+        // id. Keep observing and retain Stop intent; onRunId will issue the
+        // fenced cancellation once that identity arrives.
+        stopTargetRef.current = streamOwnerRef.current;
+      }
       // Keep observing: the request may lose a completion race, and only the
       // persisted terminal event can say whether Codex stopped or completed.
       return;
@@ -2390,7 +2400,9 @@ export function useChatStreaming(
             Math.max(latestRun.streamSeq ?? 0, pendingSeq),
             gapAwareCallbacks,
             signal,
-            latestRun.streamId
+            harnessConnection.executionProvider === 'codex'
+              ? latestRun.runId
+              : latestRun.streamId
           );
           if (res.status === 'idle') {
             if (harnessConnection.executionProvider === 'codex') {

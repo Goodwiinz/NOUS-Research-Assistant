@@ -38,6 +38,7 @@ import type { UseChatDrawerReturn } from '@/hooks/chat/useChatDrawer';
 import type { UseCitationPanelReturn } from '@/hooks/chat/useCitationPanel';
 import type { UseChatComposerActionsReturn } from '@/hooks/chat/useChatComposerActions';
 import type { UseSlashCommandsReturn } from '@/hooks/chat/useSlashCommands';
+import type { AgentStreamCallbacks } from '@/services/agentChatService';
 
 function wrapper({ children }: { children: ReactNode }): ReactElement {
   const client = new QueryClient({
@@ -52,13 +53,26 @@ vi.mock('next/navigation', () => ({
 }));
 
 const streamMessageMock = vi.fn();
+const cancelActiveRunMock = vi.fn();
+const listHarnessDevicesMock = vi.fn();
+const listHarnessWorkspacesMock = vi.fn();
 vi.mock('@/services/agentChatService', () => ({
   agentChatService: {
     streamMessage: (...args: unknown[]) => streamMessageMock(...args),
     streamConfirm: vi.fn(),
+    cancelActiveRun: (...args: unknown[]) => cancelActiveRunMock(...args),
     // The hook probes for a parked HITL confirmation on thread activation;
     // nothing is parked in these scenarios.
     resumeStream: vi.fn().mockResolvedValue({ status: 'idle' }),
+  },
+}));
+
+vi.mock('@/services/harnessService', () => ({
+  harnessService: {
+    listDevices: (...args: unknown[]) => listHarnessDevicesMock(...args),
+    listWorkspaces: (...args: unknown[]) => listHarnessWorkspacesMock(...args),
+    readRequest: vi.fn(),
+    decideRequest: vi.fn(),
   },
 }));
 
@@ -213,6 +227,10 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     streamMessageMock.mockReset();
+    cancelActiveRunMock.mockResolvedValue(undefined);
+    listHarnessDevicesMock.mockResolvedValue([]);
+    listHarnessWorkspacesMock.mockResolvedValue([]);
+    window.localStorage.clear();
     vi.mocked(workspaceService.getOrCreateDefaultWorkspace).mockResolvedValue({
       id: 'ws-A',
     } as never);
@@ -367,6 +385,73 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
       await result.current.handleSubmit('later message');
     });
     expect(streamMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a Codex Stop pending until the accepted run id arrives', async () => {
+    listHarnessDevicesMock.mockResolvedValue([
+      { id: 'device-a', label: 'My laptop' },
+    ]);
+    listHarnessWorkspacesMock.mockResolvedValue([
+      { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
+    ]);
+    const pendingStream = deferred<void>();
+    let callbacks: AgentStreamCallbacks | undefined;
+    let streamSignal: AbortSignal | undefined;
+    streamMessageMock.mockImplementation(
+      (
+        _request: unknown,
+        received: AgentStreamCallbacks,
+        signal: AbortSignal
+      ) => {
+        callbacks = received;
+        streamSignal = signal;
+        return pendingStream.promise;
+      }
+    );
+    const params = {
+      ...makeParams(),
+      dbConversation: { id: 'conversation-A' } as never,
+      workspace: { id: 'ws-A', name: 'Research' } as never,
+    };
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+    await waitFor(() =>
+      expect(result.current.harnessConnection?.devices).toHaveLength(1)
+    );
+    act(() => {
+      result.current.harnessConnection?.selectProvider('codex');
+      result.current.harnessConnection?.selectDevice('device-a');
+      result.current.harnessConnection?.selectWorkspace('workspace-a');
+    });
+    await waitFor(() =>
+      expect(result.current.harnessConnection?.canSend).toBe(true)
+    );
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.handleSubmit('Codex task');
+    });
+    await waitFor(() => expect(streamMessageMock).toHaveBeenCalledOnce());
+    expect(streamSignal).toBeDefined();
+
+    act(() => result.current.handleStop());
+    expect(streamSignal?.aborted).toBe(false);
+    expect(cancelActiveRunMock).not.toHaveBeenCalled();
+    expect(result.current.harnessConnection?.statusLabel).toBe('Stopping');
+
+    await act(async () => {
+      callbacks?.onRunId?.('run-codex');
+    });
+    await waitFor(() =>
+      expect(cancelActiveRunMock).toHaveBeenCalledWith('thread-A', 'run-codex')
+    );
+    expect(streamSignal?.aborted).toBe(false);
+    expect(result.current.harnessConnection?.statusLabel).toBe('Stopping');
+
+    await act(async () => {
+      callbacks?.onError?.('Codex stopped', 'cancelled');
+      pendingStream.resolve();
+      await submission;
+    });
   });
 
   it('does not start streaming when Stop lands during first-thread creation', async () => {

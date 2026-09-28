@@ -133,6 +133,79 @@ describe('useHarnessConnection', () => {
     });
   });
 
+  it('shows the persisted command and permission target before Allow once', async () => {
+    readRequest.mockResolvedValue({
+      id: 'request-a',
+      runId: 'run-a',
+      method: 'item/commandExecution/requestApproval',
+      target: {
+        command: 'pnpm test --filter chat',
+        cwd: '/workspace/nous',
+        reason: 'Run the focused test suite',
+        kind: 'shell',
+        itemId: 'item-7',
+      },
+      targetHash: 'a'.repeat(64),
+      expiresAt: '2026-09-29T00:00:00Z',
+      consumed: false,
+      expired: false,
+    });
+    const view = renderConnectedHarness();
+    await act(async () => {
+      await view.result.current.loadApproval('request-a');
+    });
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+
+    expect(
+      screen.getByText('Codex requests command execution')
+    ).toBeInTheDocument();
+    expect(screen.getByText('pnpm test --filter chat')).toBeInTheDocument();
+    expect(screen.getByText('/workspace/nous')).toBeInTheDocument();
+    expect(screen.getByText('Run the focused test suite')).toBeInTheDocument();
+    expect(screen.getByText('shell')).toBeInTheDocument();
+    expect(screen.getByText('Item reference')).toBeInTheDocument();
+    expect(screen.getByText('item-7')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Codex needs permission to continue')
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeEnabled();
+  });
+
+  it('fails closed when a file-change request has no human-readable target', async () => {
+    readRequest.mockResolvedValue({
+      id: 'request-file',
+      runId: 'run-a',
+      method: 'item/fileChange/requestApproval',
+      target: { itemId: 'item-42' },
+      targetHash: 'b'.repeat(64),
+      expiresAt: '2026-09-29T00:00:00Z',
+      consumed: false,
+      expired: false,
+    });
+    const view = renderConnectedHarness();
+    await act(async () => {
+      await view.result.current.loadApproval('request-file');
+    });
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+
+    expect(screen.getByText('Item reference')).toBeInTheDocument();
+    expect(screen.getByText('item-42')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Target details are unavailable, so this request cannot be approved here.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeDisabled();
+  });
+
   it('keeps provider, computer, and workspace controls keyboard reachable', async () => {
     listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
     listWorkspaces.mockResolvedValue([

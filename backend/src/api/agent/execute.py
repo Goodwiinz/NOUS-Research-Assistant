@@ -1352,6 +1352,7 @@ async def resume_stream(
     if external_run is not None:
         from src.api.agent.harness_streaming import (
             context_for_accepted_run,
+            external_resume_cursor,
             stream_harness_run,
         )
 
@@ -1363,7 +1364,9 @@ async def resume_stream(
                 request,
                 _uuid.UUID(external_run.job_id),
                 external_context,
-                after_seq=after,
+                after_seq=external_resume_cursor(
+                    after, stream, _uuid.UUID(external_run.job_id)
+                ),
             ),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,

@@ -23,6 +23,13 @@ _POLL_INTERVAL_SECONDS = 0.25
 _HEARTBEAT_SECONDS = 15.0
 
 
+def external_resume_cursor(after_seq: int, stream_id: str | None, run_id: UUID) -> int:
+    """Use a replay cursor only when it was recorded for this external run."""
+    if stream_id is None or stream_id.casefold() != str(run_id).casefold():
+        return 0
+    return after_seq
+
+
 async def create_chat_context(
     db: Any,
     *,

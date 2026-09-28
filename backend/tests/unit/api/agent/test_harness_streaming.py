@@ -7,6 +7,16 @@ from src.api.agent import harness_streaming
 from src.services.agent.run_event_types import RunEventType
 
 
+def test_external_resume_cursor_resets_stale_run_identity():
+    run_id = uuid4()
+
+    assert harness_streaming.external_resume_cursor(91, str(uuid4()), run_id) == 0
+    assert harness_streaming.external_resume_cursor(91, None, run_id) == 0
+    assert (
+        harness_streaming.external_resume_cursor(91, str(run_id).upper(), run_id) == 91
+    )
+
+
 class _Session:
     async def __aenter__(self):
         return self

@@ -785,7 +785,9 @@ class AgentChatService {
 
     const terminalSeen = await consumeSse(response, callbacks);
     if (!terminalSeen && !signal?.aborted) {
-      callbacks.onConnectionLost?.();
+      if (request.execution_provider === 'codex') {
+        callbacks.onConnectionLost?.();
+      }
       callbacks.onError?.(INCOMPLETE_STREAM_ERROR);
     }
   }
