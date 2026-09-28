@@ -6,10 +6,19 @@ import json
 import re
 from dataclasses import dataclass, field
 from string import Template
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+from uuid import NAMESPACE_URL, uuid5
 
-from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
-from src.services.research_engine.discovery import search_sources, source_records
+from src.services.research_engine.connectors.base import (
+    SourceConnector,
+    SourceDocument,
+    redact_search_values,
+)
+from src.services.research_engine.discovery import (
+    SEARCH_TIMEOUT_SECONDS,
+    search_sources,
+    source_records,
+)
 from src.services.research_engine.providers.base import (
     LLMProvider,
     LLMRequest,
@@ -72,9 +81,15 @@ class StepExecutor:
         self,
         connectors: Dict[str, SourceConnector],
         providers: Dict[str, LLMProvider],
+        strategy_context: Optional[Dict[str, Any]] = None,
+        on_search_page: Optional[
+            Callable[[str, Dict[str, Any], str, str, Dict[str, Any]], Awaitable[None]]
+        ] = None,
     ) -> None:
         self.connectors = connectors
         self.providers = providers
+        self.strategy_context = strategy_context or {}
+        self.on_search_page = on_search_page
         self._handlers = {
             "search": self._execute_search,
             "screen": self._execute_screen,
@@ -127,19 +142,126 @@ class StepExecutor:
         if len(query) > MAX_RENDERED_PROMPT_CHARS:
             raise ValueError("rendered connector query exceeds the server limit")
 
-        all_sources, coverage = await search_sources(
-            self.connectors, sources, query, max_results
+        strategy = {
+            "schema_version": "nous.academic.search-strategy.v1",
+            "project_id": self.strategy_context.get("canonical_project_id"),
+            "protocol_version_id": self.strategy_context.get("protocol_version_id"),
+            "effective_plan_hash": self.strategy_context.get("effective_plan_hash"),
+            "blueprint_id": self.strategy_context.get("blueprint_id"),
+            "blueprint_version": self.strategy_context.get("blueprint_version"),
+            "step_id": step_def.get("id"),
+            "intended": {
+                "selected_providers": sources,
+                "parameters": redact_search_values(params),
+            },
+            "route_limits": {
+                "max_providers": MAX_CONNECTOR_FANOUT,
+                "max_results_per_provider": MAX_CONNECTOR_RESULTS,
+                "requested_results_per_provider": max_results,
+                "request_timeout_seconds": SEARCH_TIMEOUT_SECONDS,
+            },
+        }
+        strategy_bytes = json.dumps(
+            strategy, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        strategy_version = f"sha256:{hashlib.sha256(strategy_bytes).hexdigest()}"
+        strategy["strategy_version"] = strategy_version
+
+        step_id = str(step_def.get("id") or "search")
+        run_id = self.strategy_context.get("run_id")
+
+        async def persist_page(
+            provider_name: str, execution_id: str, page: Dict[str, Any]
+        ) -> None:
+            if self.on_search_page is not None:
+                await self.on_search_page(
+                    step_id, strategy, provider_name, execution_id, page
+                )
+
+        execution_namespace = (
+            f"{run_id}:{step_id}:{strategy_version}" if run_id else None
         )
+        all_sources, coverage = await search_sources(
+            self.connectors,
+            sources,
+            query,
+            max_results,
+            execution_namespace=execution_namespace,
+            on_page_update=persist_page if self.on_search_page is not None else None,
+        )
+        id_namespace = (
+            str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"research-source:{run_id}:{step_id}:{strategy_version}",
+                )
+            )
+            if run_id
+            else None
+        )
+        records = source_records(all_sources, id_namespace=id_namespace)
+        source_ids_by_provider_key: Dict[tuple[str, str], List[str]] = {}
+        for record in records:
+            source_id = record["source_id"]
+            for snapshot in record.get("metadata", {}).get("provenance", []):
+                provider = snapshot.get("connector_type")
+                external_id = snapshot.get("external_id")
+                if provider and external_id:
+                    source_ids_by_provider_key.setdefault(
+                        (provider, str(external_id)), []
+                    ).append(source_id)
+
+        for provider_name, receipt in coverage["providers"].items():
+            provider_source_ids: set[str] = set()
+            provider_unlinked_count = 0
+            for page in receipt.get("pages", []):
+                page_source_ids: set[str] = set()
+                linked_record_count = 0
+                for key in page.get("record_keys", []):
+                    matches = source_ids_by_provider_key.get(
+                        (
+                            key.get("provider", provider_name),
+                            str(key.get("external_id")),
+                        ),
+                        [],
+                    )
+                    if matches:
+                        linked_record_count += 1
+                        page_source_ids.update(matches)
+                provider_source_ids.update(page_source_ids)
+                parsed_count = int(page.get("response", {}).get("parsed_count", 0))
+                page["imported_source_ids"] = sorted(page_source_ids)
+                page["imported_count"] = len(page_source_ids)
+                page["unlinked_record_count"] = max(
+                    parsed_count - linked_record_count, 0
+                )
+                provider_unlinked_count += page["unlinked_record_count"]
+            receipt["imported_source_ids"] = sorted(provider_source_ids)
+            receipt["imported_count"] = len(provider_source_ids)
+            receipt["unlinked_record_count"] = provider_unlinked_count
+        coverage["strategy_version"] = strategy_version
+
+        quality_marks = []
+        if coverage.get("all_failed"):
+            quality_marks.append(
+                QualityMark(
+                    check_type="provider_search",
+                    passed=False,
+                    details="All selected search providers failed or timed out.",
+                )
+            )
 
         return StepResult(
             output={
                 "sources": [s.title for s in all_sources],
                 "query": query,
-                "source_records": source_records(all_sources),
+                "source_records": records,
                 "coverage": coverage,
+                "search_strategy": strategy,
                 "selected_sources": sources,
             },
             sources_used=all_sources,
+            quality_marks=quality_marks,
         )
 
     async def _execute_screen(self, step_def: Dict, context: Dict) -> StepResult:

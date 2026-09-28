@@ -20,13 +20,33 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from src.api.research_engine.runs import pause_run, router, stream_run
+from src.api.research_engine.runs import get_manifest, pause_run, router, stream_run
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 
 # ============================================================================
 # Helpers
 # ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_manifest_read_exposes_durable_receipts_before_run_completion():
+    run_id = uuid.uuid4()
+    run = _make_run(
+        id=run_id,
+        status="paused",
+        reproducibility_manifest={
+            "_search_receipts_v1": {"schema_version": 1, "executions": {}}
+        },
+    )
+    user = SimpleNamespace(id=uuid.uuid4())
+    with patch(
+        "src.api.research_engine.runs._get_owned_run",
+        new=AsyncMock(return_value=run),
+    ):
+        result = await get_manifest(run_id, user, AsyncMock())
+    assert result["run_status"] == "paused"
+    assert result["_search_receipts_v1"]["schema_version"] == 1
 
 
 def _make_run(**overrides):
@@ -67,6 +87,7 @@ def _mock_db_returning(
     blueprint_result=None,
     project_result=None,
     last_step_index=None,
+    last_step_quality_marks=None,
 ):
     """Build an AsyncMock DB that returns expected query results.
 
@@ -97,6 +118,7 @@ def _mock_db_returning(
             else:
                 last_step = Mock()
                 last_step.step_index = last_step_index
+                last_step.quality_marks = last_step_quality_marks
                 step_mock.scalars.return_value.first.return_value = last_step
             results.append(step_mock)
 
@@ -401,6 +423,38 @@ class TestStreamEndpointSuccess:
 
         assert response.status_code == 200
         assert captured_start_from["value"] == 3
+        stream_app.dependency_overrides.pop(get_db, None)
+
+    def test_stream_retries_step_that_paused_on_quality_failure(
+        self, stream_app, stream_client
+    ):
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        mock_run = _make_run(id=run_id, blueprint_id=bp_id, status="paused")
+        mock_bp = _make_blueprint(
+            id=bp_id,
+            steps=[{"id": "discover", "type": "search"}, {"type": "export"}],
+        )
+        db = _mock_db_returning(
+            run_result=mock_run,
+            blueprint_result=mock_bp,
+            last_step_index=0,
+            last_step_quality_marks=[
+                {"check_type": "provider_search", "passed": False}
+            ],
+        )
+        stream_app.dependency_overrides[get_db] = lambda: db
+        captured_start_from: dict[str, int | None] = {"value": None}
+
+        async def mock_engine_run(blueprint, run_id, start_from_step=0, **kwargs):
+            captured_start_from["value"] = start_from_step
+            yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
+
+        response = self._patch_engine_and_get(
+            stream_app, stream_client, run_id, mock_engine_run
+        )
+        assert response.status_code == 200
+        assert captured_start_from["value"] == 0
         stream_app.dependency_overrides.pop(get_db, None)
 
     def test_stream_persists_steps_on_step_complete(self, stream_app, stream_client):

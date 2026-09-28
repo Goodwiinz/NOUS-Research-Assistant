@@ -5,10 +5,14 @@ import copy
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any
-from uuid import uuid4
+from typing import Any, Awaitable, Callable
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.research_engine.connectors.base import (
+    SearchTrace,
+    SourceConnector,
+    SourceDocument,
+)
 
 SEARCH_TIMEOUT_SECONDS = 90.0
 
@@ -91,24 +95,46 @@ def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
     return merged
 
 
-def source_records(documents: list[SourceDocument]) -> list[dict[str, Any]]:
+def source_records(
+    documents: list[SourceDocument], *, id_namespace: str | None = None
+) -> list[dict[str, Any]]:
     """JSON-safe evidence passed through step persistence and run resume."""
-    return [
-        {
-            **asdict(doc),
-            "source_id": str(uuid4()),
-            "evidence_level": (
-                ("excerpt" if doc.connector_type == "rag_store" else "full_text")
-                if doc.full_text
-                else "abstract" if doc.abstract else "metadata"
-            ),
-        }
-        for doc in documents
-    ]
+    rows = []
+    for doc in documents:
+        if not doc.content_hash:
+            doc.compute_hash()
+        provenance = doc.metadata.get("provenance") or []
+        primary = provenance[0] if provenance else {}
+        provider = primary.get("connector_type", doc.connector_type)
+        external_id = primary.get("external_id", doc.external_id)
+        identity = (
+            f"{provider}:{external_id}"
+            if external_id
+            else f"{provider}:sha256:{doc.content_hash}"
+        )
+        source_id = uuid5(UUID(id_namespace), identity) if id_namespace else uuid4()
+        rows.append(
+            {
+                **asdict(doc),
+                "source_id": str(source_id),
+                "evidence_level": (
+                    ("excerpt" if doc.connector_type == "rag_store" else "full_text")
+                    if doc.full_text
+                    else "abstract" if doc.abstract else "metadata"
+                ),
+            }
+        )
+    return rows
 
 
 async def search_sources(
-    connectors: dict[str, SourceConnector], names: list[str], query: str, limit: int
+    connectors: dict[str, SourceConnector],
+    names: list[str],
+    query: str,
+    limit: int,
+    *,
+    execution_namespace: str | None = None,
+    on_page_update: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None,
 ) -> tuple[list[SourceDocument], dict[str, Any]]:
     """Return successful providers and explicitly record incomplete coverage."""
     names = list(dict.fromkeys(names))
@@ -121,23 +147,63 @@ async def search_sources(
         raise ValueError("max_results must be between 1 and 200 per provider")
 
     async def search(name: str) -> tuple[list[SourceDocument], dict[str, Any]]:
+        trace = SearchTrace(
+            execution_id=(
+                str(uuid5(NAMESPACE_URL, f"{execution_namespace}:{name}"))
+                if execution_namespace
+                else str(uuid4())
+            ),
+            provider=name,
+            requested_limit=limit,
+            on_page_update=on_page_update,
+        )
         try:
-            docs = await asyncio.wait_for(
-                connectors[name].search(query, max_results=limit),
+            docs, receipt = await asyncio.wait_for(
+                SourceConnector.search_with_receipts(
+                    connectors[name],
+                    query,
+                    max_results=limit,
+                    provider=name,
+                    trace=trace,
+                ),
                 SEARCH_TIMEOUT_SECONDS,
             )
-            return docs, {"status": "ok", "returned": len(docs), "limit": limit}
+            return docs, {
+                **receipt,
+                "returned": len(docs),
+                "limit": limit,
+            }
+        except asyncio.TimeoutError:
+            trace.error_type = "TimeoutError"
+            await trace.record_failed_request(trace.error_type)
+            docs = trace.documents
+            return docs, {
+                **trace.as_receipt(returned_count=len(docs), status="timed_out"),
+                "returned": len(docs),
+                "limit": limit,
+            }
         except Exception as exc:
             # Exceptions can contain credential-bearing URLs. Never serialize them.
-            return [], {"status": "failed", "error_type": type(exc).__name__}
+            trace.error_type = type(exc).__name__
+            await trace.record_failed_request(trace.error_type)
+            docs = trace.documents
+            return docs, {
+                **trace.as_receipt(returned_count=len(docs)),
+                "returned": len(docs),
+                "limit": limit,
+            }
 
     results = await asyncio.gather(*(search(name) for name in names))
     providers = {name: result[1] for name, result in zip(names, results)}
-    if all(item["status"] == "failed" for item in providers.values()):
-        raise RuntimeError("All selected research providers failed")
     docs = prepare_sources([doc for result, _ in results for doc in result])
+    failed_statuses = {"failed", "partial", "timed_out"}
     return docs, {
-        "partial": any(item["status"] == "failed" for item in providers.values()),
+        "partial": any(
+            item["status"] in failed_statuses for item in providers.values()
+        ),
+        "all_failed": all(
+            item["status"] in failed_statuses for item in providers.values()
+        ),
         "providers": providers,
         "retrieved_at": datetime.now(timezone.utc).isoformat(),
         "exhaustive": False,

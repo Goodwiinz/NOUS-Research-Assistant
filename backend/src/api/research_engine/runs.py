@@ -53,6 +53,7 @@ from src.services.research_engine.run_conformance import create_approved_run
 from src.services.research_engine.run_conformance import (
     require_run_conformance as _require_run_conformance,
 )
+from src.services.research_engine.search_receipts import SearchReceiptJournal
 from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
 
@@ -430,14 +431,14 @@ async def get_manifest(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get reproducibility manifest for a completed run."""
+    """Get the current manifest, including durable in-flight search receipts."""
     run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
-    if run.status != RunStatus.COMPLETED.value:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Run is not completed",
-        )
-    return run.reproducibility_manifest or {}
+    manifest = dict(run.reproducibility_manifest or {})
+    manifest.pop(_PAUSE_REQUESTED_KEY, None)
+    return {
+        **manifest,
+        "run_status": run.status,
+    }
 
 
 @router.get(
@@ -486,6 +487,7 @@ async def stream_run(
 
     # Determine resume offset from persisted steps for both paused and resumed runs.
     start_from = 0
+    retry_existing_step = False
     step_query = (
         select(ResearchStep)
         .where(
@@ -497,7 +499,13 @@ async def stream_run(
     step_result = await db.execute(step_query)
     last_step = step_result.scalars().first()
     if last_step is not None:
-        start_from = last_step.step_index + 1
+        quality_marks = getattr(last_step, "quality_marks", None)
+        retry_step = any(
+            isinstance(mark, dict) and mark.get("passed") is False
+            for mark in (quality_marks if isinstance(quality_marks, list) else [])
+        )
+        start_from = last_step.step_index if retry_step else last_step.step_index + 1
+        retry_existing_step = retry_step
 
     required_models = sorted(
         {
@@ -592,7 +600,7 @@ async def stream_run(
 
     async def event_generator():
         """Yield SSE-formatted events from the workflow engine."""
-        nonlocal total_tokens
+        nonlocal retry_existing_step, total_tokens
 
         async def recover_run(status_value: str, *, completed: bool = False) -> None:
             # Rollback also expires ORM state, so refresh before inspecting the
@@ -606,7 +614,38 @@ async def stream_run(
                 run.completed_at = datetime.now(timezone.utc)
             await db.commit()
 
-        executor = StepExecutor(providers=providers, connectors=connectors)
+        receipt_journal = SearchReceiptJournal(db, run_id, current_user.id)
+
+        async def persist_search_page(
+            step_id: str,
+            strategy: Dict[str, Any],
+            provider: str,
+            execution_id: str,
+            page: Dict[str, Any],
+        ) -> None:
+            await receipt_journal.persist_page(
+                step_id=step_id,
+                strategy=strategy,
+                provider=provider,
+                execution_id=execution_id,
+                page=page,
+            )
+
+        executor = StepExecutor(
+            providers=providers,
+            connectors=connectors,
+            strategy_context={
+                "run_id": str(run.id),
+                "canonical_project_id": str(canonical_project_id),
+                "protocol_version_id": (
+                    str(run.protocol_version_id) if run.protocol_version_id else None
+                ),
+                "effective_plan_hash": run.effective_plan_hash,
+                "blueprint_id": str(blueprint.id),
+                "blueprint_version": blueprint.version,
+            },
+            on_search_page=persist_search_page,
+        )
         # R5-M19: rehydrate accumulated step outputs so resumed/synthesize
         # steps see everything earlier steps produced instead of starting
         # from bare blueprint parameters.
@@ -689,11 +728,67 @@ async def stream_run(
                     if output is not None and not isinstance(output, dict):
                         output = {"value": output}
 
+                    if (
+                        step_def.get("type") == "search"
+                        and output
+                        and isinstance(output.get("search_strategy"), dict)
+                    ):
+                        await receipt_journal.finalize_search_step(
+                            step_id=str(event.get("step_id") or step_def.get("id")),
+                            strategy=output["search_strategy"],
+                            output=output,
+                        )
+                        event["output"] = output
+
                     if step_def.get("type") == "search" and output:
                         for source_row in research_source_rows(run_id, output):
                             db.add(source_row)
 
-                    db.add(_research_step_from_event(run_id, step_def, event))
+                    completed_step = _research_step_from_event(run_id, step_def, event)
+                    existing_step = None
+                    if retry_existing_step and step_index == start_from:
+                        existing_step = (
+                            (
+                                await db.execute(
+                                    select(ResearchStep)
+                                    .where(
+                                        ResearchStep.run_id == run_id,
+                                        ResearchStep.step_index == step_index,
+                                        ResearchStep.is_deleted.is_(False),
+                                    )
+                                    .order_by(ResearchStep.created_at.desc())
+                                    .limit(1)
+                                    .with_for_update()
+                                )
+                            )
+                            .scalars()
+                            .first()
+                        )
+                    if existing_step is None:
+                        db.add(completed_step)
+                    else:
+                        for attribute in (
+                            "step_type",
+                            "mode",
+                            "inputs_hash",
+                            "outputs_hash",
+                            "full_prompt",
+                            "model_id",
+                            "model_version",
+                            "temperature",
+                            "seed",
+                            "output",
+                            "quality_marks",
+                            "started_at",
+                            "completed_at",
+                            "token_count",
+                        ):
+                            setattr(
+                                existing_step,
+                                attribute,
+                                getattr(completed_step, attribute),
+                            )
+                    retry_existing_step = False
                     total_tokens += int(event.get("token_count") or 0)
                     run.total_tokens = total_tokens
                     if pause_requested:
@@ -720,6 +815,7 @@ async def stream_run(
                     if run.conformance_status == "plan_verified":
                         run.conformance_status = "conformant"
                     run.reproducibility_manifest = {
+                        **(run.reproducibility_manifest or {}),
                         "run_id": str(run.id),
                         "protocol_version_id": str(run.protocol_version_id),
                         "effective_plan_hash": run.effective_plan_hash,

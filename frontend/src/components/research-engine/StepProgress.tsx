@@ -39,11 +39,24 @@ export function StepProgress({ step }: StepProgressProps) {
   const [expanded, setExpanded] = useState(false);
   const coverage =
     typeof step.output === 'object' ? step.output?.coverage : null;
+  const providers =
+    coverage !== null &&
+    typeof coverage === 'object' &&
+    'providers' in coverage &&
+    coverage.providers !== null &&
+    typeof coverage.providers === 'object'
+      ? (coverage.providers as Record<string, ProviderCoverage>)
+      : {};
   const partialCoverage =
     coverage !== null &&
     typeof coverage === 'object' &&
     'partial' in coverage &&
     coverage.partial === true;
+  const allProvidersFailed =
+    coverage !== null &&
+    typeof coverage === 'object' &&
+    'all_failed' in coverage &&
+    coverage.all_failed === true;
   const outputPreview = (() => {
     if (!step.output) return null;
     if (typeof step.output === 'string') return step.output;
@@ -53,6 +66,27 @@ export function StepProgress({ step }: StepProgressProps) {
       return String(step.output);
     }
   })();
+
+  const completionLabel = (
+    completion?: string,
+    status?: string,
+  ): string => {
+    if (status === 'timed_out') return 'provider timed out';
+    switch (completion) {
+      case 'exhausted':
+        return 'provider exhausted';
+      case 'cap_reached':
+        return 'result cap reached';
+      case 'partial_failure':
+        return 'partial results; provider failed';
+      case 'failed':
+        return 'provider failed';
+      case 'more_available':
+        return 'more results available';
+      default:
+        return 'coverage unknown';
+    }
+  };
 
   const statusLabel = (() => {
     switch (step.status) {
@@ -202,9 +236,41 @@ export function StepProgress({ step }: StepProgressProps) {
 
       {partialCoverage && (
         <p role="alert" className="px-4 pb-3 text-sm text-muted-foreground">
-          Some selected databases could not be searched. These results have
-          partial coverage.
+          {allProvidersFailed
+            ? 'No selected databases could be searched. No provider coverage is available.'
+            : 'Some selected databases could not be searched. These results have partial coverage.'}
         </p>
+      )}
+
+      {Object.keys(providers).length > 0 && (
+        <div
+          aria-label="Search provider coverage"
+          className="space-y-1 px-4 pb-3 text-xs text-muted-foreground"
+        >
+          {Object.entries(providers).map(([name, receipt]) => (
+            <p key={name}>
+              <span className="font-medium text-foreground">{name}</span>
+              {' · '}
+              {receipt.returned_count ?? receipt.returned ?? 0} /{' '}
+              {receipt.requested_limit ?? receipt.limit ?? '—'} returned
+              {' · '}
+              {completionLabel(receipt.completion, receipt.status)}
+              {typeof receipt.pages?.length === 'number' && (
+                <>
+                  {' · '}
+                  {receipt.pages.length} page
+                  {receipt.pages.length === 1 ? '' : 's'}
+                </>
+              )}
+              {typeof receipt.imported_count === 'number' && (
+                <>
+                  {' · '}
+                  {receipt.imported_count} imported
+                </>
+              )}
+            </p>
+          ))}
+        </div>
       )}
 
       {/* Expandable details */}
@@ -293,6 +359,17 @@ export function StepProgress({ step }: StepProgressProps) {
       )}
     </div>
   );
+}
+
+interface ProviderCoverage {
+  completion?: string;
+  status?: string;
+  returned?: number;
+  returned_count?: number;
+  limit?: number;
+  requested_limit?: number;
+  imported_count?: number;
+  pages?: unknown[];
 }
 
 function PromptSection({ prompt }: { prompt: string }) {
