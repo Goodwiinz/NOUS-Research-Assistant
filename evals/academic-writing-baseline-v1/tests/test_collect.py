@@ -340,6 +340,34 @@ def test_protocol_freezes_five_canonical_trials_and_separate_corpora() -> None:
     assert len(sparse["documents"]) == 11
     assert sparse["documents"][1]["title"] == "Quoted {Result} α"
     assert sparse["documents"][10]["title"] == "Boundary Record β"
+    hijacked = next(
+        task for task in held_out["tasks"] if task["id"] == "held-hijacked-id"
+    )
+    assert hijacked["forbidden_values"] == ["10.1000/foreign-project-only"]
+    assert hijacked["forbidden_values"][0] in hijacked["instruction"]
+
+
+def test_corpus_overlap_fingerprint_ignores_task_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared = {
+        "condition": "copied",
+        "instruction": "Identical substantive task.",
+        "documents": [{"title": "Same", "content": "Same evidence."}],
+    }
+    corpora = {
+        "development": {"tasks": [{"id": "development-id", **shared}]},
+        "held_out": {"tasks": [{"id": "renamed-held-id", **shared}]},
+    }
+
+    def fake_corpus(
+        _protocol: dict[str, Any], name: str
+    ) -> tuple[Path, dict[str, Any]]:
+        return tmp_path / f"{name}.json", corpora[name]
+
+    monkeypatch.setattr(COLLECT, "_corpus", fake_corpus)
+    with pytest.raises(COLLECT.EvidenceError, match="tasks overlap"):
+        COLLECT._task_index({})
 
 
 def test_protocol_rejects_undeclared_trial_kind() -> None:
@@ -404,6 +432,23 @@ def test_markdown_body_and_bibliography_must_match_retained_evidence(
     markdown_record["sha256"] = COLLECT._file_digest(markdown_path)
 
     with pytest.raises(COLLECT.EvidenceError, match="not the retained draft"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
+def test_markdown_references_reject_unparsed_text_outside_bibtex(
+    tmp_path: Path,
+) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    markdown_record = trial["artifacts"]["exports"]["markdown"]
+    markdown_path = bundle_path.parent / markdown_record["path"]
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8")
+        + "\n\nFabricated reference outside the canonical fence.",
+        encoding="utf-8",
+    )
+    markdown_record["sha256"] = COLLECT._file_digest(markdown_path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="parseable BibTeX"):
         COLLECT._verify_success_artifacts(bundle_path, trial)
 
 
@@ -771,6 +816,13 @@ def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) 
     COLLECT._reject_sensitive_configuration(
         {"temperature": 0, "provider": {"api_key": "", "region": "eastus"}}
     )
+
+    runtime = _runtime(state, task_id, "a" * 40, "run-1")
+    runtime["tool_versions"]["api_key"] = "must-not-be-retained"
+    with pytest.raises(COLLECT.EvidenceError, match="runtime.tool_versions.api_key"):
+        COLLECT._validate_runtime_identity(
+            tmp_path / "trial.json", runtime, state, "development", "a" * 40, 101
+        )
 
     bundle_path, trial = _success_bundle(tmp_path)
     trial["runtime"] = _runtime(state, task_id, "a" * 40, "run-1")

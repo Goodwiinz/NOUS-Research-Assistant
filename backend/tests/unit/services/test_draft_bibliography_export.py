@@ -61,13 +61,18 @@ def test_draft_bibtex_uses_document_metadata_without_inventing_fields() -> None:
 def test_bibliography_normalizes_legacy_object_shaped_authors() -> None:
     citation = Citation(
         document_title="Object-shaped authors",
-        authors=[{"name": "Ada Lovelace"}, {"first": "Grace", "last": "Hopper"}],
+        authors=[
+            {"name": "Ada Lovelace"},
+            {"first": "Grace", "last": "Hopper"},
+            {"given": "Katherine", "family": "Johnson"},
+        ],
     )
     _, parsed = _parse_export(DraftCitation(citation_index=5, citation=citation))
 
     assert [str(person) for person in parsed.entries["doc5"].persons["author"]] == [
         "Lovelace, Ada",
         "Hopper, Grace",
+        "Johnson, Katherine",
     ]
 
 

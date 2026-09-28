@@ -406,7 +406,8 @@ def _task_index(
                 raise EvidenceError(f"{cohort} corpus contains a task without an id")
             if task_id in tasks:
                 raise EvidenceError(f"duplicate task id across corpora: {task_id}")
-            digest = _canonical_digest(task)
+            overlap_fixture = {key: value for key, value in task.items() if key != "id"}
+            digest = _canonical_digest(overlap_fixture)
             if digest in seen_digests:
                 raise EvidenceError(
                     f"development and held-out tasks overlap: {task_id} and "
@@ -719,7 +720,7 @@ def _verify_objective_artifacts(
             raise EvidenceError(
                 f"{bundle_path.name}: Markdown References lost canonical doc{marker}"
             )
-    match = BIBTEX_FENCE_RE.search(references)
+    match = BIBTEX_FENCE_RE.fullmatch(references.strip())
     if match is None:
         raise EvidenceError(
             f"{bundle_path.name}: Markdown evidence must retain parseable BibTeX"
@@ -1138,6 +1139,7 @@ def _validate_runtime_identity(
         raise EvidenceError(f"{bundle_path.name}: pinned tool versions are required")
     _reject_sensitive_configuration(runtime["configuration"])
     _reject_sensitive_configuration(runtime["env_flags"], "runtime.env_flags")
+    _reject_sensitive_configuration(tool_versions, "runtime.tool_versions")
     _verify_source_attestation(bundle_path, runtime, source_sha)
 
 

@@ -2156,10 +2156,12 @@ Key takeaways include the importance of continued investigation and the potentia
             elif isinstance(author, dict):
                 name = str(author.get("name") or "").strip()
                 if not name:
+                    given = author.get("given") or author.get("first")
+                    family = author.get("family") or author.get("last")
                     name = " ".join(
-                        str(author.get(part) or "").strip()
-                        for part in ("first", "middle", "last")
-                        if author.get(part)
+                        str(part).strip()
+                        for part in (given, author.get("middle"), family)
+                        if part
                     ).strip()
             else:
                 name = str(author).strip()
