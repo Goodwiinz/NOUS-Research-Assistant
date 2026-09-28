@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { Journal } from "../src/journal.ts";
 import type { BridgeCommand } from "../src/connection.ts";
 import type { HarnessAdapter, SessionOptions } from "../src/contracts.ts";
@@ -670,14 +671,14 @@ test("concurrent interrupt redelivery waits for the first successful receipt", a
   }
 });
 
-test("late interrupt failure through another journal cannot overwrite delivered", async () => {
+test("another journal cannot deliver an interrupt while its durable claim is held", async () => {
   const f = fixture(),
     first = new Journal(f.path, () => options),
     c = command(),
     a = adapter();
   a.startTurn = async () => ({ id: "turn" });
-  const goodRelease = gate(),
-    badRelease = gate();
+  const entered = gate(),
+    release = gate();
   const stop: BridgeCommand = {
     ...c,
     commandId: randomUUID(),
@@ -686,35 +687,125 @@ test("late interrupt failure through another journal cannot overwrite delivered"
   let calls = 0;
   a.interruptTurn = async () => {
     calls++;
-    if (calls === 1) await goodRelease.wait;
-    else {
-      await badRelease.wait;
-      throw new Error("late failure");
+    entered.release();
+    await release.wait;
+  };
+  let second: Journal | undefined;
+  let pending: Promise<void> | undefined;
+  try {
+    await first.execute(c, a);
+    pending = first.execute(stop, a);
+    await entered.wait;
+    second = new Journal(f.path, () => options);
+    const duplicate = second.execute(stop, a);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const overlappingCalls = calls;
+    release.release();
+    await Promise.all([pending, duplicate]);
+    assert.equal(overlappingCalls, 1);
+    assert.equal(first.state(stop.commandId), "delivered");
+    assert.equal(second.state(stop.commandId), "delivered");
+    await first.execute(stop, a);
+    await second.execute(stop, a);
+    assert.equal(calls, 1);
+  } finally {
+    release.release();
+    await pending;
+    second?.close();
+    first.close();
+    f.cleanup();
+  }
+});
+
+test("failed interrupt releases its durable claim for another journal to retry", async () => {
+  const f = fixture(),
+    first = new Journal(f.path, () => options),
+    c = command(),
+    a = adapter();
+  a.startTurn = async () => ({ id: "turn" });
+  const entered = gate(),
+    release = gate();
+  const stop: BridgeCommand = {
+    ...c,
+    commandId: randomUUID(),
+    body: { kind: "interrupt", sessionId: "session", turnId: "turn" },
+  };
+  let calls = 0;
+  a.interruptTurn = async () => {
+    calls++;
+    if (calls === 1) {
+      entered.release();
+      await release.wait;
+      throw new Error("transient interrupt failure");
     }
   };
   let second: Journal | undefined;
+  let pending: Promise<void> | undefined;
   try {
     await first.execute(c, a);
-    const good = first.execute(stop, a);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    pending = first.execute(stop, a);
+    await entered.wait;
     second = new Journal(f.path, () => options);
-    const bad = second.execute(stop, a);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await second.execute(stop, a);
+    assert.equal(calls, 1);
+    release.release();
+    await pending;
+    assert.equal(second.state(stop.commandId), "recovering");
+    await second.execute(stop, a);
     assert.equal(calls, 2);
-    goodRelease.release();
-    await good;
-    assert.equal(first.state(stop.commandId), "delivered");
-    badRelease.release();
-    await bad;
     assert.equal(second.state(stop.commandId), "delivered");
     await first.execute(stop, a);
     await second.execute(stop, a);
     assert.equal(calls, 2);
   } finally {
-    goodRelease.release();
-    badRelease.release();
+    release.release();
+    await pending;
     second?.close();
     first.close();
+    f.cleanup();
+  }
+});
+
+test("interrupt claim is reclaimed only after its executor process has exited", async () => {
+  const f = fixture(),
+    j = new Journal(f.path, () => options),
+    c = command(),
+    a = adapter();
+  a.startTurn = async () => ({ id: "turn" });
+  const stop: BridgeCommand = {
+    ...c,
+    commandId: randomUUID(),
+    body: { kind: "interrupt", sessionId: "session", turnId: "turn" },
+  };
+  try {
+    await j.execute(c, a);
+    const script = `
+      import { Journal } from ${JSON.stringify(new URL("../src/journal.ts", import.meta.url).href)};
+      const j = new Journal(${JSON.stringify(f.path)}, () => (${JSON.stringify(options)}));
+      await j.execute(${JSON.stringify(stop)}, { interruptTurn: async () => process.exit(91) });
+    `;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--experimental-sqlite",
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        script,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(child.status, 91, child.stderr);
+    assert.equal(j.state(stop.commandId), "intent");
+    await j.execute(stop, a);
+    assert.deepEqual(a.interrupts, ["session/turn"]);
+    assert.equal(j.state(stop.commandId), "delivered");
+    await j.execute(stop, a);
+    assert.equal(a.interrupts.length, 1);
+    assert.equal(j.workspaceLocked(c.workspaceId), true);
+  } finally {
+    j.close();
     f.cleanup();
   }
 });

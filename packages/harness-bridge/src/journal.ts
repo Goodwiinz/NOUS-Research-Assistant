@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { closeSync, constants, lstatSync, openSync } from "node:fs";
 import { dirname } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AdapterEvent,
   HarnessAdapter,
@@ -73,6 +73,7 @@ export class Journal {
       CREATE TABLE IF NOT EXISTS events(command TEXT NOT NULL REFERENCES commands(id), seq INTEGER NOT NULL, event TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(command,seq));
       CREATE TABLE IF NOT EXISTS leases(run_id TEXT PRIMARY KEY, device TEXT NOT NULL, expires TEXT NOT NULL, blocked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS interrupts(session TEXT NOT NULL, turn TEXT NOT NULL, PRIMARY KEY(session,turn));
+      CREATE TABLE IF NOT EXISTS interrupt_claims(command TEXT PRIMARY KEY REFERENCES commands(id), owner TEXT NOT NULL, pid INTEGER NOT NULL);
       UPDATE commands SET state='recovering' WHERE state IN ('intent','running');`);
   }
   close(): void {
@@ -122,6 +123,29 @@ export class Journal {
     } finally {
       this.inTransaction = false;
     }
+  }
+  /** Called inside the intent transaction; a live executor never loses its claim. */
+  private claimInterrupt(commandId: string, owner: string): boolean {
+    const claim = this.db
+      .prepare("SELECT owner,pid FROM interrupt_claims WHERE command=?")
+      .get(commandId) as { owner: string; pid: number } | undefined;
+    if (claim) {
+      try {
+        process.kill(claim.pid, 0);
+        return false;
+      } catch (error) {
+        // Only a confirmed dead executor permits reclaim. Timeouts, permission
+        // failures, and PID reuse retain uncertainty instead of overlapping calls.
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
+      }
+      this.db
+        .prepare("DELETE FROM interrupt_claims WHERE command=? AND owner=?")
+        .run(commandId, claim.owner);
+    }
+    this.db
+      .prepare("INSERT INTO interrupt_claims(command,owner,pid) VALUES(?,?,?)")
+      .run(commandId, owner, process.pid);
+    return true;
   }
   private owner(command: BridgeCommand): Row | undefined {
     const lock = this.db
@@ -192,6 +216,7 @@ export class Journal {
     )
       throw new Error("lease expired; verified renewal required");
     const b = command.body;
+    const interruptOwner = randomUUID();
     const claimed = this.tx(() => {
       const owner = this.owner(command);
       if (b.kind === "start") {
@@ -235,7 +260,10 @@ export class Journal {
         this.db
           .prepare("INSERT INTO locks(workspace,command) VALUES(?,?)")
           .run(command.workspaceId, command.commandId);
-      return true;
+      return (
+        b.kind !== "interrupt" ||
+        this.claimInterrupt(command.commandId, interruptOwner)
+      );
     });
     if (!claimed) return;
     try {
@@ -287,6 +315,14 @@ export class Journal {
             () => this.quarantine(command.commandId),
           );
       }
+    } finally {
+      // Release only this attempt, after its receipt or recovery state is durable.
+      // Closing a journal while the call is pending retains its claim until the
+      // executor exits; closing is not evidence that its native call has stopped.
+      if (b.kind === "interrupt" && !this.closed)
+        this.db
+          .prepare("DELETE FROM interrupt_claims WHERE command=? AND owner=?")
+          .run(command.commandId, interruptOwner);
     }
   }
   private append(id: string, body: BridgeEvent["body"]): BridgeEvent {
