@@ -6,7 +6,9 @@ Branch: `codex/daily-research-brief-20260927`
 
 Task 8 base: `68cc641938f43b99fa8d00e18822ccf2c62106e8`
 
-Final executable source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
+Final executable source: `ac17ca15a3a91af936851647bbde89d9860709ba`
+
+Prior whole-feature source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
 
 Independent-review source: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`
 
@@ -14,10 +16,19 @@ Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
 
 Disposition: **CERTIFICATION COMPLETE — NOT READY TO ENABLE**
 
+## 2026-09-28 final re-review amendment
+
+This amendment supersedes the earlier final-source designation and the earlier
+sentence that equated the reviewed Markdown hash with `report_hash`. Source
+`ac17ca15` adds the missing multi-provider bibliography fallback and the exact
+hash-relationship regression. Earlier results remain attributed below to
+`a92fcfa` or `9ca9d6a`; none is rewritten as an `ac17ca15` execution.
+
 The final executable source is followed by a documentation/evidence-only child
 commit. That scheme avoids a self-referential hash: committed transcripts name
-immutable source `9ca9d6a`, while the handoff names both commits. Earlier
-performance/eval transcripts stay bound to `a92fcfa` where they actually ran.
+immutable source `ac17ca15`, while the handoff names both commits. Earlier
+performance/eval transcripts stay bound to `a92fcfa` or `9ca9d6a` where they
+actually ran.
 
 `DAILY_RESEARCH_BRIEF_ENABLED` is a server-owned setting and defaults to
 `false`. It was enabled only in isolated local tests. Production configuration
@@ -35,13 +46,13 @@ local scope or lacked the required release state.
 
 | Gate                                        | Status  | Evidence                                                                                                                                 |
 | ------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| PostgreSQL lifecycle integration            | PASS    | Final source: 5 tests passed; duplicate resumes race two real stream claims with exactly one winner.                                     |
-| Browser → Next → FastAPI → PostgreSQL       | PASS    | Final source: all 10 serial scenarios passed with the flag explicitly enabled locally.                                                   |
-| Browser 200-row review rendering            | PASS    | 11 cold reloads: p50 `519.3 ms`, p95 `745.9 ms`, frozen ceiling `999.24 ms`.                                                             |
-| Frozen backend performance                  | PASS    | Three baseline-equivalent runs on `a92fcfa` and one exact documented run on final source passed all unchanged ceilings.                  |
-| Affected/broader backend                    | PASS    | Final source: `148 passed`; broader focused set `277 passed`.                                                                            |
+| PostgreSQL lifecycle integration            | PASS    | Prior source `9ca9d6a`: 5 tests passed; exact-source browser on `ac17ca15` also exercised real PostgreSQL.                               |
+| Browser → Next → FastAPI → PostgreSQL       | PASS    | Final source `ac17ca15`: all 10 serial scenarios passed with the flag explicitly enabled locally.                                       |
+| Browser 200-row review rendering            | PASS    | Final source: 11 cold reloads, p50 `489.2 ms`, p95 `542.1 ms`, frozen ceiling `999.24 ms`.                                               |
+| Frozen backend performance                  | PASS    | Three runs on `a92fcfa` and one exact run on prior source `9ca9d6a` passed unchanged ceilings; not relabeled for `ac17ca15`.             |
+| Affected/broader backend                    | PASS    | Final source: `161 passed`; prior broader focused set: `277 passed`.                                                                      |
 | Focused frontend                            | PASS    | 5 files and 61 tests passed; manual-resume boundary included.                                                                            |
-| Frontend type-check and earlier full Vitest | PASS    | Node `24.20.0`, pnpm `10.18.2`; type-check passed. Earlier full suite: 315 files, 2,368 tests.                                           |
+| Frontend type-check and earlier full Vitest | PASS    | Final source: Node `24.21.0`, pnpm `10.18.2`; type-check passed. Earlier full suite: 315 files, 2,368 tests.                             |
 | Full `frontend validate`                    | FAILED  | Existing full-tree lint debt stopped the command: 113 errors and 1,961 warnings.                                                         |
 | OpenAPI and generated TypeScript            | PASS    | Snapshot check passed; regenerated types produced no diff.                                                                               |
 | Alembic upgrade/downgrade/upgrade           | PASS    | `agent_ops_20260925 → daily_brief_reviews_20260927 → agent_ops_20260925 → daily_brief_reviews_20260927` passed on disposable PostgreSQL. |
@@ -63,7 +74,7 @@ Bandit is a source scan. It does not offset either failed dependency audit.
 ## Test environment
 
 Final local evidence used Linux `6.8.0-124-generic` x86_64, Python `3.12.3`,
-pytest `9.1.1`, Node `24.20.0`, pnpm `10.18.2`, Docker `29.1.3`, Bandit
+pytest `9.1.1`, Node `24.21.0`, pnpm `10.18.2`, Docker `29.1.3`, Bandit
 `1.9.4`, and Gitleaks `8.30.1`. Database commands used disposable PostgreSQL
 through `$ORCHESTRATION_TEST_DATABASE_URL`; no credential is committed.
 
@@ -74,11 +85,14 @@ through `$ORCHESTRATION_TEST_DATABASE_URL`; no credential is committed.
 Extraction evidence is joined to canonical source records by `source_id`.
 Rendering obtains `evidence_level`, DOI, publication year/date, URL, journal,
 and other bibliography fields from the canonical/nested connector shape rather
-than from extraction records that cannot carry those fields. Real-shaped
-OpenAlex, Crossref, and PubMed regressions prove an abstract source remains
-`abstract` and DOI/year survive into the supported JSON, Markdown, and CSV
-representations. Review and export hashes continue to use the exact canonical
-reviewed report bytes.
+than from extraction records that cannot carry those fields. When deduplication
+retains a secondary connector under `metadata.provenance[]`, rendering fills
+only empty canonical bibliography fields from those immutable origin snapshots;
+it never overrides a non-empty canonical value. Real-shaped OpenAlex, Crossref,
+and PubMed regressions, including both provider orders and a three-provider
+DOI/PMID bridge, prove an abstract source remains `abstract` and DOI, year, and
+journal survive into JSON, Markdown, and CSV. Reader output contains the
+enriched bibliography and never exposes the provenance blob.
 
 ### Final approval attestation
 
@@ -90,10 +104,14 @@ append-only attestation binds:
 - the verification output hash and canonical attestation hash.
 
 Verified downloads expose the complete review history and final attestation in
-JSON, Markdown, and CSV. The stored reviewed Markdown bytes remain
-reconstructible unchanged and their hash remains the attested report hash.
-Missing or mismatched review identity, output/report/verification hash, or
-attestation hash fails closed with `verified_artifact_attestation_invalid`.
+JSON, Markdown, and CSV. `report_hash` is the canonical JSON hash of the report;
+it is not the Markdown byte hash. The post-approval audit records a separate
+SHA-256 for the exact persisted Markdown prefix. The export-stage `output_hash`
+is the canonical hash of the full persisted export envelope, which includes
+`report_hash`, `verification_output_hash`, and the exact Markdown content. Tests
+prove that changing that content changes `output_hash`. Missing or mismatched
+review identity, output/report/verification hash, or attestation hash fails
+closed with `verified_artifact_attestation_invalid`.
 
 ### Default-off runtime control
 
@@ -134,7 +152,9 @@ ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" \
   backend/tests/integration/test_daily_research_brief_postgres.py
 ```
 
-Final-source result: `5 passed, 1 warning in 4.88s`.
+Prior whole-feature source result: `5 passed, 1 warning in 4.88s`. The final
+source changed only report rendering/tests; its exact browser run exercised the
+real PostgreSQL lifecycle, but this dedicated command was not rerun.
 
 The suite proves the six-stage happy path and all three reloadable review gates;
 partial/all provider failure; evidence levels and no-evidence output;
@@ -185,14 +205,14 @@ DAILY_BRIEF_E2E_PORT=8765 \
 
 The Playwright fixture starts Uvicorn with the same flag and database URL. The
 precondition asserted a clean worktree at exact source
-`9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`.
+`ac17ca15a3a91af936851647bbde89d9860709ba`.
 
 Result: `10 passed (2.6m)`. The scenarios cover all three reloadable review
 gates and exact downloads; provenance/attestation; partial provider failure;
 no-evidence; verification failure and exact-hash override; manual resume after
 an intermediate paused GET; 200-row rendering; stale refresh; immutable
 replay; and same-organization/cross-tenant owner denials. Eleven cold 200-row
-reloads observed p50 `519.3 ms` and p95 `745.9 ms` below `999.24 ms`.
+reloads observed p50 `489.2 ms` and p95 `542.1 ms` below `999.24 ms`.
 
 The manual-resume test performs the resume POST, lets the immediate refresh
 return paused, opens the SSE request, and verifies durable `running` through the
@@ -262,10 +282,12 @@ Three consecutive invocations on `a92fcfa` passed all six tests. Their max
 search/screen/extract p95 values were `14.170/29.408/88.468`,
 `13.709/31.652/89.163`, and `13.839/28.162/84.095 ms`.
 
-After the final rendering/attestation/lifecycle changes, the exact documented
-command ran again on final source `9ca9d6a` and returned `6 passed` in 18.93s:
+After the rendering/attestation/lifecycle changes, the exact documented command
+ran again on prior whole-feature source `9ca9d6a` and returned `6 passed` in
+18.93s. The `ac17ca15` re-review projects already-retained bibliography during
+report construction; performance was not rerun or relabeled for that source.
 
-| Metric                        |                  Final source |                 Frozen ceiling |
+| Metric                        |                  Source 9ca9d6a |                 Frozen ceiling |
 | ----------------------------- | ----------------------------: | -----------------------------: |
 | Six-stage p95                 |                   `19.962 ms` |                    `35.345 ms` |
 | Export p95                    |                    `0.595 ms` |                     `0.826 ms` |
@@ -294,8 +316,9 @@ validation, thresholds, and the final baseline-equivalent method intact.
 
 ## Frontend, contracts, and migration
 
-Focused frontend result: 5 files and 61 tests passed. Node `24.20.0` type-check
-passed. The earlier full Vitest suite passed 315 files and 2,368 tests. Full
+Prior focused frontend result: 5 files and 61 tests passed. Node `24.20.0`
+type-check passed there; final re-review type-check passed with Node `24.21.0`.
+The earlier full Vitest suite passed 315 files and 2,368 tests. Full
 `frontend validate` remains FAILED at its lint phase with 113 errors and 1,961
 warnings; later steps were not reached by that aggregate command.
 
@@ -376,12 +399,15 @@ The committed evidence directory is
 explains source provenance. Bounded transcripts include exact source/candidate
 state, command, exit status, salient output, and raw-capture SHA-256 for:
 
-- three baseline-equivalent performance runs on `a92fcfa` and the final-source
-  performance run on `9ca9d6a`;
+- three baseline-equivalent performance runs on `a92fcfa` and the prior
+  whole-feature performance run on `9ca9d6a`;
 - simultaneous stream-claim mutation RED/restored GREEN;
 - terminal-cancellation mutation RED/restored GREEN;
-- exact-source 10-scenario browser PASS plus prior failed/excluded attempts; and
-- affected/backend/PostgreSQL/frontend/type/OpenAPI/lint/Bandit/Gitleaks checks.
+- exact-source 10-scenario browser passes on `9ca9d6a` and final `ac17ca15`,
+  plus prior failed/excluded attempts;
+- provenance-fallback RED/restored GREEN; and
+- affected/backend/PostgreSQL/frontend/type/OpenAPI/lint/Bandit/Gitleaks checks,
+  with final re-review checks bound to `ac17ca15`.
 
 Older ignored logs under the SDD task directory are supplemental mutable local
 records. They are not the sole basis of any final-source claim.

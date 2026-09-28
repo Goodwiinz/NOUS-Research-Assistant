@@ -10,11 +10,20 @@ Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
 
 Independent-review source: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`
 
-Final whole-feature source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
+Final executable source: `ac17ca15a3a91af936851647bbde89d9860709ba`
+
+Prior whole-feature source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
 
 Disposition: **local follow-up complete; negative ship decision remains**
 
-The executable changes are frozen in the final whole-feature source. Its child
+## 2026-09-28 final re-review amendment
+
+This amendment records the bibliography-provenance repair and corrects the
+certification hash invariant. It supersedes the earlier final-source label while
+retaining every result under the source on which it ran. The release decision
+and every FAILED, BLOCKED, and NOT RUN classification remain unchanged.
+
+The executable changes are frozen in the final executable source. Its child
 commit contains only this report, the verification record, progress, and
 bounded evidence under
 `docs/testing/evidence/daily-research-brief-task8-followup-20260928/`. This
@@ -32,19 +41,27 @@ races two real SSE consumers after duplicate resume attempts. Removing the
 claim row-lock guard produced the required mutation RED `(200, 200)` and
 duplicate extraction; restoring it produced GREEN `(200, 409)`.
 
-The final whole-feature review closed five additional gaps:
+The final whole-feature review closed five additional gaps, and the final
+re-review closed the remaining multi-provider bibliography and certification
+wording gaps:
 
 1. Report rendering joins extraction evidence to canonical sources by
    `source_id`. DOI, year, URL, journal/date, and `evidence_level` come from the
-   canonical nested connector shape. Real-shaped OpenAlex, Crossref, and
-   PubMed tests prove an abstract remains abstract and bibliography data
-   appears in JSON, Markdown, and CSV while reviewed report hash semantics stay
-   exact.
+   canonical nested connector shape. Missing canonical bibliography fields are
+   deterministically enriched from retained `metadata.provenance[]` origin
+   snapshots without overriding non-empty canonical values. Real-shaped
+   OpenAlex, Crossref, PubMed, reverse-order, conflict, and bridged-cluster tests
+   prove an abstract remains abstract and DOI/year/journal appear in JSON,
+   Markdown, and CSV without exposing the provenance blob.
 2. Final approval now adds an append-only attestation around the already
    reviewed immutable artifact. It binds the final review ID, reviewer ID,
    timestamp, decision/kind/index, output hash, report hash, and verification
-   output hash. Verified JSON, Markdown, and CSV expose the full review history
-   and attestation; missing, mismatched, or corrupt attestations fail closed.
+   output hash. `report_hash` is the canonical JSON report hash; the exact
+   persisted Markdown prefix has its own SHA-256 in the post-approval audit;
+   and the export-stage `output_hash` binds the full persisted envelope,
+   including `report_hash`, `verification_output_hash`, and Markdown content.
+   Verified JSON, Markdown, and CSV expose the full review history and
+   attestation; missing, mismatched, or corrupt attestations fail closed.
 3. `DAILY_RESEARCH_BRIEF_ENABLED` is a server-owned setting with default
    `false`. When false, the Daily template is absent from list/detail, cannot
    create a Daily blueprint, and cannot start a new Daily run even from an
@@ -52,7 +69,7 @@ The final whole-feature review closed five additional gaps:
    audit and recovery; legacy/custom workflows remain available. Tests and E2E
    opt in explicitly.
 4. The complete 10-scenario browser suite ran against exact source
-   `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a` with the feature flag enabled in
+   `ac17ca15a3a91af936851647bbde89d9860709ba` with the feature flag enabled in
    the isolated test environment. It includes the manual-resume handoff and
    200-row bound and passed `10/10` in 2.6 minutes.
 5. Cancellation recovery locks and rereads durable state before deciding to
@@ -65,18 +82,24 @@ The final whole-feature review closed five additional gaps:
 
 | Gate                             | Result                                                                                  |
 | -------------------------------- | --------------------------------------------------------------------------------------- |
-| Affected backend                 | `148 passed` in 7.58s.                                                                  |
-| Broader focused backend          | `277 passed` in 14.85s.                                                                 |
-| PostgreSQL lifecycle             | `5 passed` in 4.88s.                                                                    |
+| Affected backend                 | Final source: `161 passed` in 7.45s.                                                     |
+| Broader focused backend          | Prior whole-feature source: `277 passed` in 14.85s.                                      |
+| PostgreSQL lifecycle             | Prior whole-feature source: `5 passed` in 4.88s; final browser exercised real PG.        |
 | Terminal-cancellation mutation   | Expected RED `1 failed`; restored GREEN `1 passed`.                                     |
 | Focused frontend                 | 5 files, `61 passed`.                                                                   |
-| Exact-source browser             | `10 passed (2.6m)`; 200-row p50 `519.3 ms`, p95 `745.9 ms`, frozen ceiling `999.24 ms`. |
-| Final-source frozen performance  | `6 passed` in 18.93s; every frozen ceiling passed.                                      |
-| Node 24 type-check               | PASS with Node `24.20.0` and pnpm `10.18.2`.                                            |
+| Exact-source browser             | `10 passed (2.6m)`; 200-row p50 `489.2 ms`, p95 `542.1 ms`, frozen ceiling `999.24 ms`. |
+| Frozen performance               | Prior source `9ca9d6a`: `6 passed` in 18.93s; every frozen ceiling passed.              |
+| Node 24 type-check               | PASS with Node `24.21.0` and pnpm `10.18.2`.                                            |
 | OpenAPI and generated TypeScript | PASS; regeneration produced no diff.                                                    |
 | Scoped Ruff/format               | PASS.                                                                                   |
 | Bandit 1.9.4                     | PASS; no in-scope source finding.                                                       |
 | Staged Gitleaks 8.30.1           | PASS; no staged-source secret finding.                                                  |
+
+The final provenance regression was first RED on the default OpenAlex-first
+same-DOI path (`publication_year` was `None` instead of `2025`) and GREEN after
+the fallback was added. The final affected suite includes reverse provider
+order, canonical conflicts, and a three-provider DOI/PMID bridge. Bounded
+RED/GREEN and exact-source transcripts record the raw-capture digests.
 
 The exact-source browser scenario performs resume POST, observes the immediate
 paused GET, starts the SSE request, confirms the stream claims the durable run,
@@ -95,12 +118,14 @@ channel losses are excluded environment evidence, never relabeled as passes.
 ## Frozen performance evidence
 
 Three baseline-equivalent full invocations passed on independent-review source
-`a92fcfa`, and one exact documented full invocation passed on final source
-`9ca9d6a`. The frozen numeric thresholds and nearest-rank percentile function
+`a92fcfa`, and one exact documented full invocation passed on prior
+whole-feature source `9ca9d6a`. The final re-review changed only report
+metadata projection and its tests, so performance was not rerun or relabeled.
+The frozen numeric thresholds and nearest-rank percentile function
 never changed. Both baseline and final method use one warmup plus 11 measured
 max-stage observations with GC enabled, so p95 is rank 11, the maximum.
 
-| Metric                        |                  Final source |                 Frozen ceiling |
+| Metric                        |                  Source 9ca9d6a |                 Frozen ceiling |
 | ----------------------------- | ----------------------------: | -----------------------------: |
 | Six-stage p95                 |                   `19.962 ms` |                    `35.345 ms` |
 | Export p95                    |                    `0.595 ms` |                     `0.826 ms` |

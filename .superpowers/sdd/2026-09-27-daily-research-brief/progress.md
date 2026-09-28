@@ -278,7 +278,8 @@
 - Source chain: original certification
   `efd76079be75fdbba9eef4215c1c831d829cacb4`; independent review
   `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`; final whole-feature source
-  `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`.
+  `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`; final re-review source
+  `ac17ca15a3a91af936851647bbde89d9860709ba`.
 - Earlier independent review closed five Important gaps: manual-resume
   authorization survives the intermediate paused GET; a fixed-corpus semantic
   scorer is independent of self-reported support labels; performance uses the
@@ -293,7 +294,9 @@
   - final approval adds a hash-bound append-only attestation with the final
     review/reviewer/timestamp/decision and report/output/verification hashes;
     missing or corrupt attestation fails verified download closed while the
-    reviewed artifact bytes/hash remain unchanged and reconstructible;
+    reviewed artifact remains unchanged and reconstructible. `report_hash` is
+    the canonical JSON report hash, the exact persisted Markdown prefix has a
+    separate SHA-256, and export `output_hash` binds the persisted envelope;
   - `DAILY_RESEARCH_BRIEF_ENABLED` is server-owned and defaults false; off hides
     list/detail, refuses create/start including existing Daily blueprints, and
     preserves read/export for existing runs; legacy/custom workflows remain;
@@ -302,15 +305,27 @@
   - locked cancellation recovery preserves completed/failed terminal state.
     Removing the terminal guard produced RED (`completed` became `paused`);
     restoration produced GREEN. The mutation is absent.
-- Final-source focused results: affected backend `148 passed`; broader backend
-  `277 passed`; PostgreSQL lifecycle `5 passed`; focused frontend `61 passed`;
+- Prior whole-feature focused results: affected backend `148 passed`; broader
+  backend `277 passed`; PostgreSQL lifecycle `5 passed`; focused frontend `61 passed`;
   Node `24.20.0` type-check PASS; OpenAPI/type generation no drift; scoped
   Ruff/format PASS; Bandit `1.9.4` and staged Gitleaks `8.30.1` PASS.
+- Final re-review closes multi-provider bibliography fallback from retained
+  `metadata.provenance[]` snapshots without overriding canonical values or
+  exposing provenance to readers. Its OpenAlex-first regression was RED on the
+  missing Crossref year and GREEN after the fix; reverse order, canonical
+  conflicts, and a three-provider DOI/PMID bridge are covered. Final-source
+  affected backend passed `161`; Node `24.21.0` type-check, OpenAPI/type drift,
+  Ruff/format, Bandit `1.9.4`, and Gitleaks `8.30.1` passed.
 - Exact-source browser result: `10 passed (2.6m)`. The 200-row review page used
   11 cold reloads with p50 `519.3 ms` and p95 `745.9 ms`, below the frozen
   `999.24 ms` ceiling. The scenario set includes three reloadable gates,
   provenance/final attestation, partial/no evidence, verification override,
   manual resume, 200 rows, stale/duplicate review behavior, and owner denials.
+- The browser suite was rerun after the final rendering fix against exact source
+  `ac17ca15` with the feature flag enabled only locally: `10 passed (2.6m)`;
+  11 cold 200-row reloads measured p50 `489.2 ms` and p95 `542.1 ms`, below the
+  unchanged `999.24 ms` ceiling. The prior `9ca9d6a` browser pass remains part
+  of the historical evidence rather than being overwritten.
 - Prior browser failures are retained: one consumed-response assertion produced
   one failure with nine tests not run; one unstable reconnect fixture produced
   five passes, one failure, and four tests not run; three focused attempts
@@ -319,7 +334,7 @@
 - Performance thresholds and nearest-rank function were never loosened. Final
   method is one warmup plus 11 measured max-stage observations with GC enabled,
   making p95 the maximum. Three consecutive full invocations passed on
-  `a92fcfa`; one exact documented final-source invocation returned `6 passed`
+  `a92fcfa`; one exact documented `9ca9d6a` invocation returned `6 passed`
   with six-stage p95 `19.962 ms`, export p95 `0.595 ms`, max
   search/screen/extract `15.974/31.788/96.698 ms`, hydration `3.096 ms`, and
   soak `1,149.907 ms`, all below frozen ceilings.

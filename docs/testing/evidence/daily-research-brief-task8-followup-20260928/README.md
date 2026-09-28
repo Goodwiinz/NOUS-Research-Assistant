@@ -4,16 +4,20 @@ Date: 2026-09-28
 
 Independent-review source: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`
 
-Final whole-feature source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
+Final executable source: `ac17ca15a3a91af936851647bbde89d9860709ba`
+
+Prior whole-feature source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
 
 Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
 
 The existing performance, eval, and simultaneous-stream-claim transcripts are
-bound to the independent-review source. The final provenance, approval
-attestation, runtime-control, cancellation, PostgreSQL, and browser fixes are
-frozen in the final whole-feature source. This directory is committed in a
-documentation-only child of that final source, so the transcripts can name the
-immutable executable commit without making a commit contain its own hash.
+bound to the source where they ran. Runtime control, cancellation, PostgreSQL,
+and approval attestation are frozen in the prior whole-feature source. The
+final executable source adds deterministic bibliography fallback from retained
+provider provenance and the browser rerun for that exact state. This directory
+is committed in a documentation-only child of that final source, so the
+transcripts can name the immutable executable commit without making a commit
+contain its own hash.
 
 Each bounded transcript records the command, exit status, exact source or
 candidate state, salient output, and SHA-256 digest of its local raw capture.
@@ -27,15 +31,24 @@ are the evidence of record.
 | `performance-run-1.txt`                        | PASS            | First baseline-equivalent full performance invocation on `a92fcfa`.                                         |
 | `performance-run-2.txt`                        | PASS            | Second separate invocation on `a92fcfa`.                                                                    |
 | `performance-run-3.txt`                        | PASS            | Third separate invocation on `a92fcfa`.                                                                     |
-| `final-source-performance.txt`                 | PASS            | Exact documented full performance invocation on final source `9ca9d6a`.                                     |
+| `final-source-performance.txt`                 | PASS            | Exact documented full performance invocation on prior source `9ca9d6a`.                                     |
 | `stream-claim-mutation-red.txt`                | EXPECTED RED    | Removing the row-lock guard let both real SSE consumers win.                                                |
 | `stream-claim-mutation-green.txt`              | PASS            | Restoring the exact production file admitted one consumer.                                                  |
 | `terminal-sse-cancellation-mutation-red.txt`   | EXPECTED RED    | Removing the durable terminal guard rewrote a completed run to paused.                                      |
 | `terminal-sse-cancellation-mutation-green.txt` | PASS            | Restoring the durable guard preserved terminal state.                                                       |
 | `exact-source-browser.txt`                     | PASS            | All 10 real browser → Next → FastAPI → PostgreSQL scenarios on `9ca9d6a`.                                   |
+| `exact-source-browser-ac17ca15.txt`            | PASS            | All 10 scenarios rerun after the rendering fix on exact source `ac17ca15`.                                  |
 | `exact-source-browser-failures.txt`            | FAILED/EXCLUDED | Earlier executable failures and invalid environment/host attempts retained without being counted as passes. |
 | `focused-checks.txt`                           | PASS/BLOCKED    | Eval, PostgreSQL, frontend, type-check, and formatting checks on `a92fcfa`; the live-model test is BLOCKED. |
-| `final-source-checks.txt`                      | PASS            | Final-source affected backend, PostgreSQL, frontend, contracts, lint, Bandit, and staged Gitleaks checks.   |
+| `final-source-checks.txt`                      | PASS            | Prior whole-feature backend, PostgreSQL, frontend, contracts, lint, Bandit, and Gitleaks checks.            |
+| `final-re-review-checks.txt`                   | PASS            | Affected backend, API/type drift, type-check, static checks, Bandit, and Gitleaks on `ac17ca15`.            |
+| `provenance-fallback-red-green.txt`            | EXPECTED RED/PASS | Missing secondary-provider bibliography regression before and after fix.                                  |
+
+The certification uses distinct hashes. `report_hash` is the canonical JSON
+report hash. The post-approval audit records a separate SHA-256 for the exact
+persisted Markdown prefix. The export-stage `output_hash` binds the complete
+persisted envelope, including `report_hash`, `verification_output_hash`, and
+the exact Markdown content; changing that content changes `output_hash`.
 
 The frozen numeric performance thresholds and nearest-rank percentile function
 did not change. The baseline-equivalent max-stage sample count is 11, making
