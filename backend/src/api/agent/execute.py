@@ -1333,19 +1333,7 @@ async def resume_stream(
     latest_run_for_resume = None
     latest_run_checked = False
     if sid is None:
-        active_external = await get_active_run_for_thread(
-            db,
-            thread_uuid,
-            organization_id=getattr(current_user, "organization_id", None),
-            user_id=current_user.id,
-        )
-        external_run = (
-            active_external
-            if active_external is not None
-            and getattr(active_external, "execution_provider", "nous") == "codex"
-            else None
-        )
-        if external_run is None:
+        if stream is not None:
             latest_run_for_resume = await get_latest_run_for_thread(
                 db,
                 thread_uuid,
@@ -1353,12 +1341,40 @@ async def resume_stream(
                 user_id=current_user.id,
             )
             latest_run_checked = True
-            if (
-                latest_run_for_resume is not None
+            external_run = (
+                latest_run_for_resume
+                if latest_run_for_resume is not None
                 and getattr(latest_run_for_resume, "execution_provider", "nous")
                 == "codex"
-            ):
-                external_run = latest_run_for_resume
+                else None
+            )
+        else:
+            active_external = await get_active_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            external_run = (
+                active_external
+                if active_external is not None
+                and getattr(active_external, "execution_provider", "nous") == "codex"
+                else None
+            )
+            if external_run is None:
+                latest_run_for_resume = await get_latest_run_for_thread(
+                    db,
+                    thread_uuid,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+                latest_run_checked = True
+                if (
+                    latest_run_for_resume is not None
+                    and getattr(latest_run_for_resume, "execution_provider", "nous")
+                    == "codex"
+                ):
+                    external_run = latest_run_for_resume
         if external_run is not None:
             from src.api.agent.harness_streaming import (
                 context_for_accepted_run,
