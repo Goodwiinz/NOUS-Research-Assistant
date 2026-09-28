@@ -24,6 +24,22 @@ VERDICTS = {
     "authorization": {"passed", "failed", "not_run"},
     "infrastructure": {"passed", "failed"},
 }
+FAILURE_CLASSES = {
+    "objective_failed",
+    "semantic_failed",
+    "authorization_failed",
+    "provider_unavailable",
+    "judge_unavailable",
+    "infrastructure_failed",
+}
+FAILURE_CLASS_VERDICTS = {
+    "objective_failed": ("objective", "failed"),
+    "semantic_failed": ("semantic", "failed"),
+    "authorization_failed": ("authorization", "failed"),
+    "provider_unavailable": ("infrastructure", "failed"),
+    "judge_unavailable": ("semantic", "judge_unavailable"),
+    "infrastructure_failed": ("infrastructure", "failed"),
+}
 SENSITIVE_KEY_RE = re.compile(
     r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|credential|"
     r"authorization|proxy[_-]?authorization|cookie|set[_-]?cookie|session[_-]?id)",
@@ -42,12 +58,13 @@ TRIAL_FIELDS = {
     "runtime",
     "passed",
     "verdicts",
-    "failure_reason",
+    "failure_class",
     "artifacts",
     "invalid_revision",
 }
 RUNTIME_FIELDS = {
     "run_id",
+    "seed",
     "source_sha",
     "provider",
     "model",
@@ -293,10 +310,24 @@ def _verify_source_attestation(
 ) -> None:
     path = _verify_declared_artifact(bundle_path, runtime.get("source_attestation"))
     attestation = _load_json(path)
+    _reject_unknown_fields(
+        bundle_path,
+        attestation,
+        {
+            "run_id",
+            "seed",
+            "source_sha",
+            "git_tree",
+            "tracked_diff_sha256",
+            "runner_image",
+        },
+        "source attestation",
+    )
     empty_diff_digest = f"sha256:{hashlib.sha256(b'').hexdigest()}"
     if (
         not isinstance(attestation, dict)
         or attestation.get("run_id") != runtime.get("run_id")
+        or attestation.get("seed") != runtime.get("seed")
         or attestation.get("source_sha") != source_sha
         or attestation.get("git_tree") != _git_tree_sha(source_sha)
         or attestation.get("tracked_diff_sha256") != empty_diff_digest
@@ -417,6 +448,19 @@ def _trial_kinds(protocol: dict[str, Any]) -> dict[tuple[str, int], str]:
 
 
 def validate_protocol(protocol: dict[str, Any]) -> dict[str, Any]:
+    if protocol.get("baseline_status") != {
+        "status": "not_established",
+        "required_run": (
+            "Run all 14 declared trials under this exact protocol before comparison."
+        ),
+    }:
+        raise EvidenceError(
+            "protocol must declare that its baseline is not established"
+        )
+    if "historical_comparison" in protocol:
+        raise EvidenceError(
+            "cross-protocol historical comparisons are not valid evidence"
+        )
     tasks, cohorts = _task_index(protocol)
     expected = _expected_trials(protocol)
     missing = sorted(task_id for task_id, _ in expected if task_id not in tasks)
@@ -556,7 +600,10 @@ def _verify_draft_artifact(bundle_path: Path, trial: dict[str, Any]) -> dict[str
 
 
 def _verify_objective_artifacts(
-    bundle_path: Path, trial: dict[str, Any], context: dict[str, Any]
+    bundle_path: Path,
+    trial: dict[str, Any],
+    context: dict[str, Any],
+    protocol_state: dict[str, Any],
 ) -> None:
     artifacts = context["artifacts"]
     draft = context["draft"]
@@ -710,6 +757,27 @@ def _verify_objective_artifacts(
         )
     _verify_bibtex_metadata(bundle_path, bib, citation_rows)
 
+    task = protocol_state["tasks"].get(trial.get("task_id"), {})
+    forbidden_values = task.get("forbidden_values", [])
+    retained_output = "\n".join(
+        (
+            draft_content,
+            markdown,
+            tex,
+            bib,
+            json.dumps(citations, ensure_ascii=False, sort_keys=True),
+        )
+    )
+    for forbidden in forbidden_values:
+        if not isinstance(forbidden, str) or not forbidden:
+            raise EvidenceError(
+                f"{bundle_path.name}: forbidden task values must be non-empty strings"
+            )
+        if forbidden.casefold() in retained_output.casefold():
+            raise EvidenceError(
+                f"{bundle_path.name}: retained output contains a forbidden task value"
+            )
+
     _verify_invalid_revision(bundle_path, trial.get("invalid_revision"), draft)
 
 
@@ -823,6 +891,8 @@ def _verify_semantic_artifacts(
         or not adjudication.get("id")
         or not adjudication.get("reviewer")
         or not adjudication.get("verifier")
+        or adjudication.get("draft_id") != context["draft"].get("id")
+        or adjudication.get("project_id") != context["draft"].get("project_id")
     ):
         raise EvidenceError(
             f"{bundle_path.name}: independent passing adjudication is required"
@@ -876,6 +946,7 @@ def _verify_semantic_artifacts(
                 break
     if (
         not calibration.get("id")
+        or calibration.get("run_id") != runtime.get("run_id")
         or calibration.get("outcome") != "passed"
         or calibration.get("reviewer") != adjudication.get("reviewer")
         or calibration.get("verifier") != adjudication.get("verifier")
@@ -910,7 +981,12 @@ def _verify_authorization_artifacts(
     if not isinstance(checks, dict):
         raise EvidenceError(f"{bundle_path.name}: authorization checks are required")
     collaborator = checks.get("collaborator_download")
+    foreign_access = checks.get("foreign_project_access")
     foreign = checks.get("foreign_project_download")
+    foreign_principal = (
+        foreign.get("principal_id") if isinstance(foreign, dict) else None
+    )
+    foreign_project = foreign.get("project_id") if isinstance(foreign, dict) else None
     expected_resource = {
         "resource_type": "draft_export",
         "resource_id": draft.get("id"),
@@ -926,6 +1002,19 @@ def _verify_authorization_artifacts(
     ):
         raise EvidenceError(
             f"{bundle_path.name}: collaborator download authorization is unproven"
+        )
+    if (
+        not isinstance(foreign_access, dict)
+        or foreign_access.get("status") != 200
+        or not foreign_access.get("principal_id")
+        or foreign_access.get("principal_id") != foreign_principal
+        or not foreign_access.get("project_id")
+        or foreign_access.get("project_id") != foreign_project
+        or foreign_access.get("resource_type") != "project"
+        or foreign_access.get("resource_id") != foreign_project
+    ):
+        raise EvidenceError(
+            f"{bundle_path.name}: foreign-project existence is unproven"
         )
     if (
         not isinstance(foreign, dict)
@@ -954,7 +1043,9 @@ def _verify_passed_artifacts(
         return
     context = _verify_draft_artifact(bundle_path, trial)
     if "objective" in passed_dimensions:
-        _verify_objective_artifacts(bundle_path, trial, context)
+        if protocol_state is None:
+            raise EvidenceError(f"{bundle_path.name}: frozen task state is required")
+        _verify_objective_artifacts(bundle_path, trial, context, protocol_state)
     if "semantic" in passed_dimensions:
         if protocol_state is None:
             raise EvidenceError(
@@ -983,6 +1074,7 @@ def _validate_runtime_identity(
     protocol_state: dict[str, Any],
     cohort: str,
     source_sha: str,
+    seed: int,
 ) -> None:
     required_strings = (
         "run_id",
@@ -996,6 +1088,10 @@ def _validate_runtime_identity(
     )
     if runtime.get("source_sha") != source_sha:
         raise EvidenceError(f"{bundle_path.name}: source SHA does not match this run")
+    if runtime.get("seed") != seed:
+        raise EvidenceError(
+            f"{bundle_path.name}: runtime seed does not match the trial"
+        )
     missing = [field for field in required_strings if not runtime.get(field)]
     if missing:
         raise EvidenceError(
@@ -1023,6 +1119,12 @@ def _validate_runtime_identity(
     if not isinstance(runtime.get("env_flags"), dict):
         raise EvidenceError(
             f"{bundle_path.name}: executed environment flags are required"
+        )
+    if not isinstance(runtime.get("authenticated"), bool) or not isinstance(
+        runtime.get("real_provider"), bool
+    ):
+        raise EvidenceError(
+            f"{bundle_path.name}: authenticated and real_provider must be booleans"
         )
     tool_versions = runtime.get("tool_versions")
     if (
@@ -1118,7 +1220,9 @@ def validate_trial(
     runtime = trial.get("runtime")
     if not isinstance(runtime, dict):
         raise EvidenceError(f"{bundle_path.name}: runtime identity is required")
-    _validate_runtime_identity(bundle_path, runtime, protocol_state, cohort, source_sha)
+    _validate_runtime_identity(
+        bundle_path, runtime, protocol_state, cohort, source_sha, seed
+    )
     verdicts = _validate_verdicts(bundle_path, trial)
     if any(
         verdicts[name] == "passed"
@@ -1133,13 +1237,20 @@ def validate_trial(
                 "real-provider run"
             )
         _verify_passed_artifacts(bundle_path, trial, verdicts, protocol_state)
-    if (
-        not all(verdict == "passed" for verdict in verdicts.values())
-        and not str(trial.get("failure_reason") or "").strip()
-    ):
+    is_pass = all(verdict == "passed" for verdict in verdicts.values())
+    failure_class = trial.get("failure_class")
+    if not is_pass and failure_class not in FAILURE_CLASSES:
         raise EvidenceError(
-            f"{bundle_path.name}: non-passing trial needs a failure reason"
+            f"{bundle_path.name}: non-passing trial needs a safe failure class"
         )
+    if not is_pass and failure_class in FAILURE_CLASS_VERDICTS:
+        dimension, expected_verdict = FAILURE_CLASS_VERDICTS[failure_class]
+        if verdicts[dimension] != expected_verdict:
+            raise EvidenceError(
+                f"{bundle_path.name}: failure class does not match its verdict"
+            )
+    if is_pass and failure_class is not None:
+        raise EvidenceError(f"{bundle_path.name}: passing trial has a failure class")
     return key, verdicts
 
 

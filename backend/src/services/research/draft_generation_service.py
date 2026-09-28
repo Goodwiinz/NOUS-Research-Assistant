@@ -2144,6 +2144,30 @@ Key takeaways include the importance of continued investigation and the potentia
         return BibliographyService.format_bibtex(canonical_citations, keys=keys)
 
     @staticmethod
+    def _canonical_author_names(authors: Any) -> Optional[List[str]]:
+        """Normalize legacy JSONB author objects for bibliography formatters."""
+        if not authors:
+            return None
+        raw_authors = authors if isinstance(authors, list) else [authors]
+        normalized = []
+        for author in raw_authors:
+            if isinstance(author, str):
+                name = author.strip()
+            elif isinstance(author, dict):
+                name = str(author.get("name") or "").strip()
+                if not name:
+                    name = " ".join(
+                        str(author.get(part) or "").strip()
+                        for part in ("first", "middle", "last")
+                        if author.get(part)
+                    ).strip()
+            else:
+                name = str(author).strip()
+            if name:
+                normalized.append(name)
+        return normalized or None
+
+    @staticmethod
     def _canonical_citation_records(
         citations: List[DraftCitation],
     ) -> Tuple[List[Any], List[str]]:
@@ -2152,13 +2176,26 @@ Key takeaways include the importance of continued investigation and the potentia
         keys = []
         for c in citations:
             if c.citation is not None:
-                canonical = c.citation
+                citation = c.citation
+                canonical = SimpleNamespace(
+                    document_title=citation.document_title,
+                    authors=DraftGenerationService._canonical_author_names(
+                        citation.authors
+                    ),
+                    year=citation.year,
+                    venue=citation.venue,
+                    doi=citation.doi,
+                    arxiv_id=citation.arxiv_id,
+                    abstract=citation.abstract,
+                )
             else:
                 document = c.document
                 metadata = document.document_metadata or {} if document else {}
                 canonical = SimpleNamespace(
                     document_title=document.title if document else None,
-                    authors=metadata.get("authors"),
+                    authors=DraftGenerationService._canonical_author_names(
+                        metadata.get("authors")
+                    ),
                     year=metadata.get("year"),
                     venue=metadata.get("venue"),
                     doi=metadata.get("doi") or metadata.get("DOI"),

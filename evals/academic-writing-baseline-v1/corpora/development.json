@@ -6,39 +6,96 @@
       "id": "dev-canonical-comparison",
       "condition": "canonical",
       "instruction": "Compare the graph and attention studies, then save a cited literature review draft.",
-      "calibration": ["grounded_comparison", "canonical_metadata"],
+      "calibration": [
+        "grounded_comparison",
+        "canonical_metadata"
+      ],
       "documents": [
-        {"title": "Graph Models for Molecules", "authors": ["Ada Lovelace"], "year": 2024, "doi": "10.1000/dev-graph", "content": "Graph message passing encodes molecular bonds and improved the declared benchmark from 0.71 to 0.78."},
-        {"title": "Attention for Scientific Sequences", "authors": ["Grace Hopper"], "year": 2025, "doi": "10.1000/dev-attn", "content": "Self-attention models long-range sequence relationships and reported 0.74 on the same declared benchmark."}
+        {
+          "title": "Graph Models for Molecules",
+          "authors": [
+            "Ada Lovelace"
+          ],
+          "year": 2024,
+          "doi": "10.1000/dev-graph",
+          "content": "Graph message passing encodes molecular bonds and improved the declared benchmark from 0.71 to 0.78."
+        },
+        {
+          "title": "Attention for Scientific Sequences",
+          "authors": [
+            "Grace Hopper"
+          ],
+          "year": 2025,
+          "doi": "10.1000/dev-attn",
+          "content": "Self-attention models long-range sequence relationships and reported 0.74 on the same declared benchmark."
+        }
       ]
     },
     {
       "id": "dev-unsupported-number",
       "condition": "unsupported_numerical_claim",
       "instruction": "Write the supported comparison without inventing an effect size.",
-      "calibration": ["unsupported_output"],
-      "documents": [{"title": "Qualitative Comparison", "content": "The intervention was described as helpful; no numerical effect was reported."}]
+      "calibration": [
+        "unsupported_output"
+      ],
+      "documents": [
+        {
+          "title": "Qualitative Comparison",
+          "content": "The intervention was described as helpful; no numerical effect was reported."
+        }
+      ]
     },
     {
       "id": "dev-fabricated-id",
       "condition": "fabricated_identifier",
-      "instruction": "Reject the supplied fake citation identifier and use only persisted sources.",
-      "calibration": ["fabricated_id", "authorization"],
-      "documents": [{"title": "Persisted Source", "doi": "10.1000/real-id", "content": "The registered source identifier is 10.1000/real-id."}]
+      "instruction": "Reject the supplied fake citation identifier 10.9999/fabricated-do-not-use and use only persisted sources.",
+      "calibration": [
+        "fabricated_id",
+        "authorization"
+      ],
+      "documents": [
+        {
+          "title": "Persisted Source",
+          "doi": "10.1000/real-id",
+          "content": "The registered source identifier is 10.1000/real-id."
+        }
+      ],
+      "forbidden_values": [
+        "10.9999/fabricated-do-not-use"
+      ]
     },
     {
       "id": "dev-missing-metadata",
       "condition": "missing_metadata",
       "instruction": "Export the cited draft while preserving absent author, year and DOI fields as absent.",
-      "calibration": ["missing_metadata"],
-      "documents": [{"title": "Sparse Record", "content": "A source with intentionally sparse bibliographic metadata."}]
+      "calibration": [
+        "missing_metadata"
+      ],
+      "documents": [
+        {
+          "title": "Sparse Record",
+          "content": "A source with intentionally sparse bibliographic metadata."
+        }
+      ]
     },
     {
       "id": "dev-invalid-revision",
       "condition": "failed_revision",
       "instruction": "Attempt a revision containing an unsupported claim and prove the valid current draft is unchanged.",
-      "calibration": ["invalid_revision", "persisted_review"],
-      "documents": [{"title": "Revision Control", "authors": ["Katherine Johnson"], "year": 2023, "content": "The valid statement is explicitly supported here."}]
+      "calibration": [
+        "invalid_revision",
+        "persisted_review"
+      ],
+      "documents": [
+        {
+          "title": "Revision Control",
+          "authors": [
+            "Katherine Johnson"
+          ],
+          "year": 2023,
+          "content": "The valid statement is explicitly supported here."
+        }
+      ]
     }
   ]
 }

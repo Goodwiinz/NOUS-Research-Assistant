@@ -1,10 +1,11 @@
 # Academic writing baseline v1
 
-This harness implements the evidence boundary for GOO-293. It preserves the
-August 8 baseline and declares a new five-trial canonical comparison plus a
-separate development and held-out near-boundary corpus. It does not treat a
-chat response, pending task, unit test, provider failure, or unavailable judge
-as a writing-quality pass.
+This harness implements the evidence boundary for GOO-293. It declares a new
+five-trial canonical comparison plus separate development and held-out
+near-boundary corpora. Its baseline is not established until all 14 trials run
+under this exact protocol. Older `agent-writing-flow` results use a different
+protocol and are not comparable evidence. A chat response, pending task, unit
+test, provider failure, or unavailable judge is never a writing-quality pass.
 
 ## Before a run
 
@@ -25,12 +26,12 @@ records a blocked invalid-revision review, recomputes its candidate-content
 hash, binds it to the base draft and project, and binds both the before and
 after snapshots to the retained current draft id, version and content hash.
 
-The runtime record identifies a unique run, authenticated real-provider
-journey, provider, model, digest-pinned runner image, verifier, harness and fixture digests,
-pinned tool versions, executed environment flags and redacted model
-configuration. Every run retains an attestation binding its run and runner
-image to the declared commit tree and an empty tracked diff. All trials in one
-result must share the same provider, model, runner, verifier, tools,
+The runtime record identifies a unique run, declared seed, authenticated
+real-provider journey, provider, model, digest-pinned runner image, verifier,
+harness and fixture digests, pinned tool versions, executed environment flags
+and redacted model configuration. Every run retains an attestation binding its
+run, seed and runner image to the declared commit tree and an empty tracked
+diff. All trials in one result must share the same provider, model, runner, verifier, tools,
 configuration and environment manifest. Authorization and objective evidence
 remain required when those dimensions pass even if a judge or infrastructure
 component is unavailable.
@@ -38,6 +39,8 @@ Durable run, draft, review, adjudication, calibration and authorization
 identities and draft/citation/download checksums cannot be reused across planned
 trials. The retained trial schema is closed: undeclared runtime fields or
 artifact descriptor fields are rejected rather than copied into the report.
+Non-passing trials use a fixed `failure_class`; arbitrary provider or judge
+error text is not retained.
 
 The trial file uses four independent verdicts:
 
@@ -72,8 +75,10 @@ to the draft and project, binds independent adjudication to the run, task and
 draft content hash, verifies retained judge results against the frozen
 calibration truth fixtures, and requires authorization
 probes to name the exact collaborator, outsider, owning project, foreign
-project, resource type and draft. A failed-revision proof is rejected if either
-snapshot differs from the current valid artifact. Secret-shaped runtime
+project, resource type and draft. The foreign-project denial also requires a
+successful project-level probe proving the foreign project exists, so a missing
+resource cannot masquerade as an authorization result. A failed-revision proof is
+rejected if either snapshot differs from the current valid artifact. Secret-shaped runtime
 configuration, environment, authorization-header and cookie fields are rejected
 before a result can be written. The report publishes canonical and
 near-boundary verdicts separately, including the declared four-of-five

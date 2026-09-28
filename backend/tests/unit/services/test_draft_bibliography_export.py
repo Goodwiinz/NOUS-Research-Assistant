@@ -58,6 +58,19 @@ def test_draft_bibtex_uses_document_metadata_without_inventing_fields() -> None:
     assert [str(person) for person in entry.persons["author"]] == ["Lamport, Leslie"]
 
 
+def test_bibliography_normalizes_legacy_object_shaped_authors() -> None:
+    citation = Citation(
+        document_title="Object-shaped authors",
+        authors=[{"name": "Ada Lovelace"}, {"first": "Grace", "last": "Hopper"}],
+    )
+    _, parsed = _parse_export(DraftCitation(citation_index=5, citation=citation))
+
+    assert [str(person) for person in parsed.entries["doc5"].persons["author"]] == [
+        "Lovelace, Ada",
+        "Hopper, Grace",
+    ]
+
+
 @pytest.mark.parametrize("bib_format", ["apa", "ieee", "mla"])
 def test_markdown_references_keep_sparse_doc_marker_and_canonical_metadata(
     bib_format: str,

@@ -29,11 +29,12 @@ def _record(path: Path) -> dict[str, str]:
 
 
 def _runtime(
-    state: dict[str, Any], task_id: str, source_sha: str, run_id: str
+    state: dict[str, Any], task_id: str, source_sha: str, run_id: str, seed: int = 101
 ) -> dict[str, Any]:
     cohort = state["cohorts"][task_id]
     return {
         "run_id": run_id,
+        "seed": seed,
         "source_sha": source_sha,
         "provider": "test-provider",
         "model": "test-model",
@@ -142,6 +143,7 @@ def _success_bundle(
         calibration,
         {
             "id": f"calibration-{run_id}",
+            "run_id": run_id,
             "reviewer": "independent-reviewer",
             "verifier": "writing-verifier-v1",
             "fixture_digest": state["calibration_digest"],
@@ -155,6 +157,8 @@ def _success_bundle(
         {
             "id": f"adjudication-{run_id}",
             "run_id": run_id,
+            "draft_id": f"draft-{run_id}",
+            "project_id": f"project-{run_id}",
             "reviewer": "independent-reviewer",
             "verifier": "writing-verifier-v1",
             "calibration_id": f"calibration-{run_id}",
@@ -185,6 +189,13 @@ def _success_bundle(
                     "project_id": f"foreign-project-{run_id}",
                     "resource_type": "draft_export",
                     "resource_id": f"draft-{run_id}",
+                },
+                "foreign_project_access": {
+                    "status": 200,
+                    "principal_id": f"outsider-{run_id}",
+                    "project_id": f"foreign-project-{run_id}",
+                    "resource_type": "project",
+                    "resource_id": f"foreign-project-{run_id}",
                 },
             },
         },
@@ -267,7 +278,7 @@ def _bind_trial_to_protocol(
             "seed": seed,
             "cohort": state["cohorts"][task_id],
             "task_digest": COLLECT._canonical_digest(state["tasks"][task_id]),
-            "runtime": _runtime(state, task_id, source_sha, run_id),
+            "runtime": _runtime(state, task_id, source_sha, run_id, seed),
         }
     )
     attestation_path = bundle_path.parent / "source-attestation.json"
@@ -275,6 +286,7 @@ def _bind_trial_to_protocol(
         attestation_path,
         {
             "run_id": run_id,
+            "seed": seed,
             "source_sha": source_sha,
             "git_tree": COLLECT._git_tree_sha(source_sha),
             "tracked_diff_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
@@ -314,6 +326,20 @@ def test_protocol_freezes_five_canonical_trials_and_separate_corpora() -> None:
     )
     assert set(state["cohorts"].values()) == {"development", "held_out"}
     assert state["calibration_digest"].startswith("sha256:")
+    assert protocol["baseline_status"]["status"] == "not_established"
+    assert "historical_comparison" not in protocol
+
+    held_out = COLLECT._load_json(TASK_DIR / protocol["corpora"]["held_out"])
+    late = next(
+        task for task in held_out["tasks"] if task["id"] == "held-late-page-evidence"
+    )
+    assert late["documents"][0]["content"].index("Page 20 reports") > 32_000
+    sparse = next(
+        task for task in held_out["tasks"] if task["id"] == "held-sparse-citations"
+    )
+    assert len(sparse["documents"]) == 11
+    assert sparse["documents"][1]["title"] == "Quoted {Result} α"
+    assert sparse["documents"][10]["title"] == "Boundary Record β"
 
 
 def test_protocol_rejects_undeclared_trial_kind() -> None:
@@ -412,6 +438,50 @@ def test_bibtex_metadata_must_match_canonical_citation_rows(tmp_path: Path) -> N
         COLLECT._verify_success_artifacts(bundle_path, trial)
 
 
+def test_fabricated_identifier_fixture_rejects_the_declared_value(
+    tmp_path: Path,
+) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    fake_id = "10.9999/fabricated-do-not-use"
+    trial["task_id"] = "dev-fabricated-id"
+
+    citations_record = trial["artifacts"]["citations"]
+    citations_path = bundle_path.parent / citations_record["path"]
+    citations = COLLECT._load_json(citations_path)
+    citations[0]["canonical_metadata"]["doi"] = fake_id
+    _write_json(citations_path, citations)
+    citations_record["sha256"] = COLLECT._file_digest(citations_path)
+
+    markdown_record = trial["artifacts"]["exports"]["markdown"]
+    markdown_path = bundle_path.parent / markdown_record["path"]
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8").replace("10.1000/canonical", fake_id),
+        encoding="utf-8",
+    )
+    markdown_record["sha256"] = COLLECT._file_digest(markdown_path)
+
+    latex_record = trial["artifacts"]["exports"]["latex"]
+    latex_path = bundle_path.parent / latex_record["path"]
+    with zipfile.ZipFile(latex_path, "w") as archive:
+        archive.writestr(
+            "draft.tex",
+            COLLECT._expected_latex_document(
+                (bundle_path.parent / "draft.md").read_text(encoding="utf-8")
+            ),
+        )
+        archive.writestr(
+            "references.bib",
+            (bundle_path.parent / "download.md")
+            .read_text(encoding="utf-8")
+            .split("```bibtex\n", 1)[1]
+            .rsplit("\n```", 1)[0],
+        )
+    latex_record["sha256"] = COLLECT._file_digest(latex_path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="forbidden task value"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
 def test_latex_body_must_match_retained_draft(tmp_path: Path) -> None:
     bundle_path, trial = _success_bundle(tmp_path)
     latex_record = trial["artifacts"]["exports"]["latex"]
@@ -501,6 +571,7 @@ def test_infrastructure_failure_remains_independent_of_completed_gates(
 
 def test_each_passed_dimension_requires_its_own_evidence(tmp_path: Path) -> None:
     bundle_path, trial = _success_bundle(tmp_path)
+    state = COLLECT.validate_protocol(COLLECT._load_json(TASK_DIR / "protocol.json"))
     del trial["artifacts"]["authorization"]
     verdicts = {
         "objective": "passed",
@@ -510,7 +581,7 @@ def test_each_passed_dimension_requires_its_own_evidence(tmp_path: Path) -> None
     }
 
     with pytest.raises(COLLECT.EvidenceError, match="artifact record"):
-        COLLECT._verify_passed_artifacts(bundle_path, trial, verdicts)
+        COLLECT._verify_passed_artifacts(bundle_path, trial, verdicts, state)
 
 
 def test_authorization_probes_bind_exact_principals_and_projects(
@@ -521,10 +592,27 @@ def test_authorization_probes_bind_exact_principals_and_projects(
     path = bundle_path.parent / record["path"]
     authorization = COLLECT._load_json(path)
     authorization["checks"]["foreign_project_download"]["project_id"] = "project-run-1"
+    authorization["checks"]["foreign_project_access"]["project_id"] = "project-run-1"
+    authorization["checks"]["foreign_project_access"]["resource_id"] = "project-run-1"
     _write_json(path, authorization)
     record["sha256"] = COLLECT._file_digest(path)
 
     with pytest.raises(COLLECT.EvidenceError, match="foreign-project denial"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
+def test_foreign_project_denial_requires_project_existence_proof(
+    tmp_path: Path,
+) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    record = trial["artifacts"]["authorization"]
+    path = bundle_path.parent / record["path"]
+    authorization = COLLECT._load_json(path)
+    del authorization["checks"]["foreign_project_access"]
+    _write_json(path, authorization)
+    record["sha256"] = COLLECT._file_digest(path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="existence is unproven"):
         COLLECT._verify_success_artifacts(bundle_path, trial)
 
 
@@ -623,6 +711,36 @@ def test_runner_source_attestation_binds_commit_tree(tmp_path: Path) -> None:
         COLLECT._verify_source_attestation(bundle_path, trial["runtime"], source_sha)
 
 
+def test_declared_seed_must_match_runtime_and_source_attestation(
+    tmp_path: Path,
+) -> None:
+    protocol = COLLECT._load_json(TASK_DIR / "protocol.json")
+    state = COLLECT.validate_protocol(protocol)
+    bundle_path, trial = _success_bundle(tmp_path)
+    source_sha = COLLECT._source_sha()
+    _bind_trial_to_protocol(
+        bundle_path,
+        trial,
+        state,
+        "dev-canonical-comparison",
+        101,
+        source_sha,
+        "run-1",
+    )
+    trial["seed"] = 103
+    trial["passed"] = False
+    trial["verdicts"] = {
+        "objective": "failed",
+        "semantic": "not_run",
+        "authorization": "not_run",
+        "infrastructure": "passed",
+    }
+    trial["failure_class"] = "objective_failed"
+
+    with pytest.raises(COLLECT.EvidenceError, match="runtime seed"):
+        COLLECT.validate_trial(bundle_path, trial, state, source_sha)
+
+
 def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) -> None:
     protocol = COLLECT._load_json(TASK_DIR / "protocol.json")
     state = COLLECT.validate_protocol(protocol)
@@ -631,7 +749,7 @@ def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) 
     del runtime["runner_image"]
     with pytest.raises(COLLECT.EvidenceError, match="incomplete runtime identity"):
         COLLECT._validate_runtime_identity(
-            tmp_path / "trial.json", runtime, state, "development", "a" * 40
+            tmp_path / "trial.json", runtime, state, "development", "a" * 40, 101
         )
 
     for invalid_image in ("academic-runner:latest", "academic-runner@sha256:x"):
@@ -639,7 +757,7 @@ def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) 
         runtime["runner_image"] = invalid_image
         with pytest.raises(COLLECT.EvidenceError, match="pinned by sha256"):
             COLLECT._validate_runtime_identity(
-                tmp_path / "trial.json", runtime, state, "development", "a" * 40
+                tmp_path / "trial.json", runtime, state, "development", "a" * 40, 101
             )
 
     for configuration in (
@@ -670,7 +788,7 @@ def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) 
                 "authorization": "not_run",
                 "infrastructure": "passed",
             },
-            "failure_reason": "objective evidence incomplete",
+            "failure_class": "objective_failed",
         }
     )
     with pytest.raises(COLLECT.EvidenceError, match="unsupported retained field"):
@@ -696,7 +814,7 @@ def test_collect_rejects_reused_run_identity(
                 "authorization": "not_run",
                 "infrastructure": "passed",
             },
-            "failure_reason": "objective artifact check failed",
+            "failure_class": "objective_failed",
         }
         bundle_path = trials_dir / f"trial-{index:02d}" / "trial.json"
         _bind_trial_to_protocol(
@@ -728,7 +846,7 @@ def test_collect_rejects_mixed_runtime_manifests(
                 "authorization": "not_run",
                 "infrastructure": "passed",
             },
-            "failure_reason": "objective artifact check failed",
+            "failure_class": "objective_failed",
             "passed": False,
         }
         bundle_path = trials_dir / f"trial-{index:02d}" / "trial.json"
@@ -790,7 +908,7 @@ def test_collect_reports_every_denominator_without_scoring_unavailable_runtime(
                     "authorization": "not_run",
                     "infrastructure": "failed",
                 },
-                "failure_reason": "provider unavailable",
+                "failure_class": "provider_unavailable",
             }
             bundle_path = trials_dir / f"trial-{index:02d}" / "trial.json"
         elif index == 1:
@@ -803,7 +921,7 @@ def test_collect_reports_every_denominator_without_scoring_unavailable_runtime(
                 "authorization": "passed",
                 "infrastructure": "passed",
             }
-            trial["failure_reason"] = "judge unavailable"
+            trial["failure_class"] = "judge_unavailable"
         else:
             trial = {
                 "verdicts": {
@@ -812,7 +930,7 @@ def test_collect_reports_every_denominator_without_scoring_unavailable_runtime(
                     "authorization": "not_run",
                     "infrastructure": "passed",
                 },
-                "failure_reason": "objective artifact check failed",
+                "failure_class": "objective_failed",
             }
             bundle_path = trials_dir / f"trial-{index:02d}" / "trial.json"
         _bind_trial_to_protocol(
