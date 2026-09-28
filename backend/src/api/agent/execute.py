@@ -1326,53 +1326,61 @@ async def resume_stream(
     # identity to this caller, so an editor cannot replay another member's run.
     await _require_editable_agent_thread(db, current_user, thread_uuid)
 
+    sid = await _stream_buffer.active_stream_id(thread_id)
     # External runs own a PostgreSQL event ledger and keep executing when this
-    # browser goes away. Reattach directly to that durable observation path;
-    # Redis stream buffers are only for native in-process LangGraph producers.
-    active_external = await get_active_run_for_thread(
-        db,
-        thread_uuid,
-        organization_id=getattr(current_user, "organization_id", None),
-        user_id=current_user.id,
-    )
-    external_run = (
-        active_external
-        if active_external is not None and active_external.execution_provider == "codex"
-        else None
-    )
-    if external_run is None:
-        latest_run = await get_latest_run_for_thread(
+    # browser goes away. Reattach directly to that durable observation path
+    # only when there is no native Redis stream to resume.
+    latest_run_for_resume = None
+    latest_run_checked = False
+    if sid is None:
+        active_external = await get_active_run_for_thread(
             db,
             thread_uuid,
             organization_id=getattr(current_user, "organization_id", None),
             user_id=current_user.id,
         )
-        if latest_run is not None and latest_run.execution_provider == "codex":
-            external_run = latest_run
-    if external_run is not None:
-        from src.api.agent.harness_streaming import (
-            context_for_accepted_run,
-            external_resume_cursor,
-            stream_harness_run,
+        external_run = (
+            active_external
+            if active_external is not None
+            and getattr(active_external, "execution_provider", "nous") == "codex"
+            else None
         )
+        if external_run is None:
+            latest_run_for_resume = await get_latest_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            latest_run_checked = True
+            if (
+                latest_run_for_resume is not None
+                and getattr(latest_run_for_resume, "execution_provider", "nous")
+                == "codex"
+            ):
+                external_run = latest_run_for_resume
+        if external_run is not None:
+            from src.api.agent.harness_streaming import (
+                context_for_accepted_run,
+                external_resume_cursor,
+                stream_harness_run,
+            )
 
-        external_context = await context_for_accepted_run(
-            db, run_id=_uuid.UUID(external_run.job_id), current_user=current_user
-        )
-        return StreamingResponse(
-            stream_harness_run(
-                request,
-                _uuid.UUID(external_run.job_id),
-                external_context,
-                after_seq=external_resume_cursor(
-                    after, stream, _uuid.UUID(external_run.job_id)
+            external_context = await context_for_accepted_run(
+                db, run_id=_uuid.UUID(external_run.job_id), current_user=current_user
+            )
+            return StreamingResponse(
+                stream_harness_run(
+                    request,
+                    _uuid.UUID(external_run.job_id),
+                    external_context,
+                    after_seq=external_resume_cursor(
+                        after, stream, _uuid.UUID(external_run.job_id)
+                    ),
                 ),
-            ),
-            media_type="text/event-stream",
-            headers=_SSE_HEADERS,
-        )
-
-    sid = await _stream_buffer.active_stream_id(thread_id)
+                media_type="text/event-stream",
+                headers=_SSE_HEADERS,
+            )
     # Run correlation (codex audit CX1): the client's seq cursor is only
     # meaningful against the stream it was read from. If the caller names its
     # stream and a DIFFERENT run now owns the thread's active pointer, replaying
@@ -1402,12 +1410,14 @@ async def resume_stream(
         owner_thread_id = await _stream_buffer.thread_id_for_stream(stream)
         if owner_thread_id is None or owner_thread_id.lower() != thread_id.lower():
             return Response(status_code=204)
-        latest_run = await get_latest_run_for_thread(
-            db,
-            thread_uuid,
-            organization_id=getattr(current_user, "organization_id", None),
-            user_id=current_user.id,
-        )
+        latest_run = latest_run_for_resume
+        if not latest_run_checked:
+            latest_run = await get_latest_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
         if latest_run is None:
             return Response(status_code=204)
         latest_stream = await _stream_buffer.stream_id_for_run(str(latest_run.job_id))

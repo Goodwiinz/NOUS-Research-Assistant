@@ -1943,7 +1943,7 @@ async def stream_event_generator(
         # id on the accepted frame — unchanged behaviour, not a new hole.
         # ------------------------------------------------------------------
         if _accept_eligible(thread_obj):
-            if request_body.execution_provider == "codex":
+            if getattr(request_body, "execution_provider", "nous") == "codex":
                 from src.api.agent.harness_streaming import create_chat_context
 
                 if request_body.device_id is None or request_body.workspace_id is None:
@@ -1976,7 +1976,7 @@ async def stream_event_generator(
                 extra={"thread_id": request_body.thread_id},
             )
 
-        if request_body.execution_provider == "codex":
+        if getattr(request_body, "execution_provider", "nous") == "codex":
             if acceptance is None:
                 raise ValueError("Codex execution requires a durable chat thread")
             from src.api.agent.harness_streaming import (
