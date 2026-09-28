@@ -133,3 +133,45 @@ topology, and six-step rendering coverage.
 ## Concerns
 
 None for Task 7. Task 8 lifecycle certification was not changed.
+
+## Important-findings follow-up
+
+Five focused regressions were added on base
+`bb2e393911ec0c1f4f4fdc07b810ec22cc2288ad` before the follow-up production
+edits. The combined RED run reported `8 failed, 20 passed` across the four Task
+7 files: one store failure, one results failure, and six RunView failures.
+
+- Oversized pending-review projections now resolve through the single run store
+  only when the persisted step matches the descriptor's run, index, stage, and
+  exact output hash. Extraction reviews regain the complete data and quoted
+  evidence, while final review eligibility and summary rendering use the full
+  persisted export. The immutable server descriptor remains the submission
+  authority.
+- Every clean stream EOF, missing body, non-OK response, or connection failure
+  triggers a durable run/step refresh before the UI decides what to do. Durable
+  paused, completed, and failed runs stop immediately. Active runs retry at
+  bounded exponential delays for three total attempts and then show a safe
+  visible terminal error.
+- `refreshRun` now reports failure to callers after storing its safe UI error.
+  Stale-review and accepted-review paths therefore tell the reader to reload
+  when the authoritative refresh fails instead of announcing a successful
+  refresh.
+- Provider completion reads the production
+  `coverage.provider_results` array. The regression fixture uses that artifact
+  shape and does not depend on the old fixture-only `coverage.providers` map.
+- Run lifecycle notifications are monotonic after `completed` or `failed`, so
+  late start/pause and conflicting terminal events cannot regress the run.
+  A real paused-to-running resume remains valid.
+
+Follow-up GREEN and quality evidence:
+
+```text
+Focused Task 7:             4 files, 28 passed
+Adjacent research-engine:  8 files, 60 passed
+Frontend type-check:        passed
+Scoped ESLint:              passed
+Changed Prettier:           passed
+Lint-debt ratchet:          passed (113 errors, 1,961 warnings; baseline 116/2,003)
+TypeScript exclusions:      passed (21 baselined exclusions)
+git diff --check:           passed
+```

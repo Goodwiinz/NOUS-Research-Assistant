@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   PendingReviewResponse,
@@ -10,8 +16,10 @@ import {
   getRun,
   listSteps,
   resumeRun,
+  submitReview,
 } from '@/services/researchEngineService';
 import { useResearchEngineStore } from '@/store/research-engine-store';
+import { APIErrorClass } from '@/types/api';
 import { RunView } from '../RunView';
 
 vi.mock('next/navigation', () => ({
@@ -69,6 +77,31 @@ function persistedStep(overrides: Partial<StepResponse> = {}): StepResponse {
     output: { source_records: [] },
     quality_marks: [],
     ...overrides,
+  };
+}
+
+function pendingScreeningReview(): PendingReviewResponse {
+  return {
+    pending: true,
+    descriptor: {
+      run_id: RUN_ID,
+      step_index: 1,
+      stage_type: 'screen',
+      review_kind: 'screening',
+      contract_version: 1,
+      output_hash: 'a'.repeat(64),
+      status: 'pending',
+    },
+    stage_output: {
+      screening: [
+        {
+          source_id: 'source-a',
+          part_id: 'p0001',
+          included: true,
+          reason: 'Relevant population',
+        },
+      ],
+    },
   };
 }
 
@@ -136,32 +169,63 @@ describe('RunView durable run state', () => {
     expect(screen.queryByText(/internal-secret/i)).not.toBeInTheDocument();
   });
 
-  it('reconnects a running stream after a clean end without duplicating persisted state', async () => {
-    vi.mocked(getRun).mockResolvedValue(run());
+  it('refreshes after a clean stream end and stops when the durable run is paused', async () => {
+    vi.mocked(getRun)
+      .mockResolvedValueOnce(run())
+      .mockResolvedValueOnce(
+        run({ status: 'paused', pause_reason: 'user_paused' })
+      );
     vi.mocked(listSteps).mockResolvedValue([persistedStep()]);
     const closedStream = new ReadableStream({
       start(controller) {
         controller.close();
       },
     });
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(
-        new Response(closedStream, {
-          status: 200,
-          headers: { 'Content-Type': 'text/event-stream' },
-        })
-      )
-      .mockResolvedValue({ ok: false, body: null } as Response);
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(closedStream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    );
 
     render(<RunView runId={RUN_ID} />);
 
     expect(
       await screen.findByRole('button', { name: /search/i })
     ).toBeInTheDocument();
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2), {
-      timeout: 2_000,
-    });
+    expect(
+      await screen.findByRole('button', { name: /^resume$/i })
+    ).toBeInTheDocument();
+    expect(getRun).toHaveBeenCalledTimes(2);
+    expect(listSteps).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
     expect(screen.getAllByRole('button', { name: /search/i })).toHaveLength(1);
+  });
+
+  it('refreshes non-OK streams and stops with a safe error after bounded retries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(getRun).mockResolvedValue(run());
+      vi.mocked(listSteps).mockResolvedValue([persistedStep()]);
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(null, { status: 409, statusText: 'Conflict' })
+      );
+
+      render(<RunView runId={RUN_ID} />);
+
+      expect(
+        await screen.findByText(
+          /live updates stopped after repeated connection failures/i,
+          {},
+          { timeout: 5_000 }
+        )
+      ).toBeInTheDocument();
+      expect(fetch).toHaveBeenCalledTimes(3);
+      expect(getRun).toHaveBeenCalledTimes(4);
+      expect(listSteps).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('clears the previous run while a new run is being hydrated', async () => {
@@ -249,6 +313,299 @@ describe('RunView durable run state', () => {
     expect(
       screen.queryByRole('button', { name: /^resume$/i })
     ).not.toBeInTheDocument();
+  });
+
+  it('fills a projected extraction review from its matching persisted step and keeps the pending hash', async () => {
+    const outputHash = 'b'.repeat(64);
+    vi.mocked(getRun).mockResolvedValue(
+      run({
+        status: 'paused',
+        pause_reason: 'review_required',
+        review_kind: 'extraction',
+        step_index: 2,
+        output_hash: outputHash,
+      })
+    );
+    vi.mocked(listSteps).mockResolvedValue([
+      persistedStep({
+        output: {
+          source_records: [
+            {
+              source_id: 'source-a',
+              title: 'Persisted source title',
+              evidence_level: 'full_text',
+            },
+          ],
+        },
+      }),
+      persistedStep({
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        step_index: 2,
+        step_type: 'extract',
+        outputs_hash: outputHash,
+        output: {
+          contract_version: 1,
+          stage_type: 'extract',
+          extractions: [
+            {
+              source_id: 'source-a',
+              part_id: 'p0001',
+              data: { effect: 'positive' },
+              evidence: [
+                {
+                  quote: 'The persisted effect was positive.',
+                  page_reference: '7',
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ]);
+    vi.mocked(getPendingReview).mockResolvedValue({
+      pending: true,
+      descriptor: {
+        run_id: RUN_ID,
+        step_index: 2,
+        stage_type: 'extract',
+        review_kind: 'extraction',
+        contract_version: 1,
+        output_hash: outputHash,
+        status: 'pending',
+      },
+      stage_output: {
+        contract_version: 1,
+        stage_type: 'extract',
+        review_projection: {
+          projected: true,
+          truncated: true,
+          identity_complete: true,
+        },
+        extractions: [{ source_id: 'source-a', part_id: 'p0001' }],
+      },
+    });
+    vi.mocked(submitReview).mockResolvedValue({
+      id: '99999999-9999-4999-8999-999999999999',
+      run_id: RUN_ID,
+      step_index: 2,
+      stage_type: 'extract',
+      review_kind: 'extraction',
+      output_hash: outputHash,
+      decision: 'approve',
+      decision_payload: {
+        items: [
+          {
+            source_id: 'source-a',
+            part_id: 'p0001',
+            decision: 'accept',
+          },
+        ],
+      },
+      reviewer_id: '88888888-8888-4888-8888-888888888888',
+      created_at: '2026-09-27T11:00:00Z',
+      replay: false,
+    });
+
+    render(<RunView runId={RUN_ID} />);
+
+    expect(
+      await screen.findByText('The persisted effect was positive.')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/"effect": "positive"/i)).toBeInTheDocument();
+    const group = screen.getByRole('group', {
+      name: /extraction from persisted source title, part p0001/i,
+    });
+    fireEvent.click(within(group).getByRole('radio', { name: /accept/i }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /approve extraction review/i })
+    );
+    await waitFor(() =>
+      expect(submitReview).toHaveBeenCalledWith(
+        RUN_ID,
+        2,
+        expect.objectContaining({ output_hash: outputHash })
+      )
+    );
+  });
+
+  it('uses the matching full export step for a projected final review', async () => {
+    const outputHash = 'c'.repeat(64);
+    vi.mocked(getRun).mockResolvedValue(
+      run({
+        status: 'paused',
+        pause_reason: 'review_required',
+        review_kind: 'final',
+        step_index: 5,
+        output_hash: outputHash,
+      })
+    );
+    vi.mocked(listSteps).mockResolvedValue([
+      persistedStep({
+        id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        step_index: 5,
+        step_type: 'export',
+        outputs_hash: outputHash,
+        output: {
+          contract_version: 1,
+          stage_type: 'export',
+          exported: {
+            final_status: 'verified',
+            verification: {
+              claims: [{ claim_id: 'c0001', status: 'supported' }],
+            },
+          },
+          markdown: '# Full persisted brief',
+        },
+      }),
+    ]);
+    vi.mocked(getPendingReview).mockResolvedValue({
+      pending: true,
+      descriptor: {
+        run_id: RUN_ID,
+        step_index: 5,
+        stage_type: 'export',
+        review_kind: 'final',
+        contract_version: 1,
+        output_hash: outputHash,
+        status: 'pending',
+      },
+      stage_output: {
+        contract_version: 1,
+        stage_type: 'export',
+        review_projection: {
+          projected: true,
+          truncated: true,
+          identity_complete: true,
+        },
+        format: 'markdown',
+      },
+    });
+
+    render(<RunView runId={RUN_ID} />);
+
+    expect(
+      await screen.findByText('# Full persisted brief')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /approve final review/i })
+    ).toBeEnabled();
+    expect(
+      screen.queryByText(/cannot receive final approval/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not claim a stale review was refreshed when durable reload fails', async () => {
+    vi.mocked(getRun)
+      .mockResolvedValueOnce(
+        run({
+          status: 'paused',
+          pause_reason: 'review_required',
+          review_kind: 'screening',
+          step_index: 1,
+          output_hash: 'a'.repeat(64),
+        })
+      )
+      .mockRejectedValueOnce(new Error('internal reload failure'));
+    vi.mocked(listSteps).mockResolvedValue([
+      persistedStep({
+        output: {
+          source_records: [
+            {
+              source_id: 'source-a',
+              title: 'Persisted source title',
+              evidence_level: 'abstract',
+            },
+          ],
+        },
+      }),
+    ]);
+    vi.mocked(getPendingReview).mockResolvedValue(pendingScreeningReview());
+    vi.mocked(submitReview).mockRejectedValue(
+      new APIErrorClass({
+        message: 'stale output',
+        status_code: 409,
+        type: 'http_error',
+      })
+    );
+
+    render(<RunView runId={RUN_ID} />);
+
+    const group = await screen.findByRole('group', {
+      name: /persisted source title/i,
+    });
+    fireEvent.click(within(group).getByRole('radio', { name: /include/i }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /approve screening review/i })
+    );
+
+    const alert = await screen.findByRole('alert', {
+      name: /review changed/i,
+    });
+    expect(alert).toHaveTextContent(/reload the page/i);
+    expect(alert).not.toHaveTextContent(/has been refreshed/i);
+  });
+
+  it('reports an accepted review whose durable reload failed', async () => {
+    vi.mocked(getRun)
+      .mockResolvedValueOnce(
+        run({
+          status: 'paused',
+          pause_reason: 'review_required',
+          review_kind: 'screening',
+          step_index: 1,
+          output_hash: 'a'.repeat(64),
+        })
+      )
+      .mockRejectedValueOnce(new Error('internal reload failure'));
+    vi.mocked(listSteps).mockResolvedValue([
+      persistedStep({
+        output: {
+          source_records: [
+            {
+              source_id: 'source-a',
+              title: 'Persisted source title',
+              evidence_level: 'abstract',
+            },
+          ],
+        },
+      }),
+    ]);
+    vi.mocked(getPendingReview).mockResolvedValue(pendingScreeningReview());
+    vi.mocked(submitReview).mockResolvedValue({
+      id: '99999999-9999-4999-8999-999999999999',
+      run_id: RUN_ID,
+      step_index: 1,
+      stage_type: 'screen',
+      review_kind: 'screening',
+      output_hash: 'a'.repeat(64),
+      decision: 'approve',
+      decision_payload: {
+        items: [
+          {
+            source_id: 'source-a',
+            part_id: 'p0001',
+            decision: 'include',
+          },
+        ],
+      },
+      reviewer_id: '88888888-8888-4888-8888-888888888888',
+      created_at: '2026-09-27T11:00:00Z',
+      replay: false,
+    });
+
+    render(<RunView runId={RUN_ID} />);
+
+    const group = await screen.findByRole('group', {
+      name: /persisted source title/i,
+    });
+    fireEvent.click(within(group).getByRole('radio', { name: /include/i }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /approve screening review/i })
+    );
+
+    expect(
+      await screen.findByRole('alert', { name: /review accepted/i })
+    ).toHaveTextContent(/latest run state could not be loaded/i);
   });
 
   it('reconstructs a manual pause with only the ordinary resume action', async () => {

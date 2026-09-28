@@ -93,6 +93,54 @@ function labelStepType(stepType: string): string {
   return stepType.charAt(0).toUpperCase() + stepType.slice(1);
 }
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function hasCompleteReviewProjection(value: unknown): boolean {
+  const projection = record(record(value)?.review_projection);
+  return (
+    projection?.projected === true &&
+    projection.truncated === true &&
+    projection.identity_complete === true
+  );
+}
+
+function resolveProjectedReview(
+  review: PendingReviewResponse,
+  steps: RunStepState[]
+): PendingReviewResponse {
+  const descriptor = review.descriptor;
+  if (
+    !review.pending ||
+    !descriptor ||
+    !hasCompleteReviewProjection(review.stage_output)
+  ) {
+    return review;
+  }
+
+  const matchedStep = steps.find(
+    (step) =>
+      step.run_id === descriptor.run_id &&
+      step.step_index === descriptor.step_index &&
+      step.step_type === descriptor.stage_type &&
+      step.outputs_hash === descriptor.output_hash &&
+      record(step.output) !== null
+  );
+  const persistedOutput = record(matchedStep?.output);
+  if (!persistedOutput) return review;
+
+  return {
+    ...review,
+    // The immutable descriptor remains the authority for submission identity;
+    // only its bounded display projection is replaced from the matching owned
+    // persisted step.
+    stage_output: persistedOutput,
+  };
+}
+
 function persistedStep(step: StepResponse): RunStepState {
   const status: RunStepStatus = step.completed_at
     ? 'complete'
@@ -217,12 +265,17 @@ export const useResearchEngineStore = create<ResearchEngineState>((set) => ({
         (item) => !persistedKeys.has(`${item.run_id}:${item.step_index}`)
       );
 
+      const runSteps = [...hydrated, ...unreconciled].sort(
+        (a, b) => a.step_index - b.step_index
+      );
+
       return {
         activeRunId: run.id,
         activeRun: run,
-        runSteps: [...hydrated, ...unreconciled].sort(
-          (a, b) => a.step_index - b.step_index
-        ),
+        runSteps,
+        pendingReview: state.pendingReview
+          ? resolveProjectedReview(state.pendingReview, runSteps)
+          : null,
         isLoading: false,
         error: null,
       };
@@ -235,9 +288,11 @@ export const useResearchEngineStore = create<ResearchEngineState>((set) => ({
       let activeRun = state.activeRun;
       let finalStatus = state.finalStatus;
       if (activeRun) {
-        if (event.event === 'run_started') {
+        const terminal =
+          activeRun.status === 'completed' || activeRun.status === 'failed';
+        if (event.event === 'run_started' && !terminal) {
           activeRun = { ...activeRun, status: 'running' };
-        } else if (event.event === 'run_paused') {
+        } else if (event.event === 'run_paused' && !terminal) {
           activeRun = {
             ...activeRun,
             status: 'paused',
@@ -246,10 +301,16 @@ export const useResearchEngineStore = create<ResearchEngineState>((set) => ({
             step_index: event.step_index ?? activeRun.step_index,
             output_hash: event.output_hash ?? activeRun.output_hash,
           };
-        } else if (event.event === 'run_complete') {
+        } else if (
+          event.event === 'run_complete' &&
+          activeRun.status !== 'failed'
+        ) {
           activeRun = { ...activeRun, status: 'completed' };
           finalStatus = event.final_status ?? finalStatus;
-        } else if (event.event === 'run_failed') {
+        } else if (
+          event.event === 'run_failed' &&
+          activeRun.status !== 'completed'
+        ) {
           activeRun = { ...activeRun, status: 'failed' };
         }
       }
@@ -315,7 +376,11 @@ export const useResearchEngineStore = create<ResearchEngineState>((set) => ({
       const descriptorRunId = pendingReview?.descriptor?.run_id;
       if (descriptorRunId && descriptorRunId !== state.activeRunId)
         return state;
-      return { pendingReview };
+      return {
+        pendingReview: pendingReview
+          ? resolveProjectedReview(pendingReview, state.runSteps)
+          : null,
+      };
     }),
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),

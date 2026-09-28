@@ -78,19 +78,26 @@ const STATUS_BADGE: Record<
   },
 };
 
-const SSE_RECONNECT_DELAY_MS = 1_000;
+const SSE_MAX_ATTEMPTS = 3;
+const SSE_RECONNECT_BASE_DELAY_MS = 500;
 
-function waitForReconnect(signal: AbortSignal): Promise<void> {
+function waitForReconnect(
+  signal: AbortSignal,
+  completedAttempt: number
+): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
     const onAbort = (): void => {
       clearTimeout(timeoutId);
       resolve();
     };
-    const timeoutId = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, SSE_RECONNECT_DELAY_MS);
+    const timeoutId = setTimeout(
+      () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      },
+      SSE_RECONNECT_BASE_DELAY_MS * 2 ** (completedAttempt - 1)
+    );
     signal.addEventListener('abort', onAbort, { once: true });
   });
 }
@@ -134,7 +141,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
   const abortRef = useRef<AbortController | null>(null);
   const requestRef = useRef(0);
 
-  const refreshRun = useCallback(async () => {
+  const refreshRun = useCallback(async (): Promise<boolean> => {
     const requestId = ++requestRef.current;
     try {
       const [run, steps] = await Promise.all([getRun(runId), listSteps(runId)]);
@@ -142,7 +149,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
         requestRef.current !== requestId ||
         useResearchEngineStore.getState().activeRunId !== runId
       ) {
-        return;
+        return false;
       }
       hydrateRun(run, steps);
 
@@ -168,6 +175,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
               message: 'The pending review could not be loaded. Try again.',
             });
           }
+          return false;
         }
       } else {
         setPendingReview(null);
@@ -194,15 +202,17 @@ export function RunView({ runId }: RunViewProps): ReactElement {
             // output remains available and is used as the presentation fallback.
           });
       }
+      return true;
     } catch {
       if (
         requestRef.current !== requestId ||
         useResearchEngineStore.getState().activeRunId !== runId
       ) {
-        return;
+        return false;
       }
       setError('The run could not be loaded. Try again.');
       setLoading(false);
+      return false;
     }
   }, [
     runId,
@@ -245,7 +255,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     abortRef.current = controller;
 
     const connectSSE = async (): Promise<void> => {
-      while (!controller.signal.aborted) {
+      for (let attempt = 1; attempt <= SSE_MAX_ATTEMPTS; attempt += 1) {
         const token = await getAuthToken();
         const headers: Record<string, string> = {
           Accept: 'text/event-stream',
@@ -264,71 +274,89 @@ export function RunView({ runId }: RunViewProps): ReactElement {
             }
           );
 
-          if (!response.ok || !response.body) return;
+          if (response.ok && response.body) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let currentEventType: string | null = null;
 
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-          let currentEventType: string | null = null;
+            try {
+              while (!controller.signal.aborted) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-          try {
-            while (!controller.signal.aborted) {
-              const { done, value } = await reader.read();
-              if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() ?? '';
 
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() ?? '';
+                for (const line of lines) {
+                  const trimmed = line.trim();
 
-              for (const line of lines) {
-                const trimmed = line.trim();
+                  if (trimmed.startsWith('event: ')) {
+                    currentEventType = trimmed.slice(7).trim();
+                  } else if (trimmed.startsWith('data: ') && currentEventType) {
+                    try {
+                      const parsed = JSON.parse(
+                        trimmed.slice(6)
+                      ) as RunStepEvent;
+                      mergeRunEvent({
+                        ...parsed,
+                        event: currentEventType,
+                        run_id: parsed.run_id ?? runId,
+                      });
 
-                if (trimmed.startsWith('event: ')) {
-                  currentEventType = trimmed.slice(7).trim();
-                } else if (trimmed.startsWith('data: ') && currentEventType) {
-                  try {
-                    const parsed = JSON.parse(trimmed.slice(6)) as RunStepEvent;
-                    mergeRunEvent({
-                      ...parsed,
-                      event: currentEventType,
-                      run_id: parsed.run_id ?? runId,
-                    });
-
-                    if (
-                      currentEventType === 'step_complete' ||
-                      currentEventType === 'step_error' ||
-                      currentEventType === 'run_complete' ||
-                      currentEventType === 'run_failed' ||
-                      currentEventType === 'run_paused'
-                    ) {
-                      void refreshRun();
+                      if (
+                        currentEventType === 'step_complete' ||
+                        currentEventType === 'step_error' ||
+                        currentEventType === 'run_complete' ||
+                        currentEventType === 'run_failed' ||
+                        currentEventType === 'run_paused'
+                      ) {
+                        void refreshRun();
+                      }
+                    } catch {
+                      // Skip a malformed notification; persisted hydration stays
+                      // authoritative and the next refresh can recover it.
                     }
-                  } catch {
-                    // Skip a malformed notification; persisted hydration stays
-                    // authoritative and the next refresh can recover it.
+                    currentEventType = null;
                   }
-                  currentEventType = null;
                 }
               }
+            } finally {
+              reader.releaseLock();
             }
-          } finally {
-            reader.releaseLock();
           }
         } catch (err) {
           if ((err as Error).name === 'AbortError') return;
           console.error('SSE stream error:', err);
         }
 
-        await waitForReconnect(controller.signal);
+        if (controller.signal.aborted) return;
+
+        // The stream is only a notification channel. Re-read durable rows
+        // after every EOF or rejected response before deciding to reconnect.
+        await refreshRun();
         const latest = useResearchEngineStore.getState();
+        const latestStatus = latest.activeRun?.status;
         if (
           controller.signal.aborted ||
           latest.activeRunId !== runId ||
-          (latest.activeRun?.status !== 'running' &&
-            latest.activeRun?.status !== 'pending')
+          (latestStatus !== 'running' && latestStatus !== 'pending')
         ) {
           return;
         }
+
+        if (attempt === SSE_MAX_ATTEMPTS) {
+          setActionError({
+            runId,
+            message:
+              'Live updates stopped after repeated connection failures. Refresh the run to continue.',
+          });
+          return;
+        }
+
+        await waitForReconnect(controller.signal, attempt);
+        if (controller.signal.aborted) return;
       }
     };
 
@@ -347,6 +375,12 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     mergeRunEvent,
     refreshRun,
   ]);
+
+  const refreshReviewState = useCallback(async (): Promise<void> => {
+    if (!(await refreshRun())) {
+      throw new Error('The durable run state could not be refreshed.');
+    }
+  }, [refreshRun]);
 
   const steps: StepData[] = runSteps.map((step) => ({
     stepIndex: step.step_index,
@@ -379,7 +413,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     setActionLoading(true);
     try {
       await pauseRun(runId);
-      await refreshRun();
+      if (!(await refreshRun())) throw new Error('Refresh failed');
     } catch {
       setActionError({
         runId,
@@ -395,7 +429,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     setActionLoading(true);
     try {
       await resumeRun(runId);
-      await refreshRun();
+      if (!(await refreshRun())) throw new Error('Refresh failed');
     } catch {
       setActionError({
         runId,
@@ -415,7 +449,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
         continue_unverified: true,
         output_hash: activeRun.output_hash,
       });
-      await refreshRun();
+      if (!(await refreshRun())) throw new Error('Refresh failed');
     } catch {
       setActionError({
         runId,
@@ -469,7 +503,9 @@ export function RunView({ runId }: RunViewProps): ReactElement {
         </div>
         <button
           type="button"
-          onClick={() => refreshRun()}
+          onClick={() => {
+            void refreshRun();
+          }}
           className="rounded text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           Retry
@@ -625,7 +661,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
             runId={runId}
             review={pendingReview}
             sourceRecords={sourceRecords}
-            onRefresh={refreshRun}
+            onRefresh={refreshReviewState}
           />
         )}
 

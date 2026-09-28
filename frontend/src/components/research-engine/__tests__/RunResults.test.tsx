@@ -36,10 +36,17 @@ function exportStep(finalStatus: 'verified' | 'unverified'): StepResponse {
       exported: {
         final_status: finalStatus,
         coverage: {
-          providers: {
-            openalex: { status: 'ok', returned: 3 },
-            crossref: { status: 'failed', error_type: 'TimeoutError' },
-          },
+          partial: true,
+          exhaustive: false,
+          provider_results: [
+            { provider: 'openalex', returned_count: 3 },
+            {
+              provider: 'crossref',
+              status: 'failed',
+              error_type: 'TimeoutError',
+              returned_count: 0,
+            },
+          ],
         },
         included_source_ids: ['source-a'],
         screening: [

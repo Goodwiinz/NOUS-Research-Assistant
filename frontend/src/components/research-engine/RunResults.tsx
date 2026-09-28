@@ -60,14 +60,26 @@ function countLabel(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`;
 }
 
+function providerResults(
+  artifact: Record<string, unknown>
+): Record<string, unknown>[] {
+  return records(record(artifact.coverage)?.provider_results);
+}
+
+function providerSucceeded(result: Record<string, unknown>): boolean {
+  const status = text(result.status);
+  if (status) {
+    return ['ok', 'success', 'succeeded', 'completed'].includes(status);
+  }
+  return result.error === undefined && result.error_type === undefined;
+}
+
 function resultMetrics(artifact: Record<string, unknown>): string[] {
   const metrics: string[] = [];
-  const coverage = record(artifact.coverage);
-  const providers = record(coverage?.providers);
-  if (providers && Object.keys(providers).length > 0) {
-    const values = Object.values(providers).map(record);
-    const succeeded = values.filter((item) => item?.status === 'ok').length;
-    metrics.push(`${succeeded} of ${values.length} providers succeeded`);
+  const providers = providerResults(artifact);
+  if (providers.length > 0) {
+    const succeeded = providers.filter(providerSucceeded).length;
+    metrics.push(`${succeeded} of ${providers.length} providers succeeded`);
   }
 
   const screeningDecisions = reviewItems(artifact, 'screening');

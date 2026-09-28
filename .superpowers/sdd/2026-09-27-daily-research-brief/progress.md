@@ -251,4 +251,15 @@
 - Full frontend lint remains the advisory unrelated baseline: final all-tree
   scan `113` errors and `1,961` warnings, below the committed `116`/`2,003`
   ratchet. Every Task 7 path is clean.
+- Important-findings follow-up RED: `8 failed, 20 passed` across the four
+  focused files before production changes. The regressions cover projected
+  review recovery, durable stream termination and bounded retry, refresh
+  failure reporting, production provider-result counts, and monotonic terminal
+  run state.
+- Follow-up GREEN: `28 passed` focused and `60 passed` across the eight-file
+  adjacent research-engine batch. TypeScript, scoped ESLint, changed Prettier,
+  lint-debt and exclusion ratchets, and diff checks pass. Projected reviews now
+  recover only exact-hash persisted outputs, stream decisions follow refreshed
+  durable state with a three-attempt cap, and review submissions never report a
+  failed refresh as successful.
 - Task 7: complete.

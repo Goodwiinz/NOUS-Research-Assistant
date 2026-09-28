@@ -112,6 +112,15 @@ function finalStatus(review: PendingReviewResponse): string | undefined {
   );
 }
 
+function isProjectedOutput(output: Record<string, unknown> | null): boolean {
+  const projection = record(output?.review_projection);
+  return (
+    projection?.projected === true &&
+    projection.truncated === true &&
+    projection.identity_complete === true
+  );
+}
+
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2);
@@ -142,6 +151,12 @@ export function ReviewPanel({
     [sourceRecords]
   );
   const stageOutput = record(review.stage_output);
+  const finalStatusValue = finalStatus(review);
+  const finalArtifact =
+    record(stageOutput?.exported) ?? record(stageOutput?.artifact);
+  const finalVerification = record(finalArtifact?.verification);
+  const finalChecks = finalVerification?.claims ?? finalArtifact?.claims;
+  const projectedOutput = isProjectedOutput(stageOutput);
   const reviewItems = descriptor
     ? records(
         stageOutput?.[
@@ -153,7 +168,7 @@ export function ReviewPanel({
     descriptor?.review_kind === 'screening' ? 'exclude' : 'reject';
   const approvalBlocked =
     descriptor?.review_kind === 'final'
-      ? finalStatus(review) !== 'verified'
+      ? finalStatusValue !== 'verified'
       : drafts.length === 0 ||
         drafts.some(
           (draft) =>
@@ -262,7 +277,9 @@ export function ReviewPanel({
 
   const accepted = review.accepted_review;
   const finalCanNeverBeApproved =
-    descriptor.review_kind === 'final' && finalStatus(review) !== 'verified';
+    descriptor.review_kind === 'final' &&
+    finalStatusValue !== undefined &&
+    finalStatusValue !== 'verified';
 
   return (
     <section
@@ -312,6 +329,18 @@ export function ReviewPanel({
         </div>
       )}
 
+      {descriptor.review_kind === 'final' &&
+        projectedOutput &&
+        finalStatusValue === undefined && (
+          <div
+            role="status"
+            className="mt-4 rounded-lg border border-border bg-muted/40 p-3 text-sm text-foreground"
+          >
+            The full persisted export is not available yet. Refresh before
+            making a final decision.
+          </div>
+        )}
+
       {descriptor.review_kind === 'final' && (
         <div className="mt-4 space-y-3">
           <div className="rounded-lg border border-border bg-muted/30 p-4">
@@ -322,13 +351,13 @@ export function ReviewPanel({
               {text(stageOutput.markdown) ?? text(stageOutput.content) ?? ''}
             </pre>
           </div>
-          {record(stageOutput.exported)?.claims !== undefined && (
+          {finalChecks !== undefined && (
             <details className="rounded-lg border border-border p-3">
               <summary className="cursor-pointer text-sm font-medium">
                 Claim coverage and checks
               </summary>
               <pre className="mt-2 overflow-auto whitespace-pre-wrap text-xs">
-                {safeJson(record(stageOutput.exported)?.claims)}
+                {safeJson(finalChecks)}
               </pre>
             </details>
           )}

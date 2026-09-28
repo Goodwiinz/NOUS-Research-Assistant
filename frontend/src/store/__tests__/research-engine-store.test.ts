@@ -201,4 +201,42 @@ describe('research engine run store', () => {
     store.setPendingReview(review);
     expect(useResearchEngineStore.getState().pendingReview).toBe(review);
   });
+
+  it('keeps terminal lifecycle states monotonic while allowing a real paused resume', () => {
+    const store = useResearchEngineStore.getState();
+
+    store.resetRun(RUN_ID);
+    store.hydrateRun(run(RUN_ID, { status: 'completed' }), []);
+    store.mergeRunEvent({ event: 'run_started', run_id: RUN_ID });
+    store.mergeRunEvent({
+      event: 'run_paused',
+      run_id: RUN_ID,
+      pause_reason: 'user_paused',
+    });
+    store.mergeRunEvent({ event: 'run_complete', run_id: RUN_ID });
+    store.mergeRunEvent({ event: 'run_failed', run_id: RUN_ID });
+    expect(useResearchEngineStore.getState().activeRun?.status).toBe(
+      'completed'
+    );
+
+    store.resetRun(RUN_ID);
+    store.hydrateRun(run(RUN_ID, { status: 'failed' }), []);
+    store.mergeRunEvent({ event: 'run_started', run_id: RUN_ID });
+    store.mergeRunEvent({
+      event: 'run_paused',
+      run_id: RUN_ID,
+      pause_reason: 'review_required',
+    });
+    store.mergeRunEvent({ event: 'run_failed', run_id: RUN_ID });
+    store.mergeRunEvent({ event: 'run_complete', run_id: RUN_ID });
+    expect(useResearchEngineStore.getState().activeRun?.status).toBe('failed');
+
+    store.resetRun(RUN_ID);
+    store.hydrateRun(
+      run(RUN_ID, { status: 'paused', pause_reason: 'user_paused' }),
+      []
+    );
+    store.mergeRunEvent({ event: 'run_started', run_id: RUN_ID });
+    expect(useResearchEngineStore.getState().activeRun?.status).toBe('running');
+  });
 });
