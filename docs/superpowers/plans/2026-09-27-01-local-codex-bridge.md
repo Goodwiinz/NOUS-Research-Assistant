@@ -4,13 +4,13 @@
 
 **Goal:** Run owner-authorized local Codex sessions from NOUS chat with durable recovery, exact approvals, and extensible adapters.
 
-**Architecture:** NOUS owns accepted turns, authorization, and persisted events; an outbound authenticated bridge owns local processes and workspace registration. Codex App Server supplies structured execution through a restricted adapter. Integration context is shared with the separate MCP and artifact plans.
+**Architecture:** NOUS owns accepted turns, authorization, and persisted events; an outbound authenticated bridge owns local processes and workspace registration. Codex App Server supplies structured execution through a restricted adapter. This plan implements the local bridge boundary only; other NOUS capabilities remain separately scoped.
 
 **Tech Stack:** FastAPI, Pydantic, SQLAlchemy/Alembic, existing Celery, Node 24, TypeScript, pnpm 10.18.2, existing assistant-ui/TanStack Query.
 
-**Spec:** [Architecture decision](../../plans/2026-09-27-harness-bridge-and-artifacts.md), sections 3–5 and 8–9.
+**Design basis:** NOUS remains the authorization and persistence authority; the local bridge is the process-execution authority. Provider selection is separate from model selection, and uncertain native work remains quarantined until verified.
 
-**Status:** Proposed implementation instructions, 2026-09-27; source baseline `16f824197f85436c84558769e72936e3c1decf2b`. No implementation or acceptance run accompanies this plan.
+**Status:** Active implementation plan for the local Codex bridge; source baseline `bbd86abc8fff68df049d95dcd143efd28bc55cf7` (`develop`).
 
 ## Global Constraints
 
@@ -19,7 +19,7 @@
 - Preserve atomic submission, existing NOUS default, tenant authorization, and the 16 KiB durable-event limit.
 - Only the paired device owner launches local runs; permissions intersect backend grant, device policy, and native sandbox.
 - `recovering` is nonterminal and retains thread/workspace ownership; never retry an ambiguous native start blindly.
-- Planning only: checkbox commands below are instructions for a future authorized implementation.
+- Scope: Tasks 1–7 below are the complete local Codex bridge feature. NOUS MCP tools and artifact publication are outside this PR and must ship separately.
 
 ## Review Focus
 
@@ -44,7 +44,7 @@ Every **Create** path below is proposed. **Modify** paths and named seams were i
 | Chat integration | `frontend/src/hooks/chat/useHarnessConnection.ts`, `frontend/src/components/chat/HarnessSelector.tsx`, existing streaming/service/surface files |
 | Proof and operations | Focused tests per task; `docs/engineering/harness-bridge.md`; `tests/e2e/tests/harness-bridge.spec.ts` |
 
-Tasks 1–7 run in order and deliver independently usable local Codex execution. The sibling plans in [the plan index](2026-09-27-00-harness-workspace.md) subsequently add NOUS tools and artifact publication. This package must compile without importing their future modules; optional typed session configuration is the only advance seam.
+Tasks 1–7 run in order and deliver independently usable local Codex execution. This package must compile without future MCP or artifact modules; optional typed session configuration is only a future composition seam.
 
 ## Task 1: Restricted grants and device/workspace pairing
 
