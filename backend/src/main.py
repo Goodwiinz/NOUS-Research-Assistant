@@ -50,6 +50,7 @@ from src.api.documents import (
 )
 from src.api.evidence.router import router as evidence_router
 from src.api.infrastructure import evaluation_router, workers_router
+from src.api.integrations import router as integrations_router
 from src.api.quality import (
     performance_dashboard_router,
     quality_metrics_router,
@@ -565,6 +566,7 @@ app.add_middleware(AgentDisconnectSignalMiddleware)
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(cli_auth_router, prefix="/api/v1")
+app.include_router(integrations_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
