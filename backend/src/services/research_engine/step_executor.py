@@ -330,6 +330,37 @@ class StepExecutor:
         coverage = prompt_context.get("coverage")
         if isinstance(coverage, dict):
             coverage.pop("retrieved_at", None)
+            provider_receipts = coverage.get("providers")
+            if isinstance(provider_receipts, dict):
+                for receipt in provider_receipts.values():
+                    if not isinstance(receipt, dict):
+                        continue
+                    for field in (
+                        "execution_id",
+                        "attempt_id",
+                        "started_at",
+                        "completed_at",
+                        "imported_source_ids",
+                    ):
+                        receipt.pop(field, None)
+                    pages = receipt.get("pages")
+                    if not isinstance(pages, list):
+                        continue
+                    for page in pages:
+                        if not isinstance(page, dict):
+                            continue
+                        page.pop("page_id", None)
+                        page.pop("attempt_id", None)
+                        page.pop("imported_source_ids", None)
+                        request = page.get("request")
+                        if isinstance(request, dict):
+                            request.pop("requested_at", None)
+                        response = page.get("response")
+                        if isinstance(response, dict):
+                            response.pop("received_at", None)
+                            for attempt in response.get("request_attempts", []):
+                                if isinstance(attempt, dict):
+                                    attempt.pop("requested_at", None)
         for record in prompt_context.get("source_records", []):
             record.pop("source_id", None)
             for snapshot in record.get("metadata", {}).get("provenance", []):

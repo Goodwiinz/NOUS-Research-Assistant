@@ -237,13 +237,14 @@ export function StepProgress({ step }: StepProgressProps) {
       {partialCoverage && (
         <p role="alert" className="px-4 pb-3 text-sm text-muted-foreground">
           {allProvidersFailed
-            ? 'No selected databases could be searched. No provider coverage is available.'
+            ? 'All selected databases could not be fully searched. Results may have partial coverage.'
             : 'Some selected databases could not be searched. These results have partial coverage.'}
         </p>
       )}
 
       {Object.keys(providers).length > 0 && (
         <div
+          role="group"
           aria-label="Search provider coverage"
           className="space-y-1 px-4 pb-3 text-xs text-muted-foreground"
         >

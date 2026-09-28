@@ -6,7 +6,6 @@ when given the same inputs, temperature 0, and seed values.
 
 import copy
 import hashlib
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -136,6 +135,34 @@ async def _collect_events(
     return events
 
 
+def _strip_search_observation_fields(output: Dict[str, Any]) -> None:
+    """Keep evidence content while normalizing unique receipt IDs and times."""
+    coverage = output["coverage"]
+    coverage.pop("retrieved_at", None)
+    for receipt in coverage["providers"].values():
+        for field in (
+            "execution_id",
+            "attempt_id",
+            "started_at",
+            "completed_at",
+            "imported_source_ids",
+        ):
+            receipt.pop(field, None)
+        for page in receipt["pages"]:
+            page.pop("page_id", None)
+            page.pop("attempt_id", None)
+            page.pop("imported_source_ids", None)
+            page["request"].pop("requested_at", None)
+            page["response"].pop("received_at", None)
+            for attempt in page["response"].get("request_attempts", []):
+                attempt.pop("requested_at", None)
+
+    for record in output["source_records"]:
+        record.pop("source_id", None)
+        for snapshot in record["metadata"]["provenance"]:
+            snapshot.pop("retrieved_at", None)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -161,24 +188,30 @@ async def test_same_inputs_produce_same_outputs():
         if ea["step_id"] == "search_step":
             # Separate retrievals have distinct row identities and audit times;
             # all evidence content and downstream generated output must match.
+            assert UUID(outputs[0]["source_records"][0]["source_id"])
+            assert UUID(outputs[1]["source_records"][0]["source_id"])
+            assert UUID(outputs[0]["coverage"]["providers"]["test"]["execution_id"])
+            assert UUID(outputs[1]["coverage"]["providers"]["test"]["execution_id"])
+            assert UUID(
+                outputs[0]["coverage"]["providers"]["test"]["pages"][0]["page_id"]
+            )
+            assert UUID(
+                outputs[1]["coverage"]["providers"]["test"]["pages"][0]["page_id"]
+            )
             assert (
                 outputs[0]["source_records"][0]["source_id"]
                 != outputs[1]["source_records"][0]["source_id"]
             )
+            assert (
+                outputs[0]["coverage"]["providers"]["test"]["execution_id"]
+                != outputs[1]["coverage"]["providers"]["test"]["execution_id"]
+            )
+            assert (
+                outputs[0]["coverage"]["providers"]["test"]["pages"][0]["page_id"]
+                != outputs[1]["coverage"]["providers"]["test"]["pages"][0]["page_id"]
+            )
             for output in outputs:
-                assert (
-                    datetime.fromisoformat(
-                        output["coverage"].pop("retrieved_at")
-                    ).tzinfo
-                    is not None
-                )
-                for record in output["source_records"]:
-                    assert UUID(record.pop("source_id"))
-                    for snapshot in record["metadata"]["provenance"]:
-                        assert (
-                            datetime.fromisoformat(snapshot.pop("retrieved_at")).tzinfo
-                            is not None
-                        )
+                _strip_search_observation_fields(output)
         assert outputs[0] == outputs[1]
 
 
@@ -194,6 +227,18 @@ async def test_prompt_keeps_evidence_but_does_not_mutate_retrieval_audit() -> No
 
     other_retrieval = copy.deepcopy(context)
     other_retrieval["coverage"]["retrieved_at"] = "2026-01-01T00:00:00+00:00"
+    receipt = other_retrieval["coverage"]["providers"]["test"]
+    receipt["execution_id"] = str(uuid4())
+    receipt["attempt_id"] = str(uuid4())
+    receipt["started_at"] = "2026-01-01T00:00:00+00:00"
+    receipt["completed_at"] = "2026-01-01T00:01:00+00:00"
+    receipt["imported_source_ids"] = [str(uuid4())]
+    page = receipt["pages"][0]
+    page["page_id"] = str(uuid4())
+    page["attempt_id"] = str(uuid4())
+    page["imported_source_ids"] = [str(uuid4())]
+    page["request"]["requested_at"] = "2026-01-01T00:00:00+00:00"
+    page["response"]["received_at"] = "2026-01-01T00:01:00+00:00"
     record = other_retrieval["source_records"][0]
     record["source_id"] = str(uuid4())
     record["metadata"]["provenance"][0]["retrieved_at"] = "2026-01-01T00:00:00+00:00"

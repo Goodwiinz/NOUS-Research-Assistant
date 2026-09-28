@@ -85,7 +85,9 @@ class PubMedConnector(SourceConnector):
                     response=search_resp,
                     total_available=total_count,
                     next_cursor=None,
-                    has_more=total_count > len(pmids),
+                    # No IDs means this response has no usable next page, even
+                    # if Count reports results that the IdList omitted.
+                    has_more=bool(pmids) and total_count > len(pmids),
                     provider_count=len(pmids),
                 )
 

@@ -557,6 +557,70 @@ class TestStreamEndpointSuccess:
         step = next(row for row in added if isinstance(row, ResearchStep))
         assert step.output["source_records"][0]["source_id"] == str(sources[0].id)
 
+    # Mutation guard: replace runs.py:749's retry-only db.merge(source_row) with
+    # db.add(source_row); this focused test must fail on the duplicate insert.
+    # Command: pytest -q backend/tests/unit/api/test_research_engine_stream.py -k retry_merges_discovered_sources_with_stable_ids
+    def test_retry_merges_discovered_sources_with_stable_ids(
+        self, stream_app, stream_client
+    ):
+        from src.models.research_source import ResearchSource
+
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        source_id = uuid.uuid4()
+        run = _make_run(id=run_id, blueprint_id=bp_id, status="paused")
+        bp = _make_blueprint(
+            id=bp_id,
+            steps=[{"id": "discover", "type": "search"}],
+        )
+        db = _mock_db_returning(
+            run_result=run,
+            blueprint_result=bp,
+            last_step_index=0,
+            last_step_quality_marks=[
+                {"check_type": "provider_search", "passed": False}
+            ],
+        )
+        existing_step_result = Mock()
+        existing_step_result.scalars.return_value.first.return_value = Mock()
+        db.execute.side_effect = [
+            *db.execute.side_effect,
+            existing_step_result,
+        ]
+        db.merge = AsyncMock()
+        stream_app.dependency_overrides[get_db] = lambda: db
+        record = {
+            "source_id": str(source_id),
+            "connector_type": "openalex",
+            "external_id": "W123",
+            "title": "Paper",
+            "evidence_level": "abstract",
+            "metadata": {},
+        }
+
+        async def engine_run(**kwargs):
+            yield {
+                "event": "step_complete",
+                "step_index": 0,
+                "output": {"source_records": [record]},
+                "quality_marks": [],
+            }
+            yield {"event": "run_complete"}
+
+        response = self._patch_engine_and_get(
+            stream_app, stream_client, run_id, engine_run
+        )
+
+        assert "event: run_complete" in response.text
+        db.merge.assert_awaited_once()
+        merged_source = db.merge.await_args.args[0]
+        assert isinstance(merged_source, ResearchSource)
+        assert merged_source.id == source_id
+        assert not any(
+            isinstance(call.args[0], ResearchSource) for call in db.add.call_args_list
+        )
+        stream_app.dependency_overrides.pop(get_db, None)
+
     @pytest.mark.asyncio
     async def test_stream_persists_completed_step_before_honoring_external_pause(
         self,

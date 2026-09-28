@@ -740,13 +740,19 @@ async def stream_run(
                         )
                         event["output"] = output
 
+                    retrying_existing_step = (
+                        retry_existing_step and step_index == start_from
+                    )
                     if step_def.get("type") == "search" and output:
                         for source_row in research_source_rows(run_id, output):
-                            db.add(source_row)
+                            if retrying_existing_step:
+                                await db.merge(source_row)
+                            else:
+                                db.add(source_row)
 
                     completed_step = _research_step_from_event(run_id, step_def, event)
                     existing_step = None
-                    if retry_existing_step and step_index == start_from:
+                    if retrying_existing_step:
                         existing_step = (
                             (
                                 await db.execute(

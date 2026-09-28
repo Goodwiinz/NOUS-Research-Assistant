@@ -150,6 +150,34 @@ async def test_search_trace_checkpoints_requests_and_reuses_page_identity() -> N
 
 
 @pytest.mark.asyncio
+async def test_pubmed_empty_id_list_does_not_claim_more_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.services.research_engine.connectors import pubmed_connector
+    from src.services.research_engine.connectors.base import SearchTrace
+
+    async def respond(*args, **kwargs):
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", "https://eutils.ncbi.nlm.nih.gov/"),
+            text="<eSearchResult><Count>120</Count><IdList /></eSearchResult>",
+        )
+
+    monkeypatch.setattr(pubmed_connector, "get", respond)
+    trace = SearchTrace(
+        execution_id=str(uuid4()), provider="pubmed", requested_limit=10
+    )
+    documents = await pubmed_connector.PubMedConnector().search(
+        "approved query", max_results=10, search_trace=trace
+    )
+
+    assert documents == []
+    receipt = trace.as_receipt(returned_count=0)
+    assert receipt["completion"] == "exhausted"
+    assert receipt["pages"][0]["response"]["has_more"] is False
+
+
+@pytest.mark.asyncio
 async def test_legacy_connector_gets_a_durable_single_request_receipt() -> None:
     from src.services.research_engine.discovery import search_sources
 

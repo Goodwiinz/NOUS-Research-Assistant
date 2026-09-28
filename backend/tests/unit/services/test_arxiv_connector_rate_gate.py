@@ -37,6 +37,7 @@ class _Resp:
         self.status_code = status_code
         self.text = text
         self.headers: dict[str, str] = {}
+        self.extensions: dict[str, Any] = {}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
