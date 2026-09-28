@@ -298,16 +298,14 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
           .join(' ')
           .includes('useClientLookup: Index 0 out of bounds')
       )
-    ).toBe(true);
+    ).toBe(false);
+    // The optimistic first-send frame used to log exactly the transient
+    // out-of-bounds throw (plus React's "The above error occurred" echo)
+    // while the external-store runtime lagged the optimistic row. Rows are
+    // identity-addressed now, so that frame renders null instead — the
+    // crash signature must be gone AND nothing else may log an error.
     expect(
-      consoleError.mock.calls
-        .map((args) => args.map(String).join(' '))
-        .filter(
-          (message) =>
-            !/useClientLookup: Index 0 out of bounds|The above error occurred/i.test(
-              message
-            )
-        )
+      consoleError.mock.calls.map((args) => args.map(String).join(' '))
     ).toEqual([]);
   });
 

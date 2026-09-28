@@ -30,6 +30,9 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 logger = logging.getLogger(__name__)
 
+_FIELD_DATA_KEY_ID = "master-derived-field-data-v1"
+_FIELD_DATA_KEY_INFO = b"nous/field-data-encryption/v1"
+
 
 class EncryptionError(Exception):
     """Base exception for encryption operations"""
@@ -224,6 +227,26 @@ class KeyManager:
                 raise KeyManagementError("Master key must be 32 bytes (256 bits)")
         except Exception as e:
             raise KeyManagementError(f"Invalid master key format: {str(e)}")
+
+    def ensure_field_data_key(self) -> EncryptionKey:
+        """Derive a stable field key so encrypted columns survive process restarts."""
+        existing = self._keys.get(_FIELD_DATA_KEY_ID)
+        if existing is not None:
+            return existing
+        if self._master_key is None:
+            raise KeyManagementError("Master key not initialized")
+
+        key = EncryptionKey(
+            key_id=_FIELD_DATA_KEY_ID,
+            key_type=EncryptionKeyType.DATA,
+            key_data=KeyDerivation.derive_key_hkdf(
+                self._master_key, info=_FIELD_DATA_KEY_INFO
+            ),
+            algorithm=EncryptionAlgorithm.AES256_GCM,
+            created_at=datetime.utcnow(),
+        )
+        self._keys[key.key_id] = key
+        return key
 
     def generate_key(
         self,
@@ -632,6 +655,7 @@ def initialize_encryption(master_key_env_var: str = "ENCRYPTION_MASTER_KEY") -> 
     global _key_manager, _aes_encryption, _field_encryption, _file_encryption
 
     _key_manager = KeyManager(master_key_env_var)
+    _key_manager.ensure_field_data_key()
     _aes_encryption = AESEncryption(_key_manager)
     _field_encryption = FieldEncryption(_aes_encryption)
     _file_encryption = FileEncryption(_key_manager)

@@ -380,15 +380,17 @@ export const ChatMessageList = React.memo(function ChatMessageList({
 
           {/* Key the message-row subtree by thread id so a thread switch
               MOUNTS a fresh row tree instead of reconciling the previous
-              thread's index-addressed MessageByIndex fibers against the new
+              thread's identity-addressed message rows against the new
               thread. Rapid switching otherwise interleaves partial commits and
               trips React's reconciler ("Tried to unmount a fiber that is
               already unmounted") — a reconciler-internal error the #1096
               MessageByIndexBoundary cannot catch. A clean remount also drops
-              the old thread's store subscriptions in one unit, shrinking the
-              window for the useClientLookup torn read (which the boundary still
-              backstops). Appends within a thread keep the same key — no
-              remount, no flicker. */}
+              the old thread's store subscriptions in one unit, so the
+              runtime's useClientLookup never has to serve a row whose
+              message left with the previous thread (the #1096 crash — now
+              structurally prevented by identity addressing, which renders
+              null rather than resolving a missing message). Appends within a
+              thread keep the same key — no remount, no flicker. */}
           <React.Fragment key={`rows-${activeThreadId ?? 'new'}`}>
             {isVirtualized ? (
               <VirtualizedMessageList
