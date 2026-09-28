@@ -23,7 +23,7 @@ croniter==2.0.1
 
 # Authentication and security
 python-jose[cryptography]==3.5.0
-cryptography>=50.0.0
+cryptography>=50.0.1
 passlib[bcrypt]==1.7.4
 
 # Data validation and serialization
