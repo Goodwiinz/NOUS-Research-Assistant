@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -39,6 +40,7 @@ def _runtime(
         "runner_image": "academic-runner@sha256:" + "d" * 64,
         "verifier": "writing-verifier-v1",
         "fixture_digest": state["corpus_digests"][cohort],
+        "calibration_digest": state["calibration_digest"],
         "harness_digest": COLLECT._harness_digest(),
         "tool_versions": {"harbor": "0.6.6", "python": "3.11.14"},
         "env_flags": {"network": "restricted", "judge_access": "verifier-only"},
@@ -54,6 +56,8 @@ def _success_bundle(
     bundle_name: str = "trial-success",
     run_id: str = "run-1",
 ) -> tuple[Path, dict[str, Any]]:
+    protocol = COLLECT._load_json(TASK_DIR / "protocol.json")
+    state = COLLECT.validate_protocol(protocol)
     bundle = tmp_path / bundle_name
     bundle.mkdir(parents=True)
     draft = bundle / "draft.md"
@@ -116,6 +120,15 @@ def _success_bundle(
         archive.writestr("references.bib", bibliography)
     task_digest = "sha256:" + "b" * 64
     fixture_digest = "sha256:" + "e" * 64
+    calibration_results = [
+        {
+            "fixture_id": fixture["id"],
+            "input_digest": COLLECT._canonical_digest(fixture["input"]),
+            "expected": fixture["expected"],
+            "observed": fixture["expected"],
+        }
+        for fixture in state["calibration"]["fixtures"]
+    ]
     calibration = bundle / "calibration.json"
     _write_json(
         calibration,
@@ -123,10 +136,9 @@ def _success_bundle(
             "id": f"calibration-{run_id}",
             "reviewer": "independent-reviewer",
             "verifier": "writing-verifier-v1",
-            "fixture_digest": fixture_digest,
+            "fixture_digest": state["calibration_digest"],
             "outcome": "passed",
-            "correct_fixture_passed": True,
-            "wrong_fixture_rejected": True,
+            "results": calibration_results,
         },
     )
     adjudication = bundle / "adjudication.json"
@@ -170,12 +182,18 @@ def _success_bundle(
         },
     )
     blocked_review = bundle / "blocked-review.json"
+    blocked_candidate = "Unsupported revision without source support."
     _write_json(
         blocked_review,
         {
             "id": f"review-blocked-{run_id}",
             "outcome": "blocked",
-            "candidate_content_hash": "sha256:" + "c" * 64,
+            "project_id": f"project-{run_id}",
+            "base_draft_id": f"draft-{run_id}",
+            "candidate_content": blocked_candidate,
+            "candidate_content_hash": hashlib.sha256(
+                blocked_candidate.encode("utf-8")
+            ).hexdigest(),
         },
     )
     trial = {
@@ -186,6 +204,7 @@ def _success_bundle(
             "model": "model",
             "verifier": "writing-verifier-v1",
             "fixture_digest": fixture_digest,
+            "calibration_digest": state["calibration_digest"],
         },
         "artifacts": {
             "draft": {
@@ -255,7 +274,7 @@ def _bind_trial_to_protocol(
     if isinstance(calibration_record, dict):
         calibration_path = bundle_path.parent / calibration_record["path"]
         calibration = COLLECT._load_json(calibration_path)
-        calibration["fixture_digest"] = trial["runtime"]["fixture_digest"]
+        calibration["fixture_digest"] = trial["runtime"]["calibration_digest"]
         _write_json(calibration_path, calibration)
         calibration_record["sha256"] = COLLECT._file_digest(calibration_path)
 
@@ -274,6 +293,15 @@ def test_protocol_freezes_five_canonical_trials_and_separate_corpora() -> None:
         == 5
     )
     assert set(state["cohorts"].values()) == {"development", "held_out"}
+    assert state["calibration_digest"].startswith("sha256:")
+
+
+def test_protocol_rejects_undeclared_trial_kind() -> None:
+    protocol = COLLECT._load_json(TASK_DIR / "protocol.json")
+    protocol["trial_plan"][1]["kind"] = "boundary_typo"
+
+    with pytest.raises(COLLECT.EvidenceError, match="unsupported trial kinds"):
+        COLLECT.validate_protocol(protocol)
 
 
 def test_success_requires_reconciled_persisted_and_downloaded_artifacts(
@@ -297,6 +325,21 @@ def test_equal_revision_snapshots_must_match_retained_draft(tmp_path: Path) -> N
         trial["invalid_revision"][snapshot]["draft_id"] = "fabricated-draft"
 
     with pytest.raises(COLLECT.EvidenceError, match="bound to the retained draft"):
+        COLLECT._verify_success_artifacts(bundle_path, trial)
+
+
+def test_blocked_review_binds_base_project_and_candidate_content(
+    tmp_path: Path,
+) -> None:
+    bundle_path, trial = _success_bundle(tmp_path)
+    record = trial["invalid_revision"]["review"]
+    path = bundle_path.parent / record["path"]
+    review = COLLECT._load_json(path)
+    review["base_draft_id"] = "unrelated-draft"
+    _write_json(path, review)
+    record["sha256"] = COLLECT._file_digest(path)
+
+    with pytest.raises(COLLECT.EvidenceError, match="attempted revision"):
         COLLECT._verify_success_artifacts(bundle_path, trial)
 
 
@@ -395,7 +438,7 @@ def test_infrastructure_failure_remains_independent_of_completed_gates(
     assert verdicts["objective"] == "passed"
     assert verdicts["infrastructure"] == "failed"
 
-    with pytest.raises(COLLECT.EvidenceError, match="cannot produce a product pass"):
+    with pytest.raises(COLLECT.EvidenceError, match="passed flag must equal"):
         COLLECT._validate_verdicts(
             tmp_path / "trial.json",
             {
@@ -444,7 +487,12 @@ def test_semantic_pass_requires_bound_calibration(tmp_path: Path) -> None:
     calibration_record = trial["artifacts"]["calibration"]
     calibration_path = bundle_path.parent / calibration_record["path"]
     calibration = COLLECT._load_json(calibration_path)
-    calibration["wrong_fixture_rejected"] = False
+    wrong = next(
+        result
+        for result in calibration["results"]
+        if result["fixture_id"] == "known-wrong"
+    )
+    wrong["observed"] = "accept"
     _write_json(calibration_path, calibration)
     calibration_record["sha256"] = COLLECT._file_digest(calibration_path)
 
@@ -482,12 +530,13 @@ def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) 
             tmp_path / "trial.json", runtime, state, "development", "a" * 40
         )
 
-    runtime = _runtime(state, task_id, "a" * 40, "run-1")
-    runtime["runner_image"] = "academic-runner:latest"
-    with pytest.raises(COLLECT.EvidenceError, match="pinned by sha256"):
-        COLLECT._validate_runtime_identity(
-            tmp_path / "trial.json", runtime, state, "development", "a" * 40
-        )
+    for invalid_image in ("academic-runner:latest", "academic-runner@sha256:x"):
+        runtime = _runtime(state, task_id, "a" * 40, "run-1")
+        runtime["runner_image"] = invalid_image
+        with pytest.raises(COLLECT.EvidenceError, match="pinned by sha256"):
+            COLLECT._validate_runtime_identity(
+                tmp_path / "trial.json", runtime, state, "development", "a" * 40
+            )
 
     for configuration in (
         {"headers": {"Authorization": "Bearer must-not-be-retained"}},

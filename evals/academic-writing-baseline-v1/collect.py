@@ -33,6 +33,7 @@ BIBTEX_FENCE_RE = re.compile(
     r"```(?:bibtex|biblatex)\s*\n(?P<body>.*?)\n```", re.DOTALL | re.IGNORECASE
 )
 SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}")
+RUNNER_IMAGE_RE = re.compile(r"(?:[A-Za-z0-9._/:~-]+@)?sha256:[0-9a-f]{64}")
 TRIAL_FIELDS = {
     "task_id",
     "seed",
@@ -53,6 +54,7 @@ RUNTIME_FIELDS = {
     "runner_image",
     "verifier",
     "fixture_digest",
+    "calibration_digest",
     "harness_digest",
     "tool_versions",
     "env_flags",
@@ -293,6 +295,32 @@ def _corpus(protocol: dict[str, Any], name: str) -> tuple[Path, dict[str, Any]]:
     return path, value
 
 
+def _calibration_fixture(protocol: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    relative = protocol.get("calibration_fixture")
+    if not isinstance(relative, str):
+        raise EvidenceError("protocol calibration fixture is missing")
+    path = (TASK_DIR / relative).resolve()
+    value = _load_json(path)
+    fixtures = value.get("fixtures") if isinstance(value, dict) else None
+    if not isinstance(fixtures, list) or len(fixtures) < 2:
+        raise EvidenceError("calibration fixture must contain known truth cases")
+    identities = {
+        fixture.get("id") for fixture in fixtures if isinstance(fixture, dict)
+    }
+    if identities != {"known-correct", "known-wrong"}:
+        raise EvidenceError(
+            "calibration fixture requires known-correct and known-wrong"
+        )
+    expected = {
+        fixture.get("id"): fixture.get("expected")
+        for fixture in fixtures
+        if isinstance(fixture, dict)
+    }
+    if expected != {"known-correct": "accept", "known-wrong": "reject"}:
+        raise EvidenceError("calibration truth outcomes are invalid")
+    return path, value
+
+
 def _task_index(
     protocol: dict[str, Any],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
@@ -357,12 +385,22 @@ def validate_protocol(protocol: dict[str, Any]) -> dict[str, Any]:
     expected_cohorts = {cohorts[task_id] for task_id, _ in expected}
     if expected_cohorts != {"development", "held_out"}:
         raise EvidenceError("trial plan must include development and held-out tasks")
+    invalid_kinds = sorted(
+        {
+            str(entry.get("kind"))
+            for entry in protocol["trial_plan"]
+            if entry.get("kind") not in {"canonical", "near_boundary"}
+        }
+    )
+    if invalid_kinds:
+        raise EvidenceError(f"unsupported trial kinds: {invalid_kinds}")
     canonical = [
         entry for entry in protocol["trial_plan"] if entry.get("kind") == "canonical"
     ]
     canonical_count = sum(len(entry["seeds"]) for entry in canonical)
     if canonical_count != 5:
         raise EvidenceError("the canonical comparison must declare exactly five trials")
+    calibration_path, calibration = _calibration_fixture(protocol)
     return {
         "tasks": tasks,
         "cohorts": cohorts,
@@ -372,6 +410,8 @@ def validate_protocol(protocol: dict[str, Any]) -> dict[str, Any]:
             name: _file_digest(_corpus(protocol, name)[0])
             for name in ("development", "held_out")
         },
+        "calibration_digest": _file_digest(calibration_path),
+        "calibration": calibration,
     }
 
 
@@ -388,10 +428,9 @@ def _validate_verdicts(bundle_path: Path, trial: dict[str, Any]) -> dict[str, st
             )
         normalized[dimension] = verdict
     is_product_pass = all(verdict == "passed" for verdict in normalized.values())
-    if trial.get("passed") is True and not is_product_pass:
+    if not isinstance(trial.get("passed"), bool) or trial["passed"] != is_product_pass:
         raise EvidenceError(
-            f"{bundle_path.name}: incomplete or unavailable gates cannot produce "
-            "a product pass"
+            f"{bundle_path.name}: passed flag must equal the computed verdict status"
         )
     return normalized
 
@@ -407,13 +446,22 @@ def _verify_invalid_revision(
         )
     review_path = _verify_declared_artifact(bundle_path, proof.get("review"))
     review = _load_json(review_path)
+    candidate_content = review.get("candidate_content")
+    candidate_hash = (
+        hashlib.sha256(candidate_content.encode("utf-8")).hexdigest()
+        if isinstance(candidate_content, str)
+        else None
+    )
     if (
         review.get("id") != proof.get("review_id")
         or review.get("outcome") != "blocked"
-        or not review.get("candidate_content_hash")
+        or review.get("project_id") != draft.get("project_id")
+        or review.get("base_draft_id") != draft.get("id")
+        or not candidate_content
+        or review.get("candidate_content_hash") != candidate_hash
     ):
         raise EvidenceError(
-            f"{bundle_path.name}: blocked revision review is not persisted"
+            f"{bundle_path.name}: blocked revision review is not bound to the attempted revision"
         )
     before = proof.get("before")
     after = proof.get("after")
@@ -696,7 +744,10 @@ def _verify_bibtex_metadata(
 
 
 def _verify_semantic_artifacts(
-    bundle_path: Path, trial: dict[str, Any], context: dict[str, Any]
+    bundle_path: Path,
+    trial: dict[str, Any],
+    context: dict[str, Any],
+    protocol_state: dict[str, Any],
 ) -> None:
     artifacts = context["artifacts"]
     draft_digest = context["digest"]
@@ -734,15 +785,38 @@ def _verify_semantic_artifacts(
         bundle_path, artifacts.get("calibration")
     )
     calibration = _load_json(calibration_path)
+    frozen_fixtures = {
+        fixture["id"]: fixture for fixture in protocol_state["calibration"]["fixtures"]
+    }
+    results = calibration.get("results")
+    retained_results = (
+        {
+            result.get("fixture_id"): result
+            for result in results
+            if isinstance(result, dict)
+        }
+        if isinstance(results, list)
+        else {}
+    )
+    truth_is_bound = set(retained_results) == set(frozen_fixtures)
+    if truth_is_bound:
+        for fixture_id, fixture in frozen_fixtures.items():
+            result = retained_results[fixture_id]
+            if (
+                result.get("input_digest") != _canonical_digest(fixture["input"])
+                or result.get("expected") != fixture["expected"]
+                or result.get("observed") != fixture["expected"]
+            ):
+                truth_is_bound = False
+                break
     if (
         not calibration.get("id")
         or calibration.get("outcome") != "passed"
-        or calibration.get("correct_fixture_passed") is not True
-        or calibration.get("wrong_fixture_rejected") is not True
         or calibration.get("reviewer") != adjudication.get("reviewer")
         or calibration.get("verifier") != adjudication.get("verifier")
-        or calibration.get("fixture_digest") != runtime["fixture_digest"]
+        or calibration.get("fixture_digest") != runtime["calibration_digest"]
         or adjudication.get("calibration_id") != calibration.get("id")
+        or not truth_is_bound
     ):
         raise EvidenceError(
             f"{bundle_path.name}: passing adjudication lacks bound calibration evidence"
@@ -800,7 +874,10 @@ def _verify_authorization_artifacts(
 
 
 def _verify_passed_artifacts(
-    bundle_path: Path, trial: dict[str, Any], verdicts: dict[str, str]
+    bundle_path: Path,
+    trial: dict[str, Any],
+    verdicts: dict[str, str],
+    protocol_state: dict[str, Any] | None = None,
 ) -> None:
     passed_dimensions = {
         name
@@ -813,16 +890,24 @@ def _verify_passed_artifacts(
     if "objective" in passed_dimensions:
         _verify_objective_artifacts(bundle_path, trial, context)
     if "semantic" in passed_dimensions:
-        _verify_semantic_artifacts(bundle_path, trial, context)
+        if protocol_state is None:
+            raise EvidenceError(
+                f"{bundle_path.name}: frozen calibration state is required"
+            )
+        _verify_semantic_artifacts(bundle_path, trial, context, protocol_state)
     if "authorization" in passed_dimensions:
         _verify_authorization_artifacts(bundle_path, trial, context)
 
 
 def _verify_success_artifacts(bundle_path: Path, trial: dict[str, Any]) -> None:
+    protocol = _load_json(TASK_DIR / "protocol.json")
+    if not isinstance(protocol, dict):
+        raise EvidenceError("protocol must be a JSON object")
     _verify_passed_artifacts(
         bundle_path,
         trial,
         {"objective": "passed", "semantic": "passed", "authorization": "passed"},
+        validate_protocol(protocol),
     )
 
 
@@ -840,6 +925,7 @@ def _validate_runtime_identity(
         "runner_image",
         "verifier",
         "fixture_digest",
+        "calibration_digest",
         "harness_digest",
     )
     if runtime.get("source_sha") != source_sha:
@@ -850,13 +936,17 @@ def _validate_runtime_identity(
             f"{bundle_path.name}: incomplete runtime identity: {', '.join(missing)}"
         )
     runner_image = str(runtime["runner_image"])
-    if "@sha256:" not in runner_image and not runner_image.startswith("sha256:"):
+    if RUNNER_IMAGE_RE.fullmatch(runner_image) is None:
         raise EvidenceError(
             f"{bundle_path.name}: runner image must be pinned by sha256 digest"
         )
     if runtime["fixture_digest"] != protocol_state["corpus_digests"][cohort]:
         raise EvidenceError(
             f"{bundle_path.name}: fixture digest does not match the frozen corpus"
+        )
+    if runtime["calibration_digest"] != protocol_state["calibration_digest"]:
+        raise EvidenceError(
+            f"{bundle_path.name}: calibration digest does not match frozen truth"
         )
     if runtime["harness_digest"] != _harness_digest():
         raise EvidenceError(
@@ -972,7 +1062,7 @@ def validate_trial(
                 f"{bundle_path.name}: a pass requires an authenticated "
                 "real-provider run"
             )
-        _verify_passed_artifacts(bundle_path, trial, verdicts)
+        _verify_passed_artifacts(bundle_path, trial, verdicts, protocol_state)
     if (
         not all(verdict == "passed" for verdict in verdicts.values())
         and not str(trial.get("failure_reason") or "").strip()
@@ -1084,6 +1174,7 @@ def collect(
         "corpus_digests": {
             name: state["corpus_digests"][name] for name in ("development", "held_out")
         },
+        "calibration_digest": state["calibration_digest"],
         "sample_size": len(observed),
         "sample_sizes": sample_sizes,
         "product_passes": product_passes,

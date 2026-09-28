@@ -18,11 +18,12 @@ Each planned trial must retain a directory containing `trial.json`, the exact
 saved draft content, its persisted review, persisted citations, a downloaded
 Markdown file, a downloaded LaTeX ZIP, and an independent adjudication bound to
 the frozen task and draft hashes. A semantic pass additionally retains a
-passing judge calibration that proves a known-correct fixture was accepted and
-a known-wrong fixture was rejected, bound to the same reviewer, verifier and
-frozen fixture digest. An objective pass records a blocked invalid-revision
-review and binds both the before and after snapshots to the retained current
-draft id, version and content hash.
+passing judge calibration that records the input digest, expected outcome and
+observed judge outcome for the frozen known-correct and known-wrong fixtures,
+bound to the same reviewer, verifier and calibration digest. An objective pass
+records a blocked invalid-revision review, recomputes its candidate-content
+hash, binds it to the base draft and project, and binds both the before and
+after snapshots to the retained current draft id, version and content hash.
 
 The runtime record identifies a unique run, authenticated real-provider
 journey, provider, model, digest-pinned runner image, verifier, harness and fixture digests,
@@ -43,6 +44,8 @@ The trial file uses four independent verdicts:
 
 Infrastructure failures and `judge_unavailable` are unscored. They remain in
 the published sample-size table but do not become product passes or failures.
+The retained boolean `passed` must exactly match the four dimension verdicts,
+and every planned trial is explicitly either `canonical` or `near_boundary`.
 
 ## Collect retained evidence
 
@@ -61,7 +64,8 @@ downloaded LaTeX ZIP, reconciles every saved `[Doc N]` marker with the exact
 saved Markdown and transformed LaTeX manuscript bodies, `\cite{docN}` and
 parsed BibTeX metadata, and rejects duplicate persisted citation indices. It
 binds the persisted review and independent adjudication to the run, task and
-draft content hash, verifies judge calibration, and requires authorization
+draft content hash, verifies retained judge results against the frozen
+calibration truth fixtures, and requires authorization
 probes to name the exact collaborator, outsider, owning project, foreign
 project, resource type and draft. A failed-revision proof is rejected if either
 snapshot differs from the current valid artifact. Secret-shaped runtime

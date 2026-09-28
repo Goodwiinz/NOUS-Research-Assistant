@@ -11,6 +11,7 @@
     "development": "corpora/development.json",
     "held_out": "corpora/held-out.json"
   },
+  "calibration_fixture": "semantic-judge-calibration.json",
   "supported_seeds": [101, 103, 107, 109, 113],
   "trial_plan": [
     {
