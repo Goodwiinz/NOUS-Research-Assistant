@@ -175,12 +175,12 @@ describe('useHarnessConnection', () => {
     expect(screen.getByRole('button', { name: 'Allow once' })).toBeEnabled();
   });
 
-  it('fails closed when a file-change request has no human-readable target', async () => {
+  it('fails closed when a file-change request has only a reason and item reference', async () => {
     readRequest.mockResolvedValue({
       id: 'request-file',
       runId: 'run-a',
       method: 'item/fileChange/requestApproval',
-      target: { itemId: 'item-42' },
+      target: { itemId: 'item-42', reason: 'Please update these files' },
       targetHash: 'b'.repeat(64),
       expiresAt: '2026-09-29T00:00:00Z',
       consumed: false,
@@ -200,10 +200,53 @@ describe('useHarnessConnection', () => {
     expect(screen.getByText('item-42')).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Target details are unavailable, so this request cannot be approved here.'
+        'File paths or a file-specific change summary are unavailable, so this request cannot be approved here.'
       )
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Allow once' })).toBeDisabled();
+  });
+
+  it('shows exact file targets and enables approval when paths and summary are present', async () => {
+    readRequest.mockResolvedValue({
+      id: 'request-file-targeted',
+      runId: 'run-a',
+      method: 'item/fileChange/requestApproval',
+      target: {
+        itemId: 'item-43',
+        reason: 'Apply the requested refactor',
+        paths: ['/workspace/src/a.ts', '/workspace/src/b.ts'],
+        changeSummary: 'Rename the shared parser and update both imports.',
+      },
+      targetHash: 'c'.repeat(64),
+      expiresAt: '2026-09-29T00:00:00Z',
+      consumed: false,
+      expired: false,
+    });
+    const view = renderConnectedHarness();
+    await act(async () => {
+      await view.result.current.loadApproval('request-file-targeted');
+    });
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+
+    expect(
+      screen.getByText(
+        (content) =>
+          content.includes('/workspace/src/a.ts') &&
+          content.includes('/workspace/src/b.ts')
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Rename the shared parser and update both imports.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Apply the requested refactor')
+    ).toBeInTheDocument();
+    expect(screen.getByText('item-43')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeEnabled();
   });
 
   it('keeps provider, computer, and workspace controls keyboard reachable', async () => {

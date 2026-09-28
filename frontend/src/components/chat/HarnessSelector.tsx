@@ -26,27 +26,65 @@ function requestTargetRows(
   method: string,
   target: Record<string, unknown>
 ): Array<[string, string]> {
-  const fields =
-    method === 'item/commandExecution/requestApproval'
-      ? ['command', 'cwd', 'reason', 'kind', 'itemId']
-      : method === 'item/fileChange/requestApproval'
-        ? ['reason', 'itemId']
+  if (method === 'item/commandExecution/requestApproval') {
+    return ['command', 'cwd', 'reason', 'kind', 'itemId'].flatMap((field) => {
+      const value = target[field];
+      return typeof value === 'string' && value.length > 0
+        ? [[fieldLabel(field), value]]
         : [];
-  return fields.flatMap((field) => {
-    const value = target[field];
-    return typeof value === 'string' && value.length > 0
-      ? [
-          [
-            field === 'cwd'
-              ? 'Working directory'
-              : field === 'itemId'
-                ? 'Item reference'
-                : field,
-            value,
-          ],
-        ]
-      : [];
-  });
+    });
+  }
+  if (method === 'item/fileChange/requestApproval') {
+    const rows: Array<[string, string]> = [];
+    for (const field of ['path', 'filePath', 'paths', 'filePaths', 'files']) {
+      const value = target[field];
+      const paths =
+        typeof value === 'string'
+          ? [value]
+          : Array.isArray(value)
+            ? value.filter(
+                (item): item is string =>
+                  typeof item === 'string' && item.trim().length > 0
+              )
+            : [];
+      if (paths.length > 0) {
+        rows.push(['Affected file paths', paths.join('\n')]);
+      }
+    }
+    for (const field of ['changeSummary', 'summary', 'changes']) {
+      const value = target[field];
+      const summary =
+        typeof value === 'string'
+          ? value
+          : Array.isArray(value)
+            ? value
+                .filter(
+                  (item): item is string =>
+                    typeof item === 'string' && item.trim().length > 0
+                )
+                .join('\n')
+            : '';
+      if (summary.trim().length > 0) {
+        rows.push(['Change summary', summary]);
+      }
+    }
+    const reason = target.reason;
+    if (typeof reason === 'string' && reason.trim().length > 0) {
+      rows.push(['Reason', reason]);
+    }
+    const itemId = target.itemId;
+    if (typeof itemId === 'string' && itemId.length > 0) {
+      rows.push(['Item reference', itemId]);
+    }
+    return rows;
+  }
+  return [];
+}
+
+function fieldLabel(field: string): string {
+  if (field === 'cwd') return 'Working directory';
+  if (field === 'itemId') return 'Item reference';
+  return field;
 }
 
 function hasReviewableTarget(
@@ -54,12 +92,34 @@ function hasReviewableTarget(
   target: Record<string, unknown>
 ): boolean {
   if (method === 'item/fileChange/requestApproval') {
-    return typeof target.reason === 'string' && target.reason.trim().length > 0;
+    // The currently persisted native schema carries only reason/item identity
+    // for file changes, so a request without explicit paths or a concrete
+    // change summary must remain deny-only.
+    const hasPath = ['path', 'filePath', 'paths', 'filePaths', 'files'].some(
+      (field) => {
+        const value = target[field];
+        return typeof value === 'string'
+          ? value.trim().length > 0
+          : Array.isArray(value) &&
+              value.some(
+                (item) => typeof item === 'string' && item.trim().length > 0
+              );
+      }
+    );
+    const hasSummary = ['changeSummary', 'summary', 'changes'].some((field) => {
+      const value = target[field];
+      return typeof value === 'string'
+        ? value.trim().length > 0
+        : Array.isArray(value) &&
+            value.some(
+              (item) => typeof item === 'string' && item.trim().length > 0
+            );
+    });
+    return hasPath || hasSummary;
   }
   if (method === 'item/commandExecution/requestApproval') {
-    return (
-      typeof target.command === 'string' && target.command.trim().length > 0
-    );
+    const value = target.command;
+    return typeof value === 'string' && value.trim().length > 0;
   }
   return false;
 }
@@ -226,8 +286,8 @@ export function HarnessSelector({
           {request.method === 'item/fileChange/requestApproval' &&
             !hasReviewableTarget(request.method, request.target) && (
               <p className="mt-2 text-xs text-(--nous-fg-2)">
-                Target details are unavailable, so this request cannot be
-                approved here.
+                File paths or a file-specific change summary are unavailable, so
+                this request cannot be approved here.
               </p>
             )}
           {Array.isArray(request.target.questions) ? (
