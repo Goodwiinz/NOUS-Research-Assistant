@@ -1,12 +1,13 @@
 """External database connector base protocol.
 
-All external database connectors implement this interface, enabling the agent
-to search and ingest from 250+ data sources through a single standard API.
+Registered external database adapters implement this interface, enabling the
+agent to search the configured sources through a standard API.
 """
 
 from __future__ import annotations
 
 import abc
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -83,6 +84,42 @@ class ExternalDBConnector(abc.ABC):
     Subclasses must implement ``info``, ``search``, and ``fetch_by_id``.
     The ``transform_result`` hook can be overridden for custom post-processing.
     """
+
+    supported_filter_keys: frozenset[str] = frozenset()
+
+    def validate_search_filters(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Validate a connector's declared mapping filters without rewriting them."""
+        if filters is None:
+            return {}
+        if not isinstance(filters, dict):
+            raise ValueError("filters must be an object")
+
+        invalid_keys = [
+            key
+            for key in filters
+            if not isinstance(key, str) or key not in self.supported_filter_keys
+        ]
+        if invalid_keys:
+            rendered = ", ".join(sorted(map(str, invalid_keys)))
+            raise ValueError(f"unsupported filters: {rendered}")
+
+        for key, value in filters.items():
+            if isinstance(value, str):
+                if not value.strip() or len(value) > 200:
+                    raise ValueError(
+                        f"filter '{key}' must be a non-empty string of at most 200 characters"
+                    )
+                if any(ord(char) < 32 or ord(char) == 127 for char in value):
+                    raise ValueError(f"filter '{key}' contains control characters")
+            elif isinstance(value, bool) or isinstance(value, int):
+                continue
+            elif isinstance(value, float) and math.isfinite(value):
+                continue
+            else:
+                raise ValueError(f"filter '{key}' must be a bounded scalar")
+        return dict(filters)
 
     @property
     @abc.abstractmethod

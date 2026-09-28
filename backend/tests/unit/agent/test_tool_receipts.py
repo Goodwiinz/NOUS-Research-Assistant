@@ -1,122 +1,121 @@
-"""Durable per-tool-call receipts against checkpoint replay (audit B8-I1).
-
-``tool_node`` commits tool side effects before any checkpoint write, and the
-per-turn ``state["tool_executions"]`` guard dies with the node. A side
-effecting call whose ``tool_call_id`` already has a receipt must not run
-again; a fresh one must run and leave a receipt behind.
-"""
+"""The old unscoped receipts remain historical data, not replay authority."""
 
 from __future__ import annotations
 
 import json
-from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+import uuid
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.services.agent._nodes_tools import SIDE_EFFECT_TOOLS, _execute_single_tool
+from src.services.agent.tool_registry import ToolEffectMode, ToolPolicyTag
+from src.services.agent.tools import TOOL_REGISTRY
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 
-class _FakeSession:
-    """Records every statement; answers the receipt lookup with *receipt*."""
-
-    def __init__(self, receipt: Optional[str]) -> None:
-        self.receipt = receipt
-        self.statements: List[str] = []
-        self.commits = 0
-
-    async def execute(self, statement: Any) -> Any:
-        self.statements.append(str(statement))
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = self.receipt
-        return result
-
-    async def commit(self) -> None:
-        self.commits += 1
-
-
-@asynccontextmanager
-async def _session_ctx(session: _FakeSession) -> AsyncIterator[_FakeSession]:
-    yield session
-
-
 async def _run(
-    tool_name: str, session: _FakeSession, executor: AsyncMock
+    *,
+    executor: AsyncMock,
+    operation_context: dict[str, Any] | None,
+    tool_name: str = "create_project",
+    arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    with (
-        patch("src.services.agent.graph._get_execute_tool", return_value=executor),
-        patch(
-            "src.services.agent.tool_session.tool_session",
-            lambda: _session_ctx(session),
-        ),
-    ):
-        return await _execute_single_tool(
-            {"name": tool_name, "args": {"name": "x"}, "id": "call-1"},
-            {"configurable": {"user_id": "u1", "thread_id": "t1"}},
-            {},
-        )
+    user_id = str(uuid.uuid4())
+    organization_id = str(uuid.uuid4())
+    call = {
+        "name": tool_name,
+        "args": arguments or {"name": "A scoped project"},
+        "id": "provider-call-1",
+    }
+    config = {
+        "configurable": {
+            "user_id": user_id,
+            "organization_id": organization_id,
+            "thread_id": "thread-1",
+        }
+    }
+    with patch("src.services.agent.graph._get_execute_tool", return_value=executor):
+        return await _execute_single_tool(call, config, {}, operation_context)
 
 
-async def test_side_effect_tools_are_the_fixed_audited_set() -> None:
-    assert SIDE_EFFECT_TOOLS == {
+async def test_mutation_inventory_is_complete_and_registry_owned() -> None:
+    expected = {
         "create_project",
         "create_project_note",
+        "add_document_to_project",
         "create_draft",
         "revise_draft",
         "ingest_arxiv_papers",
         "execute_code",
+        "forget_memory",
+    }
+    actual = {
+        descriptor.name
+        for descriptor in TOOL_REGISTRY.descriptors
+        if descriptor.effect_mode is not ToolEffectMode.READ_ONLY
     }
 
+    assert actual == expected
+    assert SIDE_EFFECT_TOOLS == expected
+    for descriptor in TOOL_REGISTRY.descriptors:
+        if descriptor.effect_mode is ToolEffectMode.READ_ONLY:
+            continue
+        assert ToolPolicyTag.DESTRUCTIVE in descriptor.policy_tags
+        assert ToolPolicyTag.NO_OUTER_RETRY in descriptor.policy_tags
+        assert ToolPolicyTag.CONTEXT_FREE not in descriptor.policy_tags
 
-async def test_replayed_call_is_skipped_without_executing() -> None:
-    session = _FakeSession(receipt="call-1")
-    executor = AsyncMock(return_value={"project_id": "p1"})
 
-    result = await _run("create_project", session, executor)
+async def test_unanchored_mutation_fails_closed_without_using_legacy_receipts() -> None:
+    executor = AsyncMock(return_value={"status": "success"})
+
+    result = await _run(executor=executor, operation_context=None)
 
     executor.assert_not_awaited()
-    assert result["execution"]["status"] == "skipped"
+    assert result["execution"]["status"] == "failed"
     payload = json.loads(result["message"].content)
-    assert payload == {
-        "status": "skipped",
-        "reason": "already_executed",
-        "tool_call_id": "call-1",
-    }
-    # No "error" key: the classifier must not count a skipped replay as one.
-    assert "error" not in payload
-    assert result["error_increment"] == 0
+    assert payload["error_category"] == "legacy_operation_result_unavailable"
+    assert payload["restart_with_new_turn"] is True
+    assert result["execution"]["retry_exhausted"] is True
 
 
-async def test_fresh_call_executes_and_writes_a_receipt() -> None:
-    session = _FakeSession(receipt=None)
-    executor = AsyncMock(return_value={"project_id": "p1"})
+async def test_anchored_mutation_passes_scoped_identity_and_effective_arguments() -> (
+    None
+):
+    executor = AsyncMock(
+        return_value={"status": "success", "project_id": str(uuid.uuid4())}
+    )
 
-    result = await _run("create_project", session, executor)
+    result = await _run(
+        executor=executor,
+        operation_context={
+            "tool_operation_protocol_version": 1,
+            "tool_operation_turn_id": "human-message-1",
+        },
+    )
 
     executor.assert_awaited_once()
+    operation_key = executor.await_args.kwargs["operation_key"]
+    assert operation_key.thread_id == "thread-1"
+    assert operation_key.turn_id == "human-message-1"
+    assert operation_key.tool_call_id == "provider-call-1"
+    assert operation_key.tool_name == "create_project"
+    assert len(operation_key.args_hash) == 64
     assert result["execution"]["status"] == "completed"
-    assert any("INSERT INTO agent_tool_receipts" in s for s in session.statements)
-    assert session.commits == 1
 
 
-async def test_failed_call_leaves_no_receipt() -> None:
-    session = _FakeSession(receipt=None)
-    executor = AsyncMock(return_value={"error": "boom"})
-
-    await _run("create_project", session, executor)
-
-    assert not any("INSERT INTO agent_tool_receipts" in s for s in session.statements)
-
-
-async def test_read_only_tools_never_touch_the_receipt_table() -> None:
-    session = _FakeSession(receipt=None)
+async def test_read_tool_does_not_require_operation_anchor_or_legacy_receipt() -> None:
     executor = AsyncMock(return_value={"results": []})
 
-    result = await _run("search_arxiv", session, executor)
+    result = await _run(
+        executor=executor,
+        operation_context=None,
+        tool_name="search_arxiv",
+        arguments={"query": "tenant scoped tools"},
+    )
 
     executor.assert_awaited_once()
+    assert "operation_key" not in executor.await_args.kwargs
     assert result["execution"]["status"] == "completed"
-    assert session.statements == []

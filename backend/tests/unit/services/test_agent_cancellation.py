@@ -14,7 +14,11 @@ exception is re-raised so the task tears down cleanly.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Any, AsyncIterator, Callable
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
@@ -30,6 +34,37 @@ def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "src.services.threads.workspace_access.get_thread",
         editable_thread_getter(),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_status_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return a unit-test decision without connecting to the database."""
+    from src.services.agent.agent_run_service import RunStatusDecision
+    from src.shared.enums import JobStatus
+
+    async def record_job_status(
+        job_id: str,
+        data: dict[str, Any],
+        *,
+        raise_on_error: bool = False,
+    ) -> RunStatusDecision:
+        del raise_on_error
+        status = JobStatus(data["status"])
+        return RunStatusDecision(
+            job_id=job_id,
+            requested_status=status,
+            effective_status=status,
+            user_id=data.get("user_id"),
+            organization_id=data.get("organization_id"),
+            thread_id=data.get("thread_id"),
+            error=data.get("error"),
+            cancel_requested_at=None,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    monkeypatch.setattr(
+        "src.services.agent.agent_run_service.record_job_status", record_job_status
     )
 
 
@@ -104,7 +139,11 @@ async def test_run_agent_graph_marks_job_cancelled_and_reraises():
         patch("src.services.agent.graph.compile_agent_graph", return_value=mock_graph),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_yielding(db),
+            new=lambda: _async_session_yielding(db),
+        ),
+        patch(
+            "src.services.agent.agent_run_service.is_run_cancellation_requested",
+            AsyncMock(return_value=False),
         ),
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -152,7 +191,11 @@ async def test_resume_agent_graph_marks_job_cancelled_and_reraises():
         patch("src.services.agent.graph.compile_agent_graph", return_value=mock_graph),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_yielding(db),
+            new=lambda: _async_session_yielding(db),
+        ),
+        patch(
+            "src.services.agent.agent_run_service.is_run_cancellation_requested",
+            AsyncMock(return_value=False),
         ),
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -210,7 +253,11 @@ async def test_run_agent_graph_still_marks_failed_for_regular_exceptions():
         patch("src.services.agent.graph.compile_agent_graph", return_value=mock_graph),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_yielding(db),
+            new=lambda: _async_session_yielding(db),
+        ),
+        patch(
+            "src.services.agent.agent_run_service.is_run_cancellation_requested",
+            AsyncMock(return_value=False),
         ),
     ):
         # Plain Exception is caught — no re-raise.
@@ -277,7 +324,11 @@ async def test_resume_agent_graph_reparks_on_chained_interrupt():
         patch("src.services.agent.graph.compile_agent_graph", return_value=mock_graph),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_yielding(db),
+            new=lambda: _async_session_yielding(db),
+        ),
+        patch(
+            "src.services.agent.agent_run_service.is_run_cancellation_requested",
+            AsyncMock(return_value=False),
         ),
     ):
         # GraphInterrupt is control flow — caught, not re-raised.
@@ -287,3 +338,266 @@ async def test_resume_agent_graph_reparks_on_chained_interrupt():
     assert job is not None
     assert job["status"] == "awaiting_confirmation"
     assert job["confirmation"] == confirmation
+
+
+async def test_queued_cancel_interrupts_graph() -> None:
+    """A durable cancel accepted before startup must prevent graph work."""
+    graph = _BlockedGraph()
+    checker_calls: list[tuple[Any, tuple[Any, ...]]] = []
+    terminal_writes: list[dict[str, Any]] = []
+    sessions: list[Any] = []
+
+    async def check(db: Any, *scope: Any) -> bool:
+        checker_calls.append((db, scope))
+        return True
+
+    async with _start_test_runner(
+        "initial", graph, [check], terminal_writes, sessions
+    ) as (task, main_db, job_id, user):
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.1)
+
+        assert graph.started.is_set() is False
+        assert graph.cancelled.is_set() is False
+        assert len(checker_calls) == 1
+        assert checker_calls[0][0] is not main_db
+        assert checker_calls[0][1] == (job_id, "test-org", str(user.id))
+        assert [write["status"] for write in terminal_writes] == ["cancelled"]
+
+
+async def test_resumed_cancel_interrupts_graph() -> None:
+    """A durable cancel during a confirmation resume cancels and joins it."""
+    graph = _BlockedGraph(resume=True, owner_id="user-cancel-test")
+    checker_calls: list[tuple[Any, tuple[Any, ...]]] = []
+    terminal_writes: list[dict[str, Any]] = []
+    sessions: list[Any] = []
+    results = iter([False, True])
+
+    async def check(db: Any, *scope: Any) -> bool:
+        checker_calls.append((db, scope))
+        return next(results)
+
+    async with _start_test_runner(
+        "resume", graph, [check], terminal_writes, sessions
+    ) as (task, main_db, job_id, user):
+        await asyncio.wait_for(graph.started.wait(), timeout=1)
+        await asyncio.wait_for(graph.cancelled.wait(), timeout=1)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert graph.started.is_set()
+        assert graph.cancelled.is_set()
+        assert len(checker_calls) >= 2
+        assert all(db is not main_db for db, _scope in checker_calls)
+        assert all(
+            scope == (job_id, "test-org", str(user.id)) for _, scope in checker_calls
+        )
+        assert [write["status"] for write in terminal_writes] == ["cancelled"]
+
+
+async def test_cancel_race_emits_one_terminal() -> None:
+    """If cancellation commits as ainvoke returns, the final marker read
+    prevents completion and writes exactly one cancelled outcome."""
+    graph = _FinishingGraph()
+    checker_calls: list[tuple[Any, tuple[Any, ...]]] = []
+    terminal_writes: list[dict[str, Any]] = []
+    sessions: list[Any] = []
+    results = iter([False, True])
+
+    async def check(db: Any, *scope: Any) -> bool:
+        checker_calls.append((db, scope))
+        return next(results)
+
+    async with _start_test_runner(
+        "initial", graph, [check], terminal_writes, sessions
+    ) as (task, main_db, job_id, user):
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+
+        assert len(checker_calls) == 2
+        assert all(db is not main_db for db, _scope in checker_calls)
+        assert [write["status"] for write in terminal_writes] == ["cancelled"]
+        assert (
+            len(
+                [
+                    write
+                    for write in terminal_writes
+                    if write["status"] in {"cancelled", "completed"}
+                ]
+            )
+            == 1
+        )
+
+
+class _BlockedGraph:
+    def __init__(self, resume: bool = False, owner_id: str = "") -> None:
+        self.resume = resume
+        self.owner_id = owner_id
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.state_reads = 0
+
+    async def ainvoke(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        self.started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        raise AssertionError("blocked graph unexpectedly completed")
+
+    async def aget_state(self, _config: dict[str, Any]) -> Any:
+        if not self.resume:
+            return None
+        self.state_reads += 1
+        if self.state_reads > 1:
+            return None
+        return SimpleNamespace(
+            values={"user_id": self.owner_id},
+            config={"configurable": {"checkpoint_id": "resume-checkpoint"}},
+            tasks=[SimpleNamespace(interrupts=[object()])],
+        )
+
+
+class _FinishingGraph:
+    async def ainvoke(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        return {
+            "messages": [
+                HumanMessage(content="current request"),
+                AIMessage(content="answer"),
+            ],
+            "tool_executions": [],
+        }
+
+    async def aget_state(self, _config: dict[str, Any]) -> None:
+        return None
+
+
+@asynccontextmanager
+async def _start_test_runner(
+    runner: str,
+    graph: Any,
+    checkers: list[Callable[..., Any]],
+    terminal_writes: list[dict[str, Any]],
+    sessions: list[Any],
+) -> AsyncIterator[tuple[asyncio.Task[None], Any, str, Any]]:
+    from src.api.agent.execute import AgentExecuteRequest
+    from src.services.agent import agent_execution_service as service
+
+    user = _make_mock_user()
+    job_id = f"cancel-monitor-{runner}-{uuid4()}"
+    request = AgentExecuteRequest(
+        messages=[{"role": "user", "content": "cancel this request"}],
+        page_context={"type": "unknown"},
+        model="model-router",
+        use_rag=True,
+        max_context_docs=5,
+    )
+    with service._jobs_lock:
+        service._jobs[job_id] = {
+            "status": "awaiting_confirmation" if runner == "resume" else "running",
+            "tool_executions": [],
+            "user_id": str(user.id),
+            "request": request.model_dump(mode="json"),
+        }
+
+    main_db = _make_mock_db()
+
+    @asynccontextmanager
+    async def session() -> AsyncIterator[Any]:
+        db = main_db if not sessions else _make_mock_db()
+        sessions.append(db)
+        yield db
+
+    async def record_job(
+        job_key: str,
+        data: dict[str, Any],
+        *,
+        require_durable_decision: bool = False,
+        **_kwargs: Any,
+    ) -> Any:
+        terminal_writes.append(data)
+        with service._jobs_lock:
+            service._jobs[job_key] = {**service._jobs.get(job_key, {}), **data}
+        if not require_durable_decision:
+            return None
+        from src.services.agent.agent_run_service import RunStatusDecision
+        from src.shared.enums import JobStatus
+
+        status = JobStatus(data["status"])
+        return RunStatusDecision(
+            job_id=job_key,
+            requested_status=status,
+            effective_status=status,
+            user_id=data.get("user_id"),
+            organization_id=data.get("organization_id"),
+            thread_id=data.get("thread_id"),
+            error=data.get("error"),
+            cancel_requested_at=None,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    async def cancellation_check(
+        db: Any, job_key: str, organization_id: str, user_id: str
+    ) -> bool:
+        checker = checkers[0]
+        return await checker(db, job_key, organization_id, user_id)
+
+    from src.services.agent import agent_run_service
+
+    patches = (
+        patch.object(service, "AsyncSessionLocal", session),
+        patch.object(service, "_resolve_thread", AsyncMock(return_value=(None, None))),
+        patch.object(
+            service, "_resolve_and_bind_project", AsyncMock(return_value=None)
+        ),
+        patch.object(service, "_persist_user_message_guarded", AsyncMock()),
+        patch.object(service, "_clear_stale_pending_confirmation", AsyncMock()),
+        patch.object(service, "_set_job_async", record_job),
+        patch("src.services.agent.checkpointer.get_checkpointer", AsyncMock()),
+        patch("src.services.agent.memory.get_memory_store", AsyncMock()),
+        patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
+        patch(
+            "src.services.agent.runtime_snapshot.create_runtime_snapshot",
+            AsyncMock(return_value=SimpleNamespace(id="cancel-test-snapshot")),
+        ),
+        patch(
+            "src.services.agent.runtime_snapshot.runtime_state_fields", return_value={}
+        ),
+        patch(
+            "src.services.agent.runtime_snapshot.runtime_config_fields", return_value={}
+        ),
+        patch(
+            "src.services.agent.runtime_snapshot.resume_runtime_config_fields",
+            return_value={},
+        ),
+        patch.object(service, "get_run", AsyncMock(return_value=None)),
+        patch.object(
+            agent_run_service, "is_run_cancellation_requested", cancellation_check
+        ),
+        patch.object(service, "_run_heartbeat", _no_heartbeat),
+        patch.object(service, "_CANCELLATION_POLL_SECONDS", 0.001, create=True),
+    )
+    with contextlib.ExitStack() as stack:
+        for context in patches:
+            stack.enter_context(context)
+        task = asyncio.create_task(
+            service._run_agent_graph(job_id, request, user)
+            if runner == "initial"
+            else service._resume_agent_graph(job_id, True, user)
+        )
+        await asyncio.sleep(0)
+        try:
+            yield task, main_db, job_id, user
+        finally:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
+@asynccontextmanager
+async def _no_heartbeat(_job_id: str) -> AsyncIterator[None]:
+    yield

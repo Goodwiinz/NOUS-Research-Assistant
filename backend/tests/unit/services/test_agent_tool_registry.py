@@ -324,6 +324,10 @@ class TestProductionToolRegistryParity:
                 # search, and lit-review requests classify as writing.
                 "search_external_database",
                 "list_external_databases",
+                # Resolve named accessible local sources and retrieve their
+                # authorized content from the writing lane.
+                "search_documents",
+                "do_kb_retrieve",
             },
             "data": {
                 # list_project_documents' _missing_project_error names this.
@@ -385,6 +389,10 @@ class TestProductionToolRegistryParity:
             "list_external_databases",
             "revise_draft",
             "get_current_draft",
+            # Appended at positions 15 and 16 for named-source resolution and
+            # scoped content retrieval.
+            "search_documents",
+            "do_kb_retrieve",
         ]
         assert [
             item.name for item in TOOL_REGISTRY.descriptors_for_subgraph("data")

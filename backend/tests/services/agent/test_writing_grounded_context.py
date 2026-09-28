@@ -57,6 +57,7 @@ def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         AGENT_LIGHTWEIGHT_SYNTHESIS=True,
         AGENT_PARALLEL_TOOL_CALLS=False,
+        PROJECT_SKILL_RUNTIME_ENABLED=False,
     )
 
 
@@ -85,7 +86,12 @@ async def test_writing_node_injects_retrieved_context() -> None:
             return_value=llm,
         ),
     ):
-        await writing_llm_node(_grounded_state(), config={})
+        await writing_llm_node(
+            _grounded_state(),
+            config={
+                "configurable": {"project_id": "00000000-0000-0000-0000-000000000001"}
+            },
+        )
 
     assert bound.ainvoke.await_args is not None
     messages = bound.ainvoke.await_args.args[0]
@@ -99,7 +105,8 @@ async def test_writing_node_injects_retrieved_context() -> None:
     assert "title: Project paper" in system_text
     assert "The project studies grounded retrieval systems." in system_text
     assert "00000000-0000-0000-0000-000000000001" in system_text
-    assert "use this project_id" in system_text
+    assert "Current authorized project scope ID" in system_text
+    assert "Use this exact ID" in system_text
 
 
 @pytest.mark.unit
@@ -268,4 +275,7 @@ async def test_batched_pending_create_draft_is_terminal() -> None:
         if isinstance(message, SystemMessage)
     )
     assert "pending and terminal" in system_text
-    assert "substantive completed tool results" in system_text
+    assert (
+        "Report its pending status together with substantive completed results."
+        in system_text
+    )

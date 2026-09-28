@@ -26,6 +26,7 @@ from src.services.agent.tool_registry import (
     AgentIntent,
     AgentSubgraph,
     ToolDescriptor,
+    ToolEffectMode,
     ToolPolicyTag,
     ToolRegistry,
 )
@@ -747,6 +748,8 @@ async def create_draft(
     themes: List[str],
     project_id: Optional[str] = None,
     style: str = "academic",
+    document_ids: Optional[List[str]] = None,
+    instructions: Optional[str] = None,
     config: RunnableConfig = None,  # type: ignore[assignment]
 ) -> Dict[str, Any]:
     """Generate a literature review draft for a project based on themes.
@@ -764,7 +767,13 @@ async def create_draft(
         if not resolved_pid:
             return _missing_project_error("create_draft")
         return await _tool_create_draft(
-            {"project_id": resolved_pid, "themes": themes, "style": safe_style},
+            {
+                "project_id": resolved_pid,
+                "themes": themes,
+                "style": safe_style,
+                "document_ids": document_ids,
+                "instructions": instructions,
+            },
             db,
             current_user,
         )
@@ -894,8 +903,8 @@ async def search_external_database(
 ) -> Dict[str, Any]:
     """Search external databases (PubMed, UniProt, ChEMBL, PubChem, FRED, SEC EDGAR, etc.).
 
-    Provides a single entry point to 250+ external scientific and financial
-    data sources. Supply ``connector`` to target one (e.g. ``"pubmed"``),
+    Provides a single entry point to the registered scientific and financial
+    connector adapters. Supply ``connector`` to target one (e.g. ``"pubmed"``),
     ``domain`` to fan out across a category (``biomedical``, ``chemistry``,
     ``finance``, ``clinical``, ``genomics``, ``economic``, ``literature``),
     or omit both to search every available connector concurrently.
@@ -923,16 +932,8 @@ async def search_external_database(
     safe_domain = _validate_connector_name(domain)
     if safe_domain:
         args["domain"] = safe_domain
-    # Filters are an opaque mapping; only pass through scalar values to
-    # keep the dispatch surface small and prevent nested-payload abuse.
-    if filters and isinstance(filters, dict):
-        scalar_filters = {
-            k: v
-            for k, v in filters.items()
-            if isinstance(k, str) and isinstance(v, (str, int, float, bool))
-        }
-        if scalar_filters:
-            args["filters"] = scalar_filters
+    if filters is not None:
+        args["filters"] = filters
     return await _tool_search_external_database(args)
 
 
@@ -1060,6 +1061,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="search_documents",
@@ -1071,8 +1073,14 @@ TOOL_REGISTRY = ToolRegistry(
                     AgentIntent.GENERAL,
                 }
             ),
-            subgraphs=frozenset({AgentSubgraph.RESEARCH, AgentSubgraph.DATA}),
-            subgraph_positions=((AgentSubgraph.RESEARCH, 2), (AgentSubgraph.DATA, 5)),
+            subgraphs=frozenset(
+                {AgentSubgraph.RESEARCH, AgentSubgraph.WRITING, AgentSubgraph.DATA}
+            ),
+            subgraph_positions=(
+                (AgentSubgraph.RESEARCH, 2),
+                (AgentSubgraph.WRITING, 15),
+                (AgentSubgraph.DATA, 5),
+            ),
             policy_tags=frozenset(),
         ),
         ToolDescriptor(
@@ -1090,8 +1098,14 @@ TOOL_REGISTRY = ToolRegistry(
             # only, that advice was unfollowable from the data subgraph —
             # make_filtered_tool_node answers "not available in this context"
             # (guarded by test_recovery_suggestions_are_callable).
-            subgraphs=frozenset({AgentSubgraph.RESEARCH, AgentSubgraph.DATA}),
-            subgraph_positions=((AgentSubgraph.RESEARCH, 3), (AgentSubgraph.DATA, 8)),
+            subgraphs=frozenset(
+                {AgentSubgraph.RESEARCH, AgentSubgraph.WRITING, AgentSubgraph.DATA}
+            ),
+            subgraph_positions=(
+                (AgentSubgraph.RESEARCH, 3),
+                (AgentSubgraph.WRITING, 16),
+                (AgentSubgraph.DATA, 8),
+            ),
             policy_tags=frozenset(),
             exposed_in_all_tools=False,
         ),
@@ -1110,6 +1124,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="list_projects",
@@ -1146,6 +1161,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="create_project_note",
@@ -1162,6 +1178,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="list_project_documents",
@@ -1268,6 +1285,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="revise_draft",
@@ -1282,6 +1300,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="export_bibliography",
@@ -1314,6 +1333,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="search_external_database",
@@ -1377,6 +1397,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
     ]
 )

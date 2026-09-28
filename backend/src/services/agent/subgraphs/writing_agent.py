@@ -71,7 +71,13 @@ def _build_writing_system_prompt() -> str:
         "You are a specialized Writing Agent focused on creating content, "
         "summarizing documents, and managing bibliographies.\n\n"
         f"{SHARED_AGENT_RULES}\n\n"
-        "Write clearly and academically. Cite sources when available."
+        "Write clearly and academically. Cite sources when available. "
+        "Ingest results contain document_ids (plural UUIDs) and "
+        "ingested_count; use those exact IDs for document tools. Active-project "
+        "ingestion already attaches its documents. For a specifically named "
+        "source, use search_documents and pass its exact documents[].id in "
+        "do_kb_retrieve.document_ids. Never broaden a named-source retrieval "
+        "when the title lookup or scoped retrieval returns no evidence."
     )
 
 
@@ -79,11 +85,7 @@ def _build_writing_system_prompt() -> str:
 async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     """Writing-specialized LLM node."""
     from src.core.config import get_settings
-    from src.services.agent._nodes_llm import _attachment_status_part
-    from src.services.agent.graph import (
-        AGENT_LLM_TIMEOUT_SECONDS,
-        _build_page_context_line,
-    )
+    from src.services.agent.graph import AGENT_LLM_TIMEOUT_SECONDS
 
     sanitized = _sanitize_messages(state["messages"])
     trailing_tools = []
@@ -138,40 +140,7 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
                             )
                         ]
                     }
-    messages = [SystemMessage(content=_build_writing_system_prompt())]
-    context_line = _build_page_context_line(state.get("page_context", {}))
-    if context_line:
-        messages.append(SystemMessage(content=context_line))
-    attachment_status_prompt = _attachment_status_part(
-        state.get("attachment_status", [])
-    )
-    if attachment_status_prompt:
-        messages.append(SystemMessage(content=attachment_status_prompt))
     retrieved = state.get("retrieved_contexts", [])
-    if retrieved:
-        from src.services.agent._nodes_llm import _retrieval_context_part
-
-        messages.append(
-            SystemMessage(content=_retrieval_context_part(retrieved, sanitized))
-        )
-    from src.services.agent.runtime_snapshot import render_project_skill_catalog
-
-    skill_catalog_prompt = render_project_skill_catalog(
-        state.get("project_skill_catalog", [])
-    )
-    if skill_catalog_prompt:
-        messages.append(SystemMessage(content=skill_catalog_prompt))
-    if mixed_pending_create:
-        messages.append(
-            SystemMessage(
-                content=(
-                    "The create_draft result in this batch is pending and terminal for "
-                    "this turn. Report that pending status together with substantive "
-                    "completed tool results. Do not request or promise any more tools."
-                )
-            )
-        )
-    messages += sanitized
 
     # Post-tool synthesis turn → use the synthesis deployment. Mirrors
     # research_llm_node + main llm_node. Trace 019e191a showed gpt-5
@@ -199,23 +168,18 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         )
     )
 
-    # Inject the planner's plan on the pre-tool pass so the executor follows
-    # it instead of refusing. Skipped on synthesis turns — by then the tools
-    # have already run and the plan would only re-trigger completed steps.
-    if not use_synthesis:
-        from src.services.agent.planner import render_plan_directive
-
-        plan_directive = render_plan_directive(state.get("plan"))
-        if plan_directive:
-            messages.insert(1, SystemMessage(content=plan_directive))
     # Hoisted above the branch: _build_llm is used inside it, so importing
     # after would NameError.
     from src.services.agent.graph import _build_llm, _merge_run_config
 
     if use_synthesis:
-        from src.services.agent.llm_factory import build_synthesis_llm
+        from src.services.agent.llm_factory import (
+            build_synthesis_llm,
+            get_synthesis_model_name,
+        )
 
         llm = build_synthesis_llm(max_tokens=4096, tool_calling=True)
+        resolved_model = get_synthesis_model_name()
         logger.debug("writing_llm_node: using synthesis model after ToolMessage")
     else:
         # Tool-decision turn runs on the main deployment — see the note in
@@ -223,16 +187,55 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         # job small tiers are worst at, and create_draft / create_project_note
         # are destructive, so a wrong call costs a confirmation round trip.
         llm = _build_llm(model_override=state.get("model") or None)
+        from src.services.agent.llm_factory import resolve_chat_deployment
+
+        resolved_model = resolve_chat_deployment(state.get("model") or None)
         logger.debug("writing_llm_node: using main model for tool decision")
+    execution_closed = bool(mixed_pending_create or grounded_direct_synthesis)
+    from src.services.agent.runtime_context import (
+        forced_synthesis_static_prompt,
+        render_dynamic_context,
+    )
+
+    server_guidance: list[str] = []
+    if mixed_pending_create:
+        server_guidance.append(
+            "A create_draft operation is pending and terminal for this turn. "
+            "Report its pending status together with substantive completed results."
+        )
+    if grounded_direct_synthesis:
+        server_guidance.append(
+            "This grounded summary pass has no tool execution. Synthesize from "
+            "retrieved evidence and state any evidence limits."
+        )
+    dynamic_context = render_dynamic_context(
+        state,
+        config,
+        resolved_model=resolved_model,
+        execution_closed=execution_closed,
+        branch="writing",
+        messages=sanitized,
+        server_guidance=server_guidance,
+    )
+    static_prompt = (
+        forced_synthesis_static_prompt()
+        if execution_closed
+        else _build_writing_system_prompt()
+    )
+    messages = [
+        SystemMessage(content=static_prompt),
+        SystemMessage(content=dynamic_context),
+        *sanitized,
+    ]
     from src.services.agent._nodes_llm import (
         normalize_ai_content as _normalize_ai_content,
     )
-    from src.services.agent._nodes_llm import tools_for_runtime_snapshot
+    from src.services.agent._nodes_llm import tools_for_runtime_projection
 
     bound_tools = (
         []
         if grounded_direct_synthesis or mixed_pending_create
-        else tools_for_runtime_snapshot(WRITING_TOOLS, state)
+        else tools_for_runtime_projection(state, branch="writing")
     )
     llm_with_tools = llm.bind_tools(
         bound_tools,

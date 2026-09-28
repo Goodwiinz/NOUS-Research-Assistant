@@ -841,6 +841,8 @@ class TestHumanInTheLoopFlow:
         state = _make_initial_state("ingest paper 2401.12345")
         state["messages"].append(ai_msg)
         state["intent"] = "research"
+        state["tool_operation_protocol_version"] = 1
+        state["tool_operation_turn_id"] = str(uuid4())
 
         graph.update_state(config, values=state, as_node="research_llm_node")
 
@@ -898,18 +900,18 @@ class TestHumanInTheLoopFlow:
         thread_id = str(uuid4())
         config = _make_config(thread_id)
 
-        # Setup: LLM requested a destructive tool
+        # Setup: LLM requested a destructive tool available on the general lane.
         ai_msg = AIMessage(
-            content="I'll create a draft.",
+            content="I'll ingest that paper.",
             tool_calls=[
                 {
                     "id": "tc1",
-                    "name": "create_draft",
-                    "args": {"themes": ["AI"]},
+                    "name": "ingest_arxiv_papers",
+                    "args": {"paper_ids": ["2401.12345"]},
                 }
             ],
         )
-        state = _make_initial_state("create a draft about AI")
+        state = _make_initial_state("ingest paper 2401.12345")
         state["messages"].append(ai_msg)
         state["intent"] = "general"
 

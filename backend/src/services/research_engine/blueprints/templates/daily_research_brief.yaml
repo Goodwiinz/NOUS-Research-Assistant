@@ -1,0 +1,103 @@
+name: "Daily Research Brief"
+description: "Produce a bounded research brief from selected scholarly providers with screening, extraction, synthesis, verification, and human review gates."
+template_source: daily_research_brief
+contract_version: 1
+parameters:
+  contract_version: 1
+  research_question: ""
+  inclusion_criteria: []
+  exclusion_criteria: []
+  providers:
+    - openalex
+    - crossref
+  limit_per_provider: 25
+  notes: ""
+constraints:
+  providers:
+    min: 1
+    max: 4
+  limit_per_provider:
+    min: 1
+    max: 50
+coverage:
+  exhaustive: false
+
+steps:
+  - type: search
+    name: "Bounded Provider Search"
+    description: "Search the confirmed scholarly providers for the research question."
+    parameters:
+      contract_version: 1
+      sources: "{providers}"
+      query_template: "{research_question}"
+      max_results_per_source: "{limit_per_provider}"
+    model_id: null
+    mode: deterministic
+    system_prompt_template: null
+
+  - type: screen
+    name: "Evidence Screening"
+    description: "Screen titles and abstracts against the confirmed inclusion and exclusion criteria."
+    parameters:
+      contract_version: 1
+      output_kind: screening
+      inclusion_criteria: "{inclusion_criteria}"
+      exclusion_criteria: "{exclusion_criteria}"
+      review_gate: screening
+    model_id: "claude-sonnet-4-6"
+    mode: deterministic
+    system_prompt_template: >
+      Screen only the supplied source records against the supplied inclusion and exclusion criteria.
+      Return exactly one decision for each supplied source part and do not infer evidence beyond its evidence level.
+
+  - type: extract
+    name: "Evidence Extraction"
+    description: "Extract bounded findings and their exact supporting evidence from included sources."
+    parameters:
+      contract_version: 1
+      output_kind: review_fields
+      fields:
+        - methodology
+        - findings
+        - limitations
+      review_gate: extraction
+    model_id: "claude-sonnet-4-6"
+    mode: deterministic
+    system_prompt_template: >
+      Extract only requested fields supported by exact source-substring evidence.
+      Preserve uncertainty and do not claim access beyond the supplied evidence level.
+
+  - type: synthesize
+    name: "Brief Synthesis"
+    description: "Synthesize verified evidence into a concise research brief."
+    parameters:
+      contract_version: 1
+    model_id: "claude-sonnet-4-6"
+    mode: deterministic
+    system_prompt_template: >
+      Synthesize only the supplied evidence records. Every factual claim must cite a supplied evidence ID.
+
+  - type: verify
+    name: "Grounding Verification"
+    description: "Verify every synthesized claim against its cited evidence."
+    parameters:
+      contract_version: 1
+    model_id: "claude-sonnet-4-6"
+    mode: deterministic
+    system_prompt_template: >
+      Verify every supplied claim against its cited evidence and mark unsupported or contradictory claims explicitly.
+
+  - type: export
+    name: "Reviewed Brief Export"
+    description: "Export the verified brief in an approved format after final review."
+    parameters:
+      contract_version: 1
+      format: markdown
+      formats:
+        - markdown
+        - json
+        - csv
+      review_gate: final
+    model_id: null
+    mode: deterministic
+    system_prompt_template: null

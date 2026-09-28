@@ -3570,7 +3570,10 @@ async def stream_confirm_event_generator(
         page_context = _page_context_to_dict(
             current_snapshot.values.get("page_context", {})
         )
-        from src.services.agent.runtime_snapshot import resume_runtime_config_fields
+        from src.services.agent.runtime_snapshot import (
+            hydrate_runtime_state_from_snapshot,
+            resume_runtime_config_fields,
+        )
 
         runtime_context = resume_runtime_config_fields(current_snapshot.values)
 
@@ -3764,7 +3767,17 @@ async def stream_confirm_event_generator(
             ),
         }
 
-        resume_input = Command(resume={"confirmed": request_body.confirmed})
+        runtime_state_update = await hydrate_runtime_state_from_snapshot(
+            db,
+            dict(current_snapshot.values),
+            user_id=current_user.id,
+            thread_id=request_body.thread_id,
+            job_id=(str(active_run.job_id) if active_run is not None else None),
+        )
+        resume_input = Command(
+            **({"update": runtime_state_update} if runtime_state_update else {}),
+            resume={"confirmed": request_body.confirmed},
+        )
 
         emitter.set_context(route="graph")
         # Bind the resumed stream to the durable run (audit S2-H1) so a

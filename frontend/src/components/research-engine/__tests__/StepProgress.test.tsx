@@ -46,4 +46,25 @@ describe('StepProgress', () => {
     fireEvent.click(screen.getByRole('button', { name: /extract evidence/i }));
     expect(screen.getByText(/structured summary/i)).toBeInTheDocument();
   });
+
+  it('shows the full escaped Markdown export as text', () => {
+    const markdown = `# Report\n\n${'Evidence line. '.repeat(45)}\n\n<script>window.alert('bad')</script>`;
+    render(
+      <StepProgress
+        step={{
+          stepIndex: 3,
+          stepName: 'Export report',
+          stepType: 'export',
+          status: 'complete',
+          tokenCount: 0,
+          qualityMarks: [],
+          output: { markdown, media_type: 'text/markdown' },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /export report/i }));
+    expect(screen.getByText(/Evidence line\./).textContent).toBe(markdown);
+    expect(document.querySelector('script')).toBeNull();
+  });
 });

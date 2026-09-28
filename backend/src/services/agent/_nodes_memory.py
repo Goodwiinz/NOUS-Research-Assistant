@@ -234,6 +234,17 @@ async def memory_save_node(state: AgentState, config: RunnableConfig) -> dict:
     those operations (p95 was 8.1 s on the critical path).
     """
     configurable = config.get("configurable", {})
+    capability_message = None
+    if state.get("capability_limitation"):
+        from src.services.agent.capability_terminal import (
+            make_capability_terminal_message,
+        )
+
+        capability_message = make_capability_terminal_message(state)
+        state = {
+            **state,
+            "messages": [*state.get("messages", []), capability_message],
+        }
     # Ids-only configurable (audit B8): the save is keyed by user_id.
     user_id = str(configurable.get("user_id", "") or "")
 
@@ -250,6 +261,9 @@ async def memory_save_node(state: AgentState, config: RunnableConfig) -> dict:
             await asyncio.to_thread(write_iteration, thread_id, dict(state))
     except Exception as _ledger_exc:  # noqa: BLE001 - observability must not crash
         logger.debug("ledger write skipped: %s", _ledger_exc)
+
+    if capability_message is not None:
+        return {"messages": [capability_message]}
 
     if not user_id:
         return {}

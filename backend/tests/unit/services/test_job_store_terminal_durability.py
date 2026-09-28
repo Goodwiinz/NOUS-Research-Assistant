@@ -20,12 +20,14 @@ opened un-``aclose()``d — one leaked pool per retry cycle during an outage.
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 from typing import Any, Iterator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from src.services.agent import job_store as js
+from src.shared.enums import JobStatus
 
 
 @pytest.fixture(autouse=True)
@@ -37,22 +39,139 @@ def _clean_l1() -> Iterator[None]:
         js._l1.clear()
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "existing_status",
+    [JobStatus.COMPLETED.value, JobStatus.STOPPING.value],
+)
+def test_sync_set_job_preserves_terminal_and_stopping_winners(
+    existing_status: str,
+) -> None:
+    """A newer bootstrap mirror cannot regress an existing durable winner."""
+    from src.services.agent.agent_execution_service import _set_job
+
+    winner = {
+        "status": existing_status,
+        "user_id": "u-sync-guard",
+        "result": {"answer": "durable winner"},
+        "created_at": 1.0,
+        "_seq": 1,
+    }
+    js._l1["job-sync-guard"] = dict(winner)
+
+    _set_job(
+        "job-sync-guard",
+        {"status": JobStatus.RUNNING.value, "user_id": "u-sync-guard"},
+        project=False,
+    )
+
+    assert js._l1["job-sync-guard"] == winner
+
+
+@pytest.mark.unit
+def test_sync_set_job_keeps_newer_nonterminal_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The absorbing-state guard retains existing nonterminal freshness order."""
+    import src.services.agent.agent_execution_service as execution
+
+    winner = {
+        "status": JobStatus.RUNNING.value,
+        "user_id": "u-sync-freshness",
+        "created_at": 2000.0,
+        "_seq": 50,
+    }
+    js._l1["job-sync-freshness"] = dict(winner)
+    monkeypatch.setattr(execution.time, "time", lambda: 1000.0)
+
+    execution._set_job(
+        "job-sync-freshness",
+        {"status": JobStatus.QUEUED.value, "user_id": "u-sync-freshness"},
+        project=False,
+    )
+
+    assert js._l1["job-sync-freshness"] == winner
+
+
+@pytest.mark.unit
+def test_sync_set_job_rejects_terminal_publication() -> None:
+    """Sync writers still defer terminal states to awaited durable publication."""
+    from src.services.agent.agent_execution_service import _set_job
+
+    current = {
+        "status": JobStatus.RUNNING.value,
+        "user_id": "u-sync-terminal",
+        "created_at": 1.0,
+        "_seq": 1,
+    }
+    js._l1["job-sync-terminal"] = dict(current)
+
+    with pytest.raises(js.JobStatusPublicationError):
+        _set_job(
+            "job-sync-terminal",
+            {"status": JobStatus.COMPLETED.value, "user_id": "u-sync-terminal"},
+            project=False,
+        )
+
+    assert js._l1["job-sync-terminal"] == current
+
+
 # ---------------------------------------------------------------------------
 # H2 — terminal status must survive a failed strict projection
 # ---------------------------------------------------------------------------
 
 
+class _FailingRedisPipeline:
+    """WATCH/MULTI double whose EXEC fails after durable publication."""
+
+    def __init__(self) -> None:
+        self.execute_attempted = False
+
+    async def __aenter__(self) -> _FailingRedisPipeline:
+        return self
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        return None
+
+    async def watch(self, *_keys: str) -> None:
+        return None
+
+    async def get(self, _key: str) -> None:
+        return None
+
+    def multi(self) -> None:
+        return None
+
+    def setex(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def execute(self) -> None:
+        self.execute_attempted = True
+        raise OSError("redis unavailable")
+
+    async def reset(self) -> None:
+        return None
+
+
+class _ConflictingRedisPipeline(_FailingRedisPipeline):
+    def __init__(self) -> None:
+        super().__init__()
+        self.execute_attempts = 0
+
+    async def execute(self) -> None:
+        from redis.exceptions import WatchError
+
+        self.execute_attempted = True
+        self.execute_attempts += 1
+        raise WatchError()
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_set_job_terminal_status_survives_projection_failure(
+async def test_set_job_does_not_publish_terminal_status_when_projection_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A PG blip on the strict terminal projection must not cost the result.
-
-    Pre-fix: ``record_job_status``'s ``raise_on_error=True`` exception escapes
-    ``set_job`` before the L1/Redis writes run, so this call raises and the
-    job is never observable as completed.
-    """
+    """The requested terminal cannot become visible without a DB decision."""
     js._l1["job-1"] = {
         "status": "running",
         "user_id": "u-1",
@@ -66,16 +185,21 @@ async def test_set_job_terminal_status_survives_projection_failure(
         "src.services.agent.agent_run_service.record_job_status",
         new=failing_projection,
     ):
-        # Pre-fix this raises RuntimeError here — the job never reaches L1/Redis.
-        await js.set_job(
-            "job-1",
-            {"status": "completed", "thread_id": "t-1", "error": "real msg"},
-        )
+        with pytest.raises(js.JobStatusPublicationError, match="pg blip"):
+            await js.set_job(
+                "job-1",
+                {
+                    "status": "completed",
+                    "thread_id": "t-1",
+                    "error": "real msg",
+                },
+                require_durable_decision=True,
+            )
 
     job = await js.get_job("job-1")
     assert job is not None, "terminal status lost after projection failure"
-    assert job["status"] == "completed"
-    assert job["error"] == "real msg"
+    assert job["status"] == "running"
+    assert "error" not in job
     failing_projection.assert_awaited_once()
 
 
@@ -92,17 +216,132 @@ async def test_set_job_terminal_status_control_projection_succeeds(
         "created_at": time.time(),
     }
     monkeypatch.setattr(js, "_get_redis", AsyncMock(return_value=None))
-    ok_projection = AsyncMock(return_value=None)
+    ok_projection = AsyncMock(
+        return_value=SimpleNamespace(
+            job_id="job-2",
+            requested_status=JobStatus.COMPLETED,
+            effective_status=JobStatus.COMPLETED,
+            user_id="u-1",
+            organization_id=None,
+            thread_id="t-2",
+            error=None,
+            cancel_requested_at=None,
+            updated_at="2026-09-26T00:00:00+00:00",
+        )
+    )
 
     with patch(
         "src.services.agent.agent_run_service.record_job_status", new=ok_projection
     ):
-        await js.set_job("job-2", {"status": "completed", "thread_id": "t-2"})
+        await js.set_job(
+            "job-2",
+            {"status": "completed", "thread_id": "t-2"},
+            require_durable_decision=True,
+        )
 
     job = await js.get_job("job-2")
     assert job is not None
     assert job["status"] == "completed"
     ok_projection.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_committed_terminal_decision_survives_redis_cache_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache outage after commit cannot undo or hide the durable winner."""
+    js._l1["job-cache-outage"] = {
+        "status": JobStatus.RUNNING.value,
+        "user_id": "u-3",
+        "thread_id": "t-3",
+        "created_at": time.time(),
+    }
+    decision = SimpleNamespace(
+        job_id="job-cache-outage",
+        requested_status=JobStatus.COMPLETED,
+        effective_status=JobStatus.COMPLETED,
+        user_id="u-3",
+        organization_id=None,
+        thread_id="t-3",
+        error=None,
+        cancel_requested_at=None,
+        updated_at="2026-09-26T00:00:00+00:00",
+    )
+    projection = AsyncMock(return_value=decision)
+    failing_pipeline = _FailingRedisPipeline()
+    redis_client = SimpleNamespace(pipeline=Mock(return_value=failing_pipeline))
+    monkeypatch.setattr(js, "_get_redis", AsyncMock(return_value=redis_client))
+
+    with patch(
+        "src.services.agent.agent_run_service.record_job_status", new=projection
+    ):
+        result = await js.set_job(
+            "job-cache-outage",
+            {
+                "status": JobStatus.COMPLETED,
+                "user_id": "u-3",
+                "thread_id": "t-3",
+                "result": {"answer": "committed"},
+            },
+            require_durable_decision=True,
+        )
+
+    assert result is decision
+    assert js._l1["job-cache-outage"]["status"] is JobStatus.COMPLETED
+    assert js._l1["job-cache-outage"]["result"] == {"answer": "committed"}
+    projection.assert_awaited_once()
+    redis_client.pipeline.assert_called_once_with(transaction=True)
+    assert failing_pipeline.execute_attempted
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_committed_terminal_decision_survives_redis_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Five WATCH conflicts are unavailable, not a reason to undo L1 commit."""
+    job_id = "job-cache-retries-exhausted"
+    decision = SimpleNamespace(
+        job_id=job_id,
+        requested_status=JobStatus.COMPLETED,
+        effective_status=JobStatus.COMPLETED,
+        user_id="u-retry",
+        organization_id=None,
+        thread_id="t-retry",
+        error=None,
+        cancel_requested_at=None,
+        updated_at="2026-09-26T00:00:00+00:00",
+    )
+    pipeline = _ConflictingRedisPipeline()
+    redis_client = SimpleNamespace(pipeline=Mock(return_value=pipeline))
+    monkeypatch.setattr(js, "_get_redis", AsyncMock(return_value=redis_client))
+    captured: list[Any] = []
+    real_writer = js.set_job_redis_only
+
+    async def _capture_outcome(*args: Any, **kwargs: Any) -> Any:
+        outcome = await real_writer(*args, **kwargs)
+        captured.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(js, "set_job_redis_only", _capture_outcome)
+    result = await js.set_job(
+        job_id,
+        {
+            "status": JobStatus.COMPLETED,
+            "user_id": "u-retry",
+            "thread_id": "t-retry",
+            "result": {"answer": "durable fallback"},
+        },
+        project=False,
+        decision=decision,
+    )
+
+    assert result is decision
+    assert captured[0].state == "unavailable"
+    assert pipeline.execute_attempts == js._REDIS_WRITE_MAX_ATTEMPTS == 5
+    assert js._l1[job_id]["status"] == JobStatus.COMPLETED
+    assert js._l1[job_id]["result"] == {"answer": "durable fallback"}
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +373,9 @@ async def test_set_job_does_not_stomp_newer_write_landing_during_projection_awai
     monkeypatch.setattr(js.time, "time", lambda: 1500.0)
 
     newer_record = {
-        "status": "cancelled",
+        "status": "running",
         "user_id": "u-1",
+        "thread_id": "t-1",
         "created_at": 2000.0,
         "_seq": 999,
     }
@@ -147,9 +387,25 @@ async def test_set_job_does_not_stomp_newer_write_landing_during_projection_awai
         with js._l1_lock:
             js._l1["job-1"] = dict(newer_record)
 
+    async def _land_newer_write_during_await_with_decision(
+        *_args: Any, **_kwargs: Any
+    ) -> Any:
+        await _land_newer_write_during_await()
+        return SimpleNamespace(
+            job_id="job-1",
+            requested_status=JobStatus.COMPLETED,
+            effective_status=JobStatus.COMPLETED,
+            user_id="u-1",
+            organization_id=None,
+            thread_id="t-1",
+            error=None,
+            cancel_requested_at=None,
+            updated_at="2026-09-26T00:00:00+00:00",
+        )
+
     monkeypatch.setattr(
         "src.services.agent.agent_run_service.record_job_status",
-        AsyncMock(side_effect=_land_newer_write_during_await),
+        AsyncMock(side_effect=_land_newer_write_during_await_with_decision),
     )
 
     await js.set_job("job-1", {"status": "completed", "thread_id": "t-1"})

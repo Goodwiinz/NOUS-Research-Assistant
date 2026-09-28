@@ -484,7 +484,13 @@ async def test_sweeper_delegates_external_absence_without_reading_native_store(
     )
     monkeypatch.setattr(job_store, "get_job_fresh", native_read)
     result = await _sweep_stale_agent_runs(lease_owner="sweeper")
-    assert result == {"scanned": 1, "failed": 0, "repaired": 0, "skipped": 1}
+    assert result == {
+        "scanned": 1,
+        "failed": 0,
+        "repaired": 0,
+        "skipped": 1,
+        "cancelled": 0,
+    }
     native_read.assert_not_called()
     db.expire_all()
     run = await db.get(AgentRun, str(external_run.id))

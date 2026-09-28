@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -89,6 +91,32 @@ def _parse_filing(hit: Dict[str, Any]) -> ConnectorResult:
 
 class SECEdgarConnector(ExternalDBConnector):
     """SEC EDGAR full-text search for public company filings."""
+
+    supported_filter_keys = frozenset({"start_date", "end_date", "form_type"})
+
+    def validate_search_filters(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        validated = super().validate_search_filters(filters)
+        if any(not isinstance(value, str) for value in validated.values()):
+            raise ValueError("SEC EDGAR filters must be strings")
+        parsed_dates = {}
+        for key in ("start_date", "end_date"):
+            value = validated.get(key)
+            if value is not None:
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                    raise ValueError(f"filter '{key}' must be an ISO calendar date")
+                try:
+                    parsed_dates[key] = date.fromisoformat(value)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"filter '{key}' must be an ISO calendar date"
+                    ) from exc
+        start = parsed_dates.get("start_date")
+        end = parsed_dates.get("end_date")
+        if start and end and start > end:
+            raise ValueError("start_date must not be after end_date")
+        return validated
 
     @property
     def info(self) -> ConnectorInfo:

@@ -31,7 +31,7 @@
 # Usage:  scripts/ci/run_local_ci.sh [--base origin/develop] [--skip-tests] [--frontend]
 #
 # Match CI's pinned linters or results will not agree:
-#   pip install ruff==0.15.15 black==26.5.1 isort==5.13.2 mypy==1.7.1
+#   pip install ruff==0.15.15 black==26.5.1 isort==5.13.2 mypy==1.7.1 types-redis==4.6.0.20241004 types-PyYAML==6.0.12.20260906
 set -uo pipefail
 
 BASE="origin/develop"

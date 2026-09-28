@@ -1,0 +1,54 @@
+FEATURE: reader-safe bibliography identifiers and canonical precedence
+FINAL_SOURCE_SHA: b334ec79861b438e8646ff75325cf4f5bdd75a30
+
+EXPECTED RED
+CLASSIFICATION: EXPECTED RED
+TEST_STATE: regression present; production identifier filtering absent
+COMMAND:
+  .venv/bin/python -m pytest -q -o addopts='' \
+    backend/tests/unit/services/test_report_rendering.py \
+    -k 'prefers_direct_doi_and_filters_opaque_identifiers'
+EXIT_STATUS: 1
+RESULT:
+  1 failed, 6 deselected
+  A canonical direct DOI of 10.5555/canonical was replaced in reader output by
+  the retained conflicting identifier value 10.5555/conflicting-provenance.
+  The same fixture also carried opaque provider_trace and patient_id values.
+RAW_CAPTURE:
+  The bounded terminal result was recorded immediately; a separate raw capture
+  was not retained for this expected RED.
+
+RESTORED GREEN
+CLASSIFICATION: PASS
+TEST_STATE: safe allowlist and canonical/direct precedence implemented
+COMMAND:
+  .venv/bin/python -m pytest -q -o addopts='' \
+    backend/tests/unit/services/test_report_rendering.py \
+    -k 'prefers_direct_doi_and_filters_opaque_identifiers'
+EXIT_STATUS: 0
+RESULT:
+  1 passed, 6 deselected
+
+FINAL EXACT-SOURCE SUITE
+CLASSIFICATION: PASS
+COMMAND:
+  PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q \
+    backend/tests/unit/services/test_report_rendering.py \
+    backend/tests/unit/services/test_paper_discovery.py \
+    backend/tests/unit/services/test_export_service.py \
+    backend/tests/unit/services/test_research_review_service.py \
+    backend/tests/unit/services/test_research_template_contracts.py \
+    backend/tests/unit/test_audit_schema_drift.py
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 81d3f0ca16fb0ac0fdaba339bac85af207f9c182a665cdaecc882a0459d22830
+RAW_CAPTURE_BYTES: 87151
+RESULT: 162 passed, 1 warning in 8.31s
+
+FINAL ASSERTIONS
+  prepare_sources -> source_records -> build_report -> JSON/Markdown/CSV keeps
+  the direct canonical DOI when retained provenance conflicts. Only doi, pmid,
+  pmcid, arxiv, openalex, semantic_scholar, and rag_store may reach reader
+  identifier maps. Missing safe identifiers may be filled from provenance;
+  populated canonical/direct values win. provider_trace, patient_id, their
+  values, and the conflicting provenance DOI are absent from every reader
+  format. The provenance blob remains internal.

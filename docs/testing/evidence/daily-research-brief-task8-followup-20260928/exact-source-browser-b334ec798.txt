@@ -1,0 +1,57 @@
+CLASSIFICATION: PASS
+SOURCE_SHA: b334ec79861b438e8646ff75325cf4f5bdd75a30
+RAW_CAPTURE_SHA256: 59146c130e4456cea16de284aeaa072b0a3e7b5a68cae99f60f8791b2dfa56b3
+RAW_CAPTURE_BYTES: 3735
+EXIT_STATUS: 0
+
+PRECONDITION
+  git status --short returned empty at the exact executable source.
+  PostgreSQL container codex-daily-brief-pg was healthy.
+  ORCHESTRATION_TEST_DATABASE_URL was supplied from the local environment; its
+  credential value is intentionally omitted.
+  DAILY_RESEARCH_BRIEF_ENABLED=true was limited to this isolated test process.
+
+OFFLINE NEXT ENVIRONMENT
+  BACKEND_URL=http://127.0.0.1:8765
+  NEXT_PUBLIC_API_BASE_URL=/api/v1
+  NEXT_PUBLIC_API_URL=
+  NEXT_PUBLIC_AUTH_COOKIE_NAME=daily-brief-e2e-auth
+  NEXT_PUBLIC_SUPABASE_URL=http://localhost:3000/api/v1/auth-fixture
+  SUPABASE_SERVER_URL=http://127.0.0.1:8765/api/v1/auth-fixture
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=e2e-anon-key
+  DAILY_RESEARCH_BRIEF_ENABLED=true
+
+NEXT COMMAND
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 --dir frontend run dev:offline
+
+EXACT TEST COMMAND
+  DAILY_RESEARCH_BRIEF_ENABLED=true \
+  ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" \
+  DAILY_BRIEF_E2E_PORT=8765 \
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+    --dir frontend exec playwright test \
+    e2e/research-engine/daily-research-brief.spec.ts \
+    --project=chromium --reporter=line
+
+SALIENT OUTPUT
+  Running 10 tests using 1 worker
+  1. reloads all three gates and persists exact artifacts and downloads: PASS
+  2. retains evidence after a provider partial failure: PASS
+  3. renders durable no-evidence result with audit downloads: PASS
+  4. stops at persisted verification failure: PASS
+  5. binds exact-hash verification override and labels unverified: PASS
+  6. reconnects and manually resumes without duplicate screening: PASS
+  7. renders 200 candidates within frozen browser ceiling: PASS
+  8. rejects stale screening review and refreshes descriptor: PASS
+  9. returns immutable row for duplicate review submission: PASS
+  10. returns non-enumerating same-org/cross-tenant owner denials: PASS
+  DAILY_BRIEF_REVIEW_PAGE={"candidateRows":200,"samples":11,"p50Ms":523.3,"p95Ms":604.3}
+  Frozen browser p95 ceiling: 999.24 ms
+  10 passed (2.9m)
+
+SCOPE
+  Real Chromium -> Next -> FastAPI/Uvicorn -> PostgreSQL lifecycle. Controlled
+  provider/model fixtures stop at the external-provider seam. The source change
+  constrains report identifiers; this rerun covers exact rendered downloads.
+  This run neither inspected nor changed production configuration and did not
+  deploy or enable the feature in production.

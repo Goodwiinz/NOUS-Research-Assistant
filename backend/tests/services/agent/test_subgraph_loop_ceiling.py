@@ -305,8 +305,10 @@ async def test_research_force_synthesis_marks_skipped_placeholder_as_non_evidenc
     )
     assert placeholder.content == '{"status": "skipped"}'
     prompt = captured["messages"][0].content
-    assert "call_skipped" in prompt
-    assert "not execution evidence" in prompt
+    assert (
+        "skipped placeholders and failed or error ToolMessages do not prove execution"
+        in prompt
+    )
 
 
 @pytest.mark.unit
@@ -332,11 +334,16 @@ async def test_writing_force_synthesis_reports_pending_write_as_started():
         await writing_force_synthesis_node(state, {"configurable": {}})
 
     prompt = captured["messages"][0].content
-    assert "call_pending" in prompt
-    assert "started asynchronously and remain pending" in prompt
-    assert "must be reported as started/pending, not completed" in prompt
+    pending_result = next(
+        message
+        for message in captured["messages"]
+        if isinstance(message, ToolMessage) and message.tool_call_id == "call_pending"
+    )
+    assert '"status": "pending"' in pending_result.content
+    assert '"draft_id": "draft-1"' in pending_result.content
     assert (
-        'These tool call IDs are not execution evidence: ["call_pending"]' not in prompt
+        "A pending status proves the tool started but does not prove completion"
+        in prompt
     )
 
 
