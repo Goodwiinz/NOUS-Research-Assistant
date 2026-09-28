@@ -3,6 +3,11 @@ import { closeSync, constants, lstatSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { NativeExitUnconfirmed } from "./rpc.ts";
+import {
+  readBootIdentity,
+  validateBootIdentity,
+  type BootIdentity,
+} from "./recovery.ts";
 import type {
   AdapterEvent,
   HarnessAdapter,
@@ -44,6 +49,11 @@ export class Journal {
   constructor(
     path: string,
     private optionsFor: (workspaceId: string) => SessionOptions,
+    // Trusted local composition/test hooks; never deserialize from bridge input.
+    private local: {
+      readBootIdentity?: () => BootIdentity;
+      recoveryOnly?: boolean;
+    } = {},
   ) {
     const dir = lstatSync(dirname(path));
     if (
@@ -76,7 +86,77 @@ export class Journal {
       CREATE TABLE IF NOT EXISTS interrupts(session TEXT NOT NULL, turn TEXT NOT NULL, PRIMARY KEY(session,turn));
       CREATE TABLE IF NOT EXISTS interrupt_claims(command TEXT PRIMARY KEY REFERENCES commands(id), owner TEXT NOT NULL, pid INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS interrupt_exit_uncertainty(command TEXT PRIMARY KEY REFERENCES commands(id));
-      UPDATE commands SET state='recovering' WHERE state IN ('intent','running');`);
+      CREATE TABLE IF NOT EXISTS interrupt_recovery_boot(command TEXT PRIMARY KEY REFERENCES commands(id), evidence TEXT NOT NULL);`);
+    if (!local.recoveryOnly)
+      this.db.exec(
+        "UPDATE commands SET state='recovering' WHERE state IN ('intent','running')",
+      );
+  }
+  uncertainInterrupts(): string[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT command FROM interrupt_exit_uncertainty ORDER BY command",
+        )
+        .all() as { command: string }[]
+    ).map((row) => row.command);
+  }
+  private bootIdentity(): BootIdentity {
+    return validateBootIdentity(
+      (this.local.readBootIdentity ?? readBootIdentity)(),
+    );
+  }
+  /** Explicit local operator action. Reboot proves termination, never run completion. */
+  recoverInterrupt(commandId: string): void {
+    const current = this.bootIdentity();
+    const needsReboot = this.tx(() => {
+      const row = this.row(commandId);
+      if (
+        !row ||
+        JSON.parse(row.command).body.kind !== "interrupt" ||
+        !this.db
+          .prepare("SELECT 1 FROM interrupt_exit_uncertainty WHERE command=?")
+          .get(commandId)
+      )
+        throw new Error("no uncertain interrupt with this command ID");
+      const stored = this.db
+        .prepare("SELECT evidence FROM interrupt_recovery_boot WHERE command=?")
+        .get(commandId) as { evidence: string } | undefined;
+      if (!stored) {
+        // Legacy/unknown markers need a new baseline, then a subsequent reboot.
+        this.db
+          .prepare(
+            "INSERT INTO interrupt_recovery_boot(command,evidence) VALUES(?,?)",
+          )
+          .run(commandId, JSON.stringify(current));
+        return true;
+      }
+      const prior = validateBootIdentity(JSON.parse(stored.evidence));
+      if (prior.machineId !== current.machineId)
+        throw new Error("recovery refused: different machine");
+      if (prior.bootId === current.bootId)
+        throw new Error(
+          "recovery refused: same boot; reboot this machine first",
+        );
+      if (prior.observedAt + 5000 >= current.bootStartedAt)
+        throw new Error(
+          "recovery evidence must predate current boot by more than five seconds",
+        );
+      this.db
+        .prepare("DELETE FROM interrupt_claims WHERE command=?")
+        .run(commandId);
+      this.db
+        .prepare("DELETE FROM interrupt_exit_uncertainty WHERE command=?")
+        .run(commandId);
+      this.db
+        .prepare("DELETE FROM interrupt_recovery_boot WHERE command=?")
+        .run(commandId);
+      return false;
+    });
+    if (needsReboot)
+      throw new Error(
+        "recovery baseline recorded; wait at least ten seconds, reboot this machine, then retry",
+      );
   }
   close(): void {
     this.closed = true;
@@ -182,6 +262,8 @@ export class Journal {
     }
   }
   async execute(value: BridgeCommand, adapter: HarnessAdapter): Promise<void> {
+    if (this.local.recoveryOnly)
+      throw new Error("recovery-only journal cannot dispatch commands");
     const command = parseCommand(value);
     // Serialize the complete attempt, including its native receipt, so a
     // duplicate observes the prior attempt's persisted result before deciding.
@@ -318,12 +400,26 @@ export class Journal {
     } catch (error) {
       retainInterruptClaim =
         b.kind === "interrupt" && error instanceof NativeExitUnconfirmed;
-      if (retainInterruptClaim)
-        this.db
-          .prepare(
-            "INSERT OR IGNORE INTO interrupt_exit_uncertainty(command) VALUES(?)",
-          )
-          .run(command.commandId);
+      if (retainInterruptClaim) {
+        this.tx(() => {
+          this.db
+            .prepare(
+              "INSERT OR IGNORE INTO interrupt_exit_uncertainty(command) VALUES(?)",
+            )
+            .run(command.commandId);
+          let boot: BootIdentity;
+          try {
+            boot = this.bootIdentity();
+          } catch {
+            return;
+          }
+          this.db
+            .prepare(
+              "INSERT OR IGNORE INTO interrupt_recovery_boot(command,evidence) VALUES(?,?)",
+            )
+            .run(command.commandId, JSON.stringify(boot));
+        });
+      }
       this.quarantine(command.commandId);
       const row = this.row(command.commandId)!;
       if (row.session && b.kind === "start") {

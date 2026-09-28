@@ -303,6 +303,33 @@ export async function runBridge(
     journal.close();
   }
 }
+export function recoverInterrupt(
+  stateDir: string,
+  commandId?: string,
+): string[] {
+  if (commandId !== undefined && !uuid(commandId))
+    throw new Error("interrupt command UUID required");
+  const journal = new Journal(
+    join(stateDir, "journal.sqlite"),
+    () => {
+      throw new Error("recovery cannot start native work");
+    },
+    { recoveryOnly: true },
+  );
+  try {
+    if (commandId) journal.recoverInterrupt(commandId);
+    return journal.uncertainInterrupts();
+  } finally {
+    journal.close();
+  }
+}
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME | workspace add --root PATH [--label NAME] | run
+  nous-harness recover-interrupt [--command UUID] [--store PATH]
+List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
+Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.
+After reboot, rerun with --command UUID, then restart the bridge for reconciliation.
+Same boot, another machine, or unavailable OS evidence refuses recovery. Recovery keeps workspace ownership and run state unchanged.
+Do not edit the journal database; unsupported platforms or unreadable OS identity require restoring OS evidence before retrying.`;
 async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -312,10 +339,25 @@ async function main(): Promise<void> {
       label: { type: "string" },
       store: { type: "string" },
       root: { type: "string" },
+      command: { type: "string" },
+      help: { type: "boolean" },
     },
   });
   const stateDir = values.store ?? join(homedir(), ".nous", "harness-bridge");
-  if (
+  if (values.help) {
+    console.log(help);
+    return;
+  }
+  if (positionals.join(" ") === "recover-interrupt") {
+    const remaining = recoverInterrupt(stateDir, values.command);
+    if (values.command)
+      console.log(
+        "Interrupt delivery blocker cleared; restart the bridge for reconciliation. Workspace ownership and run state retained.",
+      );
+    console.log(
+      remaining.length ? remaining.join("\n") : "No uncertain interrupts.",
+    );
+  } else if (
     positionals.join(" ") === "connect" &&
     values.api &&
     values.project &&
@@ -334,10 +376,7 @@ async function main(): Promise<void> {
     process.once("SIGINT", () => controller.abort());
     process.once("SIGTERM", () => controller.abort());
     await runBridge(stateDir, controller.signal);
-  } else
-    throw new Error(
-      "Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME | workspace add --root PATH [--label NAME] | run",
-    );
+  } else throw new Error(help);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
   void main().catch((error) => {
