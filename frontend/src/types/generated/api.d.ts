@@ -13130,6 +13130,11 @@ export interface components {
              */
             can_edit: boolean;
             /**
+             * Can Manage
+             * @default false
+             */
+            can_manage: boolean;
+            /**
              * Created At
              * Format: date-time
              */
