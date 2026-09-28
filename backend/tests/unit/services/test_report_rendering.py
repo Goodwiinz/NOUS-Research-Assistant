@@ -268,6 +268,80 @@ def test_canonical_bibliography_values_win_over_conflicting_provenance() -> None
     assert source["journal"] == "Canonical Journal"
 
 
+@pytest.mark.parametrize(
+    ("reverse", "expected_year", "expected_date", "conflicting_year"),
+    [
+        (False, 2025, [[2025, 6, 1]], "2024"),
+        (True, 2024, "2024-01-02", "2025"),
+    ],
+)
+def test_date_aliases_preserve_canonical_provider_across_reader_formats(
+    reverse: bool,
+    expected_year: int,
+    expected_date: object,
+    conflicting_year: str,
+) -> None:
+    """A secondary date alias cannot replace the canonical provider's date."""
+    crossref = SourceDocument(
+        connector_type="crossref",
+        external_id="10.5555/date-alias",
+        title="Canonical date source",
+        metadata={
+            "doi": "10.5555/date-alias",
+            "published": [[2025, 6, 1]],
+        },
+    )
+    openalex = SourceDocument(
+        connector_type="openalex",
+        external_id="https://openalex.org/W-DATE-ALIAS",
+        title="Canonical date source",
+        abstract="Date alias evidence.",
+        metadata={
+            "doi": "10.5555/date-alias",
+            "publication_date": "2024-01-02",
+        },
+    )
+    documents = [openalex, crossref] if reverse else [crossref, openalex]
+    records = source_records(prepare_sources(documents))
+    assert len(records) == 1
+    source_id = records[0]["source_id"]
+    extraction = {
+        "source_id": source_id,
+        "part_id": "p0001",
+        "data": {"finding": "Canonical date finding"},
+        "evidence": [
+            {
+                "evidence_id": "e0001",
+                "part_id": "p0001",
+                "pointer": "abstract:0-20",
+                "quote": "Date alias evidence.",
+            }
+        ],
+    }
+    report = build_report(
+        {
+            "contract_version": 1,
+            "source_records": records,
+            "extractions": [extraction],
+            "verification": {"passed": True, "claims": []},
+        }
+    )
+    source = report["sources"][0]
+    markdown = render_markdown(report)
+    csv_text = render_csv(
+        [{"source": records[0], "extraction": extraction}],
+        final_status="verified",
+    )
+    csv_row = next(csv.DictReader(io.StringIO(csv_text)))
+
+    assert source["publication_year"] == expected_year
+    assert source["publication_date"] == expected_date
+    assert str(expected_year) in markdown
+    assert conflicting_year not in markdown
+    assert str(expected_year) in csv_row["bibliography"]
+    assert conflicting_year not in csv_row["bibliography"]
+
+
 def test_prepare_sources_export_prefers_direct_doi_and_filters_opaque_identifiers() -> (
     None
 ):

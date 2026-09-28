@@ -33,13 +33,16 @@ _MAX_CSV_CELL_CHARS = 8192
 
 _PROVENANCE_BIBLIOGRAPHY_FIELDS = (
     "doi",
-    "publication_year",
-    "year",
-    "publication_date",
-    "published",
     "journal",
     "publication_type",
     "url",
+)
+
+_PUBLICATION_DATE_FIELDS = (
+    "publication_date",
+    "published",
+    "publication_year",
+    "year",
 )
 
 _READER_SAFE_IDENTIFIER_KINDS = (
@@ -103,6 +106,10 @@ def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
         return {}
     metadata = _flatten_metadata(value)
     merged_identifiers = _reader_identifiers(metadata.get("identifiers"))
+    has_canonical_publication_date = any(
+        _has_metadata_value(metadata.get(key)) or _has_metadata_value(source.get(key))
+        for key in _PUBLICATION_DATE_FIELDS
+    )
     # Direct canonical fields take precedence over retained provider snapshots,
     # including legacy records whose normalized identifier map is incomplete.
     for kind in _READER_SAFE_IDENTIFIER_KINDS:
@@ -113,6 +120,15 @@ def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
             merged_identifiers.setdefault(kind, identifier.strip())
     for snapshot in _provenance_snapshots(value):
         candidate = _flatten_metadata(snapshot)
+        if not has_canonical_publication_date:
+            publication_values = {
+                key: candidate[key]
+                for key in _PUBLICATION_DATE_FIELDS
+                if _has_metadata_value(candidate.get(key))
+            }
+            if publication_values:
+                metadata.update(publication_values)
+                has_canonical_publication_date = True
         for key in _PROVENANCE_BIBLIOGRAPHY_FIELDS:
             if not _has_metadata_value(metadata.get(key)) and _has_metadata_value(
                 candidate.get(key)
