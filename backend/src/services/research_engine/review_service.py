@@ -576,7 +576,7 @@ class ResearchReviewService:
                 code="review_not_found",
                 message="Run not found",
             )
-        return run
+        return cast(ResearchRun, run)
 
     async def _load_step(
         self,
@@ -593,7 +593,7 @@ class ResearchReviewService:
         if lock:
             statement = statement.with_for_update(read=shared)
         result = await self.session.execute(statement)
-        return result.scalars().first()
+        return cast(ResearchStep | None, result.scalars().first())
 
     async def _load_review(
         self,
@@ -614,7 +614,7 @@ class ResearchReviewService:
         if lock:
             statement = statement.with_for_update(read=shared)
         result = await self.session.execute(statement)
-        return result.scalars().first()
+        return cast(ResearchStageReview | None, result.scalars().first())
 
     @staticmethod
     def _pending_mapping(run: ResearchRun) -> dict[str, Any] | None:
@@ -676,7 +676,7 @@ class ResearchReviewService:
         )
         if pending.get("output_hash") != output_hash:
             raise self._stale(descriptor)
-        return descriptor
+        return cast(ReviewDescriptor, descriptor)
 
     @staticmethod
     def _canonical_decision(request: StageReviewRequest) -> _CanonicalDecision:
@@ -840,21 +840,24 @@ class ResearchReviewService:
 
     @staticmethod
     def _response(review: ResearchStageReview, *, replay: bool) -> StageReviewResponse:
-        return StageReviewResponse.model_validate(
-            {
-                "id": review.id,
-                "run_id": review.run_id,
-                "step_index": review.step_index,
-                "stage_type": review.stage_type,
-                "review_kind": review.review_kind,
-                "reviewer_id": review.reviewer_id,
-                "output_hash": review.output_hash,
-                "decision": review.decision,
-                "decision_payload": copy.deepcopy(review.decision_payload),
-                "note": review.note,
-                "created_at": review.created_at,
-                "replay": replay,
-            }
+        return cast(
+            StageReviewResponse,
+            StageReviewResponse.model_validate(
+                {
+                    "id": review.id,
+                    "run_id": review.run_id,
+                    "step_index": review.step_index,
+                    "stage_type": review.stage_type,
+                    "review_kind": review.review_kind,
+                    "reviewer_id": review.reviewer_id,
+                    "output_hash": review.output_hash,
+                    "decision": review.decision,
+                    "decision_payload": copy.deepcopy(review.decision_payload),
+                    "note": review.note,
+                    "created_at": review.created_at,
+                    "replay": replay,
+                },
+            ),
         )
 
     @staticmethod

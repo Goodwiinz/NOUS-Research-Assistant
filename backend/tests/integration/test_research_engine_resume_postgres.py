@@ -58,9 +58,11 @@ def _async_dsn(dsn: str) -> str:
 
 @asynccontextmanager
 async def _research_schema(
-    dsn: str,
+    dsn: str | None,
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """Create only the research tables in a disposable, isolated schema."""
+    if dsn is None:
+        raise ValueError("ORCHESTRATION_TEST_DATABASE_URL is required")
     schema = "research_resume_" + uuid.uuid4().hex
     admin_engine = create_async_engine(_async_dsn(dsn))
     scoped_engine = None

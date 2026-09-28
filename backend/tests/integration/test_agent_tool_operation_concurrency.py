@@ -84,8 +84,10 @@ def _ensure_fixture_encryption() -> Any:
 
 
 @asynccontextmanager
-async def _postgres_tool_schema(dsn: str) -> AsyncIterator[_ToolDatabase]:
+async def _postgres_tool_schema(dsn: str | None) -> AsyncIterator[_ToolDatabase]:
     """Create a disposable schema containing real local business tables."""
+    if dsn is None:
+        raise ValueError("ORCHESTRATION_TEST_DATABASE_URL is required")
     field_encryption = _ensure_fixture_encryption()
     schema = "agent_tool_ops_" + uuid.uuid4().hex
     admin_engine = create_async_engine(_async_dsn(dsn))

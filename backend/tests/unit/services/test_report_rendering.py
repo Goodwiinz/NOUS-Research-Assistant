@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from typing import Any
 
 import pytest
 
@@ -18,7 +19,7 @@ from src.services.research_engine.report_rendering import (
 )
 
 
-def _real_shaped_context() -> dict[str, object]:
+def _real_shaped_context() -> dict[str, Any]:
     sources = [
         {
             "source_id": "source-openalex",

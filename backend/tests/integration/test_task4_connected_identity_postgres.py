@@ -133,6 +133,7 @@ async def test_search_identity_survives_real_compaction_checkpoint_and_scoped_fo
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     async with _postgres_draft_schema(dsn) as database:
         async_engine = database.factory.kw["bind"]

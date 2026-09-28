@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from src.services.research_engine import contracts
 from src.services.research_engine import step_executor as step_executor_module
@@ -542,11 +543,11 @@ async def test_max_daily_brief_extraction_batches_screening_control_data(
     contract_compiles: list[dict[str, Any]] = []
     stage_compiles: list[dict[str, Any]] = []
 
-    def _compile_contract(schema: Any):
+    def _compile_contract(schema: Any) -> Draft202012Validator:
         contract_compiles.append(copy.deepcopy(schema))
         return original_validate_user_schema(schema)
 
-    def _compile_stage(schema: Any):
+    def _compile_stage(schema: Any) -> Draft202012Validator:
         stage_compiles.append(copy.deepcopy(schema))
         return original_validate_user_schema(schema)
 

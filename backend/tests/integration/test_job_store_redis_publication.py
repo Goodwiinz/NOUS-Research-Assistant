@@ -27,6 +27,7 @@ async def _real_redis() -> Any:
     redis_url = os.getenv("ORCHESTRATION_TEST_REDIS_URL")
     if not redis_url:
         pytest.skip("ORCHESTRATION_TEST_REDIS_URL is not configured")
+    assert redis_url is not None
     redis_client = redis_asyncio.from_url(redis_url, decode_responses=True)
     await redis_client.ping()
     return redis_client

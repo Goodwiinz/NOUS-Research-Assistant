@@ -195,9 +195,12 @@ async def test_real_uniprot_filter_rejects_heterogeneous_fanout_before_dispatch(
 
     uniprot = UniProtConnector()
     pubmed = PubMedConnector()
-    for connector in (uniprot, pubmed):
-        monkeypatch.setattr(connector, "is_available", lambda: True)
-        connector.search = AsyncMock(return_value=[])
+    uniprot_search = AsyncMock(return_value=[])
+    pubmed_search = AsyncMock(return_value=[])
+    monkeypatch.setattr(uniprot, "is_available", lambda: True)
+    monkeypatch.setattr(pubmed, "is_available", lambda: True)
+    monkeypatch.setattr(uniprot, "search", uniprot_search)
+    monkeypatch.setattr(pubmed, "search", pubmed_search)
     monkeypatch.setattr(connector_registry, "list_available", lambda: [uniprot, pubmed])
 
     result = await _tool_search_external_database(
@@ -210,8 +213,8 @@ async def test_real_uniprot_filter_rejects_heterogeneous_fanout_before_dispatch(
     assert result["error_category"] == "unsupported_connector_filter"
     assert "uniprot" in result["error"]
     assert "query syntax" in result["error"]
-    uniprot.search.assert_not_awaited()
-    pubmed.search.assert_not_awaited()
+    uniprot_search.assert_not_awaited()
+    pubmed_search.assert_not_awaited()
 
 
 @pytest.mark.unit

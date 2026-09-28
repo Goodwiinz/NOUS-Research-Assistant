@@ -153,6 +153,7 @@ def test_duplicate_specialist_observation_replay_preserves_one_provenance_record
     None
 ):
     from src.services.agent._nodes_tools import _identity_ledger_update
+    from src.services.agent.state import AgentState
     from src.services.agent.tools_impl import _cap_tool_result
 
     document_id = str(uuid.uuid4())
@@ -165,15 +166,20 @@ def test_duplicate_specialist_observation_replay_preserves_one_provenance_record
         tool_name="search_documents",
     )
     observation = ("search_documents", "specialist-call-15", "completed", receipt)
-    state = {
-        "identity_ledger": {},
-        "identity_current_references": [],
-        "tool_operation_turn_id": "specialist-turn-15",
-    }
+    state = cast(
+        AgentState,
+        {
+            "identity_ledger": {},
+            "identity_current_references": [],
+            "tool_operation_turn_id": "specialist-turn-15",
+        },
+    )
 
     first = _identity_ledger_update(state, [observation])
+    replay_state = cast(AgentState, dict(state))
+    replay_state["identity_ledger"] = first["identity_ledger"]
     replayed = _identity_ledger_update(
-        {**state, "identity_ledger": first["identity_ledger"]},
+        replay_state,
         [observation, observation],
     )
 

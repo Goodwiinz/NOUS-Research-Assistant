@@ -233,6 +233,7 @@ async def test_http_generation_uses_selected_scope_and_persists_postgres_rows() 
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     async with _postgres_draft_schema(dsn) as database:
 
@@ -421,7 +422,7 @@ async def test_http_generation_uses_selected_scope_and_persists_postgres_rows() 
                                 "instructions": exact_instruction,
                             },
                             tool_session,
-                            SimpleNamespace(id=database.user_id),
+                            User(id=database.user_id),
                             dispatch_recorder=record_dispatch,
                         )
                     assert tool_result["status"] == "completed", tool_result
@@ -494,7 +495,7 @@ async def test_http_generation_uses_selected_scope_and_persists_postgres_rows() 
                                 "instructions": "Clarify the relation between sources.",
                             },
                             revision_session,
-                            SimpleNamespace(id=database.user_id),
+                            User(id=database.user_id),
                         )
                     assert revision_result["version"] == 3, revision_result
                     assert (

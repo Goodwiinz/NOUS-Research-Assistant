@@ -977,6 +977,7 @@ async def test_controlled_lifecycle_persists_each_stage_exactly_once() -> None:
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     async with _daily_brief_lifecycle(dsn) as persisted:
         assert persisted.stage_types == (
@@ -1052,6 +1053,7 @@ async def test_partial_provider_failure_deduplicates_and_persists_metadata_only(
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     shared_doi = "10.1000/shared-daily-brief"
     openalex_documents = [
@@ -1182,6 +1184,7 @@ async def test_terminal_search_scenarios_are_durable(case: str) -> None:
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     providers = (
         ["openalex", "crossref"] if case == "all_provider_failure" else ["openalex"]
@@ -1280,6 +1283,7 @@ async def test_failed_verification_requires_hash_bound_override() -> None:
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     async with _scenario_database(dsn, status="pending") as scenario:
         await _configure_daily_brief(scenario, providers=["openalex"])
@@ -1660,7 +1664,7 @@ def create_e2e_app() -> FastAPI:
                     "semantic_scholar",
                 )
             }
-            runs_module._build_providers = lambda _steps: {
+            runs_module._build_providers = lambda steps: {
                 "claude-sonnet-4-6": _E2EProvider(fixture_state)
             }
             runs_module.admit_expensive_work = admitted

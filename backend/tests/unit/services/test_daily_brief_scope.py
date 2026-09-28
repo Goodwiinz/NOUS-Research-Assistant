@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 from importlib import import_module
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -42,7 +42,10 @@ def _submitted(**overrides: Any) -> research_schemas.DailyBriefScopeConfirmation
         "confirmed": True,
     }
     values.update(overrides)
-    return research_schemas.DailyBriefScopeConfirmation.model_validate(values)
+    return cast(
+        research_schemas.DailyBriefScopeConfirmation,
+        research_schemas.DailyBriefScopeConfirmation.model_validate(values),
+    )
 
 
 def test_effective_parameters_merge_only_declared_scope_overrides() -> None:

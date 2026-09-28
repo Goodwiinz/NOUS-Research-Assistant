@@ -45,7 +45,9 @@ class _PausedUpdateSession:
         return await self._db.execute(statement, *args, **kwargs)
 
 
-def _async_dsn(dsn: str) -> str:
+def _async_dsn(dsn: str | None) -> str:
+    if dsn is None:
+        raise ValueError("ORCHESTRATION_TEST_DATABASE_URL is required")
     if dsn.startswith("postgresql+asyncpg://"):
         return dsn
     if dsn.startswith("postgresql://"):
@@ -55,7 +57,7 @@ def _async_dsn(dsn: str) -> str:
 
 @asynccontextmanager
 async def _postgres_run_schema(
-    dsn: str,
+    dsn: str | None,
 ) -> AsyncIterator[
     tuple[
         async_sessionmaker[AsyncSession],
@@ -1053,9 +1055,11 @@ async def test_real_sweeper_consumes_stop_or_completion_winning_after_refresh(
                 assert result["cancelled"] == 0
                 assert result["repaired"] == 1
                 set_job.assert_awaited_once()
-                assert set_job.await_args.args[1]["status"] is JobStatus.COMPLETED
+                await_args = set_job.await_args
+                assert await_args is not None
+                assert await_args.args[1]["status"] is JobStatus.COMPLETED
                 assert (
-                    set_job.await_args.kwargs["decision"].effective_status
+                    await_args.kwargs["decision"].effective_status
                     is JobStatus.COMPLETED
                 )
         finally:

@@ -214,28 +214,35 @@ async def _postgres_review_schema(dsn: str) -> AsyncIterator[_ReviewDatabase]:
 
 
 def _decline_request(database: _ReviewDatabase, *, second: str) -> StageReviewRequest:
-    return StageReviewRequest.model_validate(
-        {
-            "review_kind": "screening",
-            "output_hash": database.output_hash,
-            "decision": "decline",
-            "decision_payload": {
-                "items": [
-                    {
-                        "source_id": "source-a",
-                        "part_id": "p0001",
-                        "decision": "include",
-                    },
-                    {
-                        "source_id": "source-b",
-                        "part_id": "p0001",
-                        "decision": second,
-                        **({"reason": "not in scope"} if second == "exclude" else {}),
-                    },
-                ]
-            },
-            "note": "concurrent decision",
-        }
+    return cast(
+        StageReviewRequest,
+        StageReviewRequest.model_validate(
+            {
+                "review_kind": "screening",
+                "output_hash": database.output_hash,
+                "decision": "decline",
+                "decision_payload": {
+                    "items": [
+                        {
+                            "source_id": "source-a",
+                            "part_id": "p0001",
+                            "decision": "include",
+                        },
+                        {
+                            "source_id": "source-b",
+                            "part_id": "p0001",
+                            "decision": second,
+                            **(
+                                {"reason": "not in scope"}
+                                if second == "exclude"
+                                else {}
+                            ),
+                        },
+                    ]
+                },
+                "note": "concurrent decision",
+            }
+        ),
     )
 
 
@@ -275,6 +282,7 @@ async def test_postgres_identical_concurrent_decisions_replay_one_ledger_row() -
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     async with _postgres_review_schema(dsn) as database:
         request = _decline_request(database, second="exclude")
@@ -294,6 +302,7 @@ async def test_postgres_different_concurrent_decisions_return_stable_conflict() 
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     async with _postgres_review_schema(dsn) as database:
         results, arrivals, row_count = await _race_reviews(

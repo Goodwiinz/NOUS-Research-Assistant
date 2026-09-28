@@ -261,6 +261,8 @@ class ResearchRunLifecycleService:
                     temperature = step_definition.get(
                         "temperature", params.get("temperature", 0.0)
                     )
+                if not isinstance(temperature, (str, int, float)):
+                    raise TypeError("research step temperature must be numeric")
                 seed = (
                     event["seed"]
                     if "seed" in event
@@ -1056,7 +1058,7 @@ class ResearchRunLifecycleService:
                 ResearchStageReview.decision == "approve",
             )
         )
-        return result.scalars().first()
+        return cast(ResearchStageReview | None, result.scalars().first())
 
     def _pause_after_step(
         self,

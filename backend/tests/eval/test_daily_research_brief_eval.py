@@ -245,6 +245,7 @@ def _live_eval_prerequisites() -> tuple[str, float | None]:
             "BLOCKED: DAILY_BRIEF_CITATION_THRESHOLD is absent; "
             "candidate live eval was not run"
         )
+    assert frozen_value is not None
     try:
         citation_threshold = float(frozen_value)
     except ValueError:

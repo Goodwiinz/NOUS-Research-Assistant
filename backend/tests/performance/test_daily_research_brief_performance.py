@@ -292,11 +292,15 @@ async def test_controlled_six_stage_latency_baseline() -> None:
         print("DAILY_BRIEF_PERF_SIX_STAGE=" + json.dumps(metrics, sort_keys=True))
     threshold = _FROZEN_THRESHOLDS.get("six_stage_p95_ms")
     if threshold is not None:
-        assert metrics["six_stage_p95_ms"] <= threshold
+        metric_value = metrics["six_stage_p95_ms"]
+        assert isinstance(metric_value, (int, float))
+        assert metric_value <= threshold
     for metric in ("export_p95_ms", "export_payload_bytes"):
         threshold = _FROZEN_THRESHOLDS.get(metric)
         if threshold is not None:
-            assert metrics[metric] <= threshold
+            metric_value = metrics[metric]
+            assert isinstance(metric_value, (int, float))
+            assert metric_value <= threshold
 
 
 async def test_max_stage_sample_policy_uses_nearest_rank_p95() -> None:
@@ -434,6 +438,7 @@ async def test_repeated_postgres_reconnect_lifecycle_soak() -> None:
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
 
     samples: list[float] = []
     review_ids: set[str] = set()

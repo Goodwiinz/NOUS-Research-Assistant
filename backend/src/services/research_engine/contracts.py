@@ -7,7 +7,7 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictStr
@@ -536,7 +536,7 @@ def validate_extraction_record(
     ]
     if missing:
         raise ValueError("non-null extracted values lack exact evidence")
-    return parsed.model_dump(mode="json")
+    return cast(dict[str, Any], parsed.model_dump(mode="json"))
 
 
 def validate_screening(
