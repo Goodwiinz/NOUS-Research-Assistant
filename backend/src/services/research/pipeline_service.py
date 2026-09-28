@@ -18,7 +18,9 @@ class PipelineService:
     """Service for research pipeline CRUD and state transitions."""
 
     @staticmethod
-    async def get_or_create(db: AsyncSession, project_id: UUID) -> ResearchPipeline:
+    async def get_or_create(
+        db: AsyncSession, project_id: UUID, *, create_if_missing: bool = True
+    ) -> ResearchPipeline:
         """Get existing pipeline for a project, or create one."""
         result = await db.execute(
             select(ResearchPipeline).where(
@@ -29,6 +31,8 @@ class PipelineService:
         pipeline = result.scalar_one_or_none()
 
         if pipeline is None:
+            if not create_if_missing:
+                raise ValueError("No pipeline found for project")
             pipeline = ResearchPipeline(
                 project_id=project_id,
                 current_step=0,

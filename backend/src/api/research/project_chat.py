@@ -8,7 +8,7 @@ Enables linking research projects to chat threads for:
 - Saving thread content to project notes
 """
 
-from typing import List
+from typing import List, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,6 +32,11 @@ from src.models import (
     Workspace,
 )
 from src.schemas.chat import ThreadCreate
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    accessible_research_workspace_ids,
+    resolve_project,
+)
 from src.shared.research_schemas import (
     LinkThreadRequest,
     NoteCreate,
@@ -56,34 +61,10 @@ async def _get_project_with_auth(
     project_id: UUID,
     current_user: User,
     db: AsyncSession,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> Collection:
-    """Get project with authorization check.
-
-    Raises:
-        HTTPException: If not found or not authorized
-    """
-    query = (
-        select(Collection)
-        .options(selectinload(Collection.documents))
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            and_(
-                Collection.id == project_id,
-                Workspace.owner_id == current_user.id,
-                Collection.is_deleted.is_(False),
-            )
-        )
-    )
-    result = await db.execute(query)
-    project = result.scalar_one_or_none()
-
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found or access denied",
-        )
-
-    return project
+    """Apply the canonical project authorization and lifecycle boundary."""
+    return (await resolve_project(db, project_id, current_user.id, action)).collection
 
 
 async def _get_thread_with_auth(
@@ -108,6 +89,7 @@ async def _get_thread_with_auth(
     Raises:
         HTTPException: If not found or not authorized
     """
+    workspace_ids = await accessible_research_workspace_ids(db, current_user.id)
     query = (
         select(Thread)
         .options(selectinload(Thread.conversation))
@@ -116,7 +98,9 @@ async def _get_thread_with_auth(
         .where(
             and_(
                 Thread.id == thread_id,
-                Workspace.owner_id == current_user.id,
+                Workspace.id.in_(workspace_ids),
+                Workspace.is_deleted.is_(False),
+                Conversation.is_deleted.is_(False),
                 Thread.is_deleted == False,
             )
         )
@@ -132,7 +116,34 @@ async def _get_thread_with_auth(
             detail="Thread not found or access denied",
         )
 
-    return thread
+    return cast(Thread, thread)
+
+
+async def _get_conversation_with_auth(
+    conversation_id: UUID,
+    current_user: User,
+    db: AsyncSession,
+) -> Conversation:
+    """Return a live conversation from a research-accessible workspace."""
+    workspace_ids = await accessible_research_workspace_ids(db, current_user.id)
+    conversation = (
+        await db.execute(
+            select(Conversation)
+            .join(Workspace, Conversation.workspace_id == Workspace.id)
+            .where(
+                Conversation.id == conversation_id,
+                Conversation.is_deleted.is_(False),
+                Workspace.id.in_(workspace_ids),
+                Workspace.is_deleted.is_(False),
+            )
+        )
+    ).scalar_one_or_none()
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found or access denied",
+        )
+    return cast(Conversation, conversation)
 
 
 async def _get_project_document_scope(
@@ -140,14 +151,9 @@ async def _get_project_document_scope(
     db: AsyncSession,
 ) -> List[str]:
     """Return non-deleted document IDs linked to a project."""
-    doc_query = select(CollectionDocument.document_id).where(
-        and_(
-            CollectionDocument.collection_id == project_id,
-            CollectionDocument.is_deleted == False,
-        )
-    )
-    doc_result = await db.execute(doc_query)
-    return [str(row[0]) for row in doc_result.all()]
+    from src.services.research.project_thread_service import get_project_document_scope
+
+    return await get_project_document_scope(project_id, db)
 
 
 # =========================================================================
@@ -161,7 +167,7 @@ async def start_chat_from_project(
     request: StartChatFromProjectRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> StartChatFromProjectResponse:
     """
     Start a new chat thread from a project with document context.
 
@@ -180,7 +186,9 @@ async def start_chat_from_project(
     """
     try:
         # Verify project access
-        project = await _get_project_with_auth(project_id, current_user, db)
+        project = await _get_project_with_auth(
+            project_id, current_user, db, ResearchAction.EDIT
+        )
 
         # Get project's documents for RAG scope
         document_ids = await _get_project_document_scope(project_id, db)
@@ -205,23 +213,9 @@ async def start_chat_from_project(
             conversation_id = conversation.id
         else:
             # Verify conversation exists and user has access
-            conv_query = (
-                select(Conversation)
-                .join(Workspace, Conversation.workspace_id == Workspace.id)
-                .where(
-                    and_(
-                        Conversation.id == conversation_id,
-                        Workspace.owner_id == current_user.id,
-                    )
-                )
+            conversation = await _get_conversation_with_auth(
+                conversation_id, current_user, db
             )
-            conv_result = await db.execute(conv_query)
-            conversation = conv_result.scalar_one_or_none()
-            if not conversation:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Conversation not found or access denied",
-                )
             if conversation.workspace_id != project.workspace_id:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -307,7 +301,7 @@ async def link_thread_to_project(
     request: LinkThreadRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> ProjectThreadResponse:
     """
     Link an existing thread to a project.
 
@@ -322,7 +316,9 @@ async def link_thread_to_project(
     """
     try:
         # Verify project access
-        project = await _get_project_with_auth(project_id, current_user, db)
+        project = await _get_project_with_auth(
+            project_id, current_user, db, ResearchAction.EDIT
+        )
 
         # Verify thread access
         thread = await _get_thread_with_auth(request.thread_id, current_user, db)
@@ -394,7 +390,7 @@ async def list_project_threads(
     project_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> ProjectThreadListResponse:
     """
     List all threads linked to a project.
 
@@ -408,7 +404,7 @@ async def list_project_threads(
     """
     try:
         # Verify project access
-        await _get_project_with_auth(project_id, current_user, db)
+        project = await _get_project_with_auth(project_id, current_user, db)
 
         # Get linked threads with thread details (exclude soft-deleted links).
         # The thread-level soft-delete check also lives in SQL (audit B8):
@@ -418,12 +414,17 @@ async def list_project_threads(
         query = (
             select(ProjectThread)
             .join(Thread, ProjectThread.thread_id == Thread.id)
+            .join(Conversation, Thread.conversation_id == Conversation.id)
+            .join(Workspace, Conversation.workspace_id == Workspace.id)
             .options(selectinload(ProjectThread.thread))
             .where(
                 and_(
                     ProjectThread.project_id == project_id,
                     ProjectThread.is_deleted == False,
                     Thread.is_deleted == False,  # noqa: E712
+                    Conversation.is_deleted.is_(False),
+                    Conversation.workspace_id == project.workspace_id,
+                    Workspace.is_deleted.is_(False),
                 )
             )
             .order_by(ProjectThread.linked_at.desc())
@@ -480,7 +481,7 @@ async def unlink_thread_from_project(
     thread_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> None:
     """
     Unlink a thread from a project.
 
@@ -492,7 +493,7 @@ async def unlink_thread_from_project(
     """
     try:
         # Verify project access
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         # Find and delete the link. Exclude soft-deleted links: a second
         # DELETE on an already-unlinked thread must 404, not re-run the
@@ -527,11 +528,9 @@ async def unlink_thread_from_project(
         # scalar source, OR whenever the scalar is NULL but other links remain
         # (fixes desync where source_project_id was already cleared).
         scalar = getattr(thread, "source_project_id", None)
-        # Only reassign the scalar source to a project the caller still owns.
-        # Scoping the lookup through Workspace.owner_id stops a stray
-        # cross-workspace link from repointing the thread's RAG fast-path to a
-        # project the user can't access, and the id tiebreaker makes the chosen
-        # survivor deterministic when two links share a linked_at timestamp.
+        # Only reassign the scalar source to another live project in the
+        # authorized thread workspace. This excludes stale cross-workspace
+        # legacy links while allowing active workspace members to unlink.
         remaining_query = (
             select(ProjectThread)
             .join(Collection, ProjectThread.project_id == Collection.id)
@@ -541,7 +540,8 @@ async def unlink_thread_from_project(
                     ProjectThread.thread_id == thread_id,
                     ProjectThread.project_id != project_id,
                     ProjectThread.is_deleted == False,
-                    Workspace.owner_id == current_user.id,
+                    Collection.workspace_id == thread.conversation.workspace_id,
+                    Workspace.is_deleted.is_(False),
                     # The link row can be live while its project is soft
                     # deleted; without this, unlinking repoints
                     # thread.source_project_id at a dead project and every
@@ -610,7 +610,7 @@ async def save_thread_to_note(
     request: SaveThreadToNoteRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> NoteResponse:
     """
     Save thread content to a project note.
 
@@ -625,7 +625,7 @@ async def save_thread_to_note(
     """
     try:
         # Verify project access
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         # Verify thread access and get messages
         thread = await _get_thread_with_auth(request.thread_id, current_user, db)

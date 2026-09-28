@@ -40,6 +40,9 @@ def _make_run(**overrides):
     run.started_at = overrides.get("started_at", None)
     run.completed_at = overrides.get("completed_at", None)
     run.total_tokens = overrides.get("total_tokens", 0)
+    run.protocol_version_id = overrides.get("protocol_version_id", uuid.uuid4())
+    run.effective_plan_hash = overrides.get("effective_plan_hash", "a" * 64)
+    run.conformance_status = overrides.get("conformance_status", "plan_verified")
     run.reproducibility_manifest = overrides.get("reproducibility_manifest", None)
     run.created_at = overrides.get("created_at", now)
     run.updated_at = overrides.get("updated_at", now)
@@ -74,12 +77,9 @@ def _mock_db_returning(
     - Query 3: get last completed step (for paused runs)
     """
     db = AsyncMock()
+    db.expire_all = Mock()
+    db._run_result = run_result
     results = []
-
-    # Query 1: _get_owned_run JOIN query
-    run_mock = Mock()
-    run_mock.scalars.return_value.first.return_value = run_result
-    results.append(run_mock)
 
     if run_result is not None:
         # Only add more results for streamable statuses
@@ -116,6 +116,44 @@ def _mock_db_returning(
     db.refresh = AsyncMock()
     db.add = Mock()
     return db
+
+
+@pytest.fixture(autouse=True)
+def patch_shared_run_access(monkeypatch):
+    """Keep stream tests focused on SSE behavior, not resolver SQL shape."""
+
+    async def fake_require_run(db, run_id, user_id, action):
+        run = db._run_result
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return run
+
+    context = SimpleNamespace(
+        collection=SimpleNamespace(id=uuid.uuid4()),
+        engine=SimpleNamespace(id=uuid.uuid4()),
+    )
+
+    async def fake_require_conformance(db, run, blueprint, project_context):
+        return {
+            "blueprint_id": str(blueprint.id),
+            "blueprint_version": blueprint.version,
+            "steps": blueprint.steps,
+            "parameters": blueprint.parameters,
+        }
+
+    monkeypatch.setattr("src.api.research_engine.runs.require_run", fake_require_run)
+    monkeypatch.setattr(
+        "src.api.research_engine.runs.resolve_engine_project_context",
+        AsyncMock(return_value=context),
+    )
+    monkeypatch.setattr(
+        "src.api.research_engine.runs.resolve_project",
+        AsyncMock(return_value=context),
+    )
+    monkeypatch.setattr(
+        "src.api.research_engine.runs._require_run_conformance",
+        fake_require_conformance,
+    )
 
 
 # ============================================================================
@@ -386,6 +424,13 @@ class TestStreamEndpointSuccess:
                 "output": {"content": "ok"},
                 "quality_marks": [],
                 "token_count": 42,
+                "inputs_hash": "a" * 64,
+                "outputs_hash": "b" * 64,
+                "full_prompt": "permitted system prompt",
+                "model_id": "effective-model",
+                "model_version": "2026-09-01",
+                "temperature": 0.25,
+                "seed": 7,
             }
             yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
 
@@ -395,6 +440,20 @@ class TestStreamEndpointSuccess:
 
         assert response.status_code == 200
         db.add.assert_called()
+        from src.models.research_step import ResearchStep
+
+        step = next(
+            call.args[0]
+            for call in db.add.call_args_list
+            if isinstance(call.args[0], ResearchStep)
+        )
+        assert step.inputs_hash == "a" * 64
+        assert step.outputs_hash == "b" * 64
+        assert step.full_prompt == "permitted system prompt"
+        assert step.model_id == "effective-model"
+        assert step.model_version == "2026-09-01"
+        assert step.temperature == 0.25
+        assert step.seed == 7
         stream_app.dependency_overrides.pop(get_db, None)
 
     def test_stream_persists_discovered_sources_with_step(

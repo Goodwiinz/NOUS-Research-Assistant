@@ -4,36 +4,37 @@ Unit tests for Project-Chat Integration API endpoints.
 Tests the API layer with mocked database and dependencies.
 """
 
-import pytest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4, UUID
+from uuid import UUID, uuid4
 
+import pytest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import (
-    User,
-    UserRole,
+    ChatMessage,
     Collection,
-    Workspace,
-    Thread,
     Conversation,
+    MessageRole,
     ProjectThread,
     ProjectThreadLinkType,
-    ChatMessage,
-    MessageRole,
+    Thread,
+    User,
+    UserRole,
+    Workspace,
 )
 from src.shared.research_schemas import (
-    StartChatFromProjectRequest,
     LinkThreadRequest,
     SaveThreadToNoteRequest,
+    StartChatFromProjectRequest,
 )
-
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def mock_user():
@@ -128,35 +129,43 @@ def mock_db():
 # Helper Function Tests
 # ============================================================================
 
+
 class TestGetProjectWithAuth:
     """Tests for _get_project_with_auth helper"""
 
     @pytest.mark.asyncio
-    async def test_returns_project_when_authorized(self, mock_user, mock_project, mock_db):
+    async def test_returns_project_when_authorized(
+        self, mock_user, mock_project, mock_db
+    ):
         """Test returning project when user has access"""
         from src.api.research.project_chat import _get_project_with_auth
 
-        # Mock the query result
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_project
-        mock_db.execute.return_value = mock_result
-
-        result = await _get_project_with_auth(mock_project.id, mock_user, mock_db)
+        with patch(
+            "src.api.research.project_chat.resolve_project",
+            new=AsyncMock(
+                return_value=SimpleNamespace(collection=mock_project, engine=None)
+            ),
+        ) as resolve:
+            result = await _get_project_with_auth(mock_project.id, mock_user, mock_db)
 
         assert result == mock_project
-        mock_db.execute.assert_called_once()
+        resolve.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_raises_404_when_project_not_found(self, mock_user, mock_db):
         """Test raising 404 when project doesn't exist"""
         from src.api.research.project_chat import _get_project_with_auth
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_db.execute.return_value = mock_result
-
-        with pytest.raises(HTTPException) as exc_info:
-            await _get_project_with_auth(uuid4(), mock_user, mock_db)
+        with patch(
+            "src.api.research.project_chat.resolve_project",
+            new=AsyncMock(
+                side_effect=HTTPException(
+                    status_code=404, detail="Project not found or access denied"
+                )
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_project_with_auth(uuid4(), mock_user, mock_db)
 
         assert exc_info.value.status_code == 404
         assert "not found or access denied" in exc_info.value.detail
@@ -166,7 +175,9 @@ class TestGetThreadWithAuth:
     """Tests for _get_thread_with_auth helper"""
 
     @pytest.mark.asyncio
-    async def test_returns_thread_when_authorized(self, mock_user, mock_thread, mock_db):
+    async def test_returns_thread_when_authorized(
+        self, mock_user, mock_thread, mock_db
+    ):
         """Test returning thread when user has access"""
         from src.api.research.project_chat import _get_thread_with_auth
 
@@ -174,9 +185,14 @@ class TestGetThreadWithAuth:
         mock_result.scalar_one_or_none.return_value = mock_thread
         mock_db.execute.return_value = mock_result
 
-        result = await _get_thread_with_auth(mock_thread.id, mock_user, mock_db)
+        with patch(
+            "src.api.research.project_chat.accessible_research_workspace_ids",
+            new=AsyncMock(return_value=[mock_thread.conversation.workspace_id]),
+        ) as accessible_workspaces:
+            result = await _get_thread_with_auth(mock_thread.id, mock_user, mock_db)
 
         assert result == mock_thread
+        accessible_workspaces.assert_awaited_once_with(mock_db, mock_user.id)
 
     @pytest.mark.asyncio
     async def test_raises_404_when_thread_not_found(self, mock_user, mock_db):
@@ -187,8 +203,12 @@ class TestGetThreadWithAuth:
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
 
-        with pytest.raises(HTTPException) as exc_info:
-            await _get_thread_with_auth(uuid4(), mock_user, mock_db)
+        with patch(
+            "src.api.research.project_chat.accessible_research_workspace_ids",
+            new=AsyncMock(return_value=[]),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_thread_with_auth(uuid4(), mock_user, mock_db)
 
         assert exc_info.value.status_code == 404
 
@@ -196,6 +216,7 @@ class TestGetThreadWithAuth:
 # ============================================================================
 # Start Chat from Project Tests
 # ============================================================================
+
 
 class TestStartChatFromProject:
     """Tests for start_chat_from_project endpoint"""
@@ -265,15 +286,19 @@ class TestStartChatFromProject:
             conversation_id=mock_conversation.id,
         )
 
-        doc_result = MagicMock()
-        doc_result.all.return_value = []
-        conv_result = MagicMock()
-        conv_result.scalar_one_or_none.return_value = mock_conversation
-        mock_db.execute.side_effect = [doc_result, conv_result]
-
-        with patch(
-            "src.api.research.project_chat._get_project_with_auth",
-            new=AsyncMock(return_value=mock_project),
+        with (
+            patch(
+                "src.api.research.project_chat._get_project_with_auth",
+                new=AsyncMock(return_value=mock_project),
+            ),
+            patch(
+                "src.api.research.project_chat._get_conversation_with_auth",
+                new=AsyncMock(return_value=mock_conversation),
+            ),
+            patch(
+                "src.api.research.project_chat._get_project_document_scope",
+                new=AsyncMock(return_value=[]),
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await start_chat_from_project(
@@ -287,7 +312,9 @@ class TestStartChatFromProject:
         assert "same workspace" in exc_info.value.detail
 
     @pytest.mark.asyncio
-    async def test_start_chat_logs_warning_for_empty_documents(self, mock_user, mock_project):
+    async def test_start_chat_logs_warning_for_empty_documents(
+        self, mock_user, mock_project
+    ):
         """Test warning is logged when project has no documents"""
         # Verify the project has no documents
         mock_project.documents = []
@@ -297,6 +324,7 @@ class TestStartChatFromProject:
 # ============================================================================
 # Link Thread to Project Tests
 # ============================================================================
+
 
 class TestLinkThreadToProject:
     """Tests for link_thread_to_project endpoint"""
@@ -375,12 +403,15 @@ class TestLinkThreadToProject:
 
         mock_db.refresh = AsyncMock(side_effect=_refresh)
 
-        with patch(
-            "src.api.research.project_chat._get_project_with_auth",
-            new=AsyncMock(return_value=mock_project),
-        ), patch(
-            "src.api.research.project_chat._get_thread_with_auth",
-            new=AsyncMock(return_value=mock_thread),
+        with (
+            patch(
+                "src.api.research.project_chat._get_project_with_auth",
+                new=AsyncMock(return_value=mock_project),
+            ),
+            patch(
+                "src.api.research.project_chat._get_thread_with_auth",
+                new=AsyncMock(return_value=mock_thread),
+            ),
         ):
             await link_thread_to_project(
                 mock_project.id,
@@ -396,6 +427,7 @@ class TestLinkThreadToProject:
 # ============================================================================
 # List Project Threads Tests
 # ============================================================================
+
 
 class TestListProjectThreads:
     """Tests for list_project_threads endpoint"""
@@ -438,6 +470,7 @@ class TestListProjectThreads:
 # ============================================================================
 # Unlink Thread Tests
 # ============================================================================
+
 
 class TestUnlinkThreadFromProject:
     """Tests for unlink_thread_from_project endpoint"""
@@ -488,12 +521,15 @@ class TestUnlinkThreadFromProject:
         remaining_result.scalars.return_value.first.return_value = None
         mock_db.execute.side_effect = [link_result, remaining_result]
 
-        with patch(
-            "src.api.research.project_chat._get_project_with_auth",
-            new=AsyncMock(return_value=mock_project),
-        ), patch(
-            "src.api.research.project_chat._get_thread_with_auth",
-            new=AsyncMock(return_value=mock_thread),
+        with (
+            patch(
+                "src.api.research.project_chat._get_project_with_auth",
+                new=AsyncMock(return_value=mock_project),
+            ),
+            patch(
+                "src.api.research.project_chat._get_thread_with_auth",
+                new=AsyncMock(return_value=mock_thread),
+            ),
         ):
             await unlink_thread_from_project(
                 mock_project.id,
@@ -538,12 +574,15 @@ class TestUnlinkThreadFromProject:
         doc_result.all.return_value = [(new_doc_id,)]
         mock_db.execute.side_effect = [link_result, remaining_result, doc_result]
 
-        with patch(
-            "src.api.research.project_chat._get_project_with_auth",
-            new=AsyncMock(return_value=mock_project),
-        ), patch(
-            "src.api.research.project_chat._get_thread_with_auth",
-            new=AsyncMock(return_value=mock_thread),
+        with (
+            patch(
+                "src.api.research.project_chat._get_project_with_auth",
+                new=AsyncMock(return_value=mock_project),
+            ),
+            patch(
+                "src.api.research.project_chat._get_thread_with_auth",
+                new=AsyncMock(return_value=mock_thread),
+            ),
         ):
             await unlink_thread_from_project(
                 mock_project.id,
@@ -562,6 +601,7 @@ class TestUnlinkThreadFromProject:
 # ============================================================================
 # Save Thread to Note Tests
 # ============================================================================
+
 
 class TestSaveThreadToNote:
     """Tests for save_thread_to_note endpoint"""
@@ -609,6 +649,7 @@ class TestSaveThreadToNote:
 # ============================================================================
 # Project Thread Response Tests
 # ============================================================================
+
 
 class TestProjectThreadResponse:
     """Tests for ProjectThreadResponse schema"""
@@ -662,6 +703,7 @@ class TestProjectThreadResponse:
 # Error Handling Tests
 # ============================================================================
 
+
 class TestErrorHandling:
     """Tests for API error handling"""
 
@@ -695,6 +737,7 @@ class TestErrorHandling:
 # ============================================================================
 # Authorization Tests
 # ============================================================================
+
 
 class TestAuthorization:
     """Tests for authorization logic"""

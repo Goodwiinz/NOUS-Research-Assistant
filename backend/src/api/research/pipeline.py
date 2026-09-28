@@ -15,8 +15,10 @@ from structlog import get_logger
 
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
-from src.models import Collection, User, Workspace
+from src.models import User
+from src.models.workspace import WorkspaceRole
 from src.services.research.pipeline_service import PipelineService
+from src.services.research_engine.project_access import ResearchAction, resolve_project
 
 logger = get_logger()
 router = APIRouter(
@@ -52,26 +54,13 @@ class UpdatePipelineRequest(BaseModel):
 
 
 async def _ensure_project_access(
-    project_id: UUID, current_user: User, db: AsyncSession
+    project_id: UUID,
+    current_user: User,
+    db: AsyncSession,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> None:
-    """Verify the caller owns the project (via its workspace) before touching
-    its pipeline. These endpoints previously took project_id with no ownership
-    check, so any user could read/mutate/reset another project's pipeline.
-    Mirrors projects._get_project_with_auth. 404 (not 403) to avoid id probing.
-    """
-    result = await db.execute(
-        select(Collection.id)
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            and_(
-                Collection.id == project_id,
-                Workspace.owner_id == current_user.id,
-                Collection.is_deleted.is_(False),
-            )
-        )
-    )
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    """Apply the canonical project authorization and lifecycle boundary."""
+    await resolve_project(db, project_id, current_user.id, action)
 
 
 def _pipeline_to_response(pipeline) -> PipelineResponse:
@@ -101,8 +90,19 @@ async def get_pipeline(
     db: AsyncSession = Depends(get_db),
 ):
     """Get or create pipeline state for a project."""
-    await _ensure_project_access(project_id, current_user, db)
-    pipeline = await PipelineService.get_or_create(db, project_id)
+    context = await resolve_project(db, project_id, current_user.id)
+    can_create = (
+        context.workspace_role
+        in {WorkspaceRole.OWNER, WorkspaceRole.ADMIN, WorkspaceRole.EDITOR}
+        and not context.workspace.is_archived
+        and context.collection.research_status != "archived"
+    )
+    try:
+        pipeline = await PipelineService.get_or_create(
+            db, project_id, create_if_missing=can_create
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Pipeline not found") from exc
     await db.commit()
     return _pipeline_to_response(pipeline)
 
@@ -118,7 +118,7 @@ async def update_pipeline(
     db: AsyncSession = Depends(get_db),
 ):
     """Update pipeline state (step navigation, completions, data)."""
-    await _ensure_project_access(project_id, current_user, db)
+    await _ensure_project_access(project_id, current_user, db, ResearchAction.EDIT)
     try:
         pipeline = await PipelineService.update_pipeline(
             db,
@@ -145,7 +145,7 @@ async def reset_pipeline(
     db: AsyncSession = Depends(get_db),
 ):
     """Reset pipeline to initial state (step 0, no completions)."""
-    await _ensure_project_access(project_id, current_user, db)
+    await _ensure_project_access(project_id, current_user, db, ResearchAction.EDIT)
     try:
         pipeline = await PipelineService.reset_pipeline(db, project_id)
         await db.commit()

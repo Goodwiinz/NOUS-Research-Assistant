@@ -66,7 +66,9 @@ def test_workspace_quota_cap() -> None:
     assert "MAX_WORKSPACES_PER_ORG" in cw[:2000]
     assert _read("src/core/config.py").count("MAX_WORKSPACES_PER_ORG") >= 1
     assert "Project limit reached" in _read("src/services/research/project_service.py")
-    assert "Project limit reached" in _read("src/api/research_engine/projects.py")
+    engine_src = _read("src/api/research_engine/projects.py")
+    assert "collection_id is required" in engine_src
+    assert "Project is already linked" in engine_src
 
 
 # R2-L6

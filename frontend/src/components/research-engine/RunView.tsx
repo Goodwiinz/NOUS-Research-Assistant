@@ -1,6 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -63,6 +69,13 @@ const STATUS_BADGE: Record<
   },
 };
 
+const CONFORMANCE_LABEL = {
+  plan_verified: 'Plan verified',
+  conformant: 'Conformant',
+  deviated: 'Deviated',
+  legacy_unbound: 'Legacy unbound',
+} as const;
+
 async function getAuthToken(): Promise<string | null> {
   try {
     const { createClient } = await import('@/lib/supabase/client');
@@ -76,10 +89,10 @@ async function getAuthToken(): Promise<string | null> {
   }
 }
 
-export function RunView({ runId }: RunViewProps) {
+export function RunView({ runId }: RunViewProps): ReactElement {
   const router = useRouter();
   const {
-    activeRun,
+    activeRun: storedRun,
     setActiveRun,
     runEvents,
     addRunEvent,
@@ -89,35 +102,52 @@ export function RunView({ runId }: RunViewProps) {
     setError,
     error,
   } = useResearchEngineStore();
+  const activeRun = storedRun?.id === runId ? storedRun : null;
 
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
+  const [actionFailure, setActionFailure] = useState<{
+    runId: string;
+    message: string;
+  } | null>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const actionError =
+    actionFailure?.runId === runId ? actionFailure.message : null;
+  const actionLoading = pendingAction === runId;
   const abortRef = useRef<AbortController | null>(null);
+  const requestRef = useRef<{ runId: string; revision: number } | null>(null);
 
   // Fetch run details on mount
   const fetchRun = useCallback(async () => {
+    const request = requestRef.current;
+    if (!request || request.runId !== runId) return;
+    const revision = ++request.revision;
+    const isCurrent = (): boolean =>
+      requestRef.current === request && request.revision === revision;
     setLoading(true);
     setError(null);
     try {
       const data = (await getRun(runId)) as ResearchRun;
-      setActiveRun(data);
+      if (isCurrent()) setActiveRun(data);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to load run details'
-      );
+      if (isCurrent()) {
+        setError(
+          err instanceof Error ? err.message : 'Failed to load run details'
+        );
+      }
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [runId, setActiveRun, setLoading, setError]);
 
   useEffect(() => {
+    requestRef.current = { runId, revision: 0 };
     clearRunEvents();
     fetchRun();
     return () => {
+      requestRef.current = null;
       setActiveRun(null);
       clearRunEvents();
     };
-  }, [fetchRun, clearRunEvents, setActiveRun]);
+  }, [runId, fetchRun, clearRunEvents, setActiveRun]);
 
   // Connect to SSE stream when run is running
   useEffect(() => {
@@ -127,8 +157,9 @@ export function RunView({ runId }: RunViewProps) {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const connectSSE = async () => {
+    const connectSSE = async (): Promise<void> => {
       const token = await getAuthToken();
+      if (controller.signal.aborted) return;
       const headers: Record<string, string> = {
         Accept: 'text/event-stream',
       };
@@ -156,7 +187,7 @@ export function RunView({ runId }: RunViewProps) {
         try {
           while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done || controller.signal.aborted) break;
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
@@ -217,30 +248,41 @@ export function RunView({ runId }: RunViewProps) {
     activeRun?.total_tokens ||
     0;
 
-  const handlePause = async () => {
-    setActionError(null);
-    setActionLoading(true);
+  const handlePause = async (): Promise<void> => {
+    const request = requestRef.current;
+    setActionFailure(null);
+    setPendingAction(runId);
     try {
       await pauseRun(runId);
       await fetchRun();
     } catch {
-      setActionError('Pause failed. The run may have already finished.'); // R6-L21
+      if (requestRef.current === request) {
+        setActionFailure({
+          runId,
+          message: 'Pause failed. The run may have already finished.',
+        });
+      }
     } finally {
-      setActionLoading(false);
+      if (requestRef.current === request) setPendingAction(null);
     }
   };
 
-  const handleResume = async () => {
-    setActionError(null);
-    setActionLoading(true);
+  const handleResume = async (): Promise<void> => {
+    const request = requestRef.current;
+    setActionFailure(null);
+    setPendingAction(runId);
     try {
       await resumeRun(runId);
       await fetchRun();
     } catch {
-      setActionError('Resume failed. Try again in a moment.'); // R6-L21
-      // ignore
+      if (requestRef.current === request) {
+        setActionFailure({
+          runId,
+          message: 'Resume failed. Try again in a moment.',
+        });
+      }
     } finally {
-      setActionLoading(false);
+      if (requestRef.current === request) setPendingAction(null);
     }
   };
 
@@ -301,7 +343,11 @@ export function RunView({ runId }: RunViewProps) {
       <div className="mb-6 flex flex-wrap items-center gap-4 rounded-xl border border-border bg-card p-5 shadow-xs">
         <button
           type="button"
-          onClick={() => router.back()}
+          onClick={() =>
+            activeRun?.project_id
+              ? router.push(`/projects/${activeRun.project_id}?tab=workflow`)
+              : router.back()
+          }
           className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           aria-label="Go back"
         >
@@ -319,6 +365,23 @@ export function RunView({ runId }: RunViewProps) {
             <p className="mt-0.5 text-xs text-muted-foreground">
               Started {new Date(activeRun.started_at).toLocaleString()}
             </p>
+          )}
+          {activeRun?.conformance_status && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-medium text-foreground">
+                Conformance: {CONFORMANCE_LABEL[activeRun.conformance_status]}
+              </span>
+              {activeRun.protocol_version_id && (
+                <span className="text-muted-foreground">
+                  Protocol {activeRun.protocol_version_id.slice(0, 8)}
+                </span>
+              )}
+              {activeRun.effective_plan_hash && (
+                <code className="text-muted-foreground">
+                  Plan {activeRun.effective_plan_hash.slice(0, 12)}
+                </code>
+              )}
+            </div>
           )}
         </div>
 

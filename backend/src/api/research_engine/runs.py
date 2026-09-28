@@ -35,11 +35,23 @@ from src.services.research_engine.connectors import (
 )
 from src.services.research_engine.connectors.registry import build_connectors
 from src.services.research_engine.engine import WorkflowEngine
+from src.services.research_engine.project_access import (
+    ProjectContext,
+    ResearchAction,
+    require_blueprint,
+    require_run,
+    resolve_engine_project_context,
+    resolve_project,
+)
 from src.services.research_engine.providers import (
     ClaudeProvider,
     OllamaProvider,
     OpenAIProvider,
     ProviderConfig,
+)
+from src.services.research_engine.run_conformance import create_approved_run
+from src.services.research_engine.run_conformance import (
+    require_run_conformance as _require_run_conformance,
 )
 from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
@@ -61,6 +73,46 @@ def _set_pause_requested(run: ResearchRun, requested: bool) -> None:
     else:
         manifest.pop(_PAUSE_REQUESTED_KEY, None)
     run.reproducibility_manifest = manifest or None
+
+
+def _research_step_from_event(
+    run_id: UUID,
+    step_def: Dict[str, Any],
+    event: Dict[str, Any],
+) -> ResearchStep:
+    """Build the durable step row from the executor's completed-step event."""
+    params = _get_step_params(step_def)
+    model_id = (
+        event.get("model_id") or step_def.get("model_id") or params.get("model_id")
+    )
+    temperature = event.get("temperature")
+    if temperature is None:
+        temperature = step_def.get("temperature", params.get("temperature", 0.0))
+    if "seed" in event:
+        seed = event["seed"]
+    else:
+        seed = step_def.get("seed", params.get("seed"))
+    output = event.get("output")
+    if output is not None and not isinstance(output, dict):
+        output = {"value": output}
+
+    return ResearchStep(
+        run_id=run_id,
+        step_index=int(event.get("step_index") or 0),
+        step_type=str(event.get("step_type") or step_def.get("type") or "search"),
+        mode=str(step_def.get("mode") or params.get("mode") or "deterministic"),
+        inputs_hash=event.get("inputs_hash"),
+        outputs_hash=event.get("outputs_hash"),
+        full_prompt=event.get("full_prompt"),
+        model_id=str(model_id) if model_id is not None else None,
+        model_version=event.get("model_version"),
+        temperature=float(temperature),
+        seed=int(seed) if seed is not None else None,
+        output=output,
+        quality_marks=event.get("quality_marks") or [],
+        token_count=int(event.get("token_count") or 0),
+        completed_at=datetime.now(timezone.utc),
+    )
 
 
 async def _run_interrupted_cleanup(cleanup: Awaitable[None]) -> None:
@@ -97,28 +149,21 @@ async def _get_owned_run(
     run_id: UUID,
     user_id: UUID,
     db: AsyncSession,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> ResearchRun:
-    """Fetch a run in a single query, verifying the user owns it via JOIN.
+    """Resolve a run through the shared mapped-project access policy."""
+    return await require_run(db, run_id, user_id, action)
 
-    Raises 404 if the run doesn't exist or the user doesn't own it.
-    """
-    query = (
-        select(ResearchRun)
-        .join(ResearchBlueprint, ResearchBlueprint.id == ResearchRun.blueprint_id)
-        .join(ResearchProject, ResearchProject.id == ResearchBlueprint.project_id)
-        .where(
-            ResearchRun.id == run_id,
-            ResearchProject.owner_id == user_id,
-        )
+
+def _run_response(run: ResearchRun, context: ProjectContext) -> RunResponse:
+    assert context.engine is not None
+    return RunResponse.model_validate(
+        {
+            **run.__dict__,
+            "project_id": context.collection.id,
+            "research_engine_project_id": context.engine.id,
+        }
     )
-    result = await db.execute(query)
-    run = result.scalars().first()
-    if not run:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Run not found",
-        )
-    return run
 
 
 def _get_step_params(step_def: Dict[str, Any]) -> Dict[str, Any]:
@@ -269,47 +314,19 @@ router = APIRouter(
 )
 async def start_run(
     blueprint_id: UUID,
-    body: RunCreate = None,
+    body: Optional[RunCreate] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Start a new research run from a blueprint."""
-    if body is None:
-        body = RunCreate()
-
-    # Look up the blueprint with ownership verification in one query
-    query = (
-        select(ResearchBlueprint)
-        .join(ResearchProject, ResearchProject.id == ResearchBlueprint.project_id)
-        .where(
-            ResearchBlueprint.id == blueprint_id,
-            ResearchProject.owner_id == current_user.id,
-        )
+    blueprint = await require_blueprint(
+        db, blueprint_id, current_user.id, ResearchAction.EDIT
     )
-    result = await db.execute(query)
-    blueprint = result.scalars().first()
-    if not blueprint:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Blueprint not found",
-        )
-
-    # Mark blueprint as immutable
-    blueprint.is_immutable = True
-
-    # Create the run; execution starts when /runs/{id}/stream is opened.
-    run = ResearchRun(
-        blueprint_id=blueprint_id,
-        blueprint_version=blueprint.version,
-        status=RunStatus.PENDING.value,
-        reproducibility_manifest={
-            "parameters_override": body.parameters_override or {},
-        },
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
     )
-    db.add(run)
-    await db.commit()
-    await db.refresh(run)
-    return RunResponse.model_validate(run)
+    run = await create_approved_run(db, context, blueprint, body or RunCreate())
+    return _run_response(run, context)
 
 
 @router.get(
@@ -322,8 +339,13 @@ async def get_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Get run status."""
-    run = await _get_owned_run(run_id, current_user.id, db)
-    return RunResponse.model_validate(run)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
+    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
+    assert blueprint is not None
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.VIEW
+    )
+    return _run_response(run, context)
 
 
 @router.post(
@@ -336,7 +358,7 @@ async def pause_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Pause a running run."""
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.EDIT)
     if run.status != RunStatus.RUNNING.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -364,7 +386,12 @@ async def pause_run(
         )
     await db.commit()
     await db.refresh(run)
-    return RunResponse.model_validate(run)
+    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
+    assert blueprint is not None
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
+    )
+    return _run_response(run, context)
 
 
 @router.post(
@@ -377,7 +404,13 @@ async def resume_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Resume a paused run."""
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.EDIT)
+    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
+    assert blueprint is not None
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
+    )
+    await _require_run_conformance(db, run, blueprint, context)
     if run.status != RunStatus.PAUSED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -386,7 +419,7 @@ async def resume_run(
     run.status = RunStatus.RUNNING.value
     await db.commit()
     await db.refresh(run)
-    return RunResponse.model_validate(run)
+    return _run_response(run, context)
 
 
 @router.get(
@@ -398,7 +431,7 @@ async def get_manifest(
     db: AsyncSession = Depends(get_db),
 ):
     """Get reproducibility manifest for a completed run."""
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
     if run.status != RunStatus.COMPLETED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -420,7 +453,7 @@ async def stream_run(
     Accepts runs in PENDING or PAUSED status. Returns 404 for missing runs,
     409 for runs in non-streamable states (completed, failed, running).
     """
-    run = await _get_owned_run(run_id, current_user.id, db)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.EDIT)
 
     # Only pending or paused runs can be streamed
     streamable = {RunStatus.PENDING.value, RunStatus.PAUSED.value}
@@ -430,6 +463,7 @@ async def stream_run(
             detail=f"Run is in '{run.status}' state and cannot be streamed",
         )
     was_paused = run.status == RunStatus.PAUSED.value
+    actor_user_id = current_user.id
 
     # Look up the blueprint
     bp_query = select(ResearchBlueprint).where(
@@ -442,12 +476,22 @@ async def stream_run(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Blueprint not found",
         )
+    lifecycle_context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
+    )
+    canonical_project_id = lifecycle_context.collection.id
+    approved_plan = await _require_run_conformance(
+        db, run, blueprint, lifecycle_context
+    )
 
     # Determine resume offset from persisted steps for both paused and resumed runs.
     start_from = 0
     step_query = (
         select(ResearchStep)
-        .where(ResearchStep.run_id == run_id)
+        .where(
+            ResearchStep.run_id == run_id,
+            ResearchStep.is_deleted.is_(False),
+        )
         .order_by(ResearchStep.step_index.desc())
     )
     step_result = await db.execute(step_query)
@@ -458,11 +502,11 @@ async def stream_run(
     required_models = sorted(
         {
             str(step.get("model_id") or _get_step_params(step).get("model_id"))
-            for step in blueprint.steps or []
+            for step in approved_plan["steps"]
             if step.get("model_id") or _get_step_params(step).get("model_id")
         }
     )
-    providers = _build_providers(blueprint.steps or [])
+    providers = _build_providers(approved_plan["steps"])
     missing_models = [
         model_id for model_id in required_models if model_id not in providers
     ]
@@ -475,12 +519,11 @@ async def stream_run(
             ),
         )
 
-    effective_parameters, parameter_overrides = _get_effective_parameters(
-        blueprint, run
-    )
+    effective_parameters = approved_plan["parameters"]
+    parameter_overrides: Dict[str, Any] = {}
     try:
         validate_blueprint_runtime(
-            {"steps": blueprint.steps or [], "parameters": effective_parameters}
+            {"steps": approved_plan["steps"], "parameters": effective_parameters}
         )
     except ValueError:
         raise HTTPException(
@@ -488,7 +531,7 @@ async def stream_run(
             detail="Blueprint exceeds a server-owned execution limit",
         )
     blueprint_dict = {
-        "steps": blueprint.steps or [],
+        "steps": approved_plan["steps"],
         "parameters": effective_parameters,
     }
     total_tokens = run.total_tokens or 0
@@ -572,7 +615,10 @@ async def stream_run(
             (
                 await db.execute(
                     select(ResearchStep)
-                    .where(ResearchStep.run_id == run_id)
+                    .where(
+                        ResearchStep.run_id == run_id,
+                        ResearchStep.is_deleted.is_(False),
+                    )
                     .order_by(ResearchStep.step_index.asc())
                 )
             )
@@ -624,16 +670,21 @@ async def stream_run(
                     break
 
                 if event_type == "step_complete":
+                    # Paid work may finish after an administrator archives or
+                    # deletes the project. Re-read the lifecycle before any
+                    # new output/source row is persisted or published.
+                    db.expire_all()
+                    await resolve_project(
+                        db,
+                        canonical_project_id,
+                        actor_user_id,
+                        ResearchAction.EDIT,
+                        require_engine=True,
+                    )
                     step_index = int(event.get("step_index") or 0)
                     step_def = {}
                     if 0 <= step_index < len(blueprint_dict["steps"]):
                         step_def = blueprint_dict["steps"][step_index] or {}
-
-                    params = _get_step_params(step_def)
-                    model_id = step_def.get("model_id") or params.get("model_id")
-                    mode = step_def.get("mode") or params.get("mode") or "deterministic"
-                    temperature = params.get("temperature", 0.0)
-                    seed = params.get("seed")
                     output = event.get("output")
                     if output is not None and not isinstance(output, dict):
                         output = {"value": output}
@@ -642,25 +693,7 @@ async def stream_run(
                         for source_row in research_source_rows(run_id, output):
                             db.add(source_row)
 
-                    db.add(
-                        ResearchStep(
-                            run_id=run_id,
-                            step_index=step_index,
-                            step_type=str(
-                                event.get("step_type")
-                                or step_def.get("type")
-                                or "search"
-                            ),
-                            mode=str(mode),
-                            model_id=str(model_id) if model_id is not None else None,
-                            temperature=float(temperature),
-                            seed=int(seed) if seed is not None else None,
-                            output=output,
-                            quality_marks=event.get("quality_marks") or [],
-                            token_count=int(event.get("token_count") or 0),
-                            completed_at=datetime.now(timezone.utc),
-                        )
-                    )
+                    db.add(_research_step_from_event(run_id, step_def, event))
                     total_tokens += int(event.get("token_count") or 0)
                     run.total_tokens = total_tokens
                     if pause_requested:
@@ -679,13 +712,19 @@ async def stream_run(
                     run.completed_at = datetime.now(timezone.utc)
                     await db.commit()
                 elif event_type == "run_complete":
+                    # Serialize completion with a concurrently recorded deviation.
+                    await db.refresh(run, with_for_update=True)
                     run.status = RunStatus.COMPLETED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
+                    if run.conformance_status == "plan_verified":
+                        run.conformance_status = "conformant"
                     run.reproducibility_manifest = {
                         "run_id": str(run.id),
-                        "blueprint_id": str(blueprint.id),
-                        "blueprint_version": blueprint.version,
+                        "protocol_version_id": str(run.protocol_version_id),
+                        "effective_plan_hash": run.effective_plan_hash,
+                        "blueprint_id": approved_plan["blueprint_id"],
+                        "blueprint_version": approved_plan["blueprint_version"],
                         "total_tokens": total_tokens,
                         "completed_at": run.completed_at.isoformat(),
                         "parameters_override": parameter_overrides,

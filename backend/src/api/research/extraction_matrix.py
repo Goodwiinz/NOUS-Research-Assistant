@@ -23,6 +23,11 @@ from src.models.document import Document
 from src.models.extraction_matrix import ExtractionCell, ExtractionMatrix
 from src.models.user import User
 from src.services.research.extraction_matrix_service import ExtractionMatrixService
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    project_documents_query,
+    resolve_project,
+)
 from src.shared.scispace_schemas import (
     CreateMatrixRequest,
     ExtractionCellResponse,
@@ -42,14 +47,11 @@ def _scoped_document_query(doc_id, project_id):
     own ``project_id``; this drops any client-supplied document id that is not
     actually in that project, preventing cross-tenant/cross-project reads.
     """
-    return (
-        select(Document)
-        .join(CollectionDocument, Document.id == CollectionDocument.document_id)
-        .where(
-            Document.id == doc_id,
-            CollectionDocument.collection_id == project_id,
-        )
+    from src.services.research.extraction_matrix_service import (
+        _scoped_document_query as scoped_query,
     )
+
+    return scoped_query(doc_id, project_id)
 
 
 router = APIRouter(prefix="/api/v1/research", tags=["extraction-matrix"])
@@ -64,46 +66,10 @@ async def _validate_project_ownership(
     project_id: UUID,
     current_user: User,
     db: AsyncSession,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> Collection:
-    """Validate that the current user owns the project.
-
-    Args:
-        project_id: Project ID to validate.
-        current_user: Authenticated user.
-        db: Database session.
-
-    Returns:
-        Project (Collection) if authorized.
-
-    Raises:
-        HTTPException: 404 if not found or not authorized.
-    """
-    query = (
-        select(Collection)
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            and_(
-                Collection.id == project_id,
-                Workspace.owner_id == current_user.id,
-                Collection.is_deleted.is_(False),
-            )
-        )
-    )
-    result = await db.execute(query)
-    project = result.scalar_one_or_none()
-
-    if not project:
-        logger.warning(
-            "matrix_access_denied",
-            project_id=str(project_id),
-            user_id=str(current_user.id),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found or access denied",
-        )
-
-    return project
+    """Apply the canonical project authorization and lifecycle boundary."""
+    return (await resolve_project(db, project_id, current_user.id, action)).collection
 
 
 # ============================================================================
@@ -122,7 +88,10 @@ async def list_matrices(
 
     query = (
         select(ExtractionMatrix)
-        .where(ExtractionMatrix.project_id == project_id)
+        .where(
+            ExtractionMatrix.project_id == project_id,
+            ExtractionMatrix.is_deleted.is_(False),
+        )
         .order_by(ExtractionMatrix.created_at.desc())
     )
     result = await db.execute(query)
@@ -161,7 +130,7 @@ async def create_matrix(
     used to extract structured data from project documents.
     Automatically triggers extraction for all existing project documents.
     """
-    await _validate_project_ownership(project_id, current_user, db)
+    await _validate_project_ownership(project_id, current_user, db, ResearchAction.EDIT)
 
     matrix = ExtractionMatrix(
         project_id=project_id,
@@ -181,9 +150,7 @@ async def create_matrix(
 
     # Auto-extract: query all documents in the project
     extraction_task_id = None
-    doc_query = select(CollectionDocument.document_id).where(
-        CollectionDocument.collection_id == project_id
-    )
+    doc_query = project_documents_query(project_id).with_only_columns(Document.id)
     doc_result = await db.execute(doc_query)
     document_ids = [row[0] for row in doc_result.all()]
 
@@ -254,6 +221,17 @@ async def get_matrix(
     # Validate ownership via project
     await _validate_project_ownership(matrix.project_id, current_user, db)
 
+    allowed_ids = set(
+        (
+            await db.execute(
+                project_documents_query(matrix.project_id).with_only_columns(
+                    Document.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     cells = [
         {
             "document_id": str(cell.document_id),
@@ -263,7 +241,7 @@ async def get_matrix(
             "confidence": cell.confidence,
         }
         for cell in matrix.cells
-        if not cell.is_deleted
+        if not cell.is_deleted and cell.document_id in allowed_ids
     ]
 
     return {
@@ -313,7 +291,9 @@ async def update_matrix(
             detail="Matrix not found",
         )
 
-    await _validate_project_ownership(matrix.project_id, current_user, db)
+    await _validate_project_ownership(
+        matrix.project_id, current_user, db, ResearchAction.EDIT
+    )
 
     columns_changed = False
     stale_document_ids: List[str] = []
@@ -394,7 +374,9 @@ async def trigger_extraction(
             detail="Matrix not found",
         )
 
-    await _validate_project_ownership(matrix.project_id, current_user, db)
+    await _validate_project_ownership(
+        matrix.project_id, current_user, db, ResearchAction.EDIT
+    )
 
     logger.info(
         "extraction_triggered",
@@ -464,8 +446,9 @@ async def trigger_extraction(
 async def get_extraction_task_status(
     task_id: str,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get the status of a background extraction task."""
+    """Get a task only through its authorized, retained matrix."""
     task_status = await ExtractionMatrixService.get_extraction_status(task_id)
 
     if not task_status:
@@ -474,6 +457,17 @@ async def get_extraction_task_status(
             detail="Extraction task not found",
         )
 
+    matrix = (
+        await db.execute(
+            select(ExtractionMatrix).where(
+                ExtractionMatrix.id == task_status.get("matrix_id"),
+                ExtractionMatrix.is_deleted.is_(False),
+            )
+        )
+    ).scalar_one_or_none()
+    if matrix is None:
+        raise HTTPException(status_code=404, detail="Extraction task not found")
+    await _validate_project_ownership(matrix.project_id, current_user, db)
     return task_status
 
 
@@ -504,7 +498,9 @@ async def delete_matrix(
             detail="Matrix not found",
         )
 
-    await _validate_project_ownership(matrix.project_id, current_user, db)
+    await _validate_project_ownership(
+        matrix.project_id, current_user, db, ResearchAction.EDIT
+    )
 
     matrix.soft_delete()
     await db.commit()

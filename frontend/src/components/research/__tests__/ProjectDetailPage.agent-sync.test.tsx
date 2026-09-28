@@ -68,7 +68,9 @@ vi.mock('@/components/research/ProjectChatTab', () => ({
   ProjectChatTab: () => <div>Project Chat</div>,
 }));
 vi.mock('@/components/research/ExtractionMatrix', () => ({
-  ExtractionMatrix: () => <div>Matrix</div>,
+  ExtractionMatrix: ({ projectId }: { projectId: string }) => (
+    <div>Matrix {projectId}</div>
+  ),
 }));
 vi.mock('@/components/research/ResearchPipeline', () => ({
   ResearchPipeline: () => <div>Pipeline</div>,
@@ -81,6 +83,11 @@ vi.mock('@/components/research/NoteList', () => ({
 }));
 vi.mock('@/components/research/ProjectSkillsTab', () => ({
   ProjectSkillsTab: () => <div>Project Skills Tab</div>,
+}));
+vi.mock('@/components/research-engine/ProjectWorkflow', () => ({
+  ProjectWorkflow: ({ project }: { project: { id: string } }) => (
+    <div>Workflow {project.id}</div>
+  ),
 }));
 vi.mock('@/components/upload', () => ({
   DocumentUploadWizard: () => null,
@@ -247,6 +254,25 @@ describe('ProjectDetailPage agent sync', () => {
         'draft-1'
       );
     });
+  });
+
+  it('keeps workflow, source, matrix, and draft reads on the collection id', async () => {
+    window.history.replaceState(null, '', '/projects/proj-1?tab=workflow');
+    const { user } = render(<ProjectDetailPage />);
+
+    expect(await screen.findByText('Workflow proj-1')).toBeInTheDocument();
+    expect(mockFetchProjectDocuments).toHaveBeenCalledWith('proj-1');
+
+    await user.click(screen.getByRole('button', { name: /more tabs/i }));
+    await user.click(screen.getByRole('menuitem', { name: /matrix/i }));
+    expect(await screen.findByText('Matrix proj-1')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /drafts/i }));
+    await waitFor(() =>
+      expect(mockProjectService.listDrafts).toHaveBeenCalledWith('proj-1', {
+        limit: 50,
+      })
+    );
   });
 
   it('opens a linked draft beyond the first page of versions', async () => {

@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api.research import citations as citations_api
+from src.api.research import drafts as drafts_api
 from src.api.research import projects as projects_api
 
 
@@ -32,6 +33,30 @@ def _make_user():
     return SimpleNamespace(
         id=uuid4(), organization_id=uuid4(), email="owner@example.com"
     )
+
+
+@pytest.mark.asyncio
+async def test_draft_review_access_rejects_deleted_workspace() -> None:
+    db = AsyncMock()
+    project_id = uuid4()
+    user = _make_user()
+    with patch.object(
+        drafts_api,
+        "resolve_project",
+        AsyncMock(
+            side_effect=HTTPException(status_code=404, detail="Project not found")
+        ),
+    ) as resolve:
+        with pytest.raises(HTTPException) as exc:
+            await drafts_api.list_draft_reviews(
+                project_id=project_id, current_user=user, db=db, limit=20
+            )
+
+    assert exc.value.status_code == 404
+    resolve.assert_awaited_once_with(
+        db, project_id, user.id, drafts_api.ResearchAction.VIEW
+    )
+    db.execute.assert_not_awaited()
 
 
 def _make_document(**overrides):
@@ -202,10 +227,15 @@ async def test_export_bibliography_rejects_inaccessible_project():
 
     db.execute = AsyncMock(side_effect=execute_side_effect)
 
-    with patch.object(
-        citations_api.BibliographyService,
-        "format_bibliography",
-        return_value="@article{test}",
+    with (
+        patch.object(
+            citations_api, "resolve_project", AsyncMock(side_effect=HTTPException(404))
+        ) as resolve,
+        patch.object(
+            citations_api.BibliographyService,
+            "format_bibliography",
+            return_value="@article{test}",
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await citations_api.export_bibliography(
@@ -218,6 +248,9 @@ async def test_export_bibliography_rejects_inaccessible_project():
             )
 
     assert exc_info.value.status_code == 404
+    resolve.assert_awaited_once_with(
+        db, project_id, current_user.id, citations_api.ResearchAction.VIEW
+    )
 
 
 @pytest.mark.asyncio

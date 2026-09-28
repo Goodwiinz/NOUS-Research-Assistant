@@ -1,23 +1,27 @@
 import { create } from 'zustand';
+import type { ProjectResponse } from '@/services/researchEngineService';
+import type { components } from '@/types/generated/api';
 
-export interface ResearchProject {
-  id: string;
-  name: string;
-  description?: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
+export type ResearchProject = ProjectResponse;
 
-export interface ResearchRun {
-  id: string;
-  blueprint_id: string;
-  blueprint_version: number;
+type GeneratedResearchRun = components['schemas']['RunResponse'];
+export type ResearchRun = Omit<
+  GeneratedResearchRun,
+  | 'status'
+  | 'protocol_version_id'
+  | 'effective_plan_hash'
+  | 'conformance_status'
+  | 'created_at'
+  | 'updated_at'
+> & {
   status: 'pending' | 'running' | 'paused' | 'completed' | 'failed';
-  total_tokens: number;
-  started_at?: string;
-  completed_at?: string;
-}
+  protocol_version_id?: string | null;
+  effective_plan_hash?: string | null;
+  conformance_status?:
+    'plan_verified' | 'conformant' | 'deviated' | 'legacy_unbound';
+  created_at?: string;
+  updated_at?: string;
+};
 
 export interface RunStepEvent {
   event: string;

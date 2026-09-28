@@ -4805,6 +4805,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/drafts/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Draft Reviews
+         * @description List durable candidate reviews, including blocked candidates.
+         */
+        get: operations["list_draft_reviews_api_v1_projects__project_id__drafts_reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/drafts/status": {
         parameters: {
             query?: never;
@@ -5587,6 +5607,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/legacy-projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Legacy Projects */
+        get: operations["list_legacy_projects_api_v1_research_engine_legacy_projects_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/legacy-projects/{engine_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Legacy Project */
+        get: operations["get_legacy_project_api_v1_research_engine_legacy_projects__engine_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects": {
         parameters: {
             query?: never;
@@ -5594,21 +5648,32 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Projects
-         * @description List research projects for the current user.
-         */
+        /** List Projects */
         get: operations["list_projects_api_v1_research_engine_projects_get"];
         put?: never;
-        /**
-         * Create Project
-         * @description Create a new research project.
-         */
+        /** Create Project */
         post: operations["create_project_api_v1_research_engine_projects_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{engine_id}/collection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Link Project Collection */
+        patch: operations["link_project_collection_api_v1_research_engine_projects__engine_id__collection_patch"];
         trace?: never;
     };
     "/api/v1/research-engine/projects/{project_id}": {
@@ -5618,13 +5683,185 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get Project
-         * @description Get a single research project.
-         */
+        /** Get Project */
         get: operations["get_project_api_v1_research_engine_projects__project_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/protocols": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Protocols */
+        get: operations["list_protocols_api_v1_research_engine_projects__project_id__protocols_get"];
+        put?: never;
+        /** Create Protocol Route */
+        post: operations["create_protocol_route_api_v1_research_engine_projects__project_id__protocols_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Questions */
+        get: operations["list_questions_api_v1_research_engine_projects__project_id__questions_get"];
+        put?: never;
+        /** Create Question Route */
+        post: operations["create_question_route_api_v1_research_engine_projects__project_id__questions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Roles */
+        get: operations["list_project_roles_api_v1_research_engine_projects__project_id__roles_get"];
+        /** Assign Project Role */
+        put: operations["assign_project_role_api_v1_research_engine_projects__project_id__roles_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/roles/{user_id}/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Project Role */
+        delete: operations["delete_project_role_api_v1_research_engine_projects__project_id__roles__user_id___role__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Protocol */
+        get: operations["get_protocol_api_v1_research_engine_protocols__protocol_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}/deviations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Deviations */
+        get: operations["list_deviations_api_v1_research_engine_protocols__protocol_id__deviations_get"];
+        put?: never;
+        /** Create Deviation */
+        post: operations["create_deviation_api_v1_research_engine_protocols__protocol_id__deviations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Registrations */
+        get: operations["list_registrations_api_v1_research_engine_protocols__protocol_id__registrations_get"];
+        put?: never;
+        /** Create Registration */
+        post: operations["create_registration_api_v1_research_engine_protocols__protocol_id__registrations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Protocol Version Route */
+        post: operations["create_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}/versions/{version_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Protocol Version Route */
+        post: operations["approve_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions__version_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/questions/{question_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Question Version Route */
+        post: operations["create_question_version_route_api_v1_research_engine_questions__question_id__versions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5783,7 +6020,7 @@ export interface paths {
         };
         /**
          * Get Extraction Task Status
-         * @description Get the status of a background extraction task.
+         * @description Get a task only through its authorized, retained matrix.
          */
         get: operations["get_extraction_task_status_api_v1_research_extraction_tasks__task_id__get"];
         put?: never;
@@ -8932,6 +9169,11 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
+            /**
+             * Research Engine Project Id
+             * Format: uuid
+             */
+            research_engine_project_id: string;
             /** Steps */
             steps: components["schemas"]["BlueprintStepDefinition"][];
             /** Template Source */
@@ -10323,6 +10565,83 @@ export interface components {
          * @enum {string}
          */
         DocumentType: "text" | "image" | "audio" | "video" | "pdf" | "spreadsheet" | "presentation" | "multimodal";
+        /** DraftReviewListResponse */
+        DraftReviewListResponse: {
+            /** Reviews */
+            reviews: components["schemas"]["DraftReviewResponse"][];
+        };
+        /** DraftReviewPayload */
+        DraftReviewPayload: {
+            /** Claims */
+            claims?: {
+                [key: string]: unknown;
+            }[];
+            /** Coverage */
+            coverage?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Docs Checked
+             * @default 0
+             */
+            docs_checked: number;
+            /**
+             * Docs Skipped
+             * @default 0
+             */
+            docs_skipped: number;
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /**
+             * Fully Verified
+             * @default false
+             */
+            fully_verified: boolean;
+            /** Summary */
+            summary?: {
+                [key: string]: number;
+            };
+            /** Uncited Assertions */
+            uncited_assertions?: {
+                [key: string]: unknown;
+            }[];
+            /** Verdicts */
+            verdicts?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** DraftReviewResponse */
+        DraftReviewResponse: {
+            /** Base Draft Id */
+            base_draft_id?: string | null;
+            /** Candidate Content */
+            candidate_content: string;
+            /** Candidate Content Hash */
+            candidate_content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Outcome */
+            outcome: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            review: components["schemas"]["DraftReviewPayload"];
+            /** Source Document Ids */
+            source_document_ids: string[];
+        };
         /** DuplicateCheckRequest */
         DuplicateCheckRequest: {
             /**
@@ -11325,6 +11644,24 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** LegacyProjectResponse */
+        LegacyProjectResponse: {
+            /** Collection Id */
+            collection_id?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** Project Id */
+            project_id?: string | null;
+            /**
+             * Research Engine Project Id
+             * Format: uuid
+             */
+            research_engine_project_id: string;
+            /** Status */
+            status: string;
+        };
         /**
          * LinkThreadRequest
          * @description Request to link an existing thread to a project
@@ -11926,6 +12263,16 @@ export interface components {
          * @description Detailed project response with additional context.
          */
         ProjectDetailResponse: {
+            /**
+             * Can Edit
+             * @default false
+             */
+            can_edit: boolean;
+            /**
+             * Can Manage
+             * @default false
+             */
+            can_manage: boolean;
             /** Color */
             color?: string | null;
             /**
@@ -11993,6 +12340,8 @@ export interface components {
             recent_notes?: {
                 [key: string]: unknown;
             }[];
+            /** Research Engine Project Id */
+            research_engine_project_id?: string | null;
             /** Research Goals */
             research_goals?: string | null;
             research_status: components["schemas"]["ResearchStatus"];
@@ -12004,10 +12353,26 @@ export interface components {
              */
             updated_at: string;
             /**
+             * Workspace Archived
+             * @default false
+             */
+            workspace_archived: boolean;
+            /**
              * Workspace Id
              * Format: uuid
              */
             workspace_id: string;
+        };
+        /**
+         * ProjectLink
+         * @description One-time explicit link to an existing canonical Collection.
+         */
+        ProjectLink: {
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
         };
         /**
          * ProjectListResponse
@@ -12276,6 +12641,212 @@ export interface components {
             /** Tags */
             tags?: string[] | null;
         };
+        /** ProtocolApprovalRequest */
+        ProtocolApprovalRequest: {
+            /** Expected Content Hash */
+            expected_content_hash: string;
+            /** Expected Current Approved Version Id */
+            expected_current_approved_version_id?: string | null;
+            /** Expected Protocol Version */
+            expected_protocol_version: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason: string;
+        };
+        /** ProtocolApprovalResponse */
+        ProtocolApprovalResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            /**
+             * Approved At
+             * Format: date-time
+             */
+            approved_at: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /**
+             * Protocol Id
+             * Format: uuid
+             */
+            protocol_id: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** ProtocolDeviationCreate */
+        ProtocolDeviationCreate: {
+            /** Disposition */
+            disposition: string;
+            /** Observed Difference */
+            observed_difference: string;
+            /** Output Reference */
+            output_reference?: string | null;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rationale */
+            rationale: string;
+            /** Run Id */
+            run_id?: string | null;
+        };
+        /** ProtocolDeviationResponse */
+        ProtocolDeviationResponse: {
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disposition */
+            disposition: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Observed Difference */
+            observed_difference: string;
+            /** Output Reference */
+            output_reference?: string | null;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rationale */
+            rationale: string;
+            /** Run Id */
+            run_id?: string | null;
+        };
+        /** ProtocolRegistrationCreate */
+        ProtocolRegistrationCreate: {
+            /** External Identifier */
+            external_identifier?: string | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Protocol Version Hash */
+            protocol_version_hash: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Provider */
+            provider: string;
+            /** Receipt */
+            receipt?: {
+                [key: string]: unknown;
+            } | null;
+            /** Status */
+            status: string;
+            /** Url */
+            url?: string | null;
+        };
+        /** ProtocolRegistrationResponse */
+        ProtocolRegistrationResponse: {
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** External Identifier */
+            external_identifier?: string | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Protocol Version Hash */
+            protocol_version_hash: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Provider */
+            provider: string;
+            /** Receipt */
+            receipt?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Recorded By User Id
+             * Format: uuid
+             */
+            recorded_by_user_id: string;
+            /** Status */
+            status: string;
+            /** Url */
+            url?: string | null;
+        };
+        /** ProtocolSnapshot */
+        ProtocolSnapshot: {
+            /** Appraisal Synthesis */
+            appraisal_synthesis: {
+                [key: string]: unknown;
+            };
+            /** Eligibility */
+            eligibility: {
+                [key: string]: unknown;
+            };
+            /** Extraction */
+            extraction: {
+                [key: string]: unknown;
+            };
+            /** Outcomes */
+            outcomes: {
+                [key: string]: unknown;
+            };
+            /** Reviewer Mode */
+            reviewer_mode: {
+                [key: string]: unknown;
+            };
+            /** Selection */
+            selection: {
+                [key: string]: unknown;
+            };
+            /** Sources Search */
+            sources_search: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * PublicationRetractionCheck
          * @description Publication-level retraction check state.
@@ -12486,6 +13057,290 @@ export interface components {
          */
         RelationshipType: "WORKS_FOR" | "KNOWS" | "RELATED_TO" | "LOCATED_IN" | "PART_OF" | "MENTIONED_IN" | "APPEARS_WITH" | "CREATED_BY" | "OWNS" | "MANAGES" | "COLLABORATES_WITH" | "REPORTS_TO" | "MEMBER_OF" | "ATTENDED" | "SPOKE_AT" | "PUBLISHED_BY" | "CITED" | "REFERENCES" | "CUSTOM";
         /**
+         * ResearchProjectRole
+         * @enum {string}
+         */
+        ResearchProjectRole: "reviewer" | "adjudicator" | "supervisor";
+        /** ResearchProjectRoleCreate */
+        ResearchProjectRoleCreate: {
+            /** Role */
+            role: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /** ResearchProjectRoleResponse */
+        ResearchProjectRoleResponse: {
+            /**
+             * Assigned By Id
+             * Format: uuid
+             */
+            assigned_by_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Role */
+            role: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /** ResearchProtocolCreate */
+        ResearchProtocolCreate: {
+            /**
+             * Blueprint Id
+             * Format: uuid
+             */
+            blueprint_id: string;
+            /** Name */
+            name: string;
+            /**
+             * Question Version Id
+             * Format: uuid
+             */
+            question_version_id: string;
+            snapshot: components["schemas"]["ProtocolSnapshot"];
+        };
+        /** ResearchProtocolResponse */
+        ResearchProtocolResponse: {
+            /**
+             * Can Approve
+             * @default false
+             */
+            can_approve: boolean;
+            /**
+             * Can Edit
+             * @default false
+             */
+            can_edit: boolean;
+            /**
+             * Can Manage
+             * @default false
+             */
+            can_manage: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Current Approved Version Id */
+            current_approved_version_id?: string | null;
+            /** Current Draft Version Id */
+            current_draft_version_id?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Versions */
+            versions?: components["schemas"]["ResearchProtocolVersionResponse"][];
+        };
+        /** ResearchProtocolVersionCreate */
+        ResearchProtocolVersionCreate: {
+            /** Amendment Reason */
+            amendment_reason: string;
+            /**
+             * Blueprint Id
+             * Format: uuid
+             */
+            blueprint_id: string;
+            /**
+             * Parent Version Id
+             * Format: uuid
+             */
+            parent_version_id: string;
+            /**
+             * Question Version Id
+             * Format: uuid
+             */
+            question_version_id: string;
+            snapshot: components["schemas"]["ProtocolSnapshot"];
+        };
+        /** ResearchProtocolVersionResponse */
+        ResearchProtocolVersionResponse: {
+            /** Amendment Reason */
+            amendment_reason?: string | null;
+            /** Approved At */
+            approved_at?: string | null;
+            /** Approved By User Id */
+            approved_by_user_id?: string | null;
+            /**
+             * Author User Id
+             * Format: uuid
+             */
+            author_user_id: string;
+            /**
+             * Blueprint Id
+             * Format: uuid
+             */
+            blueprint_id: string;
+            /**
+             * Can Approve
+             * @default false
+             */
+            can_approve: boolean;
+            /** Change Kind */
+            change_kind: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Execution Plan */
+            execution_plan: {
+                [key: string]: unknown;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /**
+             * Protocol Id
+             * Format: uuid
+             */
+            protocol_id: string;
+            /**
+             * Question Version Id
+             * Format: uuid
+             */
+            question_version_id: string;
+            snapshot: components["schemas"]["ProtocolSnapshot"];
+            /** Status */
+            status: string;
+            /** Superseded At */
+            superseded_at?: string | null;
+            /** Version */
+            version: number;
+        };
+        /** ResearchQuestionCreate */
+        ResearchQuestionCreate: {
+            /** Framework */
+            framework?: {
+                [key: string]: unknown;
+            };
+            /** Hypothesis */
+            hypothesis?: string | null;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /** Question */
+            question: string;
+            /** Scope */
+            scope?: string | null;
+        };
+        /** ResearchQuestionResponse */
+        ResearchQuestionResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            current_version: components["schemas"]["ResearchQuestionVersionResponse"];
+            /**
+             * Current Version Id
+             * Format: uuid
+             */
+            current_version_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Versions */
+            versions?: components["schemas"]["ResearchQuestionVersionResponse"][];
+        };
+        /** ResearchQuestionVersionCreate */
+        ResearchQuestionVersionCreate: {
+            /** Framework */
+            framework?: {
+                [key: string]: unknown;
+            };
+            /** Hypothesis */
+            hypothesis?: string | null;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /** Question */
+            question: string;
+            /** Scope */
+            scope?: string | null;
+        };
+        /** ResearchQuestionVersionResponse */
+        ResearchQuestionVersionResponse: {
+            /**
+             * Author User Id
+             * Format: uuid
+             */
+            author_user_id: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Framework */
+            framework: {
+                [key: string]: unknown;
+            };
+            /** Hypothesis */
+            hypothesis?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /** Question */
+            question: string;
+            /**
+             * Question Id
+             * Format: uuid
+             */
+            question_id: string;
+            /** Scope */
+            scope?: string | null;
+            /** Version */
+            version: number;
+        };
+        /**
          * ResearchStatus
          * @description Research project status
          * @enum {string}
@@ -12675,6 +13530,8 @@ export interface components {
             parameters_override?: {
                 [key: string]: unknown;
             };
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
         };
         /**
          * RunResponse
@@ -12691,15 +13548,34 @@ export interface components {
             /** Completed At */
             completed_at?: string | null;
             /**
+             * Conformance Status
+             * @default legacy_unbound
+             */
+            conformance_status: string;
+            /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /** Effective Plan Hash */
+            effective_plan_hash?: string | null;
             /**
              * Id
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /**
+             * Research Engine Project Id
+             * Format: uuid
+             */
+            research_engine_project_id: string;
             /** Started At */
             started_at?: string | null;
             status: components["schemas"]["RunStatus"];
@@ -14859,6 +15735,8 @@ export interface components {
          * @description Schema for creating a research project.
          */
         src__schemas__research_engine__ProjectCreate: {
+            /** Collection Id */
+            collection_id?: string | null;
             /** Description */
             description?: string | null;
             /** Name */
@@ -14873,6 +15751,10 @@ export interface components {
          * @description Schema for project API responses.
          */
         src__schemas__research_engine__ProjectResponse: {
+            /** Blueprint Id */
+            blueprint_id?: string | null;
+            /** Collection Id */
+            collection_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -14887,6 +15769,13 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Research Engine Project Id */
+            research_engine_project_id?: string | null;
             /** Settings */
             settings: {
                 [key: string]: unknown;
@@ -15128,9 +16017,19 @@ export interface components {
         };
         /**
          * ProjectResponse
-         * @description Research project response
+         * @description Research project response; id is the canonical Collection identifier.
          */
         src__shared__research_schemas__ProjectResponse: {
+            /**
+             * Can Edit
+             * @default false
+             */
+            can_edit: boolean;
+            /**
+             * Can Manage
+             * @default false
+             */
+            can_manage: boolean;
             /** Color */
             color?: string | null;
             /**
@@ -15172,6 +16071,8 @@ export interface components {
              */
             note_count: number;
             project_type: components["schemas"]["ProjectType"];
+            /** Research Engine Project Id */
+            research_engine_project_id?: string | null;
             /** Research Goals */
             research_goals?: string | null;
             research_status: components["schemas"]["ResearchStatus"];
@@ -15182,6 +16083,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Workspace Archived
+             * @default false
+             */
+            workspace_archived: boolean;
             /**
              * Workspace Id
              * Format: uuid
@@ -22881,6 +23787,39 @@ export interface operations {
             };
         };
     };
+    list_draft_reviews_api_v1_projects__project_id__drafts_reviews_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftReviewListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_generation_status_api_v1_projects__project_id__drafts_status_get: {
         parameters: {
             query?: {
@@ -24298,7 +25237,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["RunCreate"];
+                "application/json": components["schemas"]["RunCreate"] | null;
             };
         };
         responses: {
@@ -24309,6 +25248,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_legacy_projects_api_v1_research_engine_legacy_projects_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyProjectResponse"][];
+                };
+            };
+        };
+    };
+    get_legacy_project_api_v1_research_engine_legacy_projects__engine_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyProjectResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24386,6 +25376,41 @@ export interface operations {
             };
         };
     };
+    link_project_collection_api_v1_research_engine_projects__engine_id__collection_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectLink"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["src__schemas__research_engine__ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_project_api_v1_research_engine_projects__project_id__get: {
         parameters: {
             query?: never;
@@ -24404,6 +25429,504 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["src__schemas__research_engine__ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_protocols_api_v1_research_engine_projects__project_id__protocols_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProtocolResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_protocol_route_api_v1_research_engine_projects__project_id__protocols_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchProtocolCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProtocolResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_questions_api_v1_research_engine_projects__project_id__questions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchQuestionResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_question_route_api_v1_research_engine_projects__project_id__questions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchQuestionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchQuestionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_project_roles_api_v1_research_engine_projects__project_id__roles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProjectRoleResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_project_role_api_v1_research_engine_projects__project_id__roles_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchProjectRoleCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProjectRoleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_project_role_api_v1_research_engine_projects__project_id__roles__user_id___role__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                user_id: string;
+                role: components["schemas"]["ResearchProjectRole"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_protocol_api_v1_research_engine_protocols__protocol_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProtocolResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_deviations_api_v1_research_engine_protocols__protocol_id__deviations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolDeviationResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_deviation_api_v1_research_engine_protocols__protocol_id__deviations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProtocolDeviationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolDeviationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_registrations_api_v1_research_engine_protocols__protocol_id__registrations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolRegistrationResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_registration_api_v1_research_engine_protocols__protocol_id__registrations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProtocolRegistrationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolRegistrationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchProtocolVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProtocolResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions__version_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProtocolApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolApprovalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_question_version_route_api_v1_research_engine_questions__question_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchQuestionVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchQuestionResponse"];
                 };
             };
             /** @description Validation Error */

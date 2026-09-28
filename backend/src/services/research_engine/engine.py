@@ -157,6 +157,13 @@ class WorkflowEngine:
                     "output": result.output,
                     "quality_marks": quality_marks_data,
                     "token_count": result.token_count,
+                    "inputs_hash": result.inputs_hash,
+                    "outputs_hash": result.outputs_hash,
+                    "full_prompt": result.full_prompt,
+                    "model_id": result.model_id,
+                    "model_version": result.model_version,
+                    "temperature": result.temperature,
+                    "seed": result.seed,
                 }
 
                 if total_tokens > self.max_total_tokens:

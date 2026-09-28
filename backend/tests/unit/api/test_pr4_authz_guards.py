@@ -8,7 +8,8 @@ removed from one route is caught).
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -42,10 +43,19 @@ async def test_pipeline_access_404_for_non_owner():
 
 
 async def test_pipeline_access_passes_for_owner():
-    from src.api.research.pipeline import _ensure_project_access
+    from src.api.research import pipeline as mod
 
-    db = _db_scalar(uuid4())  # owned project row returned
-    await _ensure_project_access(uuid4(), _user(), db)  # no raise
+    db = _db_scalar(uuid4())
+    project_id = uuid4()
+    user = _user()
+    with patch.object(
+        mod,
+        "resolve_project",
+        AsyncMock(return_value=SimpleNamespace(collection=object())),
+    ) as resolve:
+        await mod._ensure_project_access(project_id, user, db)
+
+    resolve.assert_awaited_once_with(db, project_id, user.id, mod.ResearchAction.VIEW)
 
 
 async def test_get_pipeline_enforces_access_before_service():
@@ -107,6 +117,13 @@ async def test_pipeline_update_and_reset_enforce_access_before_service():
     db = _db_scalar(None)  # caller owns no matching project
     body = mod.UpdatePipelineRequest()
     with (
+        patch.object(
+            mod,
+            "resolve_project",
+            AsyncMock(
+                side_effect=HTTPException(status_code=404, detail="Project not found")
+            ),
+        ) as resolve,
         patch.object(mod.PipelineService, "update_pipeline", AsyncMock()) as up,
         patch.object(mod.PipelineService, "reset_pipeline", AsyncMock()) as rp,
     ):
@@ -117,6 +134,7 @@ async def test_pipeline_update_and_reset_enforce_access_before_service():
     assert e1.value.status_code == 404 and e2.value.status_code == 404
     up.assert_not_called()
     rp.assert_not_called()
+    assert resolve.await_count == 2
 
 
 def test_all_connector_routes_require_auth():
