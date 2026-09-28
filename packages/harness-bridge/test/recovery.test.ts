@@ -506,3 +506,109 @@ test("renewal for a new generation cannot extend a fenced native turn", async ()
     f.cleanup();
   }
 });
+
+test("failed targeted interrupt retries on redelivery and successful delivery stays deduped", async () => {
+  const f = fixture();
+  let j = new Journal(f.path, () => options);
+  const c = command();
+  const a = adapter();
+  a.startTurn = async () => {
+    a.startCalls++;
+    return { id: "turn" };
+  };
+  a.interruptTurn = async (sessionId, turnId) => {
+    a.interrupts.push(`${sessionId}/${turnId}`);
+    if (a.interrupts.length === 1)
+      throw new Error("transient interrupt delivery failure");
+  };
+  const stop: BridgeCommand = {
+    ...c,
+    commandId: randomUUID(),
+    body: { kind: "interrupt", sessionId: "session", turnId: "turn" },
+  };
+  try {
+    await j.execute(c, a);
+    await j.execute(stop, a);
+    assert.equal(j.state(stop.commandId), "recovering");
+    await assert.rejects(
+      j.execute({ ...stop, expiresAt: new Date(0).toISOString() }, a),
+      /lease expired/,
+    );
+    await assert.rejects(
+      j.execute(
+        {
+          ...stop,
+          body: { kind: "interrupt", sessionId: "session", turnId: "foreign" },
+        },
+        a,
+      ),
+      /payload conflict/,
+    );
+    assert.deepEqual(a.interrupts, ["session/turn"]);
+    j.close();
+    j = new Journal(f.path, () => options);
+    await j.execute(stop, a);
+    assert.deepEqual(a.interrupts, ["session/turn", "session/turn"]);
+    assert.equal(j.state(stop.commandId), "delivered");
+    assert.equal(j.workspaceLocked(c.workspaceId), true);
+    j.close();
+    j = new Journal(f.path, () => options);
+    await j.execute(stop, a);
+    assert.equal(a.interrupts.length, 2);
+    assert.equal(a.startCalls, 1);
+    j.recordNative(c.commandId, {
+      kind: "terminal",
+      sessionId: "session",
+      turnId: "turn",
+      status: "interrupted",
+    });
+    for (const value of j.pending()) {
+      j.acknowledge({
+        runId: value.runId,
+        sourceId: value.sourceId,
+        sourceSeq: value.sourceSeq,
+        generation: value.generation,
+        canonicalSeq: value.sourceSeq,
+      });
+    }
+    assert.equal(j.workspaceLocked(c.workspaceId), false);
+    assert.equal(j.state(c.commandId), "interrupted");
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});
+
+test("ambiguous non-interrupt response is not replayed", async () => {
+  const f = fixture(),
+    j = new Journal(f.path, () => options),
+    c = command(),
+    a = adapter();
+  a.startTurn = async () => ({ id: "turn" });
+  let responses = 0;
+  a.respondToRequest = async () => {
+    responses++;
+    throw new Error("response delivery uncertain");
+  };
+  const response: BridgeCommand = {
+    ...c,
+    commandId: randomUUID(),
+    body: {
+      kind: "respond",
+      requestId: 1,
+      response: { kind: "decision", allow: true },
+      approvalRecordId: randomUUID(),
+    },
+  };
+  try {
+    await j.execute(c, a);
+    await j.execute(response, a);
+    await j.execute(response, a);
+    assert.equal(responses, 1);
+    assert.equal(j.state(response.commandId), "recovering");
+    assert.equal(j.workspaceLocked(c.workspaceId), true);
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});

@@ -155,7 +155,13 @@ export class Journal {
     if (existing) {
       if (existing.digest !== digest)
         throw new Error("command payload conflict");
-      return;
+      // An exact targeted interrupt is safe to redeliver until the native
+      // receipt is persisted. Ambiguous starts/responses are never replayed.
+      if (
+        command.body.kind !== "interrupt" ||
+        !["intent", "recovering"].includes(existing.state)
+      )
+        return;
     }
     const lease = this.db
       .prepare("SELECT expires,blocked FROM leases WHERE run_id=?")
@@ -187,11 +193,17 @@ export class Journal {
         if (b.kind === "respond" && owner.state !== "running")
           throw new Error("approval blocked during recovery");
       }
-      this.db
-        .prepare(
-          "INSERT INTO commands(id,command,digest,state) VALUES(?,?,?,?)",
-        )
-        .run(command.commandId, JSON.stringify(command), digest, "intent");
+      if (existing) {
+        this.db
+          .prepare("UPDATE commands SET state='intent' WHERE id=?")
+          .run(command.commandId);
+      } else {
+        this.db
+          .prepare(
+            "INSERT INTO commands(id,command,digest,state) VALUES(?,?,?,?)",
+          )
+          .run(command.commandId, JSON.stringify(command), digest, "intent");
+      }
       if (b.kind === "start")
         this.db
           .prepare("INSERT INTO locks(workspace,command) VALUES(?,?)")
