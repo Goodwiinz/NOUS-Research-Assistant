@@ -1,0 +1,74 @@
+SOURCE_SHA: 2b98e23b25ad345a85059c4a4266721b7a293a7f
+EXECUTION_PROVENANCE:
+  These checks ran against the exact committed executable source. Only
+  documentation and bounded evidence are changed in the child commit.
+
+AFFECTED REPORT / DISCOVERY / EXPORT / REVIEW
+CLASSIFICATION: PASS
+COMMAND:
+  PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q \
+    backend/tests/unit/services/test_report_rendering.py \
+    backend/tests/unit/services/test_paper_discovery.py \
+    backend/tests/unit/services/test_export_service.py \
+    backend/tests/unit/services/test_research_review_service.py \
+    backend/tests/unit/services/test_research_template_contracts.py \
+    backend/tests/unit/test_audit_schema_drift.py
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 47aaa6f92a8986c14dcf96a222f3c2f163370505125ec7dda4c40b8cbcbc128e
+RAW_CAPTURE_BYTES: 87528
+RESULT: 164 passed, 1 warning in 7.51s
+
+STATIC / TYPE / CONTRACT CHECKS
+CLASSIFICATION: PASS
+COMMANDS:
+  .venv/bin/ruff check \
+    backend/src/services/research_engine/report_rendering.py \
+    backend/tests/unit/services/test_report_rendering.py
+  .venv/bin/ruff format --check \
+    backend/src/services/research_engine/report_rendering.py \
+    backend/tests/unit/services/test_report_rendering.py
+  PYTHONPATH=backend .venv/bin/mypy \
+    backend/src/services/research_engine/report_rendering.py
+  .venv/bin/python scripts/ci/generate_openapi.py --check
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+    --dir frontend run generate:api-types
+  git diff --exit-code -- backend/openapi.json \
+    frontend/src/types/generated/api.d.ts
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+    --dir frontend run type-check
+  /root/.local/bin/bandit -q -r \
+    backend/src/services/research_engine/report_rendering.py
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: e9b869397991fb6253fe11ef915a4bed8967bfb4fa9af31bf27bb50718220830
+RAW_CAPTURE_BYTES: 6534
+RESULT:
+  Ruff passed; both files were already formatted; mypy found no issue in the
+  renderer; OpenAPI was current; regenerated TypeScript produced no diff;
+  tsc --noEmit passed with Node 24.21.0 and pnpm 10.18.2; scoped Bandit 1.9.4
+  reported no finding.
+
+EXACT-SOURCE GITLEAKS
+CLASSIFICATION: PASS
+VERSION: 8.30.1
+COMMAND:
+  /tmp/t8-gitleaks-bin/gitleaks git . --redact \
+    --config .gitleaks.toml --verbose --log-opts=-1
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 654213e4d5dff95968de6afd97943d9fa50406d954e9d30f79c5f41bba3bd2fd
+RAW_CAPTURE_BYTES: 174
+RESULT: 1 commit scanned; no leaks found
+
+SCOPE NOTES
+  No schema or lifecycle code changed, so dedicated migration and PostgreSQL
+  suites were not rerun. The exact-source browser run exercised real
+  PostgreSQL. No frontend source changed, so type-check plus the complete
+  browser suite were the applicable frontend gates. Performance was not rerun:
+  the change groups four existing bibliography aliases during report
+  projection and does not touch the measured stage hot paths. Earlier exact
+  performance remains bound to source 9ca9d6a and is not relabeled.
+
+RELEASE LEDGER
+  Dependency audits, anonymous Safety, full frontend validation, and full local
+  CI remain FAILED. The configured-model and authenticated Safety gates remain
+  BLOCKED. Remote candidate checks, production configuration/rollback, deploy,
+  and flag enablement remain NOT RUN. The feature remains default off.

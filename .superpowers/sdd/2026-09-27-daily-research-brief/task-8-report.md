@@ -10,7 +10,9 @@ Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
 
 Independent-review source: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`
 
-Final executable source: `b334ec79861b438e8646ff75325cf4f5bdd75a30`
+Final executable source: `2b98e23b25ad345a85059c4a4266721b7a293a7f`
+
+Prior identifier-safety source: `b334ec79861b438e8646ff75325cf4f5bdd75a30`
 
 Prior final re-review source: `ac17ca15a3a91af936851647bbde89d9860709ba`
 
@@ -18,13 +20,13 @@ Prior whole-feature source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
 
 Disposition: **local follow-up complete; negative ship decision remains**
 
-## 2026-09-28 identifier-safety amendment
+## 2026-09-28 publication-date alias amendment
 
-This amendment records the final reader-identifier repair after the
-bibliography-provenance and certification-hash fixes. It supersedes the earlier
-final-source label while retaining every result under the source on which it
-ran. The release decision and every FAILED, BLOCKED, and NOT RUN classification
-remain unchanged.
+This amendment records the publication-date alias repair after the
+bibliography-provenance, identifier-safety, and certification-hash fixes. It
+supersedes the earlier final-source label while retaining every result under the
+source on which it ran. The release decision and every FAILED, BLOCKED, and NOT
+RUN classification remain unchanged.
 
 The executable changes are frozen in the final executable source. Its child
 commit contains only this report, the verification record, progress, and
@@ -46,7 +48,8 @@ duplicate extraction; restoring it produced GREEN `(200, 409)`.
 
 The final whole-feature review closed five additional gaps. The first re-review
 closed the multi-provider bibliography and certification-wording gaps; the
-last re-review closed reader identifier precedence and filtering:
+next re-review closed reader identifier precedence and filtering; the final
+re-review closed publication-date alias precedence:
 
 1. Report rendering joins extraction evidence to canonical sources by
    `source_id`. DOI, year, URL, journal/date, and `evidence_level` come from the
@@ -55,13 +58,18 @@ last re-review closed reader identifier precedence and filtering:
    snapshots without overriding non-empty canonical values. Real-shaped
    OpenAlex, Crossref, PubMed, reverse-order, conflict, and bridged-cluster tests
    prove an abstract remains abstract and DOI/year/journal appear in JSON,
-   Markdown, and CSV without exposing the provenance blob. Final source
+   Markdown, and CSV without exposing the provenance blob. Source
    `b334ec798` restricts reader identifier maps to `doi`, `pmid`, `pmcid`,
    `arxiv`, `openalex`, `semantic_scholar`, and `rag_store`; seeds populated
    canonical/direct values before provenance fallback; and filters again at the
    final projection. A prepare-sources/export regression proves a conflicting
    provenance DOI cannot replace the direct canonical DOI and opaque
    `provider_trace`/`patient_id` identifiers never reach any reader format.
+   Final source `2b98e23b2` groups `publication_date`, `published`,
+   `publication_year`, and `year` as one semantic field. A populated canonical
+   alias blocks a conflicting provenance alias, while a fully missing canonical
+   date group may still be enriched. Both provider orders pass through real
+   `prepare_sources` and JSON, Markdown, and CSV projection.
 2. Final approval now adds an append-only attestation around the already
    reviewed immutable artifact. It binds the final review ID, reviewer ID,
    timestamp, decision/kind/index, output hash, report hash, and verification
@@ -78,9 +86,9 @@ last re-review closed reader identifier precedence and filtering:
    audit and recovery; legacy/custom workflows remain available. Tests and E2E
    opt in explicitly.
 4. The complete 10-scenario browser suite ran against exact final source
-   `b334ec79861b438e8646ff75325cf4f5bdd75a30` with the feature flag enabled in
+   `2b98e23b25ad345a85059c4a4266721b7a293a7f` with the feature flag enabled in
    the isolated test environment. It includes the manual-resume handoff and
-   200-row bound and passed `10/10` in 2.9 minutes.
+   200-row bound and passed `10/10` in 2.7 minutes.
 5. Cancellation recovery locks and rereads durable state before deciding to
    pause. A disconnect after a completed or failed terminal commit can no
    longer rewrite the run to paused. Removing only this terminal guard produced
@@ -91,12 +99,12 @@ last re-review closed reader identifier precedence and filtering:
 
 | Gate                             | Result                                                                                  |
 | -------------------------------- | --------------------------------------------------------------------------------------- |
-| Affected backend                 | Final source: `162 passed` in 8.31s.                                                     |
+| Affected backend                 | Final source: `164 passed` in 7.51s.                                                     |
 | Broader focused backend          | Prior whole-feature source: `277 passed` in 14.85s.                                      |
 | PostgreSQL lifecycle             | Prior whole-feature source: `5 passed` in 4.88s; final browser exercised real PG.        |
 | Terminal-cancellation mutation   | Expected RED `1 failed`; restored GREEN `1 passed`.                                     |
 | Focused frontend                 | 5 files, `61 passed`.                                                                   |
-| Exact-source browser             | `10 passed (2.9m)`; 200-row p50 `523.3 ms`, p95 `604.3 ms`, frozen ceiling `999.24 ms`. |
+| Exact-source browser             | `10 passed (2.7m)`; 200-row p50 `494.9 ms`, p95 `649.0 ms`, frozen ceiling `999.24 ms`. |
 | Frozen performance               | Prior source `9ca9d6a`: `6 passed` in 18.93s; every frozen ceiling passed.              |
 | Node 24 type-check               | PASS with Node `24.21.0` and pnpm `10.18.2`.                                            |
 | OpenAPI and generated TypeScript | PASS; regeneration produced no diff.                                                    |
@@ -115,6 +123,12 @@ That expected RED is committed as bounded terminal output without a separate
 raw file; the exact-source suite asserts opaque identifiers are absent from
 JSON, Markdown, and CSV.
 
+The publication-date regression was RED when Crossref-first canonical
+`published=[[2025,6,1]]` was reported as 2024 after secondary OpenAlex supplied
+`publication_date=2024-01-02`. The reverse provider order passed, isolating the
+alias-precedence defect. Grouping all four aliases restored GREEN for both
+orders while the existing missing-canonical-date fallback remained green.
+
 The exact-source browser scenario performs resume POST, observes the immediate
 paused GET, starts the SSE request, confirms the stream claims the durable run,
 and reaches the next controlled lifecycle boundary. Because the local Next
@@ -128,18 +142,20 @@ an invalid consumed-response assertion (`1 failed, 9 not run`), another had an
 unstable reconnect fixture (`5 passed, 1 failed, 4 not run`), and three focused
 attempts exposed local Next response buffering. An incomplete-auth run and host
 channel losses are excluded environment evidence, never relabeled as passes.
-Two final-source attempts also stopped before the feature lifecycle because
-stale local Next route manifests omitted `/login` and then the dynamic
-project/blueprint route. Both are retained as `1 failed, 9 not run` excluded
-setup evidence. Regenerating the route cache changed no source bytes, and the
-subsequent full exact-source run passed.
+Two attempts on prior identifier-safety source `b334ec798` also stopped before
+the feature lifecycle because stale local Next route manifests omitted `/login`
+and then the dynamic project/blueprint route. Both are retained as `1 failed, 9
+not run` excluded setup evidence. Regenerating the route cache changed no source
+bytes, and the subsequent full run passed. Final source `2b98e23b2`
+prevalidated both routes and had no invalid browser attempt.
 
 ## Frozen performance evidence
 
 Three baseline-equivalent full invocations passed on independent-review source
 `a92fcfa`, and one exact documented full invocation passed on prior
-whole-feature source `9ca9d6a`. The two re-reviews changed only report metadata
-projection/filtering and their tests, so performance was not rerun or relabeled.
+whole-feature source `9ca9d6a`. The three re-reviews changed only report
+metadata projection/filtering/grouping and their tests, so performance was not
+rerun or relabeled.
 The frozen numeric thresholds and nearest-rank percentile function
 never changed. Both baseline and final method use one warmup plus 11 measured
 max-stage observations with GC enabled, so p95 is rank 11, the maximum.

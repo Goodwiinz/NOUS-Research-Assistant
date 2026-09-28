@@ -6,7 +6,9 @@ Branch: `codex/daily-research-brief-20260927`
 
 Task 8 base: `68cc641938f43b99fa8d00e18822ccf2c62106e8`
 
-Final executable source: `b334ec79861b438e8646ff75325cf4f5bdd75a30`
+Final executable source: `2b98e23b25ad345a85059c4a4266721b7a293a7f`
+
+Prior identifier-safety source: `b334ec79861b438e8646ff75325cf4f5bdd75a30`
 
 Prior final re-review source: `ac17ca15a3a91af936851647bbde89d9860709ba`
 
@@ -18,19 +20,20 @@ Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
 
 Disposition: **CERTIFICATION COMPLETE — NOT READY TO ENABLE**
 
-## 2026-09-28 identifier-safety amendment
+## 2026-09-28 publication-date alias amendment
 
 This amendment supersedes the prior final-source designation. Source
-`ac17ca15` added the missing multi-provider bibliography fallback and exact
-hash-relationship regression. Final source `b334ec798` constrains reader-facing
-identifiers to the seven discovery identifier kinds, makes populated canonical
-and direct identifiers authoritative over retained provenance, and rejects
-opaque provider keys at the final projection. Earlier results remain attributed
+`ac17ca15` added multi-provider bibliography fallback, and source `b334ec798`
+constrained reader identifiers and their precedence. Final source `2b98e23b2`
+treats `publication_date`, `published`, `publication_year`, and `year` as one
+semantic bibliography field: any populated canonical alias blocks all
+provenance date fallback, while an entirely missing canonical group may still
+be filled from a retained provider snapshot. Earlier results remain attributed
 to the source on which they ran.
 
 The final executable source is followed by a documentation/evidence-only child
 commit. That scheme avoids a self-referential hash: committed transcripts name
-immutable source `b334ec798`, while the handoff names both commits. Earlier
+immutable source `2b98e23b2`, while the handoff names both commits. Earlier
 performance/eval transcripts stay bound to `a92fcfa` or `9ca9d6a` where they
 actually ran.
 
@@ -50,11 +53,11 @@ local scope or lacked the required release state.
 
 | Gate                                        | Status  | Evidence                                                                                                                                 |
 | ------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| PostgreSQL lifecycle integration            | PASS    | Prior source `9ca9d6a`: 5 tests passed; exact-source browser on `b334ec798` also exercised real PostgreSQL.                              |
-| Browser → Next → FastAPI → PostgreSQL       | PASS    | Final source `b334ec798`: all 10 serial scenarios passed with the flag explicitly enabled locally.                                      |
-| Browser 200-row review rendering            | PASS    | Final source: 11 cold reloads, p50 `523.3 ms`, p95 `604.3 ms`, frozen ceiling `999.24 ms`.                                               |
+| PostgreSQL lifecycle integration            | PASS    | Prior source `9ca9d6a`: 5 tests passed; exact-source browser on `2b98e23b2` also exercised real PostgreSQL.                             |
+| Browser → Next → FastAPI → PostgreSQL       | PASS    | Final source `2b98e23b2`: all 10 serial scenarios passed with the flag explicitly enabled locally.                                     |
+| Browser 200-row review rendering            | PASS    | Final source: 11 cold reloads, p50 `494.9 ms`, p95 `649.0 ms`, frozen ceiling `999.24 ms`.                                               |
 | Frozen backend performance                  | PASS    | Three runs on `a92fcfa` and one exact run on prior source `9ca9d6a` passed unchanged ceilings; not relabeled for later rendering fixes. |
-| Affected/broader backend                    | PASS    | Final source: `162 passed`; prior broader focused set: `277 passed`.                                                                      |
+| Affected/broader backend                    | PASS    | Final source: `164 passed`; prior broader focused set: `277 passed`.                                                                      |
 | Focused frontend                            | PASS    | 5 files and 61 tests passed; manual-resume boundary included.                                                                            |
 | Frontend type-check and earlier full Vitest | PASS    | Final source: Node `24.21.0`, pnpm `10.18.2`; type-check passed. Earlier full suite: 315 files, 2,368 tests.                             |
 | Full `frontend validate`                    | FAILED  | Existing full-tree lint debt stopped the command: 113 errors and 1,961 warnings.                                                         |
@@ -96,12 +99,15 @@ it never overrides a non-empty canonical value. Reader identifier maps are
 restricted to `doi`, `pmid`, `pmcid`, `arxiv`, `openalex`,
 `semantic_scholar`, and `rag_store`. Populated canonical/direct identifiers are
 seeded before provenance fallback, and the final projection filters the map
-again. Real-shaped OpenAlex, Crossref, and PubMed regressions, including both
-provider orders, a three-provider DOI/PMID bridge, and a conflicting provenance
+again. Publication date aliases form one semantic field, so a canonical value
+under any alias blocks a conflicting secondary alias; only a fully missing
+canonical date group can be enriched. Real-shaped OpenAlex, Crossref, and
+PubMed regressions, including both provider orders, a three-provider DOI/PMID
+bridge, and a conflicting provenance
 DOI with opaque `provider_trace`/`patient_id` values, prove an abstract source
-remains `abstract`, canonical DOI/year/journal survive into JSON, Markdown, and
-CSV, and opaque identifier data cannot reach readers. The provenance blob also
-remains internal.
+remains `abstract`, canonical DOI/year/date/journal survive into JSON, Markdown,
+and CSV, missing dates can still be filled, and opaque identifier data cannot
+reach readers. The provenance blob also remains internal.
 
 ### Final approval attestation
 
@@ -215,14 +221,14 @@ DAILY_BRIEF_E2E_PORT=8765 \
 
 The Playwright fixture starts Uvicorn with the same flag and database URL. The
 precondition asserted a clean worktree at exact source
-`b334ec79861b438e8646ff75325cf4f5bdd75a30`.
+`2b98e23b25ad345a85059c4a4266721b7a293a7f`.
 
-Result: `10 passed (2.9m)`. The scenarios cover all three reloadable review
+Result: `10 passed (2.7m)`. The scenarios cover all three reloadable review
 gates and exact downloads; provenance/attestation; partial provider failure;
 no-evidence; verification failure and exact-hash override; manual resume after
 an intermediate paused GET; 200-row rendering; stale refresh; immutable
 replay; and same-organization/cross-tenant owner denials. Eleven cold 200-row
-reloads observed p50 `523.3 ms` and p95 `604.3 ms` below `999.24 ms`.
+reloads observed p50 `494.9 ms` and p95 `649.0 ms` below `999.24 ms`.
 
 The manual-resume test performs the resume POST, lets the immediate refresh
 return paused, opens the SSE request, and verifies durable `running` through the
@@ -239,11 +245,13 @@ a consumed-download-response assertion (`1 failed, 9 not run`); another had an
 unstable reconnect boundary (`5 passed, 1 failed, 4 not run`); three focused
 attempts exposed Next response buffering. A login redirect caused by incomplete
 offline auth and host/channel interruptions are environment evidence. None is
-reported as a pass. On final source, two additional attempts stopped before the
-feature lifecycle because stale local Next route manifests omitted `/login` and
-then the dynamic project/blueprint route (`1 failed, 9 not run` each). Their raw
-captures are retained as failed/excluded setup evidence. Regenerating the local
-route cache changed no source bytes; the subsequent full run passed.
+reported as a pass. On prior identifier-safety source `b334ec798`, two
+additional attempts stopped before the feature lifecycle because stale local
+Next route manifests omitted `/login` and then the dynamic project/blueprint
+route (`1 failed, 9 not run` each). Their raw captures are retained as
+failed/excluded setup evidence. Regenerating the local route cache changed no
+source bytes; the subsequent full run passed. Final source `2b98e23b2`
+prevalidated both routes and had no invalid browser attempt.
 
 ## Configured-model evaluation
 
@@ -298,9 +306,9 @@ search/screen/extract p95 values were `14.170/29.408/88.468`,
 
 After the rendering/attestation/lifecycle changes, the exact documented command
 ran again on prior whole-feature source `9ca9d6a` and returned `6 passed` in
-18.93s. Sources `ac17ca15` and `b334ec798` only project and filter
-already-retained bibliography/identifier maps during report construction;
-performance was not rerun or relabeled for either source.
+18.93s. Sources `ac17ca15`, `b334ec798`, and `2b98e23b2` only project,
+filter, or group already-retained bibliography/identifier values during report
+construction; performance was not rerun or relabeled for those sources.
 
 | Metric                        |                  Source 9ca9d6a |                 Frozen ceiling |
 | ----------------------------- | ----------------------------: | -----------------------------: |
@@ -420,12 +428,12 @@ one bounded terminal capture without a separate raw file. Evidence covers:
   whole-feature performance run on `9ca9d6a`;
 - simultaneous stream-claim mutation RED/restored GREEN;
 - terminal-cancellation mutation RED/restored GREEN;
-- exact-source 10-scenario browser passes on `9ca9d6a`, `ac17ca15`, and final
-  `b334ec798`,
+- exact-source 10-scenario browser passes on `9ca9d6a`, `ac17ca15`,
+  `b334ec798`, and final `2b98e23b2`,
   plus prior failed/excluded attempts;
-- provenance-fallback and identifier-safety RED/restored GREEN; and
+- provenance-fallback, identifier-safety, and date-alias RED/restored GREEN; and
 - affected/backend/PostgreSQL/frontend/type/OpenAPI/lint/Bandit/Gitleaks checks,
-  with final identifier-safety checks bound to `b334ec798`.
+  with final date-alias checks bound to `2b98e23b2`.
 
 Older ignored logs under the SDD task directory are supplemental mutable local
 records. They are not the sole basis of any final-source claim.

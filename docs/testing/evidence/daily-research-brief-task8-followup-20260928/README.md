@@ -4,7 +4,9 @@ Date: 2026-09-28
 
 Independent-review source: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`
 
-Final executable source: `b334ec79861b438e8646ff75325cf4f5bdd75a30`
+Final executable source: `2b98e23b25ad345a85059c4a4266721b7a293a7f`
+
+Prior identifier-safety source: `b334ec79861b438e8646ff75325cf4f5bdd75a30`
 
 Prior final re-review source: `ac17ca15a3a91af936851647bbde89d9860709ba`
 
@@ -16,10 +18,13 @@ The existing performance, eval, and simultaneous-stream-claim transcripts are
 bound to the source where they ran. Runtime control, cancellation, PostgreSQL,
 and approval attestation are frozen in the prior whole-feature source. Source
 `ac17ca15` added deterministic bibliography fallback from retained provider
-provenance. Final source `b334ec798` constrains reader identifiers to the seven
+provenance. Source `b334ec798` constrains reader identifiers to the seven
 discovery identifier kinds, preserves populated canonical/direct identifiers,
-and prevents opaque provider keys from reaching JSON, Markdown, or CSV. This
-directory is committed in a documentation-only child of the final source, so
+and prevents opaque provider keys from reaching JSON, Markdown, or CSV. Final
+source `2b98e23b2` groups all publication date/year aliases so a canonical alias
+cannot be displaced by a conflicting provenance alias, while a wholly missing
+canonical date can still be enriched. This directory is committed in a
+documentation-only child of the final source, so
 the transcripts can name the immutable executable commit without making a
 commit contain its own hash.
 
@@ -45,6 +50,7 @@ are the evidence of record.
 | `exact-source-browser.txt`                     | PASS            | All 10 real browser → Next → FastAPI → PostgreSQL scenarios on `9ca9d6a`.                                   |
 | `exact-source-browser-ac17ca15.txt`            | PASS            | All 10 scenarios rerun after the rendering fix on exact source `ac17ca15`.                                  |
 | `exact-source-browser-b334ec798.txt`            | PASS            | All 10 scenarios rerun after identifier filtering on exact source `b334ec798`.                             |
+| `exact-source-browser-2b98e23b2.txt`            | PASS            | All 10 scenarios rerun after date-alias grouping on exact source `2b98e23b2`.                              |
 | `exact-source-browser-b334ec798-failures.txt`   | FAILED/EXCLUDED | Two stale local Next route-cache attempts retained and excluded from feature evidence.                      |
 | `exact-source-browser-failures.txt`            | FAILED/EXCLUDED | Earlier executable failures and invalid environment/host attempts retained without being counted as passes. |
 | `focused-checks.txt`                           | PASS/BLOCKED    | Eval, PostgreSQL, frontend, type-check, and formatting checks on `a92fcfa`; the live-model test is BLOCKED. |
@@ -53,6 +59,8 @@ are the evidence of record.
 | `provenance-fallback-red-green.txt`            | EXPECTED RED/PASS | Missing secondary-provider bibliography regression before and after fix.                                  |
 | `identifier-safety-red-green.txt`               | EXPECTED RED/PASS | Canonical DOI precedence and opaque-identifier leak regression before and after fix.                       |
 | `identifier-safety-final-checks.txt`            | PASS            | Backend, API/type drift, type-check, static checks, Bandit, and Gitleaks on `b334ec798`.                    |
+| `date-alias-red-green.txt`                      | EXPECTED RED/PASS | Cross-provider publication-date alias precedence before and after the grouped fallback.                    |
+| `date-alias-final-checks.txt`                   | PASS            | Backend, API/type drift, type-check, static checks, Bandit, and Gitleaks on `2b98e23b2`.                   |
 
 The certification uses distinct hashes. `report_hash` is the canonical JSON
 report hash. The post-approval audit records a separate SHA-256 for the exact

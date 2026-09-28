@@ -279,8 +279,9 @@
   `efd76079be75fdbba9eef4215c1c831d829cacb4`; independent review
   `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`; final whole-feature source
   `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`; bibliography re-review source
-  `ac17ca15a3a91af936851647bbde89d9860709ba`; final identifier-safety source
-  `b334ec79861b438e8646ff75325cf4f5bdd75a30`.
+  `ac17ca15a3a91af936851647bbde89d9860709ba`; identifier-safety source
+  `b334ec79861b438e8646ff75325cf4f5bdd75a30`; final date-alias source
+  `2b98e23b25ad345a85059c4a4266721b7a293a7f`.
 - Earlier independent review closed five Important gaps: manual-resume
   authorization survives the intermediate paused GET; a fixed-corpus semantic
   scorer is independent of self-reported support labels; performance uses the
@@ -326,6 +327,16 @@
   absence of opaque `provider_trace`/`patient_id` keys and values. Final-source
   affected backend passed `162`; Node `24.21.0` type-check, OpenAPI/type drift,
   Ruff/format/mypy, Bandit `1.9.4`, and exact-source Gitleaks `8.30.1` passed.
+- The publication-date alias re-review treats `publication_date`, `published`,
+  `publication_year`, and `year` as one semantic bibliography field. Its real
+  prepare-sources/export regression was RED because Crossref-first canonical
+  `published=[[2025,6,1]]` was projected as 2024 after secondary OpenAlex
+  supplied `publication_date=2024-01-02`; the reverse provider order passed.
+  Both orders are GREEN after the grouped fallback, existing missing-date
+  enrichment stays green, and JSON, Markdown, and CSV assert matching canonical
+  dates/years. Exact-source affected backend passed `164`; Node `24.21.0`
+  type-check, OpenAPI/type drift, Ruff/format/mypy, Bandit `1.9.4`, and exact-source
+  Gitleaks `8.30.1` passed.
 - Exact-source browser result: `10 passed (2.6m)`. The 200-row review page used
   11 cold reloads with p50 `519.3 ms` and p95 `745.9 ms`, below the frozen
   `999.24 ms` ceiling. The scenario set includes three reloadable gates,
@@ -337,12 +348,17 @@
   unchanged `999.24 ms` ceiling. The prior `9ca9d6a` browser pass remains part
   of the historical evidence rather than being overwritten.
 - The complete browser suite was rerun again after identifier filtering against
-  exact final source `b334ec798`: `10 passed (2.9m)`; 11 cold 200-row reloads
+  exact identifier-safety source `b334ec798`: `10 passed (2.9m)`; 11 cold 200-row reloads
   measured p50 `523.3 ms` and p95 `604.3 ms`, below the same `999.24 ms`
   ceiling. Two preceding attempts stopped before the feature lifecycle because
   stale local Next route manifests omitted `/login` and then the dynamic
   project/blueprint route (`1 failed, 9 not run` each). They are committed as
   excluded setup evidence; regenerating the route cache changed no source bytes.
+- The complete browser suite was rerun after date-alias grouping against exact
+  final source `2b98e23b2`: `10 passed (2.7m)`; 11 cold 200-row reloads measured
+  p50 `494.9 ms` and p95 `649.0 ms`, below the unchanged `999.24 ms` ceiling.
+  `/login` and the protected dynamic project/blueprint route were validated
+  before Playwright; no invalid browser attempt occurred on this source.
 - Prior browser failures are retained: one consumed-response assertion produced
   one failure with nine tests not run; one unstable reconnect fixture produced
   five passes, one failure, and four tests not run; three focused attempts
