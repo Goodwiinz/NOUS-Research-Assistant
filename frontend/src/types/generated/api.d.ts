@@ -8792,6 +8792,14 @@ export interface components {
              * @description Document ids to attach to this user turn. The documents are uploaded separately (POST /documents) and referenced here, so the stream body never carries file bytes. Ids the caller's organization does not own are dropped server-side, not rejected — a mixed batch still attaches the owned ones.
              */
             attachment_ids?: string[] | null;
+            /** Device Id */
+            device_id?: string | null;
+            /**
+             * Execution Provider
+             * @default nous
+             * @enum {string}
+             */
+            execution_provider: "nous" | "codex";
             /**
              * Max Context Docs
              * @default 5
@@ -8822,6 +8830,8 @@ export interface components {
              * @default true
              */
             use_rag: boolean;
+            /** Workspace Id */
+            workspace_id?: string | null;
         };
         /** AgentMessage */
         AgentMessage: {
@@ -11734,7 +11744,7 @@ export interface components {
          *     non-terminal; terminal states are absorbing.
          * @enum {string}
          */
-        JobStatus: "queued" | "running" | "awaiting_confirmation" | "stopping" | "completed" | "failed" | "cancelled";
+        JobStatus: "queued" | "running" | "awaiting_confirmation" | "stopping" | "recovering" | "completed" | "failed" | "cancelled";
         /** JobStatusResponse */
         JobStatusResponse: {
             /** Confirmation */

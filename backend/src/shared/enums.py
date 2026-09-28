@@ -36,6 +36,7 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     AWAITING_CONFIRMATION = "awaiting_confirmation"
     STOPPING = "stopping"
+    RECOVERING = "recovering"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

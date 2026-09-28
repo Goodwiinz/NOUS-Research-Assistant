@@ -74,6 +74,20 @@ SUPPORTED_MODELS: frozenset[str] = frozenset(
 
 
 class AgentExecuteRequest(BaseModel):
+    execution_provider: Literal["nous", "codex"] = "nous"
+    device_id: Optional[UUID] = None
+    workspace_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def _external_binding_required(self) -> "AgentExecuteRequest":
+        if self.execution_provider == "codex" and not (
+            self.device_id and self.workspace_id and self.thread_id
+        ):
+            raise ValueError(
+                "External execution requires device, workspace, and thread"
+            )
+        return self
+
     messages: List[AgentMessage] = Field(
         ...,
         min_length=1,

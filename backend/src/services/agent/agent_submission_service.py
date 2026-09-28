@@ -47,7 +47,7 @@ race, and the loser re-reads the winner.
 
 **Single writer.** ``uq_agent_runs_active_thread`` makes "one non-terminal run
 per thread" a database invariant. A new submission rejects while another run
-is queued, running, or stopping. A parked ``awaiting_confirmation`` run is safe
+is queued, running, stopping, or recovering. A parked ``awaiting_confirmation`` run is safe
 to abandon because no graph invocation is active; it is cancelled atomically
 with accepting the fresh turn, then the producer/new-turn path clears any
 stale checkpoint after claiming the replacement.
@@ -82,6 +82,7 @@ from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.thread import Thread
+from src.schemas.integration_context import IntegrationContext
 from src.services.agent.agent_run_service import ActiveRunConflict
 from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
 from src.services.agent.run_event_types import RunEventType
@@ -214,7 +215,32 @@ async def _replayed_submission(
     thread_id: UUID,
     idempotency_key: str,
     request: Any,
+    integration_context: Optional[IntegrationContext] = None,
 ) -> AcceptedSubmission:
+    if existing.thread_id != thread_id or existing.execution_provider != getattr(
+        request, "execution_provider", "nous"
+    ):
+        raise ActiveRunConflict("Idempotency key belongs to another submission.")
+    if (
+        integration_context is not None
+        and integration_context.run_id is not None
+        and str(integration_context.run_id) != existing.job_id
+    ):
+        from src.services.integrations.context import IntegrationAccessDenied
+
+        raise IntegrationAccessDenied()
+    if existing.execution_provider == "codex":
+        from src.models.harness_session import HarnessSession
+
+        binding = await db.scalar(
+            select(HarnessSession).where(HarnessSession.run_id == existing.job_id)
+        )
+        if (
+            binding is None
+            or binding.device_id != request.device_id
+            or binding.workspace_id != request.workspace_id
+        ):
+            raise ActiveRunConflict("Idempotency key belongs to another submission.")
     return AcceptedSubmission(
         run_id=str(existing.job_id),
         thread_id=str(thread_id),
@@ -439,6 +465,7 @@ async def abandon_awaiting_submission(
         AgentRun.organization_id == _coerce_uuid(organization_id),
         AgentRun.user_id == _coerce_uuid(user_id),
         AgentRun.status == JobStatus.AWAITING_CONFIRMATION.value,
+        AgentRun.execution_provider == "nous",
     ]
     if expected_run_id is not None:
         predicates.append(AgentRun.job_id == expected_run_id)
@@ -480,7 +507,7 @@ async def request_run_cancellation(
 ) -> Optional[RunCancellationResult]:
     """Durably request cancellation of one caller-owned active run.
 
-    The guarded update is the cancellation claim.  Only queued/running rows
+    The guarded update is the cancellation claim. Queued/running/recovering rows
     may transition to ``stopping``; a repeated request observes the existing
     stopping row and never appends a second ``run.stopping`` event.  The
     producer owns the later acknowledgement transition to ``cancelled``.
@@ -496,7 +523,14 @@ async def request_run_cancellation(
                 AgentRun.thread_id == _coerce_uuid(thread_id),
                 AgentRun.organization_id == _coerce_uuid(organization_id),
                 AgentRun.user_id == _coerce_uuid(user_id),
-                AgentRun.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),
+                AgentRun.status.in_(
+                    (
+                        JobStatus.QUEUED.value,
+                        JobStatus.RUNNING.value,
+                        JobStatus.RECOVERING.value,
+                    )
+                ),
+                AgentRun.cancel_requested_at.is_(None),
             )
             .values(
                 status=JobStatus.STOPPING.value,
@@ -592,6 +626,7 @@ async def fail_queued_submission(
                     AgentRun.organization_id == _coerce_uuid(organization_id),
                     AgentRun.user_id == _coerce_uuid(user_id),
                     AgentRun.status == JobStatus.QUEUED.value,
+                    AgentRun.execution_provider == "nous",
                 )
                 .values(
                     status=JobStatus.FAILED.value,
@@ -701,6 +736,7 @@ async def accept_submission(
     request: Any,  # AgentExecuteRequest
     thread: Any,  # models.thread.Thread — ownership-verified by _resolve_thread
     kind: str = DISPATCH_KIND_STREAM,
+    integration_context: Optional[IntegrationContext] = None,
 ) -> AcceptedSubmission:
     """Accept a submission atomically; the caller may then emit ``accepted``.
 
@@ -717,6 +753,31 @@ async def accept_submission(
     if thread_uuid is None:
         raise ValueError("accept_submission requires an ownership-verified thread")
 
+    provider = getattr(request, "execution_provider", "nous")
+    if provider not in {"nous", "codex"}:
+        raise ValueError("Unsupported execution provider")
+    if provider == "codex":
+        from src.services.integrations.context import IntegrationAccessDenied
+
+        if (
+            integration_context is None
+            or integration_context.user_id != _coerce_uuid(current_user.id)
+            or integration_context.organization_id
+            != _coerce_uuid(getattr(current_user, "organization_id", None))
+            or _coerce_uuid(getattr(request, "thread_id", None)) != thread_uuid
+            or not getattr(request, "device_id", None)
+            or not getattr(request, "workspace_id", None)
+        ):
+            raise IntegrationAccessDenied()
+        from src.services.harness.runs import authorize_external_submission
+
+        await authorize_external_submission(
+            db,
+            context=integration_context,
+            device_id=request.device_id,
+            workspace_id=request.workspace_id,
+            thread_id=thread_uuid,
+        )
     organization_id = getattr(current_user, "organization_id", None)
     idempotency_key = stream_idempotency_key(request, current_user)
 
@@ -742,6 +803,7 @@ async def accept_submission(
                 thread_id=thread_uuid,
                 idempotency_key=idempotency_key,
                 request=request,
+                integration_context=integration_context,
             )
 
     job_id = str(uuid4())
@@ -763,6 +825,7 @@ async def accept_submission(
                         thread_id=thread_uuid,
                         idempotency_key=idempotency_key,
                         request=request,
+                        integration_context=integration_context,
                     )
             raise
         user_message_id, user_row_inserted = await _insert_user_message(
@@ -805,6 +868,17 @@ async def accept_submission(
             client_message_id=client_message_id,
             idempotency_key=idempotency_key,
         )
+        if provider == "codex":
+            from src.services.harness.runs import bind_external_submission
+
+            assert integration_context is not None
+            await bind_external_submission(
+                db,
+                run_id=UUID(job_id),
+                context=integration_context,
+                device_id=request.device_id,
+                workspace_id=request.workspace_id,
+            )
         await append_event(
             db,
             run_id=job_id,
@@ -816,8 +890,9 @@ async def accept_submission(
             db,
             run_id=job_id,
             organization_id=organization_id,
-            kind=kind,
+            kind="harness.execute" if provider == "codex" else kind,
             payload={
+                "execution_provider": provider,
                 "thread_id": str(thread_uuid),
                 "user_id": str(current_user.id),
                 "model": getattr(request, "model", "") or "",
@@ -849,6 +924,7 @@ async def accept_submission(
                     thread_id=thread_uuid,
                     idempotency_key=idempotency_key,
                     request=request,
+                    integration_context=integration_context,
                 )
         active_job_id = (
             await db.execute(
@@ -858,6 +934,20 @@ async def accept_submission(
                 )
             )
         ).scalar_one_or_none()
+        if provider == "codex":
+            from src.models.harness_session import HarnessSession
+
+            workspace_owner = await db.scalar(
+                select(HarnessSession.id).where(
+                    HarnessSession.device_id == request.device_id,
+                    HarnessSession.workspace_id == request.workspace_id,
+                    HarnessSession.workspace_locked.is_(True),
+                )
+            )
+            if workspace_owner is not None:
+                raise ActiveRunConflict(
+                    "A response already owns this local workspace."
+                ) from None
         if active_job_id is not None:
             raise ActiveRunConflict(
                 "A response is already in progress for this thread."
@@ -907,6 +997,7 @@ async def mark_submission_dispatched(
                     AgentRun.organization_id == _coerce_uuid(organization_id),
                     AgentRun.user_id == _coerce_uuid(user_id),
                     AgentRun.status == JobStatus.QUEUED.value,
+                    AgentRun.execution_provider == "nous",
                 )
                 .values(
                     status=JobStatus.RUNNING.value,
@@ -1034,6 +1125,7 @@ async def finalize_submission(
                 .where(
                     AgentRun.job_id == run_id,
                     AgentRun.status.notin_(_TERMINAL_RUN_STATUSES),
+                    AgentRun.execution_provider == "nous",
                     # A producer that observed the durable stop marker must
                     # acknowledge it as cancelled; it may never publish a
                     # late completed/failed transition over ``stopping``.

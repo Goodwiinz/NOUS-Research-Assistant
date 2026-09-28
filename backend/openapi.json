@@ -194,6 +194,27 @@
             "description": "Document ids to attach to this user turn. The documents are uploaded separately (POST /documents) and referenced here, so the stream body never carries file bytes. Ids the caller's organization does not own are dropped server-side, not rejected — a mixed batch still attaches the owned ones.",
             "title": "Attachment Ids"
           },
+          "device_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "execution_provider": {
+            "default": "nous",
+            "enum": [
+              "nous",
+              "codex"
+            ],
+            "title": "Execution Provider",
+            "type": "string"
+          },
           "max_context_docs": {
             "default": 5,
             "maximum": 10.0,
@@ -267,6 +288,18 @@
             "default": true,
             "title": "Use Rag",
             "type": "boolean"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
           }
         },
         "required": [
@@ -6484,6 +6517,7 @@
           "running",
           "awaiting_confirmation",
           "stopping",
+          "recovering",
           "completed",
           "failed",
           "cancelled"
