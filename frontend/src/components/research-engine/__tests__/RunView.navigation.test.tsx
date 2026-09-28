@@ -34,12 +34,18 @@ describe('RunView canonical navigation', () => {
       research_engine_project_id: 'engine-1',
       blueprint_id: 'blueprint-1',
       blueprint_version: 1,
+      protocol_version_id: 'protocol-version-1',
+      effective_plan_hash: 'a'.repeat(64),
+      conformance_status: 'plan_verified',
       status: 'completed',
       total_tokens: 10,
     });
 
     render(<RunView runId="run-1" />);
     await screen.findByText('Completed');
+    expect(screen.getByText('Conformance: Plan verified')).toBeInTheDocument();
+    expect(screen.getByText('Protocol protocol')).toBeInTheDocument();
+    expect(screen.getByText('Plan aaaaaaaaaaaa')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Go back' }));
 
     expect(push).toHaveBeenCalledWith('/projects/collection-1?tab=workflow');
@@ -50,8 +56,16 @@ describe('RunView canonical navigation', () => {
     let resolveOld!: (run: Awaited<ReturnType<typeof getRun>>) => void;
     let resolveNew!: (run: Awaited<ReturnType<typeof getRun>>) => void;
     vi.mocked(getRun)
-      .mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }))
-      .mockReturnValueOnce(new Promise((resolve) => { resolveNew = resolve; }));
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveNew = resolve;
+        })
+      );
 
     const { rerender } = render(<RunView runId="old-run" />);
     rerender(<RunView runId="new-run" />);
@@ -64,7 +78,9 @@ describe('RunView canonical navigation', () => {
       status: 'completed',
       total_tokens: 10,
     };
-    await act(async () => { resolveNew(newRun); });
+    await act(async () => {
+      resolveNew(newRun);
+    });
     await screen.findByText('Completed');
     await act(async () => {
       resolveOld({ ...newRun, id: 'old-run', project_id: 'old-collection' });

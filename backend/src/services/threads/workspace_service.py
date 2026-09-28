@@ -180,7 +180,9 @@ async def update_workspace(
 ) -> Optional[Workspace]:
     """Update a workspace. ``None`` if not found/accessible; raises
     ``PermissionError`` if found but the caller lacks admin rights."""
-    workspace = await workspace_access.get_workspace(db, workspace_id, user_id)
+    workspace = await workspace_access.get_workspace(
+        db, workspace_id, user_id, for_update=True
+    )
     if not workspace:
         return None
     if not workspace.can_user_admin(str(user_id)):
@@ -220,7 +222,9 @@ async def delete_workspace(
     ``False`` (old ``ChatService`` default) leaves it ``NULL``, matching the
     pre-4.3 divergence recorded for existing ``ChatService`` callers.
     """
-    workspace = await workspace_access.get_workspace(db, workspace_id, user_id)
+    workspace = await workspace_access.get_workspace(
+        db, workspace_id, user_id, for_update=True
+    )
     if not workspace:
         return None
     if str(workspace.owner_id) != str(user_id):
@@ -257,7 +261,9 @@ async def add_member(
         # update_member_role both refuse OWNER rows, so a minted second owner
         # would hold admin rights forever with no API path to demote/remove.
         raise ValueError("Cannot assign owner role to a member")
-    workspace = await workspace_access.get_workspace(db, workspace_id, current_user_id)
+    workspace = await workspace_access.get_workspace(
+        db, workspace_id, current_user_id, for_update=True
+    )
     if not workspace:
         return None
     if not workspace.can_user_admin(str(current_user_id)):
@@ -326,7 +332,9 @@ async def update_member_role(
     if data.role.value == WorkspaceRole.OWNER.value:
         # Same guard as add_member: an OWNER row is irremovable via the API.
         raise ValueError("Cannot assign owner role to a member")
-    workspace = await workspace_access.get_workspace(db, workspace_id, current_user_id)
+    workspace = await workspace_access.get_workspace(
+        db, workspace_id, current_user_id, for_update=True
+    )
     if not workspace:
         return None
     if not workspace.can_user_admin(str(current_user_id)):
@@ -365,7 +373,9 @@ async def remove_member(
     """Remove (soft-delete) a workspace member. ``None`` if workspace/member
     not found. Raises ``PermissionError``/``ValueError`` matching the
     router's checks (self-removal always allowed; owner can't be removed)."""
-    workspace = await workspace_access.get_workspace(db, workspace_id, current_user_id)
+    workspace = await workspace_access.get_workspace(
+        db, workspace_id, current_user_id, for_update=True
+    )
     if not workspace:
         return None
     if str(target_user_id) != str(current_user_id) and not workspace.can_user_admin(

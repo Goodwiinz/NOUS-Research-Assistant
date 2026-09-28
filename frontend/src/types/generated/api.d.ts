@@ -5693,6 +5693,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/protocols": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Protocols */
+        get: operations["list_protocols_api_v1_research_engine_projects__project_id__protocols_get"];
+        put?: never;
+        /** Create Protocol Route */
+        post: operations["create_protocol_route_api_v1_research_engine_projects__project_id__protocols_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Questions */
+        get: operations["list_questions_api_v1_research_engine_projects__project_id__questions_get"];
+        put?: never;
+        /** Create Question Route */
+        post: operations["create_question_route_api_v1_research_engine_projects__project_id__questions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/roles": {
         parameters: {
             query?: never;
@@ -5723,6 +5759,110 @@ export interface paths {
         post?: never;
         /** Delete Project Role */
         delete: operations["delete_project_role_api_v1_research_engine_projects__project_id__roles__user_id___role__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Protocol */
+        get: operations["get_protocol_api_v1_research_engine_protocols__protocol_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}/deviations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Deviations */
+        get: operations["list_deviations_api_v1_research_engine_protocols__protocol_id__deviations_get"];
+        put?: never;
+        /** Create Deviation */
+        post: operations["create_deviation_api_v1_research_engine_protocols__protocol_id__deviations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Registrations */
+        get: operations["list_registrations_api_v1_research_engine_protocols__protocol_id__registrations_get"];
+        put?: never;
+        /** Create Registration */
+        post: operations["create_registration_api_v1_research_engine_protocols__protocol_id__registrations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Protocol Version Route */
+        post: operations["create_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/protocols/{protocol_id}/versions/{version_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Protocol Version Route */
+        post: operations["approve_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions__version_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/questions/{question_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Question Version Route */
+        post: operations["create_question_version_route_api_v1_research_engine_questions__question_id__versions_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -12501,6 +12641,212 @@ export interface components {
             /** Tags */
             tags?: string[] | null;
         };
+        /** ProtocolApprovalRequest */
+        ProtocolApprovalRequest: {
+            /** Expected Content Hash */
+            expected_content_hash: string;
+            /** Expected Current Approved Version Id */
+            expected_current_approved_version_id?: string | null;
+            /** Expected Protocol Version */
+            expected_protocol_version: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason: string;
+        };
+        /** ProtocolApprovalResponse */
+        ProtocolApprovalResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            /**
+             * Approved At
+             * Format: date-time
+             */
+            approved_at: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /**
+             * Protocol Id
+             * Format: uuid
+             */
+            protocol_id: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** ProtocolDeviationCreate */
+        ProtocolDeviationCreate: {
+            /** Disposition */
+            disposition: string;
+            /** Observed Difference */
+            observed_difference: string;
+            /** Output Reference */
+            output_reference?: string | null;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rationale */
+            rationale: string;
+            /** Run Id */
+            run_id?: string | null;
+        };
+        /** ProtocolDeviationResponse */
+        ProtocolDeviationResponse: {
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disposition */
+            disposition: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Observed Difference */
+            observed_difference: string;
+            /** Output Reference */
+            output_reference?: string | null;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rationale */
+            rationale: string;
+            /** Run Id */
+            run_id?: string | null;
+        };
+        /** ProtocolRegistrationCreate */
+        ProtocolRegistrationCreate: {
+            /** External Identifier */
+            external_identifier?: string | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Protocol Version Hash */
+            protocol_version_hash: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Provider */
+            provider: string;
+            /** Receipt */
+            receipt?: {
+                [key: string]: unknown;
+            } | null;
+            /** Status */
+            status: string;
+            /** Url */
+            url?: string | null;
+        };
+        /** ProtocolRegistrationResponse */
+        ProtocolRegistrationResponse: {
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** External Identifier */
+            external_identifier?: string | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Protocol Version Hash */
+            protocol_version_hash: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Provider */
+            provider: string;
+            /** Receipt */
+            receipt?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Recorded By User Id
+             * Format: uuid
+             */
+            recorded_by_user_id: string;
+            /** Status */
+            status: string;
+            /** Url */
+            url?: string | null;
+        };
+        /** ProtocolSnapshot */
+        ProtocolSnapshot: {
+            /** Appraisal Synthesis */
+            appraisal_synthesis: {
+                [key: string]: unknown;
+            };
+            /** Eligibility */
+            eligibility: {
+                [key: string]: unknown;
+            };
+            /** Extraction */
+            extraction: {
+                [key: string]: unknown;
+            };
+            /** Outcomes */
+            outcomes: {
+                [key: string]: unknown;
+            };
+            /** Reviewer Mode */
+            reviewer_mode: {
+                [key: string]: unknown;
+            };
+            /** Selection */
+            selection: {
+                [key: string]: unknown;
+            };
+            /** Sources Search */
+            sources_search: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * PublicationRetractionCheck
          * @description Publication-level retraction check state.
@@ -12755,6 +13101,240 @@ export interface components {
              */
             user_id: string;
         };
+        /** ResearchProtocolCreate */
+        ResearchProtocolCreate: {
+            /**
+             * Blueprint Id
+             * Format: uuid
+             */
+            blueprint_id: string;
+            /** Name */
+            name: string;
+            /**
+             * Question Version Id
+             * Format: uuid
+             */
+            question_version_id: string;
+            snapshot: components["schemas"]["ProtocolSnapshot"];
+        };
+        /** ResearchProtocolResponse */
+        ResearchProtocolResponse: {
+            /**
+             * Can Approve
+             * @default false
+             */
+            can_approve: boolean;
+            /**
+             * Can Edit
+             * @default false
+             */
+            can_edit: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Current Approved Version Id */
+            current_approved_version_id?: string | null;
+            /** Current Draft Version Id */
+            current_draft_version_id?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Versions */
+            versions?: components["schemas"]["ResearchProtocolVersionResponse"][];
+        };
+        /** ResearchProtocolVersionCreate */
+        ResearchProtocolVersionCreate: {
+            /** Amendment Reason */
+            amendment_reason: string;
+            /**
+             * Blueprint Id
+             * Format: uuid
+             */
+            blueprint_id: string;
+            /**
+             * Parent Version Id
+             * Format: uuid
+             */
+            parent_version_id: string;
+            /**
+             * Question Version Id
+             * Format: uuid
+             */
+            question_version_id: string;
+            snapshot: components["schemas"]["ProtocolSnapshot"];
+        };
+        /** ResearchProtocolVersionResponse */
+        ResearchProtocolVersionResponse: {
+            /** Amendment Reason */
+            amendment_reason?: string | null;
+            /** Approved At */
+            approved_at?: string | null;
+            /** Approved By User Id */
+            approved_by_user_id?: string | null;
+            /**
+             * Author User Id
+             * Format: uuid
+             */
+            author_user_id: string;
+            /**
+             * Blueprint Id
+             * Format: uuid
+             */
+            blueprint_id: string;
+            /**
+             * Can Approve
+             * @default false
+             */
+            can_approve: boolean;
+            /** Change Kind */
+            change_kind: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Execution Plan */
+            execution_plan: {
+                [key: string]: unknown;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /**
+             * Protocol Id
+             * Format: uuid
+             */
+            protocol_id: string;
+            /**
+             * Question Version Id
+             * Format: uuid
+             */
+            question_version_id: string;
+            snapshot: components["schemas"]["ProtocolSnapshot"];
+            /** Status */
+            status: string;
+            /** Superseded At */
+            superseded_at?: string | null;
+            /** Version */
+            version: number;
+        };
+        /** ResearchQuestionCreate */
+        ResearchQuestionCreate: {
+            /** Framework */
+            framework?: {
+                [key: string]: unknown;
+            };
+            /** Hypothesis */
+            hypothesis?: string | null;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /** Question */
+            question: string;
+            /** Scope */
+            scope?: string | null;
+        };
+        /** ResearchQuestionResponse */
+        ResearchQuestionResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            current_version: components["schemas"]["ResearchQuestionVersionResponse"];
+            /**
+             * Current Version Id
+             * Format: uuid
+             */
+            current_version_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Versions */
+            versions?: components["schemas"]["ResearchQuestionVersionResponse"][];
+        };
+        /** ResearchQuestionVersionCreate */
+        ResearchQuestionVersionCreate: {
+            /** Framework */
+            framework?: {
+                [key: string]: unknown;
+            };
+            /** Hypothesis */
+            hypothesis?: string | null;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /** Question */
+            question: string;
+            /** Scope */
+            scope?: string | null;
+        };
+        /** ResearchQuestionVersionResponse */
+        ResearchQuestionVersionResponse: {
+            /**
+             * Author User Id
+             * Format: uuid
+             */
+            author_user_id: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Framework */
+            framework: {
+                [key: string]: unknown;
+            };
+            /** Hypothesis */
+            hypothesis?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /** Question */
+            question: string;
+            /**
+             * Question Id
+             * Format: uuid
+             */
+            question_id: string;
+            /** Scope */
+            scope?: string | null;
+            /** Version */
+            version: number;
+        };
         /**
          * ResearchStatus
          * @description Research project status
@@ -12945,6 +13525,8 @@ export interface components {
             parameters_override?: {
                 [key: string]: unknown;
             };
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
         };
         /**
          * RunResponse
@@ -12961,10 +13543,17 @@ export interface components {
             /** Completed At */
             completed_at?: string | null;
             /**
+             * Conformance Status
+             * @default legacy_unbound
+             */
+            conformance_status: string;
+            /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /** Effective Plan Hash */
+            effective_plan_hash?: string | null;
             /**
              * Id
              * Format: uuid
@@ -12975,6 +13564,8 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
             /**
              * Research Engine Project Id
              * Format: uuid
@@ -24641,7 +25232,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["RunCreate"];
+                "application/json": components["schemas"]["RunCreate"] | null;
             };
         };
         responses: {
@@ -24846,6 +25437,138 @@ export interface operations {
             };
         };
     };
+    list_protocols_api_v1_research_engine_projects__project_id__protocols_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProtocolResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_protocol_route_api_v1_research_engine_projects__project_id__protocols_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchProtocolCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProtocolResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_questions_api_v1_research_engine_projects__project_id__questions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchQuestionResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_question_route_api_v1_research_engine_projects__project_id__questions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchQuestionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchQuestionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_project_roles_api_v1_research_engine_projects__project_id__roles_get: {
         parameters: {
             query?: never;
@@ -24931,6 +25654,275 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_protocol_api_v1_research_engine_protocols__protocol_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProtocolResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_deviations_api_v1_research_engine_protocols__protocol_id__deviations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolDeviationResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_deviation_api_v1_research_engine_protocols__protocol_id__deviations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProtocolDeviationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolDeviationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_registrations_api_v1_research_engine_protocols__protocol_id__registrations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolRegistrationResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_registration_api_v1_research_engine_protocols__protocol_id__registrations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProtocolRegistrationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolRegistrationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchProtocolVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProtocolResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions__version_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                protocol_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProtocolApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolApprovalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_question_version_route_api_v1_research_engine_questions__question_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchQuestionVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchQuestionResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

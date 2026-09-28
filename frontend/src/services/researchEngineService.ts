@@ -101,10 +101,11 @@ export const getBlueprint = (id: string) => api.get(`${BASE}/blueprints/${id}`);
 
 export const startRun = (
   blueprintId: string,
-  parametersOverride: Record<string, unknown>
+  protocolVersionId: string
 ) =>
   api.post(`${BASE}/blueprints/${blueprintId}/runs`, {
-    parameters_override: parametersOverride,
+    protocol_version_id: protocolVersionId,
+    parameters_override: {},
   });
 
 export const getRun = (runId: string) => api.get(`${BASE}/runs/${runId}`);

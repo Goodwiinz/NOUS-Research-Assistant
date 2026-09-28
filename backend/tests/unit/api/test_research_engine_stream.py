@@ -40,6 +40,9 @@ def _make_run(**overrides):
     run.started_at = overrides.get("started_at", None)
     run.completed_at = overrides.get("completed_at", None)
     run.total_tokens = overrides.get("total_tokens", 0)
+    run.protocol_version_id = overrides.get("protocol_version_id", uuid.uuid4())
+    run.effective_plan_hash = overrides.get("effective_plan_hash", "a" * 64)
+    run.conformance_status = overrides.get("conformance_status", "plan_verified")
     run.reproducibility_manifest = overrides.get("reproducibility_manifest", None)
     run.created_at = overrides.get("created_at", now)
     run.updated_at = overrides.get("updated_at", now)
@@ -130,6 +133,14 @@ def patch_shared_run_access(monkeypatch):
         engine=SimpleNamespace(id=uuid.uuid4()),
     )
 
+    async def fake_require_conformance(db, run, blueprint, project_context):
+        return {
+            "blueprint_id": str(blueprint.id),
+            "blueprint_version": blueprint.version,
+            "steps": blueprint.steps,
+            "parameters": blueprint.parameters,
+        }
+
     monkeypatch.setattr("src.api.research_engine.runs.require_run", fake_require_run)
     monkeypatch.setattr(
         "src.api.research_engine.runs.resolve_engine_project_context",
@@ -138,6 +149,10 @@ def patch_shared_run_access(monkeypatch):
     monkeypatch.setattr(
         "src.api.research_engine.runs.resolve_project",
         AsyncMock(return_value=context),
+    )
+    monkeypatch.setattr(
+        "src.api.research_engine.runs._require_run_conformance",
+        fake_require_conformance,
     )
 
 

@@ -49,6 +49,10 @@ from src.services.research_engine.providers import (
     OpenAIProvider,
     ProviderConfig,
 )
+from src.services.research_engine.run_conformance import create_approved_run
+from src.services.research_engine.run_conformance import (
+    require_run_conformance as _require_run_conformance,
+)
 from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
 
@@ -310,36 +314,18 @@ router = APIRouter(
 )
 async def start_run(
     blueprint_id: UUID,
-    body: RunCreate = None,
+    body: Optional[RunCreate] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Start a new research run from a blueprint."""
-    if body is None:
-        body = RunCreate()
-
     blueprint = await require_blueprint(
         db, blueprint_id, current_user.id, ResearchAction.EDIT
     )
     context = await resolve_engine_project_context(
         db, blueprint.project_id, current_user.id, ResearchAction.EDIT
     )
-
-    # Mark blueprint as immutable
-    blueprint.is_immutable = True
-
-    # Create the run; execution starts when /runs/{id}/stream is opened.
-    run = ResearchRun(
-        blueprint_id=blueprint_id,
-        blueprint_version=blueprint.version,
-        status=RunStatus.PENDING.value,
-        reproducibility_manifest={
-            "parameters_override": body.parameters_override or {},
-        },
-    )
-    db.add(run)
-    await db.commit()
-    await db.refresh(run)
+    run = await create_approved_run(db, context, blueprint, body or RunCreate())
     return _run_response(run, context)
 
 
@@ -419,6 +405,12 @@ async def resume_run(
 ) -> RunResponse:
     """Resume a paused run."""
     run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.EDIT)
+    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
+    assert blueprint is not None
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
+    )
+    await _require_run_conformance(db, run, blueprint, context)
     if run.status != RunStatus.PAUSED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -427,11 +419,6 @@ async def resume_run(
     run.status = RunStatus.RUNNING.value
     await db.commit()
     await db.refresh(run)
-    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
-    assert blueprint is not None
-    context = await resolve_engine_project_context(
-        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
-    )
     return _run_response(run, context)
 
 
@@ -476,6 +463,7 @@ async def stream_run(
             detail=f"Run is in '{run.status}' state and cannot be streamed",
         )
     was_paused = run.status == RunStatus.PAUSED.value
+    actor_user_id = current_user.id
 
     # Look up the blueprint
     bp_query = select(ResearchBlueprint).where(
@@ -490,6 +478,10 @@ async def stream_run(
         )
     lifecycle_context = await resolve_engine_project_context(
         db, blueprint.project_id, current_user.id, ResearchAction.EDIT
+    )
+    canonical_project_id = lifecycle_context.collection.id
+    approved_plan = await _require_run_conformance(
+        db, run, blueprint, lifecycle_context
     )
 
     # Determine resume offset from persisted steps for both paused and resumed runs.
@@ -510,11 +502,11 @@ async def stream_run(
     required_models = sorted(
         {
             str(step.get("model_id") or _get_step_params(step).get("model_id"))
-            for step in blueprint.steps or []
+            for step in approved_plan["steps"]
             if step.get("model_id") or _get_step_params(step).get("model_id")
         }
     )
-    providers = _build_providers(blueprint.steps or [])
+    providers = _build_providers(approved_plan["steps"])
     missing_models = [
         model_id for model_id in required_models if model_id not in providers
     ]
@@ -527,12 +519,11 @@ async def stream_run(
             ),
         )
 
-    effective_parameters, parameter_overrides = _get_effective_parameters(
-        blueprint, run
-    )
+    effective_parameters = approved_plan["parameters"]
+    parameter_overrides: Dict[str, Any] = {}
     try:
         validate_blueprint_runtime(
-            {"steps": blueprint.steps or [], "parameters": effective_parameters}
+            {"steps": approved_plan["steps"], "parameters": effective_parameters}
         )
     except ValueError:
         raise HTTPException(
@@ -540,7 +531,7 @@ async def stream_run(
             detail="Blueprint exceeds a server-owned execution limit",
         )
     blueprint_dict = {
-        "steps": blueprint.steps or [],
+        "steps": approved_plan["steps"],
         "parameters": effective_parameters,
     }
     total_tokens = run.total_tokens or 0
@@ -685,8 +676,8 @@ async def stream_run(
                     db.expire_all()
                     await resolve_project(
                         db,
-                        lifecycle_context.collection.id,
-                        current_user.id,
+                        canonical_project_id,
+                        actor_user_id,
                         ResearchAction.EDIT,
                         require_engine=True,
                     )
@@ -721,13 +712,19 @@ async def stream_run(
                     run.completed_at = datetime.now(timezone.utc)
                     await db.commit()
                 elif event_type == "run_complete":
+                    # Serialize completion with a concurrently recorded deviation.
+                    await db.refresh(run, with_for_update=True)
                     run.status = RunStatus.COMPLETED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
+                    if run.conformance_status == "plan_verified":
+                        run.conformance_status = "conformant"
                     run.reproducibility_manifest = {
                         "run_id": str(run.id),
-                        "blueprint_id": str(blueprint.id),
-                        "blueprint_version": blueprint.version,
+                        "protocol_version_id": str(run.protocol_version_id),
+                        "effective_plan_hash": run.effective_plan_hash,
+                        "blueprint_id": approved_plan["blueprint_id"],
+                        "blueprint_version": approved_plan["blueprint_version"],
                         "total_tokens": total_tokens,
                         "completed_at": run.completed_at.isoformat(),
                         "parameters_override": parameter_overrides,
