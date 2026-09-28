@@ -70,8 +70,14 @@ def test_revision_chains_from_agent_operations_and_is_the_only_head() -> None:
 
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
-    heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["merge_research_heads_20260928"]
+    scripts = ScriptDirectory.from_config(config)
+    heads = scripts.get_heads()
+    assert heads == ["merge_daily_harness_20260928"]
+    revisions = {
+        revision.revision
+        for revision in scripts.walk_revisions(base="base", head=heads[0])
+    }
+    assert {"merge_research_heads_20260928", "merge_harness_heads"} <= revisions
 
 
 def test_upgrade_creates_review_ledger_columns_foreign_keys_and_unique_gate() -> None:
