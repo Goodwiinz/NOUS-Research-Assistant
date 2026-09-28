@@ -13,6 +13,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from pybtex.database import Person, parse_string
+
 ROOT = Path(__file__).resolve().parents[2]
 TASK_DIR = Path(__file__).resolve().parent
 DOC_MARKER_RE = re.compile(r"\[Doc (\d+)\]")
@@ -23,8 +25,12 @@ VERDICTS = {
     "infrastructure": {"passed", "failed"},
 }
 SENSITIVE_KEY_RE = re.compile(
-    r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|credential)",
+    r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|credential|"
+    r"authorization|proxy[_-]?authorization|cookie|set[_-]?cookie|session[_-]?id)",
     re.IGNORECASE,
+)
+BIBTEX_FENCE_RE = re.compile(
+    r"```(?:bibtex|biblatex)\s*\n(?P<body>.*?)\n```", re.DOTALL | re.IGNORECASE
 )
 
 
@@ -202,6 +208,10 @@ def validate_protocol(protocol: dict[str, Any]) -> dict[str, Any]:
         "cohorts": cohorts,
         "expected": expected,
         "kinds": _trial_kinds(protocol),
+        "corpus_digests": {
+            name: _file_digest(_corpus(protocol, name)[0])
+            for name in ("development", "held_out")
+        },
     }
 
 
@@ -217,21 +227,18 @@ def _validate_verdicts(bundle_path: Path, trial: dict[str, Any]) -> dict[str, st
                 f"{bundle_path.name}: invalid {dimension} verdict {verdict!r}"
             )
         normalized[dimension] = verdict
-    if normalized["infrastructure"] == "failed" and any(
-        normalized[name] == "passed"
-        for name in ("objective", "semantic", "authorization")
-    ):
+    is_product_pass = all(verdict == "passed" for verdict in normalized.values())
+    if trial.get("passed") is True and not is_product_pass:
         raise EvidenceError(
-            f"{bundle_path.name}: infrastructure failure cannot be a product pass"
-        )
-    if normalized["semantic"] == "judge_unavailable" and trial.get("passed") is True:
-        raise EvidenceError(
-            f"{bundle_path.name}: unavailable judge cannot produce a product pass"
+            f"{bundle_path.name}: incomplete or unavailable gates cannot produce "
+            "a product pass"
         )
     return normalized
 
 
-def _verify_invalid_revision(bundle_path: Path, proof: Any) -> None:
+def _verify_invalid_revision(
+    bundle_path: Path, proof: Any, draft: dict[str, Any]
+) -> None:
     if not isinstance(proof, dict) or proof.get("attempted") is not True:
         raise EvidenceError(f"{bundle_path.name}: invalid revision proof is required")
     if proof.get("outcome") != "blocked" or not proof.get("review_id"):
@@ -259,12 +266,21 @@ def _verify_invalid_revision(bundle_path: Path, proof: Any) -> None:
         raise EvidenceError(
             f"{bundle_path.name}: invalid revision replaced the current valid artifact"
         )
+    expected = {
+        "draft_id": draft.get("id"),
+        "version": draft.get("version"),
+        "content_sha256": draft.get("content_sha256"),
+    }
+    if any(before.get(field) != expected[field] for field in identity):
+        raise EvidenceError(
+            f"{bundle_path.name}: revision snapshots are not bound to the retained draft"
+        )
 
 
-def _verify_success_artifacts(bundle_path: Path, trial: dict[str, Any]) -> None:
+def _verify_draft_artifact(bundle_path: Path, trial: dict[str, Any]) -> dict[str, Any]:
     artifacts = trial.get("artifacts")
     if not isinstance(artifacts, dict):
-        raise EvidenceError(f"{bundle_path.name}: successful trial lacks artifacts")
+        raise EvidenceError(f"{bundle_path.name}: passed verdict lacks artifacts")
     draft = artifacts.get("draft")
     if not isinstance(draft, dict) or not draft.get("id"):
         raise EvidenceError(f"{bundle_path.name}: exact saved draft id is required")
@@ -280,6 +296,24 @@ def _verify_success_artifacts(bundle_path: Path, trial: dict[str, Any]) -> None:
         raise EvidenceError(
             f"{bundle_path.name}: saved draft has no canonical citations"
         )
+    return {
+        "artifacts": artifacts,
+        "draft": draft,
+        "digest": draft_digest,
+        "content": draft_content,
+        "markers": markers,
+    }
+
+
+def _verify_objective_artifacts(
+    bundle_path: Path, trial: dict[str, Any], context: dict[str, Any]
+) -> None:
+    artifacts = context["artifacts"]
+    draft = context["draft"]
+    draft_digest = context["digest"]
+    draft_content = context["content"]
+    markers = context["markers"]
+    run_id = trial["runtime"]["run_id"]
 
     review_path = _verify_declared_artifact(bundle_path, artifacts.get("review"))
     review = _load_json(review_path)
@@ -289,49 +323,10 @@ def _verify_success_artifacts(bundle_path: Path, trial: dict[str, Any]) -> None:
         raise EvidenceError(
             f"{bundle_path.name}: review is not bound to the saved draft"
         )
-
-    adjudication_path = _verify_declared_artifact(
-        bundle_path, artifacts.get("adjudication")
-    )
-    adjudication = _load_json(adjudication_path)
-    if (
-        adjudication.get("independent") is not True
-        or adjudication.get("verdict") != "passed"
-        or not adjudication.get("id")
-        or not adjudication.get("reviewer")
-    ):
+    if review.get("draft_id") != draft.get("id") or review.get("run_id") != run_id:
         raise EvidenceError(
-            f"{bundle_path.name}: independent passing adjudication is required"
+            f"{bundle_path.name}: review identity is not bound to this run and draft"
         )
-    if adjudication.get("draft_content_sha256") != draft_digest:
-        raise EvidenceError(
-            f"{bundle_path.name}: adjudication is not bound to the saved draft"
-        )
-    if adjudication.get("task_digest") != trial.get("task_digest"):
-        raise EvidenceError(
-            f"{bundle_path.name}: adjudication is not bound to the frozen task"
-        )
-    runtime = trial.get("runtime") or {}
-    if adjudication.get("reviewer") in {runtime.get("provider"), runtime.get("model")}:
-        raise EvidenceError(
-            f"{bundle_path.name}: adjudicator must be independent of the trial model"
-        )
-
-    authorization_path = _verify_declared_artifact(
-        bundle_path, artifacts.get("authorization")
-    )
-    authorization = _load_json(authorization_path)
-    if authorization.get("draft_id") != draft.get("id"):
-        raise EvidenceError(
-            f"{bundle_path.name}: authorization evidence is not bound to the draft"
-        )
-    checks = authorization.get("checks")
-    if not isinstance(checks, dict) or checks.get("collaborator_download") != 200:
-        raise EvidenceError(
-            f"{bundle_path.name}: collaborator download authorization is unproven"
-        )
-    if checks.get("foreign_project_download") != 404:
-        raise EvidenceError(f"{bundle_path.name}: foreign-project denial is unproven")
 
     citation_path = _verify_declared_artifact(bundle_path, artifacts.get("citations"))
     citations = _load_json(citation_path)
@@ -345,34 +340,60 @@ def _verify_success_artifacts(bundle_path: Path, trial: dict[str, Any]) -> None:
         raise EvidenceError(
             f"{bundle_path.name}: saved citation identities do not reconcile"
         )
+    citation_rows: dict[str, dict[str, Any]] = {}
     for row in citations:
+        if not isinstance(row, dict):
+            raise EvidenceError(f"{bundle_path.name}: citation rows must be objects")
         if not row.get("document_id"):
             raise EvidenceError(
                 f"{bundle_path.name}: citation rows require document ids"
             )
-        if (
-            not row.get("citation_id")
-            and row.get("metadata_source") != "document_fallback"
-        ):
+        metadata_source = row.get("metadata_source")
+        if metadata_source not in {"citation", "document_fallback"}:
             raise EvidenceError(
                 f"{bundle_path.name}: citation rows must identify canonical metadata source"
             )
+        if not row.get("citation_id") and metadata_source != "document_fallback":
+            raise EvidenceError(
+                f"{bundle_path.name}: linked citation metadata requires a citation id"
+            )
+        canonical_metadata = row.get("canonical_metadata")
+        required_metadata = {"title", "authors", "year", "venue", "doi", "arxiv_id"}
+        if not isinstance(canonical_metadata, dict) or not required_metadata.issubset(
+            canonical_metadata
+        ):
+            raise EvidenceError(
+                f"{bundle_path.name}: citation rows require explicit canonical metadata"
+            )
+        marker = str(row["citation_index"])
+        citation_rows[marker] = row
 
     exports = artifacts.get("exports")
     if not isinstance(exports, dict):
         raise EvidenceError(f"{bundle_path.name}: downloaded exports are required")
     markdown_path = _verify_declared_artifact(bundle_path, exports.get("markdown"))
     markdown = markdown_path.read_text(encoding="utf-8")
-    if "## References" not in markdown:
+    separator = "\n\n## References\n\n"
+    if separator not in markdown:
         raise EvidenceError(
             f"{bundle_path.name}: Markdown export has no References section"
         )
-    references = markdown.split("## References", 1)[1]
+    markdown_body, references = markdown.rsplit(separator, 1)
+    if markdown_body != draft_content:
+        raise EvidenceError(
+            f"{bundle_path.name}: Markdown export body is not the retained draft"
+        )
     for marker in markers:
         if f"[Doc {marker}]" not in references and f"doc{marker}" not in references:
             raise EvidenceError(
                 f"{bundle_path.name}: Markdown References lost canonical doc{marker}"
             )
+    match = BIBTEX_FENCE_RE.search(references)
+    if match is None:
+        raise EvidenceError(
+            f"{bundle_path.name}: Markdown evidence must retain parseable BibTeX"
+        )
+    _verify_bibtex_metadata(bundle_path, match.group("body"), citation_rows)
 
     latex_path = _verify_declared_artifact(bundle_path, exports.get("latex"))
     try:
@@ -399,8 +420,259 @@ def _verify_success_artifacts(bundle_path: Path, trial: dict[str, Any]) -> None:
             raise EvidenceError(
                 f"{bundle_path.name}: LaTeX/BibTeX lost canonical doc{marker}"
             )
+    _verify_bibtex_metadata(bundle_path, bib, citation_rows)
 
-    _verify_invalid_revision(bundle_path, trial.get("invalid_revision"))
+    _verify_invalid_revision(bundle_path, trial.get("invalid_revision"), draft)
+
+
+def _normalized_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _verify_bibtex_metadata(
+    bundle_path: Path,
+    bibtex: str,
+    citation_rows: dict[str, dict[str, Any]],
+) -> None:
+    try:
+        bibliography = parse_string(bibtex, "bibtex")
+    except Exception as exc:
+        raise EvidenceError(
+            f"{bundle_path.name}: downloaded BibTeX cannot be parsed: {exc}"
+        ) from exc
+    expected_keys = {f"doc{marker}" for marker in citation_rows}
+    if set(bibliography.entries) != expected_keys:
+        raise EvidenceError(
+            f"{bundle_path.name}: exported BibTeX keys do not match saved citations"
+        )
+    for marker, row in citation_rows.items():
+        entry = bibliography.entries[f"doc{marker}"]
+        metadata = row["canonical_metadata"]
+        fields = {
+            "title": entry.fields.get("title"),
+            "year": entry.fields.get("year"),
+            "venue": entry.fields.get("journal") or entry.fields.get("booktitle"),
+            "doi": entry.fields.get("doi"),
+            "arxiv_id": entry.fields.get("eprint"),
+        }
+        for field, observed in fields.items():
+            if _normalized_text(observed) != _normalized_text(metadata.get(field)):
+                raise EvidenceError(
+                    f"{bundle_path.name}: exported doc{marker} {field} differs "
+                    "from canonical metadata"
+                )
+        expected_authors = [
+            _normalized_text(Person(author))
+            for author in (metadata.get("authors") or [])
+        ]
+        observed_authors = [
+            _normalized_text(person) for person in entry.persons.get("author", [])
+        ]
+        if observed_authors != expected_authors:
+            raise EvidenceError(
+                f"{bundle_path.name}: exported doc{marker} authors differ from "
+                "canonical metadata"
+            )
+
+
+def _verify_semantic_artifacts(
+    bundle_path: Path, trial: dict[str, Any], context: dict[str, Any]
+) -> None:
+    artifacts = context["artifacts"]
+    draft_digest = context["digest"]
+    runtime = trial["runtime"]
+    adjudication_path = _verify_declared_artifact(
+        bundle_path, artifacts.get("adjudication")
+    )
+    adjudication = _load_json(adjudication_path)
+    if (
+        adjudication.get("independent") is not True
+        or adjudication.get("verdict") != "passed"
+        or not adjudication.get("id")
+        or not adjudication.get("reviewer")
+        or not adjudication.get("verifier")
+    ):
+        raise EvidenceError(
+            f"{bundle_path.name}: independent passing adjudication is required"
+        )
+    if adjudication.get("draft_content_sha256") != draft_digest:
+        raise EvidenceError(
+            f"{bundle_path.name}: adjudication is not bound to the saved draft"
+        )
+    if adjudication.get("task_digest") != trial.get("task_digest"):
+        raise EvidenceError(
+            f"{bundle_path.name}: adjudication is not bound to the frozen task"
+        )
+    if adjudication.get("run_id") != runtime["run_id"]:
+        raise EvidenceError(f"{bundle_path.name}: adjudication is not bound to the run")
+    if adjudication.get("reviewer") in {runtime.get("provider"), runtime.get("model")}:
+        raise EvidenceError(
+            f"{bundle_path.name}: adjudicator must be independent of the trial model"
+        )
+
+    calibration_path = _verify_declared_artifact(
+        bundle_path, artifacts.get("calibration")
+    )
+    calibration = _load_json(calibration_path)
+    if (
+        not calibration.get("id")
+        or calibration.get("outcome") != "passed"
+        or calibration.get("correct_fixture_passed") is not True
+        or calibration.get("wrong_fixture_rejected") is not True
+        or calibration.get("reviewer") != adjudication.get("reviewer")
+        or calibration.get("verifier") != adjudication.get("verifier")
+        or calibration.get("fixture_digest") != runtime["fixture_digest"]
+        or adjudication.get("calibration_id") != calibration.get("id")
+    ):
+        raise EvidenceError(
+            f"{bundle_path.name}: passing adjudication lacks bound calibration evidence"
+        )
+
+
+def _verify_authorization_artifacts(
+    bundle_path: Path, trial: dict[str, Any], context: dict[str, Any]
+) -> None:
+    artifacts = context["artifacts"]
+    draft = context["draft"]
+    authorization_path = _verify_declared_artifact(
+        bundle_path, artifacts.get("authorization")
+    )
+    authorization = _load_json(authorization_path)
+    if (
+        not authorization.get("id")
+        or authorization.get("draft_id") != draft.get("id")
+        or authorization.get("run_id") != trial["runtime"]["run_id"]
+    ):
+        raise EvidenceError(
+            f"{bundle_path.name}: authorization evidence is not bound to the run and draft"
+        )
+    checks = authorization.get("checks")
+    if not isinstance(checks, dict) or checks.get("collaborator_download") != 200:
+        raise EvidenceError(
+            f"{bundle_path.name}: collaborator download authorization is unproven"
+        )
+    if checks.get("foreign_project_download") != 404:
+        raise EvidenceError(f"{bundle_path.name}: foreign-project denial is unproven")
+
+
+def _verify_passed_artifacts(
+    bundle_path: Path, trial: dict[str, Any], verdicts: dict[str, str]
+) -> None:
+    passed_dimensions = {
+        name
+        for name in ("objective", "semantic", "authorization")
+        if verdicts[name] == "passed"
+    }
+    if not passed_dimensions:
+        return
+    context = _verify_draft_artifact(bundle_path, trial)
+    if "objective" in passed_dimensions:
+        _verify_objective_artifacts(bundle_path, trial, context)
+    if "semantic" in passed_dimensions:
+        _verify_semantic_artifacts(bundle_path, trial, context)
+    if "authorization" in passed_dimensions:
+        _verify_authorization_artifacts(bundle_path, trial, context)
+
+
+def _verify_success_artifacts(bundle_path: Path, trial: dict[str, Any]) -> None:
+    _verify_passed_artifacts(
+        bundle_path,
+        trial,
+        {"objective": "passed", "semantic": "passed", "authorization": "passed"},
+    )
+
+
+def _validate_runtime_identity(
+    bundle_path: Path,
+    runtime: dict[str, Any],
+    protocol_state: dict[str, Any],
+    cohort: str,
+    source_sha: str,
+) -> None:
+    required_strings = (
+        "run_id",
+        "provider",
+        "model",
+        "runner_image",
+        "verifier",
+        "fixture_digest",
+        "harness_digest",
+    )
+    if runtime.get("source_sha") != source_sha:
+        raise EvidenceError(f"{bundle_path.name}: source SHA does not match this run")
+    missing = [field for field in required_strings if not runtime.get(field)]
+    if missing:
+        raise EvidenceError(
+            f"{bundle_path.name}: incomplete runtime identity: {', '.join(missing)}"
+        )
+    runner_image = str(runtime["runner_image"])
+    if "@sha256:" not in runner_image and not runner_image.startswith("sha256:"):
+        raise EvidenceError(
+            f"{bundle_path.name}: runner image must be pinned by sha256 digest"
+        )
+    if runtime["fixture_digest"] != protocol_state["corpus_digests"][cohort]:
+        raise EvidenceError(
+            f"{bundle_path.name}: fixture digest does not match the frozen corpus"
+        )
+    if runtime["harness_digest"] != _harness_digest():
+        raise EvidenceError(
+            f"{bundle_path.name}: harness digest does not match this collector"
+        )
+    if not isinstance(runtime.get("configuration"), dict):
+        raise EvidenceError(f"{bundle_path.name}: model configuration is required")
+    if not isinstance(runtime.get("env_flags"), dict):
+        raise EvidenceError(
+            f"{bundle_path.name}: executed environment flags are required"
+        )
+    tool_versions = runtime.get("tool_versions")
+    if (
+        not isinstance(tool_versions, dict)
+        or not tool_versions
+        or any(
+            not str(name).strip() or not str(version).strip()
+            for name, version in tool_versions.items()
+        )
+    ):
+        raise EvidenceError(f"{bundle_path.name}: pinned tool versions are required")
+    _reject_sensitive_configuration(runtime["configuration"])
+    _reject_sensitive_configuration(runtime["env_flags"], "runtime.env_flags")
+
+
+def _evidence_identities(
+    bundle_path: Path, trial: dict[str, Any], verdicts: dict[str, str]
+) -> set[tuple[str, str]]:
+    identities = {("run", str(trial["runtime"]["run_id"]))}
+    artifacts = trial.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return identities
+    draft = artifacts.get("draft")
+    if isinstance(draft, dict) and draft.get("id"):
+        identities.add(("draft", str(draft["id"])))
+    artifact_names: list[str] = []
+    if verdicts["objective"] == "passed":
+        artifact_names.extend(("review",))
+        proof = trial.get("invalid_revision") or {}
+        if proof.get("review_id"):
+            identities.add(("blocked_review", str(proof["review_id"])))
+    if verdicts["semantic"] == "passed":
+        artifact_names.extend(("adjudication", "calibration"))
+    if verdicts["authorization"] == "passed":
+        artifact_names.extend(("authorization",))
+    for name in artifact_names:
+        record = artifacts.get(name)
+        path = _verify_declared_artifact(bundle_path, record)
+        if not isinstance(record, dict):
+            raise EvidenceError(
+                f"{bundle_path.name}: {name} artifact record must be an object"
+            )
+        value = _load_json(path)
+        if not isinstance(value, dict) or not value.get("id"):
+            raise EvidenceError(
+                f"{bundle_path.name}: {name} evidence requires a durable id"
+            )
+        identities.add((name, str(value["id"])))
+        identities.add((f"{name}_artifact", str(record["sha256"])))
+    return identities
 
 
 def validate_trial(
@@ -419,22 +691,19 @@ def validate_trial(
     if key not in protocol_state["expected"]:
         raise EvidenceError(f"{bundle_path.name}: undeclared trial {task_id}/{seed}")
     task = protocol_state["tasks"][task_id]
-    if trial.get("cohort") != protocol_state["cohorts"][task_id]:
+    cohort = protocol_state["cohorts"][task_id]
+    if trial.get("cohort") != cohort:
         raise EvidenceError(f"{bundle_path.name}: cohort does not match frozen corpus")
     if trial.get("task_digest") != _canonical_digest(task):
         raise EvidenceError(f"{bundle_path.name}: task digest does not match corpus")
     runtime = trial.get("runtime")
-    if not isinstance(runtime, dict) or runtime.get("source_sha") != source_sha:
-        raise EvidenceError(f"{bundle_path.name}: source SHA does not match this run")
-    if not runtime.get("provider") or not runtime.get("model"):
-        raise EvidenceError(f"{bundle_path.name}: provider and model are required")
-    if not isinstance(runtime.get("configuration"), dict):
-        raise EvidenceError(f"{bundle_path.name}: model configuration is required")
-    _reject_sensitive_configuration(runtime["configuration"])
+    if not isinstance(runtime, dict):
+        raise EvidenceError(f"{bundle_path.name}: runtime identity is required")
+    _validate_runtime_identity(bundle_path, runtime, protocol_state, cohort, source_sha)
     verdicts = _validate_verdicts(bundle_path, trial)
-    if all(
+    if any(
         verdicts[name] == "passed"
-        for name in ("objective", "semantic", "authorization", "infrastructure")
+        for name in ("objective", "semantic", "authorization")
     ):
         if (
             runtime.get("authenticated") is not True
@@ -444,8 +713,11 @@ def validate_trial(
                 f"{bundle_path.name}: a pass requires an authenticated "
                 "real-provider run"
             )
-        _verify_success_artifacts(bundle_path, trial)
-    elif not str(trial.get("failure_reason") or "").strip():
+        _verify_passed_artifacts(bundle_path, trial, verdicts)
+    if (
+        not all(verdict == "passed" for verdict in verdicts.values())
+        and not str(trial.get("failure_reason") or "").strip()
+    ):
         raise EvidenceError(
             f"{bundle_path.name}: non-passing trial needs a failure reason"
         )
@@ -464,6 +736,7 @@ def collect(
         raise EvidenceError(f"no retained trial bundles found under {trials_dir}")
 
     observed: dict[tuple[str, int], dict[str, str]] = {}
+    evidence_owners: dict[tuple[str, str], tuple[str, int]] = {}
     trials = []
     for bundle_path in bundles:
         trial = _load_json(bundle_path)
@@ -473,6 +746,14 @@ def collect(
         if key in observed:
             raise EvidenceError(f"duplicate retained trial: {key[0]}/{key[1]}")
         observed[key] = verdicts
+        for identity in _evidence_identities(bundle_path, trial, verdicts):
+            owner = evidence_owners.get(identity)
+            if owner is not None:
+                raise EvidenceError(
+                    f"reused {identity[0]} evidence across retained trials: "
+                    f"{owner[0]}/{owner[1]} and {key[0]}/{key[1]}"
+                )
+            evidence_owners[identity] = key
         trials.append(trial)
     missing = sorted(state["expected"] - set(observed))
     if missing:
@@ -510,8 +791,7 @@ def collect(
         "protocol_digest": _file_digest(protocol_path),
         "harness_digest": _harness_digest(),
         "corpus_digests": {
-            name: _file_digest(_corpus(protocol, name)[0])
-            for name in ("development", "held_out")
+            name: state["corpus_digests"][name] for name in ("development", "held_out")
         },
         "sample_size": len(observed),
         "sample_sizes": sample_sizes,

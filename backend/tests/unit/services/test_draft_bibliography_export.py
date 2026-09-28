@@ -87,7 +87,10 @@ def test_markdown_references_keep_sparse_doc_marker_and_canonical_metadata(
     assert "Evidence passage" not in references
 
 
-def test_markdown_bibtex_uses_stable_doc_key_and_preserves_missing_metadata() -> None:
+@pytest.mark.parametrize("bib_format", ["bibtex", "biblatex"])
+def test_markdown_bibtex_uses_stable_doc_key_and_preserves_missing_metadata(
+    bib_format: str,
+) -> None:
     references = DraftGenerationService(None)._generate_markdown_references(
         [
             DraftCitation(
@@ -96,7 +99,7 @@ def test_markdown_bibtex_uses_stable_doc_key_and_preserves_missing_metadata() ->
                 snippet="Never a title",
             )
         ],
-        "bibtex",
+        bib_format,
     )
 
     parsed = parse_string(

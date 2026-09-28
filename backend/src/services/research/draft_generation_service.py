@@ -108,7 +108,7 @@ def _ensure_draft_metrics() -> None:
 class DraftGenerationService:
     """Service for generating literature review drafts"""
 
-    _BIBLIOGRAPHY_FORMATS = frozenset({"bibtex", "apa", "ieee", "mla"})
+    _BIBLIOGRAPHY_FORMATS = frozenset({"bibtex", "biblatex", "apa", "ieee", "mla"})
     _DOCUMENT_CONTEXT_BUDGET = 32_000
     _MAX_SOURCE_DOCUMENTS = 50
     _MAX_INSTRUCTIONS_CHARS = 8_000
@@ -2185,7 +2185,7 @@ Key takeaways include the importance of continued investigation and the potentia
             )
 
         canonical_citations, keys = self._canonical_citation_records(citations)
-        if normalized_format == "bibtex":
+        if normalized_format in {"bibtex", "biblatex"}:
             bibliography = BibliographyService.format_bibtex(
                 canonical_citations, keys=keys
             )

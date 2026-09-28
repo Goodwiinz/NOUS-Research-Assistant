@@ -17,11 +17,20 @@ redacted configuration, and downloaded artifacts only.
 Each planned trial must retain a directory containing `trial.json`, the exact
 saved draft content, its persisted review, persisted citations, a downloaded
 Markdown file, a downloaded LaTeX ZIP, and an independent adjudication bound to
-the frozen task and draft hashes. A successful trial also records a blocked
-invalid-revision review and the identical current-draft id, version and content
-hash observed before and after that attempt. Its runtime record must identify
-an authenticated real-provider journey, provider, model and redacted model
-configuration.
+the frozen task and draft hashes. A semantic pass additionally retains a
+passing judge calibration that proves a known-correct fixture was accepted and
+a known-wrong fixture was rejected, bound to the same reviewer, verifier and
+frozen fixture digest. An objective pass records a blocked invalid-revision
+review and binds both the before and after snapshots to the retained current
+draft id, version and content hash.
+
+The runtime record identifies a unique run, authenticated real-provider
+journey, provider, model, runner image, verifier, harness and fixture digests,
+pinned tool versions, executed environment flags and redacted model
+configuration. Authorization and objective evidence remain required when those
+dimensions pass even if a judge or infrastructure component is unavailable.
+Durable run, draft, review, adjudication, calibration and authorization
+identities cannot be reused across planned trials.
 
 The trial file uses four independent verdicts:
 
@@ -46,11 +55,13 @@ python3 evals/academic-writing-baseline-v1/collect.py \
 
 The collector recomputes the protocol, corpus, harness, task and artifact
 digests. It opens the downloaded LaTeX ZIP, reconciles every saved `[Doc N]`
-marker with Markdown, `\cite{docN}` and the BibTeX key, binds the persisted
-review and independent adjudication to the draft content hash, verifies the
+marker with the exact saved Markdown body, `\cite{docN}` and parsed BibTeX
+metadata, binds the persisted review and independent adjudication to the run,
+task and draft content hash, verifies judge calibration and the
 collaborator/foreign-project authorization checks, and rejects a failed-revision
-proof if the current valid artifact changed. Secret-shaped runtime
-configuration fields are rejected before a result can be written.
+proof if either snapshot differs from the current valid artifact. Secret-shaped
+runtime configuration, environment, authorization-header and cookie fields are
+rejected before a result can be written.
 
 Generated trials and results are ignored by Git. Preserve accepted evidence in
 the authorized evaluation artifact store and commit only a dated, redacted
