@@ -439,6 +439,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_ATTEMPTS: int = 50  # Max auth attempts in window
     AUTH_RATE_LIMIT_WINDOW_MINUTES: int = 15  # Time window for rate limiting
+    # When true, a Redis outage makes the API rate limiter return 503 instead
+    # of degrading to the per-process in-memory fallback.
+    RATE_LIMIT_FAIL_CLOSED: bool = False
 
     # UUIDs of explicitly trusted platform operators.  This is intentionally
     # separate from tenant roles: an organization ADMIN must not gain access
