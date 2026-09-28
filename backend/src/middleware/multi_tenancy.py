@@ -22,6 +22,7 @@ module honestly reflects the real mechanism.
 """
 
 import logging
+import re
 from contextvars import ContextVar
 from typing import Any, Callable, Optional
 
@@ -41,6 +42,70 @@ from src.models.organization import Organization
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
+
+# Audit I7: the skip list used bare ``startswith``, so look-alike paths such as
+# ``/docs<anything>`` or ``/api/v1/auth/refreshXYZ`` bypassed tenant validation.
+# All patterns below are anchored. Two separate lists, two separate policies:
+#
+# ``_SKIP_PATH_REGEXES`` — auth-establishment routes. These run BEFORE a tenant
+# context can exist (login/register/refresh, CLI device flow). Skipping tenant
+# resolution for them is required for auth to work at all.
+#
+# ``PUBLIC_PATH_REGEXES`` — deliberately anonymous routes (verified by scanning
+# ``src/api/`` for endpoints with no auth dependency and by reading each
+# handler). Everything NOT listed here is fail-closed: no Authorization header
+# => 401, unresolvable token => 401. Do not add entries without verifying the
+# endpoint has no auth dependency and exposes no tenant data.
+_SKIP_PATH_REGEXES = (
+    # POST /api/v1/auth/login — establishes identity; no tenant context yet.
+    re.compile(r"^/api/v1/auth/login$"),
+    # POST /api/v1/auth/register — same as login.
+    re.compile(r"^/api/v1/auth/register$"),
+    # POST /api/v1/auth/refresh — exchanges a refresh token for a new JWT.
+    re.compile(r"^/api/v1/auth/refresh$"),
+    # /api/v1/cli-auth/* — CLI device-flow router (api/auth/cli_auth.py) is
+    # pre-auth by design; every route under it starts an unauthenticated flow.
+    re.compile(r"^/api/v1/cli-auth/"),
+)
+
+# Deliberately anonymous routes. Each entry: one route, one reason it is
+# public. Anchored on purpose — a prefix match here would re-open the I7
+# look-alike bypass for every sibling route.
+PUBLIC_PATH_REGEXES = (
+    # GET / — static welcome/version metadata served by main.py (no tenant data).
+    re.compile(r"^/$"),
+    # GET /docs — Swagger UI page served by FastAPI (static HTML).
+    re.compile(r"^/docs$"),
+    # GET /docs/oauth2-redirect — Swagger UI OAuth2 helper page (static HTML).
+    re.compile(r"^/docs/oauth2-redirect$"),
+    # GET /redoc — ReDoc page served by FastAPI (static HTML).
+    re.compile(r"^/redoc$"),
+    # GET /openapi.json — generated API schema (service metadata).
+    re.compile(r"^/openapi\.json$"),
+    # POST /api/v1/arxiv/search — anonymous arXiv literature discovery
+    # (api/arxiv/core.py:145, no auth dependency by design; external data only).
+    re.compile(r"^/api/v1/arxiv/search$"),
+    # GET /api/v1/arxiv/tracking/stats — aggregate change-tracking counts;
+    # docstring declares it public and deliberately omits per-tenant detail.
+    re.compile(r"^/api/v1/arxiv/tracking/stats$"),
+    # GET /api/v1/agent/health — agent service health (static ok payload).
+    re.compile(r"^/api/v1/agent/health$"),
+    # GET /api/v1/evaluation/health — evaluation service health (static).
+    re.compile(r"^/api/v1/evaluation/health$"),
+    # GET /api/v1/search-quality/health — search-quality service health.
+    re.compile(r"^/api/v1/search-quality/health$"),
+    # GET /api/v1/search-quality/metrics/types — static catalog of metric
+    # enum types/descriptions (no user or tenant data).
+    re.compile(r"^/api/v1/search-quality/metrics/types$"),
+    # GET /api/v1/analytics/quality/health — quality-metrics service health.
+    re.compile(r"^/api/v1/analytics/quality/health$"),
+    # GET /api/v1/analytics/behavior/health — behavior-analytics service health.
+    re.compile(r"^/api/v1/analytics/behavior/health$"),
+    # GET /api/v1/analytics/performance/health — performance dashboard health.
+    re.compile(r"^/api/v1/analytics/performance/health$"),
+    # GET /api/v1/analytics/recommendations/health — recommendations health.
+    re.compile(r"^/api/v1/analytics/recommendations/health$"),
+)
 
 
 def _role_to_str(role: Any) -> str:
@@ -66,12 +131,38 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         if self._should_skip_tenant_validation(request):
             return await call_next(request)
 
+        # Audit I7 (fail-closed): a request with no Authorization header can
+        # never carry tenant context. The old code fell through to
+        # ``call_next`` here, so tenant isolation depended on every endpoint
+        # separately raising 401. Return 401 immediately — BEFORE the
+        # per-request DB session below is opened.
+        if not request.headers.get("Authorization", ""):
+            return error_response(
+                401, "Not authenticated", "authentication_error"
+            )
+
         try:
             async with AsyncSessionLocal() as db:
                 tenant_info = await self._extract_tenant_info(request, db)
 
                 if not tenant_info:
-                    return await call_next(request)
+                    # Audit I7 (fail-closed): a token that is absent-credentials
+                    # is handled above; here the token is present but fails
+                    # verification or tenant resolution. The downstream auth
+                    # dependencies (HTTPBearer(auto_error=True) +
+                    # get_current_user_token in core/security.py, get_current_user
+                    # in core/dependencies.py) would 401 on any route that
+                    # declares them — but the middleware cannot guarantee every
+                    # tenant-relevant route declares them (routes that only read
+                    # the ContextVar tenant context would run with a None
+                    # context). Tenant isolation must not be a per-endpoint
+                    # convention, so the middleware 401s here itself. Details of
+                    # the resolution failure stay server-side (logged below).
+                    return error_response(
+                        401,
+                        "Could not validate credentials",
+                        "authentication_error",
+                    )
                 await self._validate_tenant_access(tenant_info["organization_id"], db)
 
                 request.state.db = db
@@ -105,20 +196,20 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         ``/api/v1/auth/...``. Matching ``/auth/login`` here never fired and
         forced every login/register/refresh request through tenant
         resolution (issue #1003).
+
+        Audit I7: matching is done with anchored regexes (see
+        ``_SKIP_PATH_REGEXES`` and ``PUBLIC_PATH_REGEXES``) instead of
+        ``startswith`` so look-alike paths (``/docsX``,
+        ``/api/v1/auth/refreshXYZ``, ...) can never bypass tenant validation.
+        Probe paths stay an exact-match set lookup.
         """
         if request.url.path in PROBE_EXEMPT_PATHS:
             return True
 
-        skip_paths = [
-            "/api/v1/auth/login",
-            "/api/v1/auth/register",
-            "/api/v1/auth/refresh",
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-        ]
-
-        return any(request.url.path.startswith(path) for path in skip_paths)
+        path = request.url.path
+        if any(pattern.match(path) for pattern in _SKIP_PATH_REGEXES):
+            return True
+        return any(pattern.match(path) for pattern in PUBLIC_PATH_REGEXES)
 
     async def _extract_tenant_info(
         self, request: Request, db: Optional[AsyncSession] = None
@@ -235,11 +326,20 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         except PermissionDeniedException:
             raise
         except Exception as e:
-            logger.error(f"Error validating tenant access: {e}")
+            # Audit I7: the internal exception text used to be embedded in the
+            # client-visible ``details`` (rendered by the analytics exception
+            # handler). Log it server-side instead; the client only sees the
+            # organization_id it supplied itself.
+            logger.error(
+                "Error validating tenant access for org %s: %s",
+                organization_id,
+                e,
+                exc_info=True,
+            )
             raise PermissionDeniedException(
                 required_permission="organization_access",
                 user_role="unknown",
-                details={"organization_id": organization_id, "error": str(e)},
+                details={"organization_id": organization_id},
             )
 
 

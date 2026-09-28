@@ -107,7 +107,7 @@ def mock_db():
 
 
 @pytest.fixture
-def client(test_app, mock_current_user, mock_db):
+def client(test_app, test_auth_headers, mock_current_user, mock_db):
     """Create a test client with auth and db overrides."""
     from contextlib import asynccontextmanager
 
@@ -121,7 +121,7 @@ def client(test_app, mock_current_user, mock_db):
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app) as c:
+        with TestClient(test_app, headers=test_auth_headers) as c:
             yield c
     finally:
         test_app.router.lifespan_context = original_lifespan

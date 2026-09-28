@@ -163,16 +163,34 @@ async def test_agent_stream_path_sets_tenant_context():
 @pytest.mark.parametrize(
     "path",
     [
+        # auth-establishment routes (skip list)
         "/api/v1/auth/login",
         "/api/v1/auth/register",
         "/api/v1/auth/refresh",
-        # a sub-path of a skipped route still skips (startswith match)
-        "/api/v1/auth/refresh/callback",
+        # cli-auth device-flow router (api/auth/cli_auth.py:21) is pre-auth.
+        "/api/v1/cli-auth/start",
+        "/api/v1/cli-auth/status/session-123",
+        "/api/v1/cli-auth/approve",
+        # kubelet probes (exact-match set)
         "/health",
         "/health/readiness",
+        # deliberately anonymous docs/schema pages
         "/docs",
+        "/docs/oauth2-redirect",
         "/redoc",
         "/openapi.json",
+        # enumerated public API routes (PUBLIC_PATH_REGEXES)
+        "/",
+        "/api/v1/arxiv/search",
+        "/api/v1/arxiv/tracking/stats",
+        "/api/v1/agent/health",
+        "/api/v1/evaluation/health",
+        "/api/v1/search-quality/health",
+        "/api/v1/search-quality/metrics/types",
+        "/api/v1/analytics/quality/health",
+        "/api/v1/analytics/behavior/health",
+        "/api/v1/analytics/performance/health",
+        "/api/v1/analytics/recommendations/health",
     ],
 )
 def test_should_skip_tenant_validation_matches_mounted_paths(path):
@@ -180,9 +198,8 @@ def test_should_skip_tenant_validation_matches_mounted_paths(path):
 
     Auth router is mounted at ``/api/v1`` + ``/auth`` => ``/api/v1/auth/...``
     (main.py:522, api/auth/auth.py:35). A ``startswith`` check against
-    ``/auth/login`` never fires, so every login/register/refresh request
-    needlessly opens a DB session and runs JWT verification. Regression
-    guard for issue #1003.
+    ``/auth/login`` never fired and forced every login/register/refresh request
+    through tenant resolution (issue #1003).
     """
     from unittest.mock import MagicMock
 
@@ -206,11 +223,37 @@ def test_should_skip_tenant_validation_matches_mounted_paths(path):
         "/api/v1/analytics",
         "/health/detailed",
         "/api/v1/sentry-debug",
-        "/",  # root must NOT skip — tenant scope applies
+        # Audit I7: startswith let look-alike paths bypass tenant validation.
+        # Anchored regexes must NOT match these.
+        "/docsX",
+        "/docs/oauth2-redirectX",
+        "/docsX/oauth2-redirect",
+        "/redocX",
+        "/openapi.jsonX",
+        "/api/v1/auth/refreshXYZ",  # the exact bypass named by audit I7
+        "/api/v1/authX/login",
+        "/api/v1/auth/refresh/callback",
+        "/api/v1/cli-authX/start",
+        "/api/v2/threads",
+        # PUBLIC_PATH_REGEXES look-alikes: exemptions are exact-route only, so
+        # sibling routes (all authenticated) keep tenant validation.
+        "/api/v1/arxiv/searchX",
+        "/api/v1/arxiv/search/extra",
+        "/api/v1/arxiv/ingest",  # authenticated sibling of the public search
+        "/api/v1/arxiv/tracking/statsX",
+        "/api/v1/arxiv/tracking/history",
+        "/api/v1/agent/healthX",
+        "/api/v1/agent/stream/health",
+        "/api/v1/evaluation/healthX",
+        "/api/v1/search-quality/healthX",
+        "/api/v1/search-quality/metrics/types/all",
+        "/api/v1/analytics/quality/healthX",
+        "/api/v1/analytics/behavior/health/summary",
     ],
 )
 def test_should_skip_tenant_validation_does_not_overmatch(path):
-    """Skip-list must not swallow tenant-scoped routes or the bare root."""
+    """Skip/public lists must not swallow tenant-scoped routes or their
+    authenticated siblings."""
     from unittest.mock import MagicMock
 
     from fastapi import Request
@@ -329,3 +372,275 @@ async def test_fast_path_denies_inactive_user():
         result = await middleware._extract_tenant_info(mock_request, db=None)
 
     assert result is None
+
+
+# ===========================================================================
+# Audit I7: fail-closed gate, exact skip list, no internal-detail leakage.
+# ============================================================================
+
+
+def _i7_app():
+    """Fresh FastAPI app with the real MultiTenancyMiddleware mounted.
+
+    FastAPI's built-in /docs, /redoc and /openapi.json routes are disabled so
+    the public-route stubs registered by the tests are the authoritative
+    handlers for those paths.
+    """
+    from fastapi import FastAPI
+
+    from src.middleware.multi_tenancy import MultiTenancyMiddleware
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(MultiTenancyMiddleware)
+    return app
+
+
+def _mock_session_cm(db):
+    """Mock the ``AsyncSessionLocal()`` async context manager around ``db``."""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=db)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+@pytest.mark.asyncio
+async def test_protected_path_without_authorization_is_401_and_never_opens_db():
+    """Audit I7: no Authorization header => immediate 401.
+
+    The old middleware passed such requests through with no tenant context,
+    making tenant isolation a per-endpoint convention. The early return must
+    also happen BEFORE the middleware opens its per-request DB session.
+    """
+    from starlette.testclient import TestClient
+
+    db_factory = MagicMock(
+        side_effect=AssertionError("must not open a DB session for a 401")
+    )
+    with patch("src.middleware.multi_tenancy.AsyncSessionLocal", db_factory):
+        app = _i7_app()
+        hits = []
+
+        @app.get("/api/v1/threads")
+        async def threads_endpoint():
+            hits.append(1)
+            return {"ok": True}
+
+        client = TestClient(app)
+        response = client.get("/api/v1/threads")
+
+    assert response.status_code == 401
+    assert hits == [], "protected route handler must not run without auth"
+    db_factory.assert_not_called()
+
+    body = response.json()
+    assert body["error"]["message"] == "Not authenticated"
+    assert body["error"]["status_code"] == 401
+    assert body["error"]["type"] == "authentication_error"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/auth/login",
+        "/api/v1/cli-auth/start",
+        "/health",
+    ],
+)
+def test_skip_list_paths_reachable_without_token(path):
+    """Token-less requests to skipped paths still reach their route handlers."""
+    from starlette.testclient import TestClient
+
+    app = _i7_app()
+    reached = []
+
+    @app.get("/api/v1/auth/login")
+    async def login_stub():
+        reached.append("login")
+        return {"ok": True}
+
+    @app.get("/api/v1/cli-auth/start")
+    async def cli_auth_start_stub():
+        reached.append("cli-auth")
+        return {"ok": True}
+
+    @app.get("/health")
+    async def health_stub():
+        reached.append("health")
+        return {"status": "ok"}
+
+    client = TestClient(app)
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert len(reached) == 1, f"{path} must reach exactly its own handler"
+
+
+# (method, path) for every PUBLIC_PATH_REGEXES exemption. Each public route
+# must be reachable WITHOUT an Authorization header through the real
+# middleware — no 401 from the fail-closed gate.
+_PUBLIC_ROUTE_STUBS = [
+    ("get", "/", "root"),
+    ("get", "/docs", "docs"),
+    ("get", "/docs/oauth2-redirect", "oauth2_redirect"),
+    ("get", "/redoc", "redoc"),
+    ("get", "/openapi.json", "openapi"),
+    ("post", "/api/v1/arxiv/search", "arxiv_search"),
+    ("get", "/api/v1/arxiv/tracking/stats", "tracking_stats"),
+    ("get", "/api/v1/agent/health", "agent_health"),
+    ("get", "/api/v1/evaluation/health", "evaluation_health"),
+    ("get", "/api/v1/search-quality/health", "search_quality_health"),
+    ("get", "/api/v1/search-quality/metrics/types", "metric_types"),
+    ("get", "/api/v1/analytics/quality/health", "quality_health"),
+    ("get", "/api/v1/analytics/behavior/health", "behavior_health"),
+    ("get", "/api/v1/analytics/performance/health", "performance_health"),
+    ("get", "/api/v1/analytics/recommendations/health", "recommendations_health"),
+]
+
+
+@pytest.mark.parametrize("method,path,label", _PUBLIC_ROUTE_STUBS)
+def test_public_path_exemptions_reachable_without_token(method, path, label):
+    """Every enumerated public route (Decision 1, option b) must bypass the
+    fail-closed tenant gate: reachable with no token, handler actually runs.
+
+    PROBE_EXEMPT_PATHS (/health, /health/readiness) are covered by
+    ``test_skip_list_paths_reachable_without_token`` above; this list is
+    PUBLIC_PATH_REGEXES only.
+    """
+    from starlette.testclient import TestClient
+
+    app = _i7_app()
+    reached = []
+
+    def _register(method_, path_, name_):
+        def handler():
+            reached.append(name_)
+            return {"ok": True}
+
+        getattr(app, method_)(path_)(handler)
+
+    for m, p, n in _PUBLIC_ROUTE_STUBS:
+        _register(m, p, n)
+
+    client = TestClient(app)
+    response = getattr(client, method)(path)
+
+    assert response.status_code != 401, (
+        f"public route {path} must not be blocked by the fail-closed gate"
+    )
+    assert response.status_code == 200
+    assert reached == [label], f"{path} must reach exactly its own handler"
+
+
+@pytest.mark.asyncio
+async def test_invalid_token_on_protected_path_returns_401_never_500():
+    """Audit I7: a Bearer token that fails verification must 401, not pass
+    through with no tenant context (and never blow up as a 500)."""
+    from starlette.testclient import TestClient
+
+    mock_db = AsyncMock()
+    with (
+        patch(
+            "src.middleware.multi_tenancy.AsyncSessionLocal",
+            return_value=_mock_session_cm(mock_db),
+        ),
+        patch(
+            "src.middleware.multi_tenancy.verify_token",
+            return_value=None,
+        ),
+    ):
+        app = _i7_app()
+        hits = []
+
+        @app.get("/api/v1/threads")
+        async def threads_endpoint():
+            hits.append(1)
+            return {"ok": True}
+
+        client = TestClient(app)
+        response = client.get(
+            "/api/v1/threads", headers={"Authorization": "Bearer bad-token"}
+        )
+
+    assert response.status_code == 401
+    assert hits == []
+    body = response.json()
+    assert body["error"]["type"] == "authentication_error"
+    # No internals: only the stable message is exposed.
+    assert "bad-token" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_tenant_access_db_failure_returns_403_without_internal_text():
+    """Audit I7: a DB failure inside tenant validation surfaces as 403 whose
+    body never contains the internal exception text."""
+    from starlette.testclient import TestClient
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(side_effect=RuntimeError("S3CR3T-INTERNAL-DB"))
+    with (
+        patch(
+            "src.middleware.multi_tenancy.AsyncSessionLocal",
+            return_value=_mock_session_cm(mock_db),
+        ),
+        patch(
+            "src.middleware.multi_tenancy.MultiTenancyMiddleware._extract_tenant_info",
+            new_callable=AsyncMock,
+            return_value={
+                "organization_id": "org-x",
+                "user_id": "user-1",
+                "role": "user",
+            },
+        ),
+    ):
+        app = _i7_app()
+
+        @app.get("/api/v1/threads")
+        async def threads_endpoint():
+            return {"ok": True}
+
+        client = TestClient(app)
+        response = client.get(
+            "/api/v1/threads", headers={"Authorization": "Bearer fake-token"}
+        )
+
+    assert response.status_code == 403
+    assert "S3CR3T-INTERNAL-DB" not in response.text
+    body = response.json()
+    assert body["error"]["message"].startswith("Access denied")
+
+
+@pytest.mark.asyncio
+async def test_validate_tenant_access_failure_details_keep_only_org_id():
+    """Audit I7: the PermissionDeniedException details carry organization_id
+    only — the internal exception text goes to the server log, not the client."""
+    import json
+
+    from src.exceptions.analytics_exceptions import PermissionDeniedException
+    from src.middleware.multi_tenancy import MultiTenancyMiddleware
+
+    middleware = MultiTenancyMiddleware(app=None)
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=RuntimeError("S3CR3T-INTERNAL-DB"))
+
+    with pytest.raises(PermissionDeniedException) as exc_info:
+        await middleware._validate_tenant_access("org-1", db)
+
+    assert exc_info.value.details == {"organization_id": "org-1"}
+    assert "S3CR3T" not in json.dumps(exc_info.value.details)
+
+
+@pytest.mark.asyncio
+async def test_non_http_scope_passes_through_untouched():
+    """BaseHTTPMiddleware passes non-http scopes (websocket/lifespan) straight
+    through without tenant processing — pin that behavior."""
+    from src.middleware.multi_tenancy import MultiTenancyMiddleware
+
+    downstream = AsyncMock()
+    middleware = MultiTenancyMiddleware(app=downstream)
+    scope = {"type": "websocket", "path": "/ws", "headers": []}
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    await middleware(scope, receive, send)
+
+    downstream.assert_awaited_once_with(scope, receive, send)
