@@ -1,0 +1,588 @@
+import assert from "node:assert/strict";
+import { test, type TestContext } from "node:test";
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  chmodSync,
+  symlinkSync,
+  statSync,
+  realpathSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CodexAdapter } from "../src/adapters/codex.ts";
+import { CredentialStore, integrationHeaders } from "../src/credentials.ts";
+import { connect, addWorkspace } from "../src/cli.ts";
+import type { SessionOptions } from "../src/contracts.ts";
+
+// Wire shapes captured from `codex-cli 0.153.4 app-server generate-ts`.
+const fixture = String.raw`
+import fs from 'node:fs';
+import readline from 'node:readline';
+const root = process.argv[2];
+const config = () => JSON.parse(fs.readFileSync(root+'/config.json','utf8'));
+if (process.argv.includes('--version')) { console.log('codex-cli '+(config().version || '0.153.4')); process.exit(); }
+const send = v => process.stdout.write(JSON.stringify(v)+'\n');
+for await (const line of readline.createInterface({input:process.stdin})) {
+ const m = JSON.parse(line), c = config();
+ fs.appendFileSync(root+'/calls.jsonl',JSON.stringify(m)+'\n');
+ if (m.method === 'initialize') send({id:m.id,result:{userAgent:'codex/0.153.4',codexHome:root,platformFamily:'unix',platformOs:'macos'}});
+ if (m.method === 'thread/start' || m.method === 'thread/resume') {
+   send({id:m.id,result:{thread:{id:'s',turns:[]},cwd:root,approvalPolicy:'on-request',approvalsReviewer:'user',sandbox:{type:'workspaceWrite',writableRoots:[root],networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true},...c.effective}});
+ }
+ if (m.method === 'turn/start') {
+   if(c.mode==='exit') process.exit(7);
+   if(c.mode==='eof') { process.stdout.end(); continue; }
+   if(c.mode==='malformed') { process.stdout.write('{broken}\n'); continue; }
+   if(c.mode==='oversized') { process.stdout.write('x'.repeat(1048577)); continue; }
+   if(c.request) send({id:41,method:c.request.method,params:c.request.params});
+   const msg = JSON.stringify({method:'item/agentMessage/delta',params:{threadId:'s',turnId:'t',itemId:'i',delta:c.text || 'early'}})+'\n';
+   if(c.mode==='split') { process.stdout.write(msg.slice(0,25)); await new Promise(r=>setTimeout(r,10)); process.stdout.write(msg.slice(25)); } else process.stdout.write(msg);
+   if(c.mode==='flood') for(let i=0;i<500;i++) send({method:'item/agentMessage/delta',params:{threadId:'s',turnId:'t',delta:'part'+i}});
+   send({id:m.id,result:{turn:{id:'t',status:'inProgress',items:[],error:null}}});
+   if(c.terminal) send({method:'turn/completed',params:{threadId:'s',turn:{id:'t',status:c.terminal,items:[],error:null}}});
+ }
+ if(m.method==='turn/interrupt') send({id:m.id,result:{}});
+}
+`;
+class FakeAppServer {
+  root = realpathSync(mkdtempSync(join(tmpdir(), "nous-codex-")));
+  config: Record<string, unknown> = {};
+  constructor() {
+    writeFileSync(join(this.root, "server.mjs"), fixture);
+    this.configure({});
+  }
+  configure(value: object) {
+    Object.assign(this.config, value);
+    writeFileSync(join(this.root, "config.json"), JSON.stringify(this.config));
+  }
+  replyToStart(value: object): void {
+    this.configure({ effective: value });
+  }
+  calls(method: string): object[] {
+    try {
+      return readFileSync(join(this.root, "calls.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l))
+        .filter((m) => m.method === method);
+    } catch {
+      return [];
+    }
+  }
+}
+function setup(t: TestContext) {
+  const server = new FakeAppServer();
+  const adapter = new CodexAdapter({
+    command: process.execPath,
+    args: [join(server.root, "server.mjs"), server.root],
+  });
+  const options: SessionOptions = {
+    cwd: server.root,
+    workspaceId: "workspace",
+    policy: {
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      reviewer: "user",
+      networkAccess: false,
+      writableRoots: [server.root],
+    },
+  };
+  t.after(async () => {
+    await adapter.closeSession();
+    rmSync(server.root, { recursive: true, force: true });
+  });
+  return { server, adapter, options };
+}
+test("rejects weaker effective permissions", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.replyToStart({ sandbox: { type: "dangerFullAccess" } });
+  await assert.rejects(adapter.startSession(options), /policy mismatch/);
+  assert.equal(server.calls("turn/start").length, 0);
+});
+for (const operation of ["start", "resume"])
+  for (const drift of [
+    { approvalPolicy: "never" },
+    { approvalsReviewer: "guardian_subagent" },
+    { cwd: "/tmp" },
+    {
+      sandbox: {
+        type: "workspaceWrite",
+        writableRoots: ["/"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    },
+  ]) {
+    test(
+      operation + " rejects effective drift " + JSON.stringify(drift),
+      async (t) => {
+        const { server, adapter, options } = setup(t);
+        server.replyToStart(drift);
+        await assert.rejects(
+          operation === "start"
+            ? adapter.startSession(options)
+            : adapter.resumeSession("s", options),
+          /policy mismatch/,
+        );
+        await assert.rejects(adapter.startTurn("s", "hello", "c"), /session/);
+      },
+    );
+  }
+test("exact pinned version only", async (t) => {
+  const { server, adapter } = setup(t);
+  server.configure({ version: "0.153.5" });
+  await assert.rejects(adapter.probe(), /unsupported Codex version/);
+  assert.equal(server.calls("initialize").length, 0);
+});
+for (const mode of ["split", "malformed", "oversized", "exit", "eof"])
+  test("transport " + mode, async (t) => {
+    const { server, adapter, options } = setup(t);
+    server.configure({ mode });
+    await adapter.startSession(options);
+    const signal = new AbortController();
+    const iterator = adapter.events(signal.signal)[Symbol.asyncIterator]();
+    const first = iterator.next();
+    if (mode === "split") {
+      await adapter.startTurn("s", "x", "c");
+      assert.equal((await first).value?.kind, "delta");
+      signal.abort();
+    } else {
+      const observed = assert.rejects(first, /transport|frame|JSON/);
+      await assert.rejects(
+        adapter.startTurn("s", "x", "c"),
+        /transport|frame|JSON/,
+      );
+      await observed;
+    }
+  });
+test("early events, bounded queue backpressure, and untruncated unicode chunks", async (t) => {
+  const { server, adapter, options } = setup(t);
+  const text = "😀".repeat(10000);
+  server.configure({ text, mode: "flood", terminal: "completed" });
+  await adapter.startSession(options);
+  const ac = new AbortController();
+  const collected: string[] = [];
+  let terminal = false;
+  const consumer = (async () => {
+    for await (const event of adapter.events(ac.signal)) {
+      if (event.kind === "delta") {
+        assert.ok(Buffer.byteLength(event.text) <= 8192);
+        collected.push(event.text);
+        if (collected.length === 1) await new Promise((r) => setTimeout(r, 60));
+      }
+      if (event.kind === "terminal") {
+        terminal = true;
+        break;
+      }
+    }
+  })();
+  await adapter.startTurn("s", "x", "c");
+  await consumer;
+  assert.equal(
+    collected.join(""),
+    text + Array.from({ length: 500 }, (_, i) => "part" + i).join(""),
+  );
+  assert.equal(terminal, true);
+  assert.equal(adapter.queueHighWaterMark, 32);
+});
+test("requires event consumer and serializes active turns", async (t) => {
+  const { adapter, options } = setup(t);
+  await adapter.startSession(options);
+  await assert.rejects(adapter.startTurn("s", "x", "c"), /consumer/);
+  const ac = new AbortController();
+  const consume = (async () => {
+    for await (const _ of adapter.events(ac.signal)) {
+      /* drain */
+    }
+  })();
+  await adapter.startTurn("s", "x", "c");
+  await assert.rejects(adapter.startTurn("s", "x", "d"), /active|ambiguous/);
+  await adapter.interruptTurn("s", "t");
+  await assert.rejects(adapter.startTurn("s", "x", "d"), /active|ambiguous/);
+  ac.abort();
+  await consume;
+});
+test("unsupported and schema-invalid requests denied locally", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.configure({
+    request: {
+      method: "item/permissions/requestApproval",
+      params: { threadId: "s", turnId: "t", itemId: "i" },
+    },
+  });
+  await adapter.startSession(options);
+  const ac = new AbortController();
+  const events: unknown[] = [];
+  const consume = (async () => {
+    for await (const e of adapter.events(ac.signal)) events.push(e);
+  })();
+  await adapter.startTurn("s", "x", "c");
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(
+    events.some((e: any) => e.kind === "request"),
+    false,
+  );
+  const rows = readFileSync(join(server.root, "calls.jsonl"), "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  assert.ok(rows.some((r) => r.id === 41 && r.error));
+  ac.abort();
+  await consume;
+});
+test("credential handles are opaque and owner-only; symlinks and unsafe modes fail closed", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-creds-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = new CredentialStore(join(dir, "vault"));
+  const creds = { accessToken: "access-secret", grantToken: "grant-secret" };
+  const handle = await store.save(creds);
+  assert.ok(!handle.includes("secret"));
+  assert.deepEqual(await store.load(handle), creds);
+  assert.equal(
+    statSync(join(dir, "vault", handle + ".json")).mode & 0o777,
+    0o600,
+  );
+  assert.deepEqual(integrationHeaders(creds), {
+    Authorization: "Bearer access-secret",
+    "X-NOUS-Integration-Grant": "grant-secret",
+  });
+  chmodSync(join(dir, "vault", handle + ".json"), 0o644);
+  await assert.rejects(store.load(handle), /permissions/);
+  await assert.rejects(store.load("../elsewhere"), /handle/);
+  const link = "11111111-1111-4111-8111-111111111111";
+  symlinkSync(
+    join(dir, "vault", handle + ".json"),
+    join(dir, "vault", link + ".json"),
+  );
+  await assert.rejects(store.load(link), /symbolic|symlink|ELOOP/);
+});
+
+test("connect exchanges CLI-owned grant; workspace sends only opaque IDs and labels", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "nous-connect-")));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const project = "11111111-1111-4111-8111-111111111111",
+    device = "22222222-2222-4222-8222-222222222222",
+    grant = "33333333-3333-4333-8333-333333333333";
+  const calls: { url: string; body: any; headers: any }[] = [];
+  const announcements: string[] = [];
+  const fetchFn = (async (input: any, init: any) => {
+    const url = String(input);
+    calls.push({
+      url,
+      body: init.body ? JSON.parse(init.body) : undefined,
+      headers: init.headers,
+    });
+    let data: object;
+    if (url.endsWith("/cli-auth/start"))
+      data = {
+        session_id: "login",
+        poll_token: "poll-secret",
+        browser_url: "https://nous.test/login",
+      };
+    else if (url.includes("/cli-auth/status/"))
+      data = { status: "approved", token: "cli-secret" };
+    else if (url.endsWith("/integrations/devices")) data = { id: device };
+    else if (url.endsWith("/grant-requests"))
+      data = { id: grant, approval_url: "https://nous.test/approval" };
+    else if (url.endsWith("/exchange"))
+      data = { token: "grant-secret", grant_id: grant };
+    else if (url.endsWith("/workspaces")) data = {};
+    else data = { status: "approved" };
+    return new Response(JSON.stringify(data), { status: 200 });
+  }) as typeof fetch;
+  const options = {
+    stateDir: join(dir, "state"),
+    fetchFn,
+    announce: (m: string) => announcements.push(m),
+  };
+  const paired = await connect({
+    ...options,
+    apiUrl: "https://nous.test/api/v1",
+    projectId: project,
+    label: "Laptop",
+  });
+  assert.equal(paired.deviceId, device);
+  assert.equal(calls.filter((c) => c.url.endsWith("/exchange")).length, 1);
+  const created = await addWorkspace({
+    ...options,
+    root: dir,
+    label: "Research",
+  });
+  const again = await addWorkspace({
+    ...options,
+    root: dir,
+    label: "Research",
+  });
+  assert.deepEqual(again, created);
+  const registration = calls.find((c) => c.url.endsWith("/workspaces"))!;
+  assert.deepEqual(registration.body, {
+    workspace_id: created.workspaceId,
+    label: "Research",
+    project_id: project,
+  });
+  assert.equal(registration.headers.Authorization, "Bearer cli-secret");
+  assert.equal(calls.filter((c) => c.url.endsWith("/workspaces")).length, 1);
+  assert.ok(!JSON.stringify(calls.map((c) => c.body)).includes(dir));
+  assert.ok(!announcements.join("").includes("secret"));
+  const state = readFileSync(join(dir, "state", "connection.json"), "utf8");
+  assert.ok(!state.includes("secret"));
+  assert.ok(state.includes(paired.credentialHandle));
+});
+
+test("denied browser consent never exchanges or stores credentials", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-deny-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const calls: string[] = [];
+  const fetchFn = (async (input: any) => {
+    const url = String(input);
+    calls.push(url);
+    return new Response(
+      JSON.stringify(
+        url.endsWith("/start")
+          ? {
+              session_id: "s",
+              poll_token: "p",
+              browser_url: "https://nous.test",
+            }
+          : { status: "denied" },
+      ),
+    );
+  }) as typeof fetch;
+  await assert.rejects(
+    connect({
+      stateDir: join(dir, "state"),
+      apiUrl: "https://nous.test/api/v1",
+      projectId: "11111111-1111-4111-8111-111111111111",
+      label: "Laptop",
+      fetchFn,
+      announce: () => {},
+    }),
+    /denied/,
+  );
+  assert.equal(calls.length, 2);
+});
+for (const method of [
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/tool/requestUserInput",
+])
+  test("validates and answers exact callback " + method, async (t) => {
+    const { server, adapter, options } = setup(t);
+    const params: Record<string, unknown> = {
+      threadId: "s",
+      turnId: "t",
+      itemId: "i",
+      ...(method.includes("UserInput")
+        ? {
+            questions: [
+              {
+                id: "q",
+                header: "Choose",
+                question: "Which?",
+                isOther: false,
+                isSecret: false,
+                options: null,
+              },
+            ],
+            isBlocking: true,
+            autoResolutionMs: null,
+          }
+        : {
+            startedAtMs: 1,
+            ...(method.includes("command")
+              ? {
+                  approvalId: "a",
+                  kind: "command",
+                  environmentId: null,
+                  command: "pwd",
+                  cwd: server.root,
+                }
+              : {}),
+          }),
+    };
+    server.configure({ request: { method, params } });
+    await adapter.startSession(options);
+    const ac = new AbortController();
+    let seen = false;
+    const consume = (async () => {
+      for await (const event of adapter.events(ac.signal)) {
+        if (event.kind === "request") {
+          seen = true;
+          assert.deepEqual(event.params, params);
+          await adapter.respondToRequest(
+            event.requestId,
+            method.includes("UserInput")
+              ? { kind: "answers", answers: { q: ["yes"] } }
+              : { kind: "decision", allow: false },
+          );
+          await assert.rejects(
+            adapter.respondToRequest(event.requestId, {
+              kind: "decision",
+              allow: true,
+            }),
+            /stale/,
+          );
+        }
+      }
+    })();
+    await adapter.startTurn("s", "x", "c");
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(seen, true);
+    const rows = readFileSync(join(server.root, "calls.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    assert.deepEqual(
+      rows.find((r) => r.id === 41).result,
+      method.includes("UserInput")
+        ? { answers: { q: { answers: ["yes"] } } }
+        : { decision: "decline" },
+    );
+    ac.abort();
+    await consume;
+  });
+for (const request of [
+  {
+    method: "item/commandExecution/requestApproval",
+    params: { threadId: "s", turnId: "t", itemId: "i", startedAtMs: "invalid" },
+  },
+  {
+    method: "item/fileChange/requestApproval",
+    params: {
+      threadId: "s",
+      turnId: "t",
+      itemId: "i",
+      startedAtMs: 1,
+      grantRoot: "/",
+    },
+  },
+  {
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId: "s",
+      turnId: "t",
+      itemId: "i",
+      questions: [{}],
+      isBlocking: true,
+    },
+  },
+])
+  test("denies invalid or persistent approval " + request.method, async (t) => {
+    const { server, adapter, options } = setup(t);
+    server.configure({ request });
+    await adapter.startSession(options);
+    const ac = new AbortController();
+    const events: any[] = [];
+    const consume = (async () => {
+      for await (const e of adapter.events(ac.signal)) events.push(e);
+    })();
+    await adapter.startTurn("s", "x", "c");
+    await new Promise((r) => setTimeout(r, 30));
+    assert.ok(!events.some((e) => e.kind === "request"));
+    const rows = readFileSync(join(server.root, "calls.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    assert.ok(rows.find((r) => r.id === 41).error);
+    ac.abort();
+    await consume;
+  });
+for (const status of ["failed", "interrupted"])
+  test("native terminal " + status, async (t) => {
+    const { server, adapter, options } = setup(t);
+    server.configure({ terminal: status });
+    await adapter.startSession(options);
+    const events: any[] = [];
+    const consume = (async () => {
+      for await (const e of adapter.events(new AbortController().signal)) {
+        events.push(e);
+        if (e.kind === "terminal") break;
+      }
+    })();
+    await adapter.startTurn("s", "x", "c");
+    await consume;
+    assert.equal(events.at(-1).status, status);
+  });
+test("start/resume propagate local MCP and restrictive turn settings only", async (t) => {
+  const { server, adapter, options } = setup(t);
+  options.mcpConfig = {
+    nous: { command: "nous-mcp", args: ["--credential-handle", "opaque"] },
+  };
+  await adapter.resumeSession("s", options);
+  const resume: any = server.calls("thread/resume")[0];
+  assert.equal(resume.params.config.mcp_servers.nous.command, "nous-mcp");
+  assert.equal(resume.params.sandbox, "workspace-write");
+  options.policy.writableRoots.push("/"); // External mutation cannot widen the verified snapshot.
+  const ac = new AbortController();
+  const consume = (async () => {
+    for await (const e of adapter.events(ac.signal)) {
+    }
+  })();
+  await adapter.startTurn("s", "x", "c");
+  const call: any = server.calls("turn/start")[0];
+  assert.deepEqual(call.params.sandboxPolicy, {
+    type: "workspaceWrite",
+    writableRoots: [server.root],
+    networkAccess: false,
+    excludeTmpdirEnvVar: true,
+    excludeSlashTmp: true,
+  });
+  assert.equal(call.params.approvalsReviewer, "user");
+  ac.abort();
+  await consume;
+});
+
+test("denies network and temporary-root policy widening", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.replyToStart({
+    sandbox: {
+      type: "workspaceWrite",
+      writableRoots: [server.root],
+      networkAccess: true,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+  });
+  await assert.rejects(adapter.startSession(options), /policy mismatch/);
+  server.replyToStart({
+    sandbox: {
+      type: "workspaceWrite",
+      writableRoots: [server.root],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    },
+  });
+  await assert.rejects(adapter.resumeSession("s", options), /policy mismatch/);
+  assert.equal(server.calls("turn/start").length, 0);
+});
+
+test("resuming an active native turn cannot steer or start another", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.replyToStart({
+    thread: { id: "s", turns: [{ id: "other", status: "inProgress" }] },
+  });
+  await assert.rejects(adapter.resumeSession("s", options), /active turn/);
+  await assert.rejects(adapter.startTurn("s", "x", "c"), /session/);
+  assert.equal(server.calls("turn/start").length, 0);
+});
+
+test("malformed credential JSON errors do not reveal secrets", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-secret-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = new CredentialStore(join(dir, "vault"));
+  const id = await store.save({ accessToken: "secret", grantToken: "secret" });
+  writeFileSync(
+    join(dir, "vault", id + ".json"),
+    '{"accessToken":"secret" BROKEN',
+  );
+  await assert.rejects(
+    store.load(id),
+    (error) =>
+      error instanceof Error && error.message === "invalid stored JSON",
+  );
+});

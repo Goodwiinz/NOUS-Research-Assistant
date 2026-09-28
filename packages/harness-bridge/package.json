@@ -1,0 +1,30 @@
+{
+  "name": "@nous/harness-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "bin": {
+    "nous-harness": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/contracts.ts",
+    "./codex": "./src/adapters/codex.ts",
+    "./credentials": "./src/credentials.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test",
+    "type-check": "tsc --noEmit",
+    "start": "node --import tsx src/cli.ts"
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "tsx": "4.22.4",
+    "typescript": "5.9.3"
+  }
+}
