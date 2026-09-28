@@ -12,6 +12,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { JsonRpcProcess, NativeExitUnconfirmed } from "../src/rpc.ts";
+import { Journal } from "../src/journal.ts";
+import type { BridgeCommand } from "../src/connection.ts";
 import { CodexAdapter } from "../src/adapters/codex.ts";
 import { CredentialStore, integrationHeaders } from "../src/credentials.ts";
 import { connect, addWorkspace } from "../src/cli.ts";
@@ -24,6 +30,8 @@ import readline from 'node:readline';
 const root = process.argv[2];
 const config = () => JSON.parse(fs.readFileSync(root+'/config.json','utf8'));
 if (process.argv.includes('--version')) { console.log('codex-cli '+(config().version || '0.153.4')); process.exit(); }
+fs.writeFileSync(root+'/pid', String(process.pid));
+if(config().ignoreTerm) process.on('SIGTERM', () => fs.appendFileSync(root+'/signals', 'TERM\n'));
 const send = v => process.stdout.write(JSON.stringify(v)+'\n');
 for await (const line of readline.createInterface({input:process.stdin})) {
  const m = JSON.parse(line), c = config();
@@ -51,7 +59,7 @@ for await (const line of readline.createInterface({input:process.stdin})) {
    send({method:'turn/completed',params:{threadId:'s',turn:{id:'t',status:'completed',items:[],error:null}}});
  }
  if(m.method==='thread/read') send({id:m.id,result:{thread:c.history || {id:'s',turns:[]}}});
- if(m.method==='turn/interrupt') send({id:m.id,result:{}});
+ if(m.method==='turn/interrupt' && !c.hangInterrupt) send({id:m.id,result:{}});
 }
 `;
 class FakeAppServer {
@@ -99,6 +107,12 @@ function setup(t: TestContext) {
   };
   t.after(async () => {
     await adapter.closeSession();
+    try {
+      process.kill(
+        Number(readFileSync(join(server.root, "pid"), "utf8")),
+        "SIGKILL",
+      );
+    } catch {}
     rmSync(server.root, { recursive: true, force: true });
   });
   return { server, adapter, options };
@@ -800,4 +814,114 @@ test("history reconciliation uses a fresh reader after native transport loss wit
     "recovered",
   );
   assert.equal(server.calls("turn/start").length, 1);
+});
+
+async function waitForInterrupt(server: FakeAppServer): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (!server.calls("turn/interrupt").length) {
+    assert.ok(
+      Date.now() < deadline,
+      "fake app-server did not receive interrupt",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+function assertServerExited(server: FakeAppServer): void {
+  const pid = Number(readFileSync(join(server.root, "pid"), "utf8"));
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+}
+for (const shutdown of ["timeout", "close"] as const) {
+  test(
+    `hung interrupt ${shutdown} waits for app-server exit before releasing claim`,
+    { timeout: 40_000 },
+    async (t) => {
+      const { server, adapter, options } = setup(t);
+      server.configure({ hangInterrupt: true, ignoreTerm: true });
+      const j = new Journal(join(server.root, "journal.sqlite"), () => options);
+      const c: BridgeCommand = {
+        commandId: randomUUID(),
+        runId: randomUUID(),
+        deviceId: randomUUID(),
+        workspaceId: randomUUID(),
+        generation: 1,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        body: { kind: "start", input: "hello" },
+      };
+      const signal = new AbortController();
+      const consumer = (async () => {
+        try {
+          for await (const event of adapter.events(signal.signal)) {
+            void event;
+          }
+        } catch {}
+      })();
+      const stop: BridgeCommand = {
+        ...c,
+        commandId: randomUUID(),
+        body: { kind: "interrupt", sessionId: "s", turnId: "t" },
+      };
+      try {
+        await j.execute(c, adapter);
+        const pending = j.execute(stop, adapter);
+        await waitForInterrupt(server);
+        if (shutdown === "close") {
+          await adapter.closeSession();
+          assertServerExited(server);
+        }
+        await pending;
+        assertServerExited(server);
+        assert.match(
+          readFileSync(join(server.root, "signals"), "utf8"),
+          /TERM/,
+        );
+        assert.equal(j.state(stop.commandId), "recovering");
+        assert.equal(j.workspaceLocked(c.workspaceId), true);
+        let retries = 0;
+        await j.execute(stop, {
+          interruptTurn: async () => {
+            retries++;
+          },
+        } as unknown as import("../src/contracts.ts").HarnessAdapter);
+        assert.equal(retries, 1);
+        assert.equal(j.state(stop.commandId), "delivered");
+      } finally {
+        signal.abort();
+        await consumer;
+        j.close();
+      }
+    },
+  );
+}
+
+test("unconfirmed app-server exit fails closed when termination signals cannot be delivered", async (t) => {
+  const server = new FakeAppServer();
+  server.configure({ hangInterrupt: true, ignoreTerm: true });
+  const rpc = new JsonRpcProcess(
+    process.execPath,
+    [join(server.root, "server.mjs"), server.root],
+    async () => {},
+    () => {},
+  );
+  // Simulate an OS refusing delivery of signals to this real subprocess.
+  const child = (rpc as unknown as { child: ChildProcessWithoutNullStreams })
+    .child;
+  const kill = child.kill.bind(child);
+  t.after(async () => {
+    child.kill = kill;
+    const exited = once(child, "exit");
+    kill("SIGKILL");
+    await exited;
+    await rpc.close();
+    rmSync(server.root, { recursive: true, force: true });
+  });
+  await rpc.call("initialize", {});
+  child.kill = () => false;
+  const pending = assert.rejects(
+    rpc.call("turn/interrupt", {}),
+    NativeExitUnconfirmed,
+  );
+  await waitForInterrupt(server);
+  await assert.rejects(rpc.close(), NativeExitUnconfirmed);
+  await pending;
+  assert.doesNotThrow(() => process.kill(child.pid!, 0));
 });

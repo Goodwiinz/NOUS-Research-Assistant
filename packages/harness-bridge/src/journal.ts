@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { closeSync, constants, lstatSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { NativeExitUnconfirmed } from "./rpc.ts";
 import type {
   AdapterEvent,
   HarnessAdapter,
@@ -74,6 +75,7 @@ export class Journal {
       CREATE TABLE IF NOT EXISTS leases(run_id TEXT PRIMARY KEY, device TEXT NOT NULL, expires TEXT NOT NULL, blocked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS interrupts(session TEXT NOT NULL, turn TEXT NOT NULL, PRIMARY KEY(session,turn));
       CREATE TABLE IF NOT EXISTS interrupt_claims(command TEXT PRIMARY KEY REFERENCES commands(id), owner TEXT NOT NULL, pid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS interrupt_exit_uncertainty(command TEXT PRIMARY KEY REFERENCES commands(id));
       UPDATE commands SET state='recovering' WHERE state IN ('intent','running');`);
   }
   close(): void {
@@ -126,6 +128,13 @@ export class Journal {
   }
   /** Called inside the intent transaction; a live executor never loses its claim. */
   private claimInterrupt(commandId: string, owner: string): boolean {
+    // Executor death cannot resolve an explicitly unconfirmed native child exit.
+    if (
+      this.db
+        .prepare("SELECT 1 FROM interrupt_exit_uncertainty WHERE command=?")
+        .get(commandId)
+    )
+      return false;
     const claim = this.db
       .prepare("SELECT owner,pid FROM interrupt_claims WHERE command=?")
       .get(commandId) as { owner: string; pid: number } | undefined;
@@ -266,6 +275,7 @@ export class Journal {
       );
     });
     if (!claimed) return;
+    let retainInterruptClaim = false;
     try {
       if (b.kind === "start") {
         const options = this.optionsFor(command.workspaceId);
@@ -305,7 +315,15 @@ export class Journal {
           .prepare("UPDATE commands SET state='delivered' WHERE id=?")
           .run(command.commandId);
       }
-    } catch {
+    } catch (error) {
+      retainInterruptClaim =
+        b.kind === "interrupt" && error instanceof NativeExitUnconfirmed;
+      if (retainInterruptClaim)
+        this.db
+          .prepare(
+            "INSERT OR IGNORE INTO interrupt_exit_uncertainty(command) VALUES(?)",
+          )
+          .run(command.commandId);
       this.quarantine(command.commandId);
       const row = this.row(command.commandId)!;
       if (row.session && b.kind === "start") {
@@ -319,7 +337,7 @@ export class Journal {
       // Release only this attempt, after its receipt or recovery state is durable.
       // Closing a journal while the call is pending retains its claim until the
       // executor exits; closing is not evidence that its native call has stopped.
-      if (b.kind === "interrupt" && !this.closed)
+      if (b.kind === "interrupt" && !this.closed && !retainInterruptClaim)
         this.db
           .prepare("DELETE FROM interrupt_claims WHERE command=? AND owner=?")
           .run(command.commandId, interruptOwner);

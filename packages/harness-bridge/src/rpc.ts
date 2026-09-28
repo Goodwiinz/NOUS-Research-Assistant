@@ -18,6 +18,15 @@ export class TransportLoss extends Error {
   }
 }
 
+/** A failed termination is not permission to replay a native side effect. */
+export class NativeExitUnconfirmed extends TransportLoss {
+  constructor() {
+    super("app-server exit unconfirmed; recovery required");
+  }
+}
+const TERMINATION_GRACE_MS = 250;
+const EXIT_CONFIRMATION_MS = 1000;
+
 /** A single producer/consumer queue. Awaiting push pauses stdout reads. */
 export class BoundedQueue<T> {
   private values: T[] = [];
@@ -71,6 +80,12 @@ export class BoundedQueue<T> {
 export class JsonRpcProcess {
   private child: ChildProcessWithoutNullStreams;
   private nextId = 1;
+  private exitConfirmed = false;
+  private resolveExit!: () => void;
+  private exited = new Promise<void>((resolve) => {
+    this.resolveExit = resolve;
+  });
+  private termination?: Promise<void>;
   private pending = new Map<
     NativeRequestId,
     {
@@ -97,10 +112,15 @@ export class JsonRpcProcess {
     });
     // Do not log provider output: it can contain prompts or credentials.
     this.child.stderr.resume();
-    this.child.on("error", () =>
-      this.fail(new TransportLoss("process spawn failed")),
-    );
-    this.child.on("exit", () => this.fail(new TransportLoss("process exited")));
+    this.child.on("error", () => {
+      // A failed spawn has no child whose exit could be observed.
+      if (this.child.pid === undefined) this.confirmExit();
+      this.fail(new TransportLoss("process spawn failed"));
+    });
+    this.child.on("exit", () => {
+      this.confirmExit();
+      this.fail(new TransportLoss("process exited"));
+    });
     this.child.stdin.on("error", () =>
       this.fail(new TransportLoss("stdin failed")),
     );
@@ -173,25 +193,35 @@ export class JsonRpcProcess {
     }
   }
   async call(method: string, params: object): Promise<unknown> {
-    if (this.failure) throw this.failure;
+    if (this.failure) {
+      await this.terminate();
+      throw this.failure;
+    }
     if (this.pending.size >= 32)
       throw new Error("too many pending RPC requests");
     const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () =>
-          this.fail(
-            new TransportLoss(
-              "RPC acknowledgment timeout; execution may be ambiguous",
+    try {
+      return await new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () =>
+            this.fail(
+              new TransportLoss(
+                "RPC acknowledgment timeout; execution may be ambiguous",
+              ),
             ),
-          ),
-        30_000,
-      );
-      this.pending.set(id, { resolve, reject, timer });
-      void this.write({ id, method, params }).catch((error) =>
-        this.fail(error),
-      );
-    });
+          30_000,
+        );
+        this.pending.set(id, { resolve, reject, timer });
+        void this.write({ id, method, params }).catch((error) =>
+          this.fail(error),
+        );
+      });
+    } catch (error) {
+      // Pending RPCs fail immediately internally, but callers may only retry
+      // after the failed transport's child is confirmed gone.
+      if (this.failure) await this.terminate();
+      throw error;
+    }
   }
   notify(method: string): Promise<void> {
     return this.write({ method });
@@ -205,18 +235,51 @@ export class JsonRpcProcess {
       error: { code: -32601, message: "Unsupported or invalid request" },
     });
   }
+  private confirmExit(): void {
+    this.exitConfirmed = true;
+    this.resolveExit();
+  }
+  private terminate(): Promise<void> {
+    if (this.exitConfirmed) return Promise.resolve();
+    this.termination ??= new Promise<void>((resolve, reject) => {
+      const signal = (value: NodeJS.Signals) => {
+        try {
+          this.child.kill(value);
+        } catch {
+          /* Exit, not kill(), is authoritative. */
+        }
+      };
+      const escalate = setTimeout(
+        () => signal("SIGKILL"),
+        TERMINATION_GRACE_MS,
+      );
+      const deadline = setTimeout(
+        () => reject(new NativeExitUnconfirmed()),
+        TERMINATION_GRACE_MS + EXIT_CONFIRMATION_MS,
+      );
+      void this.exited.then(() => {
+        clearTimeout(escalate);
+        clearTimeout(deadline);
+        resolve();
+      });
+      signal("SIGTERM");
+    });
+    return this.termination;
+  }
   fail(error: Error): void {
     if (this.failure) return;
     this.failure = error;
+    // Start supervision even when no RPC caller is waiting (e.g. shutdown).
+    void this.terminate().catch(() => {});
     for (const call of this.pending.values()) {
       clearTimeout(call.timer);
       call.reject(error);
     }
     this.pending.clear();
     this.onFailure(error);
-    this.child.kill();
   }
-  close(): void {
+  async close(): Promise<void> {
     this.fail(new TransportLoss("session closed"));
+    await this.terminate();
   }
 }

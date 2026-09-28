@@ -54,6 +54,7 @@ const sameRoots = (a: unknown, b: string[]) =>
 export class CodexAdapter implements HarnessAdapter {
   private rpc?: JsonRpcProcess;
   private transportFailed = false;
+  private closed = false;
   private historyReader?: CodexAdapter;
   private boot?: Promise<void>;
   private queue = new BoundedQueue<AdapterEvent>(32);
@@ -108,6 +109,7 @@ export class CodexAdapter implements HarnessAdapter {
   private initialize(): Promise<void> {
     this.boot ??= (async () => {
       await this.probe();
+      if (this.closed) throw new TransportLoss("session closed");
       this.rpc = new JsonRpcProcess(
         this.executable.command,
         [...(this.executable.args ?? []), "app-server"],
@@ -418,11 +420,11 @@ export class CodexAdapter implements HarnessAdapter {
     };
   }
   async closeSession(): Promise<void> {
-    await this.historyReader?.closeSession();
+    this.closed = true;
+    await Promise.all([this.historyReader?.closeSession(), this.rpc?.close()]);
     this.requests.clear();
     this.seenRequestIds.clear();
     this.seenRequestIdBytes = 0;
-    this.rpc?.close();
     this.session = undefined;
   }
   private rememberRequestId(id: NativeRequestId): void {

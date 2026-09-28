@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { Journal } from "../src/journal.ts";
+import { NativeExitUnconfirmed } from "../src/rpc.ts";
 import type { BridgeCommand } from "../src/connection.ts";
 import type { HarnessAdapter, SessionOptions } from "../src/contracts.ts";
 const options: SessionOptions = {
@@ -766,45 +767,87 @@ test("failed interrupt releases its durable claim for another journal to retry",
   }
 });
 
-test("interrupt claim is reclaimed only after its executor process has exited", async () => {
+for (const uncertainExit of [false, true])
+  test(`dead executor interrupt claim recovery preserves native exit uncertainty: ${uncertainExit}`, async () => {
+    const f = fixture(),
+      j = new Journal(f.path, () => options),
+      c = command(),
+      a = adapter();
+    a.startTurn = async () => ({ id: "turn" });
+    const stop: BridgeCommand = {
+      ...c,
+      commandId: randomUUID(),
+      body: { kind: "interrupt", sessionId: "session", turnId: "turn" },
+    };
+    try {
+      await j.execute(c, a);
+      const script = `
+      import { Journal } from ${JSON.stringify(new URL("../src/journal.ts", import.meta.url).href)};
+      import { NativeExitUnconfirmed } from ${JSON.stringify(new URL("../src/rpc.ts", import.meta.url).href)};
+      const j = new Journal(${JSON.stringify(f.path)}, () => (${JSON.stringify(options)}));
+      await j.execute(${JSON.stringify(stop)}, { interruptTurn: async () => {
+        if (${uncertainExit}) throw new NativeExitUnconfirmed();
+        process.exit(91);
+      } });
+      process.exit(91);
+    `;
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--experimental-sqlite",
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "-e",
+          script,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      assert.equal(child.status, 91, child.stderr);
+      assert.equal(
+        j.state(stop.commandId),
+        uncertainExit ? "recovering" : "intent",
+      );
+      await j.execute(stop, a);
+      assert.deepEqual(a.interrupts, uncertainExit ? [] : ["session/turn"]);
+      if (!uncertainExit) assert.equal(j.state(stop.commandId), "delivered");
+      await j.execute(stop, a);
+      assert.equal(a.interrupts.length, uncertainExit ? 0 : 1);
+      assert.equal(j.workspaceLocked(c.workspaceId), true);
+    } finally {
+      j.close();
+      f.cleanup();
+    }
+  });
+
+test("unconfirmed native exit retains the durable interrupt claim across journals", async () => {
   const f = fixture(),
     j = new Journal(f.path, () => options),
     c = command(),
     a = adapter();
   a.startTurn = async () => ({ id: "turn" });
+  let calls = 0;
+  a.interruptTurn = async () => {
+    calls++;
+    throw new NativeExitUnconfirmed();
+  };
   const stop: BridgeCommand = {
     ...c,
     commandId: randomUUID(),
     body: { kind: "interrupt", sessionId: "session", turnId: "turn" },
   };
+  let other: Journal | undefined;
   try {
     await j.execute(c, a);
-    const script = `
-      import { Journal } from ${JSON.stringify(new URL("../src/journal.ts", import.meta.url).href)};
-      const j = new Journal(${JSON.stringify(f.path)}, () => (${JSON.stringify(options)}));
-      await j.execute(${JSON.stringify(stop)}, { interruptTurn: async () => process.exit(91) });
-    `;
-    const child = spawnSync(
-      process.execPath,
-      [
-        "--experimental-sqlite",
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "-e",
-        script,
-      ],
-      { encoding: "utf8", timeout: 10_000 },
-    );
-    assert.equal(child.status, 91, child.stderr);
-    assert.equal(j.state(stop.commandId), "intent");
     await j.execute(stop, a);
-    assert.deepEqual(a.interrupts, ["session/turn"]);
-    assert.equal(j.state(stop.commandId), "delivered");
+    assert.equal(j.state(stop.commandId), "recovering");
+    other = new Journal(f.path, () => options);
     await j.execute(stop, a);
-    assert.equal(a.interrupts.length, 1);
+    await other.execute(stop, a);
+    assert.equal(calls, 1);
     assert.equal(j.workspaceLocked(c.workspaceId), true);
   } finally {
+    other?.close();
     j.close();
     f.cleanup();
   }
