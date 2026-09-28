@@ -55,13 +55,13 @@ Frontend service and setup/editor contracts:
 corepack pnpm@10.18.2 --dir frontend exec vitest run src/services/__tests__/researchEngineService.test.ts src/components/research-engine/__tests__/DailyResearchBriefSetup.test.tsx src/components/research-engine/__tests__/BlueprintEditor.test.tsx
 ```
 
-Result: `3 passed` files, `27 passed` tests.
+Result after the review fix: `3 passed` files, `28 passed` tests.
 
 The final setup case initially exposed a real duplicate-capability ordering bug: a `Map` retained the last label for a canonical provider ID. The implementation now retains the first canonical capability; the original assertions remain unchanged and `DailyResearchBriefSetup.test.tsx` passes `3/3`.
 
 ## Adjacent regression evidence
 
-- Adjacent research-engine component and service tests: `4 passed` files, `30 passed` tests.
+- Adjacent research-engine component and service tests after the review fix: `4 passed` files, `31 passed` tests.
 - Adjacent backend endpoint, template, schema, review, and export tests: `121 passed, 5 warnings in 12.00s`.
 - Full frontend suite: `311 passed` files, `2325 passed` tests in `125.49s`.
 
@@ -84,6 +84,26 @@ The final setup case initially exposed a real duplicate-capability ordering bug:
 - `git diff --check`: passed.
 - The frontend commands emit the repository engine warning because this worker has Node `22.22.0` while `package.json` requests Node `24.x`; all commands completed successfully under the available runtime.
 
+## Review fix: stale persisted run target
+
+Review found that a persisted Daily Brief kept its old blueprint ID after a
+topology edit. Clearing `template_source` also removed the scope-confirmation
+guard, so the edited draft could start the old persisted blueprint before the
+custom topology was saved.
+
+The combined editor regression loads a persisted Daily Brief, confirms its
+scope, edits the topology, exercises a rejected save, retries successfully,
+and then starts the newly persisted custom blueprint. Before the fix the
+focused file was RED at `1 failed, 6 passed`: Start remained enabled directly
+after `Add step`. After the fix it passes `7/7`.
+
+`BlueprintEditor` now tracks unsaved topology independently from
+`template_source`. Every step/topology change marks the draft dirty, clears the
+Daily Brief semantics, disables Start, and is also rejected by the start
+handler. A failed save preserves that state. Only a successful save binds the
+returned blueprint and clears the dirty guard, after which the new custom
+blueprint starts without a Daily Brief scope payload.
+
 ## Files changed
 
 - `backend/openapi.json` (generated)
@@ -103,7 +123,7 @@ The final setup case initially exposed a real duplicate-capability ordering bug:
 
 - Confirmed every public request and response type in the research-engine service is either a generated schema alias or a local presentation adapter for the legacy untyped template-summary endpoint.
 - Confirmed selecting a template cannot apply summary data: the editor opens only after the detail request resolves.
-- Confirmed every topology edit clears both `template_source` and the Daily Brief scope confirmation before save or run start.
+- Confirmed every topology edit clears both `template_source` and the Daily Brief scope confirmation, and blocks the old persisted run target until a successful save.
 - Confirmed source options exclude ineligible and unavailable capabilities, de-duplicate canonical IDs deterministically, and prevent zero or more than four selections.
 - Confirmed any scope edit clears confirmation and the Daily Brief run action stays disabled until the exact current scope is confirmed.
 - Confirmed error messages do not disclose thrown exception text and every changed interactive control has a stable accessible name or status role.

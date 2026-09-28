@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BlueprintEditor } from '../BlueprintEditor';
 import { StepCard } from '../StepCard';
@@ -247,6 +253,76 @@ describe('BlueprintEditor loading', () => {
         limit_per_provider: 25,
         notes: '',
       },
+    });
+  });
+
+  it('keeps an edited Daily Brief draft from starting the old blueprint until save succeeds', async () => {
+    const parameters = {
+      ...TEMPLATE_DETAIL.parameters,
+      research_question: 'What changed?',
+      inclusion_criteria: ['Peer reviewed'],
+    };
+    vi.mocked(getBlueprint).mockResolvedValue({
+      id: 'blueprint-1',
+      name: 'Daily Research Brief',
+      template_source: 'daily_research_brief',
+      steps: TEMPLATE_STEPS,
+      parameters,
+    });
+    vi.mocked(createBlueprint)
+      .mockRejectedValueOnce(new Error('Save unavailable'))
+      .mockResolvedValueOnce({
+        id: 'blueprint-custom',
+        name: 'Daily Research Brief',
+        steps: [
+          ...TEMPLATE_STEPS,
+          {
+            type: 'search',
+            name: '',
+            description: '',
+            parameters: {},
+            mode: 'deterministic',
+            temperature: 0,
+          },
+        ],
+        parameters,
+      });
+    vi.mocked(startRun).mockResolvedValue({ id: 'run-custom' });
+
+    renderEditor();
+    const start = await screen.findByRole('button', { name: 'Start run' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Confirm scope' }));
+    expect(start).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
+    expect(start).toBeDisabled();
+    fireEvent.click(start);
+    expect(startRun).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Failed to save blueprint.'
+    );
+    expect(start).toBeDisabled();
+    expect(startRun).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(start).toBeEnabled());
+    expect(createBlueprint).toHaveBeenLastCalledWith(
+      'project-1',
+      expect.objectContaining({
+        steps: expect.arrayContaining([
+          expect.objectContaining({ type: 'search', name: '' }),
+        ]),
+      })
+    );
+    expect(
+      vi.mocked(createBlueprint).mock.calls.at(-1)?.[1]
+    ).not.toHaveProperty('template_source');
+
+    fireEvent.click(start);
+    expect(startRun).toHaveBeenCalledWith('blueprint-custom', {
+      parameters_override: parameters,
     });
   });
 });

@@ -204,4 +204,17 @@
   gates pass. Its repo-wide backend phase retains `30` unrelated failures with
   `6264` passes, including unavailable/misconfigured PostgreSQL and Redis
   surfaces; no failure is in a Task 6 changed path.
+- Review round 1 found one Important stale-target gap: after a confirmed
+  persisted Daily Brief topology was edited, clearing its template marker also
+  removed the scope guard while the old persisted blueprint ID remained
+  runnable.
+- Fix round 1 started from `02cbdf54af3fe9cbd67e13ff09bbc9a863973f90`.
+  Its combined editor regression was RED at `1 failed, 6 passed` and GREEN at
+  `7 passed`. Unsaved topology now blocks both the Start control and handler;
+  rejected saves preserve the block, and only a successful custom-blueprint
+  save rebinds the runnable blueprint.
+- Fix verification: Task 6 frontend `28 passed`; adjacent research-engine
+  frontend `31 passed`; TypeScript, API type drift, changed-file ESLint,
+  Prettier, and diff checks pass. Commit: `fix(research-ui): block stale
+  blueprint runs` (this commit). Task 7 remains untouched.
 - Task 6: complete.
