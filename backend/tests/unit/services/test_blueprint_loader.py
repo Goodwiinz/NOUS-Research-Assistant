@@ -1,5 +1,7 @@
 """Tests for the BlueprintLoader service."""
 
+import copy
+
 import pytest
 import yaml
 
@@ -94,6 +96,37 @@ class TestLoadTemplate:
         """Raises FileNotFoundError for missing templates."""
         with pytest.raises(FileNotFoundError):
             loader.load_template("nonexistent_template")
+
+    @pytest.mark.parametrize(
+        ("slug", "contents", "message"),
+        [
+            ("malformed", "name: [unterminated", "malformed YAML"),
+            ("scalar", "- not\n- an\n- object\n", "template must be an object"),
+        ],
+    )
+    def test_load_template_rejects_malformed_yaml_documents(
+        self, tmp_path, slug: str, contents: str, message: str
+    ) -> None:
+        (tmp_path / f"{slug}.yaml").write_text(contents, encoding="utf-8")
+
+        with pytest.raises(ValueError, match=message):
+            BlueprintLoader(tmp_path).load_template(slug)
+
+    def test_load_template_rejects_path_traversal(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="Invalid template slug"):
+            BlueprintLoader(tmp_path).load_template("../outside")
+
+    def test_daily_brief_slug_requires_matching_template_source(
+        self, loader: BlueprintLoader, tmp_path
+    ) -> None:
+        template = copy.deepcopy(loader.load_template("daily_research_brief"))
+        template["template_source"] = "custom"
+        (tmp_path / "daily_research_brief.yaml").write_text(
+            yaml.safe_dump(template), encoding="utf-8"
+        )
+
+        with pytest.raises(ValueError, match="template_source"):
+            BlueprintLoader(tmp_path).load_template("daily_research_brief")
 
     def test_load_template_rejects_invalid_bundled_template(self, tmp_path) -> None:
         """Loading a bundled template validates its complete step contract."""
@@ -191,3 +224,59 @@ class TestValidateTemplate:
         }
         errors = loader.validate_template(template)
         assert len(errors) > 0
+
+    def test_validate_template_rejects_non_object_contracts(
+        self, loader: BlueprintLoader
+    ) -> None:
+        assert loader.validate_template([]) == ["Template must be an object."]
+
+        errors = loader.validate_template(
+            {
+                "name": " ",
+                "parameters": [],
+                "steps": ["not-a-step"],
+            }
+        )
+        assert "Template is missing required field 'name'." in errors
+        assert "Template parameters must be an object." in errors
+        assert "Step 0: step must be an object." in errors
+
+    @pytest.mark.parametrize(
+        ("path", "value", "message"),
+        [
+            (("contract_version",), 2, "contract_version"),
+            (("parameters", "providers"), ["openalex"], "providers"),
+            (("parameters", "limit_per_provider"), 10, "limit_per_provider"),
+            (("constraints",), {}, "constraints"),
+            (("coverage",), {"exhaustive": True}, "coverage.exhaustive"),
+            (("steps", 1, "parameters", "review_gate"), "wrong", "screen"),
+            (("steps", 5, "parameters", "formats"), ["json"], "formats"),
+        ],
+    )
+    def test_validate_daily_brief_rejects_contract_drift(
+        self,
+        loader: BlueprintLoader,
+        path: tuple,
+        value,
+        message: str,
+    ) -> None:
+        template = copy.deepcopy(loader.load_template("daily_research_brief"))
+        target = template
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+
+        assert any(message in error for error in loader.validate_template(template))
+
+    def test_validate_daily_brief_rejects_non_object_parameters_and_topology(
+        self, loader: BlueprintLoader
+    ) -> None:
+        template = copy.deepcopy(loader.load_template("daily_research_brief"))
+        template["parameters"] = None
+        errors = loader.validate_template(template)
+        assert "Template parameters must be an object." in errors
+        assert any("providers" in error for error in errors)
+
+        template = copy.deepcopy(loader.load_template("daily_research_brief"))
+        template["steps"] = template["steps"][:-1]
+        assert any("topology" in error for error in loader.validate_template(template))

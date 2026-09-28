@@ -130,6 +130,43 @@ def _mock_db_for_manifest(run):
 
 
 # ---------------------------------------------------------------------------
+# Tests: owner-scoped export artifacts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_owned_export_returns_stable_not_found_error() -> None:
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    db.execute.return_value = result
+
+    with pytest.raises(ResearchExportError) as raised:
+        await ExportService().export(uuid4(), uuid4(), ExportFormat.JSON, db)
+
+    assert raised.value.status_code == 404
+    assert raised.value.detail() == {
+        "code": "run_not_found",
+        "message": "Run not found",
+    }
+
+
+@pytest.mark.asyncio
+async def test_owned_export_rejects_non_completed_run() -> None:
+    run, _, _ = _make_run(status="running")
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = run
+    db.execute.return_value = result
+
+    with pytest.raises(ResearchExportError) as raised:
+        await ExportService().export(run.id, uuid4(), ExportFormat.MARKDOWN, db)
+
+    assert raised.value.status_code == 409
+    assert raised.value.code == "run_not_completed"
+
+
+# ---------------------------------------------------------------------------
 # Tests: export_json
 # ---------------------------------------------------------------------------
 
@@ -501,6 +538,46 @@ def _daily_brief_context(*, verified: bool = True) -> tuple[dict, dict]:
         },
     }
     return context, verification
+
+
+def test_trusted_scope_rejects_malformed_or_drifted_confirmation() -> None:
+    configuration = {
+        "contract_version": 1,
+        "research_question": "bounded question",
+        "inclusion_criteria": ["included"],
+        "exclusion_criteria": ["excluded"],
+        "providers": ["openalex"],
+        "limit_per_provider": 25,
+        "notes": None,
+    }
+    scope = {
+        **configuration,
+        "confirmed": True,
+        "confirmed_by": str(uuid4()),
+        "confirmed_at": "2026-09-27T10:00:00+00:00",
+        "configuration_hash": canonical_json_sha256(configuration),
+    }
+    manifest = {
+        "scope_confirmation": scope,
+        "parameters": copy.deepcopy(configuration),
+    }
+
+    assert ExportService._trusted_scope(manifest) is True
+
+    scope["confirmed_by"] = "not-a-uuid"
+    assert ExportService._trusted_scope(manifest) is False
+    scope["confirmed_by"] = str(uuid4())
+
+    scope["confirmed_at"] = "2026-09-27T10:00:00"
+    assert ExportService._trusted_scope(manifest) is False
+    scope["confirmed_at"] = "2026-09-27T10:00:00+00:00"
+
+    scope["configuration_hash"] = "0" * 64
+    assert ExportService._trusted_scope(manifest) is False
+    scope["configuration_hash"] = canonical_json_sha256(configuration)
+
+    manifest["parameters"]["notes"] = "changed after approval"
+    assert ExportService._trusted_scope(manifest) is False
 
 
 @pytest.mark.asyncio
