@@ -6,7 +6,9 @@ import copy
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
@@ -18,25 +20,60 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.services.research_engine.blueprints.loader import BlueprintLoader
 
-TemplateAPI = tuple[TestClient, Any, list[Any]]
+
+@dataclass
+class TemplateAPI:
+    client: TestClient
+    project: Any
+    engine_project: Any
+    created: list[Any]
+    actor: dict[str, Any]
+    collection_lookup: AsyncMock
 
 
 @pytest.fixture
-def template_api(test_app: FastAPI) -> Iterator[TemplateAPI]:
+def template_api(
+    test_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TemplateAPI]:
     user = Mock(
         id=uuid.uuid4(),
         email="researcher@example.com",
         is_active=True,
     )
-    project = Mock(
+    organization_id = uuid.uuid4()
+    workspace = SimpleNamespace(
         id=uuid.uuid4(),
         owner_id=user.id,
+        organization_id=organization_id,
+        members=[],
+        is_deleted=False,
+        is_archived=False,
+    )
+    project = SimpleNamespace(
+        id=uuid.uuid4(),
+        workspace_id=workspace.id,
+        workspace=workspace,
+        name="Canonical research project",
+        description=None,
+        research_status="active",
+        is_deleted=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    engine_project = Mock(
+        id=uuid.uuid4(),
+        collection_id=project.id,
+        owner_id=user.id,
+        settings={},
         is_deleted=False,
     )
     result = Mock()
     scalars = Mock()
-    scalars.first.return_value = project
+    scalars.first.return_value = engine_project
+    scalars.all.return_value = []
     result.scalars.return_value = scalars
+    result.scalar_one_or_none.return_value = organization_id
+    result.first.return_value = (project, workspace)
 
     db = AsyncMock()
     db.execute.return_value = result
@@ -50,8 +87,25 @@ def template_api(test_app: FastAPI) -> Iterator[TemplateAPI]:
         blueprint.updated_at = datetime.now(timezone.utc)
 
     db.refresh = AsyncMock(side_effect=refresh)
-    test_app.dependency_overrides[get_current_user] = lambda: user
+    actor = {"current": user}
+    test_app.dependency_overrides[get_current_user] = lambda: actor["current"]
     test_app.dependency_overrides[get_db] = lambda: db
+
+    async def get_collection(
+        _db: Any,
+        project_id: uuid.UUID,
+        _user_id: uuid.UUID,
+        *,
+        load_documents: bool,
+    ) -> Any:
+        assert load_documents is False
+        return project if project_id == project.id else None
+
+    collection_lookup = AsyncMock(side_effect=get_collection)
+    monkeypatch.setattr(
+        "src.services.research_engine.project_access.workspace_access.get_collection",
+        collection_lookup,
+    )
 
     @asynccontextmanager
     async def no_lifespan(_app: Any) -> AsyncIterator[None]:
@@ -61,7 +115,14 @@ def template_api(test_app: FastAPI) -> Iterator[TemplateAPI]:
     test_app.router.lifespan_context = no_lifespan
     try:
         with TestClient(test_app) as client:
-            yield client, project, created
+            yield TemplateAPI(
+                client=client,
+                project=project,
+                engine_project=engine_project,
+                created=created,
+                actor=actor,
+                collection_lookup=collection_lookup,
+            )
     finally:
         test_app.router.lifespan_context = original_lifespan
         test_app.dependency_overrides.pop(get_current_user, None)
@@ -71,7 +132,7 @@ def template_api(test_app: FastAPI) -> Iterator[TemplateAPI]:
 def test_template_detail_route_returns_validated_full_template_before_uuid_route(
     template_api: TemplateAPI,
 ) -> None:
-    client, _project, _created = template_api
+    client = template_api.client
 
     response = client.get(
         "/api/v1/research-engine/blueprints/templates/daily_research_brief"
@@ -98,7 +159,7 @@ def test_template_detail_route_returns_validated_full_template_before_uuid_route
 
 
 def test_unknown_template_detail_returns_404(template_api: TemplateAPI) -> None:
-    client, _project, _created = template_api
+    client = template_api.client
     response = client.get("/api/v1/research-engine/blueprints/templates/unknown")
     assert response.status_code == 404
     assert response.json()["error"]["message"] == "Blueprint template not found"
@@ -107,7 +168,9 @@ def test_unknown_template_detail_returns_404(template_api: TemplateAPI) -> None:
 def test_disabled_daily_template_is_hidden_and_cannot_be_instantiated(
     template_api: TemplateAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, project, created = template_api
+    client = template_api.client
+    project = template_api.project
+    created = template_api.created
     monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", False)
 
     listed = client.get("/api/v1/research-engine/blueprints/templates")
@@ -143,7 +206,9 @@ def test_disabled_daily_template_is_hidden_and_cannot_be_instantiated(
 def test_known_template_is_expanded_and_persisted_from_server_owned_steps(
     template_api: TemplateAPI,
 ) -> None:
-    client, project, created = template_api
+    client = template_api.client
+    project = template_api.project
+    created = template_api.created
 
     response = client.post(
         f"/api/v1/research-engine/blueprints/projects/{project.id}",
@@ -174,13 +239,44 @@ def test_known_template_is_expanded_and_persisted_from_server_owned_steps(
     assert saved.parameters["contract_version"] == 1
     assert saved.parameters["providers"] == ["pubmed"]
     assert saved.parameters["limit_per_provider"] == 12
+    assert saved.project_id == template_api.engine_project.id
+    assert response.json()["project_id"] == str(project.id)
+    assert response.json()["research_engine_project_id"] == str(
+        template_api.engine_project.id
+    )
+    template_api.collection_lookup.assert_awaited_once()
+
+
+def test_foreign_user_cannot_create_blueprint_for_canonical_project(
+    template_api: TemplateAPI,
+) -> None:
+    template_api.actor["current"] = Mock(
+        id=uuid.uuid4(),
+        email="other-researcher@example.com",
+        is_active=True,
+    )
+
+    response = template_api.client.post(
+        f"/api/v1/research-engine/blueprints/projects/{template_api.project.id}",
+        json={
+            "name": "Foreign project blueprint",
+            "steps": [{"type": "search", "name": "Unauthorized search"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["message"] == "Project not found"
+    assert template_api.created == []
+    template_api.collection_lookup.assert_awaited_once()
 
 
 @pytest.mark.parametrize("providers", [[{}], [[]], [1], [True]])
 def test_known_template_rejects_non_string_provider_elements(
     template_api: TemplateAPI, providers: list[Any]
 ) -> None:
-    client, project, created = template_api
+    client = template_api.client
+    project = template_api.project
+    created = template_api.created
 
     response = client.post(
         f"/api/v1/research-engine/blueprints/projects/{project.id}",
@@ -200,7 +296,8 @@ def test_known_template_rejects_non_string_provider_elements(
 def test_known_template_rejects_client_topology_changes(
     template_api: TemplateAPI, tampering: str
 ) -> None:
-    client, project, _created = template_api
+    client = template_api.client
+    project = template_api.project
     template = BlueprintLoader(daily_research_brief_enabled=True).load_template(
         "daily_research_brief"
     )
@@ -232,7 +329,9 @@ def test_known_template_rejects_client_topology_changes(
 def test_custom_topology_cannot_persist_an_untrusted_template_source(
     template_api: TemplateAPI,
 ) -> None:
-    client, project, created = template_api
+    client = template_api.client
+    project = template_api.project
+    created = template_api.created
 
     response = client.post(
         f"/api/v1/research-engine/blueprints/projects/{project.id}",
@@ -252,7 +351,9 @@ def test_custom_topology_cannot_persist_an_untrusted_template_source(
 def test_persisted_template_steps_do_not_follow_later_loader_mutation(
     template_api: TemplateAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, project, created = template_api
+    client = template_api.client
+    project = template_api.project
+    created = template_api.created
     template = BlueprintLoader(daily_research_brief_enabled=True).load_template(
         "daily_research_brief"
     )
