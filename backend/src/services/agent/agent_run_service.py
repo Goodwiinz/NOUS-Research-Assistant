@@ -238,9 +238,13 @@ async def upsert_run(
         return run
 
     # A zero-row update can mean either a missing row or an existing row that
-    # rejected this transition / owner. Reload before attempting an insert.
+    # rejected this transition / owner/provider. Reload before attempting an
+    # insert.
     existing = await _reload_run(db, job_id)
     if existing is not None:
+        if existing.execution_provider != "nous":
+            # Native job-store projections are not evidence of remote execution.
+            return existing
         if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
             # A mismatched payload cannot backfill tenant or correlation data
             # on another owner's partially scoped legacy row.
@@ -274,6 +278,8 @@ async def upsert_run(
         await db.rollback()
         existing = await _reload_run(db, job_id)
         if existing is not None:
+            if existing.execution_provider != "nous":
+                return existing
             if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
                 return None
             return (
@@ -335,6 +341,8 @@ async def upsert_run(
                 await db.rollback()
                 existing = await _reload_run(db, job_id)
                 if existing is not None:
+                    if existing.execution_provider != "nous":
+                        return existing
                     if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
                         return None
                     return existing
@@ -372,6 +380,8 @@ async def upsert_run(
                         "A response is already in progress for this thread."
                     ) from fallback_error
                 raise
+            if existing.execution_provider != "nous":
+                return existing
             if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
                 return None
             return existing
@@ -434,7 +444,11 @@ async def _transition_existing_run(
     idempotency_key: Optional[str],
     backfill_metadata: bool,
 ) -> Optional[AgentRun]:
-    predicates = [AgentRun.job_id == job_id, _transition_predicate(normalized)]
+    predicates = [
+        AgentRun.job_id == job_id,
+        AgentRun.execution_provider == "nous",
+        _transition_predicate(normalized),
+    ]
     if organization_id is not None:
         predicates.append(
             or_(
@@ -758,6 +772,7 @@ async def claim_execution(
         .where(
             AgentRun.job_id == job_id,
             AgentRun.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),
+            AgentRun.execution_provider == "nous",
             AgentRun.lease_owner.is_(None),
         )
         .values(

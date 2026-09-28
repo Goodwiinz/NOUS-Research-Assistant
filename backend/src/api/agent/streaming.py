@@ -1884,6 +1884,7 @@ async def stream_event_generator(
     # the accepted frame keys off this: the run's ledger, the outbox stamp and
     # the terminal status all address `acceptance.run_id`.
     acceptance: Optional[AcceptedSubmission] = None
+    integration_context = None
     org_id = getattr(current_user, "organization_id", None)
     latest_user_message = next(
         (
@@ -1942,11 +1943,31 @@ async def stream_event_generator(
         # id on the accepted frame — unchanged behaviour, not a new hole.
         # ------------------------------------------------------------------
         if _accept_eligible(thread_obj):
+            if getattr(request_body, "execution_provider", "nous") == "codex":
+                from src.api.agent.harness_streaming import create_chat_context
+
+                if request_body.device_id is None or request_body.workspace_id is None:
+                    raise ValueError(
+                        "Codex execution requires a paired device and workspace"
+                    )
+                integration_context = await create_chat_context(
+                    db,
+                    current_user=current_user,
+                    thread=thread_obj,
+                    device_id=request_body.device_id,
+                    workspace_id=request_body.workspace_id,
+                )
+            submission_options = (
+                {"integration_context": integration_context}
+                if integration_context is not None
+                else {}
+            )
             acceptance = await accept_submission(
                 db,
                 current_user=current_user,
                 request=request_body,
                 thread=thread_obj,
+                **submission_options,
             )
         else:
             logger.info(
@@ -1954,6 +1975,27 @@ async def stream_event_generator(
                 "verified thread for this submission",
                 extra={"thread_id": request_body.thread_id},
             )
+
+        if getattr(request_body, "execution_provider", "nous") == "codex":
+            if acceptance is None:
+                raise ValueError("Codex execution requires a durable chat thread")
+            from src.api.agent.harness_streaming import (
+                context_for_accepted_run,
+                stream_harness_run,
+            )
+
+            # The server-side binding is the source of stream authority. The
+            # browser never receives or echoes the short-lived CLI grant token.
+            integration_context = await context_for_accepted_run(
+                db, run_id=_uuid.UUID(acceptance.run_id), current_user=current_user
+            )
+            async for frame in stream_harness_run(
+                request,
+                _uuid.UUID(acceptance.run_id),
+                integration_context,
+            ):
+                yield frame
+            return
 
         if acceptance is not None and acceptance.replayed:
             # Idempotency means execution-once, not merely row-once. Reattach

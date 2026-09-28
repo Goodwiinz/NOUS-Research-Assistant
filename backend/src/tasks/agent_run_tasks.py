@@ -447,6 +447,15 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
                     skipped += 1
                     continue
 
+                if run.execution_provider == "codex":
+                    from src.services.harness.runs import record_observation
+
+                    await record_observation(
+                        db, run_id=uuid.UUID(job_id), observation="unknown"
+                    )
+                    skipped += 1
+                    continue
+
                 # Cross-check the LIVE store before declaring death: a lost
                 # fire-and-forget projection write must not fail a run that
                 # actually completed.

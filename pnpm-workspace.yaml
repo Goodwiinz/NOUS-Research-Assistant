@@ -3,6 +3,7 @@ packages:
   - tests/e2e
   - terminal
   - packages/chat-runtime
+  - packages/harness-bridge
 
 allowBuilds:
   '@sentry/cli': true

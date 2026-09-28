@@ -67,6 +67,8 @@ def _cors_origin_regex_is_overbroad(pattern: str) -> bool:
 class Settings(BaseSettings):
     """Application settings"""
 
+    HARNESS_BRIDGE_ENABLED: bool = False
+
     # Application
     APP_NAME: str = "Multimodal Enterprise RAG System"
     VERSION: str = "1.0.0"

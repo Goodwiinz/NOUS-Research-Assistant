@@ -29,6 +29,8 @@ import {
 } from '@/hooks/chat/chatAuthRecovery';
 import { agentChatService } from '@/services/agentChatService';
 import type { AgentStreamCallbacks } from '@/services/agentChatService';
+import { useHarnessConnection } from '@/hooks/chat/useHarnessConnection';
+import type { HarnessConnectionController } from '@/hooks/chat/useHarnessConnection';
 import type {
   AgentProgressStep,
   AgentStreamPhase,
@@ -413,6 +415,7 @@ export interface UseChatStreamingParams {
 }
 
 export interface UseChatStreamingReturn {
+  harnessConnection?: HarnessConnectionController;
   input: string;
   setInput: React.Dispatch<React.SetStateAction<string>>;
   isLoading: boolean;
@@ -601,6 +604,7 @@ export function useChatStreaming(
   const storeIsRetrievingRag = useChatStore((state) => state.isRetrievingRag);
   const streamingThreadId = useChatStore((state) => state.streamingThreadId);
   const activeThreadId = useChatStore((state) => state.currentThreadId);
+  const harnessConnection = useHarnessConnection(activeThreadId);
   const authIsAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const authenticatedUserId = useAuthStore((state) => state.user?.id ?? null);
   const draftWorkspaceId =
@@ -1101,6 +1105,8 @@ export function useChatStreaming(
         lastStreamedContentRef.current = '';
         let streamHadError = false;
         let streamHadConfirmation = false;
+        let transportLost = false;
+        let runCancelled = false;
         const responseStart = Date.now();
         // Stamped on the first token so the committed bubble can split the
         // clock into working vs writing straight away. The backend persists
@@ -1212,6 +1218,9 @@ export function useChatStreaming(
               useChatStore.setState({ streamingElapsedMs: elapsedMs });
             },
             onStatus: (phase, detail) => {
+              if (harnessConnection.executionProvider === 'codex') {
+                harnessConnection.receive({ type: 'status', detail });
+              }
               turnProgress = appendProgressStep(turnProgress, phase, detail);
               useChatStore.setState({
                 streamingPhase: phase,
@@ -1225,17 +1234,37 @@ export function useChatStreaming(
               }
               runIdByThreadRef.current[currentThreadId] = runId;
               useAgentActivityStore.getState().setRunId(currentThreadId, runId);
+              const stopPending = isStoppedByUser();
+              if (harnessConnection.executionProvider === 'codex') {
+                harnessConnection.receive({
+                  type: stopPending ? 'stopping' : 'accepted',
+                  runId,
+                });
+              }
               // Stop can race the accepted frame while the server is still
               // opening the response. Once the producer gives us its exact
               // identity, issue the fenced command instead of losing the
               // durable stop behind the local abort.
-              if (isStoppedByUser()) {
+              if (stopPending) {
                 void requestDurableStop(currentThreadId, runId);
               }
             },
             onStreamId: (sid) => {
               if (!currentThreadId) return;
               streamIdByThreadRef.current[currentThreadId] = sid;
+            },
+            onApprovalRequired: (requestId) => {
+              if (harnessConnection.executionProvider === 'codex') {
+                void harnessConnection
+                  .loadApproval(requestId)
+                  .catch((error) => {
+                    console.error('[Chat] Could not load native request:', error);
+                  });
+              }
+            },
+            onConnectionLost: () => {
+              transportLost = true;
+              harnessConnection.markConnectionLost();
             },
             onSeq: (seq) => {
               if (!currentThreadId) return;
@@ -1431,6 +1460,9 @@ export function useChatStreaming(
                 doneIds = payload;
               }
               if (currentThreadId) {
+                if (harnessConnection.executionProvider === 'codex') {
+                  harnessConnection.receive({ type: 'done' });
+                }
                 useAgentActivityStore
                   .getState()
                   .finishRun(currentThreadId, 'done');
@@ -1444,10 +1476,36 @@ export function useChatStreaming(
                 localFailure
               );
               streamHadError = true;
-              if (currentThreadId) {
+              if (
+                harnessConnection.executionProvider === 'codex' &&
+                category === 'cancelled'
+              ) {
+                runCancelled = true;
+                // The persisted RUN_CANCELLED event is terminal evidence that
+                // Codex stopped; it is not a failed assistant response.
+                harnessConnection.receive({ type: 'error' });
+                if (currentThreadId) {
+                  useAgentActivityStore
+                    .getState()
+                    .finishRun(currentThreadId, 'stopped');
+                }
+                finishAuthRecoveryAttempt(authRecoveryAttempt);
+                return;
+              }
+              if (
+                !transportLost &&
+                harnessConnection.executionProvider === 'codex'
+              ) {
+                harnessConnection.receive({ type: 'error' });
+              }
+              if (currentThreadId && !transportLost) {
                 useAgentActivityStore
                   .getState()
                   .finishRun(currentThreadId, 'error');
+              }
+              if (transportLost) {
+                finishAuthRecoveryAttempt(authRecoveryAttempt);
+                return;
               }
               if (
                 localFailure === 'authentication_required' &&
@@ -1512,7 +1570,13 @@ export function useChatStreaming(
           }
           resetStreamingTurnState();
           await reconcileUser(
-            streamHadConfirmation ? 'confirmation-paused' : 'stream-error'
+            streamHadConfirmation
+              ? 'confirmation-paused'
+              : runCancelled
+                ? 'run-cancelled'
+                : transportLost
+                  ? 'connection-lost'
+                  : 'stream-error'
           );
           setIsLoading(false);
           return;
@@ -1779,6 +1843,7 @@ export function useChatStreaming(
       maybeAutoFocusCreatedNote,
       setPendingConfirmation,
       requestDurableStop,
+      harnessConnection,
       displayedMessages.length,
     ]
   );
@@ -1800,7 +1865,12 @@ export function useChatStreaming(
       const rawContent =
         typeof contentOverride === 'string' ? contentOverride : input;
       const content = rawContent.trim();
-      if (!content || isLoading || storeIsStreaming) {
+      if (
+        !content ||
+        isLoading ||
+        storeIsStreaming ||
+        !harnessConnection.canSend
+      ) {
         console.warn('[Chat] Send ignored by submit guard', {
           empty: !content,
           isLoading,
@@ -2104,6 +2174,11 @@ export function useChatStreaming(
                   },
                   use_rag: enableRAG,
                   thread_id: existingAgentThreadId,
+                  ...(harnessConnection.executionProvider === 'codex' && {
+                    execution_provider: 'codex',
+                    device_id: harnessConnection.deviceId,
+                    workspace_id: harnessConnection.workspaceId,
+                  }),
                   // Documents the composer uploaded for this turn. The server
                   // links them to the user row it persists and drops any the
                   // caller's org does not own.
@@ -2159,21 +2234,11 @@ export function useChatStreaming(
       boundProjectId,
       resolvedProjectName,
       runStreamTurn,
+      harnessConnection,
     ]
   );
 
   const handleStop = useCallback(() => {
-    // Mark the stop first so the stream-completion path (which runs right after
-    // the abort makes streamMessage resolve) keeps the partial answer and tags
-    // it `stopped`, rather than wiping it here and racing the commit. The stop
-    // targets whichever stream owns the slice right now.
-    stopTargetRef.current = streamOwnerRef.current;
-    // Snapshot the turn's citations BEFORE storeStopStreaming() wipes
-    // streamingCitations — the completion path reads the store after the
-    // wipe and would otherwise commit + persist a stopped RAG answer with
-    // zero sources.
-    stopCitationsRef.current = useChatStore.getState().streamingCitations;
-
     // Stop during a confirmation continuation has no main-stream active ref;
     // use the pending gate's workspace thread while the confirm lock owns the
     // producer. The parked (legacy) confirmation path stays no-body below.
@@ -2193,6 +2258,29 @@ export function useChatStreaming(
         activityRun?.runId ??
         pendingConfirmation?.runId)
       : undefined;
+    if (
+      harnessConnection.executionProvider === 'codex' &&
+      normalRunStop &&
+      runThread
+    ) {
+      harnessConnection.receive({ type: 'stopping' });
+      if (expectedRunId) {
+        void requestDurableStop(runThread, expectedRunId);
+      } else {
+        // Acceptance may reach the browser before it carries the durable run
+        // id. Keep observing and retain Stop intent; onRunId will issue the
+        // fenced cancellation once that identity arrives.
+        stopTargetRef.current = streamOwnerRef.current;
+      }
+      // Keep observing: the request may lose a completion race, and only the
+      // persisted terminal event can say whether Codex stopped or completed.
+      return;
+    }
+
+    // For the native in-process path Stop aborts the reader immediately. Mark
+    // it first so the local completion path preserves the stopped partial.
+    stopTargetRef.current = streamOwnerRef.current;
+    stopCitationsRef.current = useChatStore.getState().streamingCitations;
     if (normalRunStop && runThread && expectedRunId) {
       // Issue the durable command before aborting the local transport. The
       // activity rail stays running until the producer's `cancelled` ACK is
@@ -2238,6 +2326,7 @@ export function useChatStreaming(
     pendingConfirmation,
     setPendingConfirmation,
     requestDurableStop,
+    harnessConnection,
     storeIsStreaming,
     storeStopStreaming,
   ]);
@@ -2318,14 +2407,26 @@ export function useChatStreaming(
             pendingSeqRef.current?.threadId === threadId
               ? pendingSeqRef.current.seq
               : 0;
+          if (harnessConnection.executionProvider === 'codex') {
+            harnessConnection.receive({ type: 'reconciling' });
+          }
           const res = await agentChatService.resumeStream(
             threadId,
             Math.max(latestRun.streamSeq ?? 0, pendingSeq),
             gapAwareCallbacks,
             signal,
-            latestRun.streamId
+            harnessConnection.executionProvider === 'codex'
+              ? latestRun.runId
+              : latestRun.streamId
           );
           if (res.status === 'idle') {
+            if (harnessConnection.executionProvider === 'codex') {
+              // A missing active pointer is not proof that the external run
+              // completed. Keep the visible outcome unknown until replay has
+              // delivered a persisted terminal event.
+              harnessConnection.markConnectionLost();
+              return;
+            }
             // Nothing active server-side — clear the stale run record.
             useAgentActivityStore.getState().finishRun(threadId, 'done');
             return;
@@ -2349,6 +2450,7 @@ export function useChatStreaming(
     pendingConfirmation,
     runStreamTurn,
     storeIsStreaming,
+    harnessConnection,
   ]);
 
   // ---- Re-deliver a parked HITL confirmation on a cold thread load ----
@@ -3178,6 +3280,7 @@ export function useChatStreaming(
   }, [pendingConfirmation, activeThreadId, setMessages]);
 
   return {
+    harnessConnection,
     input,
     setInput,
     isLoading,

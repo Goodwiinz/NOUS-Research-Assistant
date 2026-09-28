@@ -194,6 +194,27 @@
             "description": "Document ids to attach to this user turn. The documents are uploaded separately (POST /documents) and referenced here, so the stream body never carries file bytes. Ids the caller's organization does not own are dropped server-side, not rejected — a mixed batch still attaches the owned ones.",
             "title": "Attachment Ids"
           },
+          "device_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "execution_provider": {
+            "default": "nous",
+            "enum": [
+              "nous",
+              "codex"
+            ],
+            "title": "Execution Provider",
+            "type": "string"
+          },
           "max_context_docs": {
             "default": 5,
             "maximum": 10.0,
@@ -267,6 +288,18 @@
             "default": true,
             "title": "Use Rag",
             "type": "boolean"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
           }
         },
         "required": [
@@ -4274,6 +4307,44 @@
         "title": "DeterministicTrace",
         "type": "object"
       },
+      "DeviceCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "DeviceCreate",
+        "type": "object"
+      },
+      "DeviceDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "id"
+        ],
+        "title": "DeviceDTO",
+        "type": "object"
+      },
       "DocumentDateRange": {
         "description": "Allowed quick date-range filters for document search.\n\nSECURITY: An unconstrained free-text ``date_range`` query param is\nsilently ignored by every branch that doesn't match, which looks like a\nworking filter to the caller but returns unfiltered results. Restricting\nit to an enum makes an unknown value a 422 instead of a silent no-op.",
         "enum": [
@@ -5942,6 +6013,118 @@
         "title": "FinalReviewDecisionPayload",
         "type": "object"
       },
+      "GrantDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "approved"
+        ],
+        "title": "GrantDecision",
+        "type": "object"
+      },
+      "GrantRequestCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "device_id": {
+            "format": "uuid",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "project_id",
+          "device_id",
+          "scopes"
+        ],
+        "title": "GrantRequestCreate",
+        "type": "object"
+      },
+      "GrantRequestDTO": {
+        "properties": {
+          "approval_url": {
+            "title": "Approval Url",
+            "type": "string"
+          },
+          "device_id": {
+            "format": "uuid",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "device_label": {
+            "title": "Device Label",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_label": {
+            "title": "Project Label",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "consumed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "expires_at",
+          "approval_url",
+          "project_id",
+          "device_id",
+          "scopes",
+          "project_label",
+          "device_label"
+        ],
+        "title": "GrantRequestDTO",
+        "type": "object"
+      },
       "GraphAnalytics": {
         "description": "Model for graph analytics and statistics",
         "properties": {
@@ -6554,6 +6737,25 @@
         "title": "IntegritySegmentScore",
         "type": "object"
       },
+      "IssuedGrant": {
+        "properties": {
+          "grant_id": {
+            "format": "uuid",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "grant_id"
+        ],
+        "title": "IssuedGrant",
+        "type": "object"
+      },
       "JobStartResponse": {
         "properties": {
           "job_id": {
@@ -6574,6 +6776,7 @@
           "running",
           "awaiting_confirmation",
           "stopping",
+          "recovering",
           "completed",
           "failed",
           "cancelled"
@@ -7641,6 +7844,119 @@
         ],
         "title": "MetricTimeRange",
         "type": "string"
+      },
+      "NativeDecision": {
+        "additionalProperties": false,
+        "description": "A strict one-time decision, or exact answers to native questions.",
+        "properties": {
+          "allow": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow"
+          },
+          "answers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answers"
+          },
+          "kind": {
+            "enum": [
+              "decision",
+              "answers"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "targetHash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targethash"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "NativeDecision",
+        "type": "object"
+      },
+      "NativeRequestDTO": {
+        "additionalProperties": false,
+        "description": "Browser-safe, owner-authenticated view of a pending native request.",
+        "properties": {
+          "consumed": {
+            "title": "Consumed",
+            "type": "boolean"
+          },
+          "expired": {
+            "title": "Expired",
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "target": {
+            "additionalProperties": true,
+            "title": "Target",
+            "type": "object"
+          },
+          "targetHash": {
+            "title": "Targethash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "runId",
+          "method",
+          "target",
+          "targetHash",
+          "expiresAt",
+          "consumed",
+          "expired"
+        ],
+        "title": "NativeRequestDTO",
+        "type": "object"
       },
       "NoteListResponse": {
         "description": "Paginated list of notes.",
@@ -15336,6 +15652,62 @@
           "worker_details"
         ],
         "title": "WorkerStatsResponse",
+        "type": "object"
+      },
+      "WorkspaceBindingCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "workspace_id",
+          "project_id"
+        ],
+        "title": "WorkspaceBindingCreate",
+        "type": "object"
+      },
+      "WorkspaceBindingDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "workspace_id",
+          "project_id"
+        ],
+        "title": "WorkspaceBindingDTO",
         "type": "object"
       },
       "WorkspaceCreate": {
@@ -27571,6 +27943,576 @@
         "summary": "Reprocess File",
         "tags": [
           "files"
+        ]
+      }
+    },
+    "/api/v1/harness/requests/{request_id}": {
+      "get": {
+        "operationId": "read_native_request_api_v1_harness_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRequestDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Native Request",
+        "tags": [
+          "harness"
+        ]
+      }
+    },
+    "/api/v1/harness/requests/{request_id}/decision": {
+      "post": {
+        "operationId": "decide_native_request_api_v1_harness_requests__request_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Native Request",
+        "tags": [
+          "harness"
+        ]
+      }
+    },
+    "/api/v1/integrations/devices": {
+      "get": {
+        "operationId": "get_devices_api_v1_integrations_devices_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceDTO"
+                  },
+                  "title": "Response Get Devices Api V1 Integrations Devices Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Devices",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "post": {
+        "operationId": "create_device_api_v1_integrations_devices_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Device",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/devices/{device_id}/workspaces": {
+      "get": {
+        "operationId": "get_workspace_bindings_api_v1_integrations_devices__device_id__workspaces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceBindingDTO"
+                  },
+                  "title": "Response Get Workspace Bindings Api V1 Integrations Devices  Device Id  Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Workspace Bindings",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "post": {
+        "operationId": "create_workspace_binding_api_v1_integrations_devices__device_id__workspaces_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceBindingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceBindingDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Workspace Binding",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests": {
+      "post": {
+        "operationId": "create_grant_request_api_v1_integrations_grant_requests_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantRequestDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Grant Request",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests/{request_id}": {
+      "get": {
+        "operationId": "get_grant_request_api_v1_integrations_grant_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantRequestDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Grant Request",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests/{request_id}/decision": {
+      "post": {
+        "operationId": "decide_grant_request_api_v1_integrations_grant_requests__request_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantRequestDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Grant Request",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests/{request_id}/exchange": {
+      "post": {
+        "operationId": "exchange_grant_request_api_v1_integrations_grant_requests__request_id__exchange_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Exchange Grant Request",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grants/{grant_id}": {
+      "delete": {
+        "operationId": "delete_grant_api_v1_integrations_grants__grant_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Grant",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grants/{grant_id}/renew": {
+      "post": {
+        "operationId": "renew_grant_api_v1_integrations_grants__grant_id__renew_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Renew Grant",
+        "tags": [
+          "integrations"
         ]
       }
     },
