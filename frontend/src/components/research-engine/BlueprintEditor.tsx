@@ -1,6 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useState, type ReactElement } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
@@ -92,6 +98,7 @@ export function BlueprintEditor({
   const [scopeConfirmation, setScopeConfirmation] =
     useState<DailyBriefScopeConfirmation | null>(null);
   const [topologyDirty, setTopologyDirty] = useState(false);
+  const topologyRevisionRef = useRef(0);
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -112,6 +119,7 @@ export function BlueprintEditor({
           setGlobalParamsText(JSON.stringify(bp.parameters, null, 2));
           setTemplateSource(bp.template_source ?? null);
           setScopeConfirmation(null);
+          topologyRevisionRef.current += 1;
           setTopologyDirty(false);
           setShowTemplateSelector(false);
         } else {
@@ -128,13 +136,18 @@ export function BlueprintEditor({
     fetchData();
   }, [fetchData]);
 
+  const markTopologyDirty = (): void => {
+    topologyRevisionRef.current += 1;
+    setTopologyDirty(true);
+  };
+
   const handleTemplateSelect = (
     template: BlueprintTemplateDetail | null
   ): void => {
     setShowTemplateSelector(false);
     setBlueprint(null);
     setScopeConfirmation(null);
-    setTopologyDirty(true);
+    markTopologyDirty();
     if (template) {
       setBlueprintName(template.name);
       setSteps(template.steps.map(withKey));
@@ -169,7 +182,7 @@ export function BlueprintEditor({
   const handleStepChange = (index: number, updated: BlueprintStepDef): void => {
     setTemplateSource(null);
     setScopeConfirmation(null);
-    setTopologyDirty(true);
+    markTopologyDirty();
     setSteps((prev) =>
       prev.map((s, i) => (i === index ? { ...updated, _key: s._key } : s))
     );
@@ -180,7 +193,7 @@ export function BlueprintEditor({
     if (target < 0 || target >= steps.length) return;
     setTemplateSource(null);
     setScopeConfirmation(null);
-    setTopologyDirty(true);
+    markTopologyDirty();
     setSteps((prev) => {
       const next = [...prev];
       [next[index], next[target]] = [next[target], next[index]];
@@ -191,14 +204,14 @@ export function BlueprintEditor({
   const handleRemoveStep = (index: number): void => {
     setTemplateSource(null);
     setScopeConfirmation(null);
-    setTopologyDirty(true);
+    markTopologyDirty();
     setSteps((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleAddStep = (): void => {
     setTemplateSource(null);
     setScopeConfirmation(null);
-    setTopologyDirty(true);
+    markTopologyDirty();
     setSteps((prev) => [...prev, withKey({ ...DEFAULT_STEP })]);
   };
 
@@ -206,6 +219,7 @@ export function BlueprintEditor({
     if (!blueprintName.trim()) return;
     if (globalParamsError) return;
 
+    const topologyRevisionAtSave = topologyRevisionRef.current;
     setSaving(true);
     setError(null);
     try {
@@ -217,7 +231,7 @@ export function BlueprintEditor({
         ...(templateSource ? { template_source: templateSource } : {}),
       });
 
-      if (bp) {
+      if (bp && topologyRevisionRef.current === topologyRevisionAtSave) {
         setBlueprint(bp);
         setTemplateSource(bp.template_source ?? null);
         setTopologyDirty(false);
@@ -568,7 +582,7 @@ export function BlueprintEditor({
                       onChange={(sources) => {
                         setTemplateSource(null);
                         setScopeConfirmation(null);
-                        setTopologyDirty(true);
+                        markTopologyDirty();
                         setSteps((prev) =>
                           prev.map((step) =>
                             step.type === 'search'

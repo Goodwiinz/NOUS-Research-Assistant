@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -324,6 +325,61 @@ describe('BlueprintEditor loading', () => {
     expect(startRun).toHaveBeenCalledWith('blueprint-custom', {
       parameters_override: parameters,
     });
+  });
+
+  it('keeps a newer topology dirty when an older save resolves', async () => {
+    vi.mocked(getBlueprint).mockResolvedValue({
+      id: 'blueprint-1',
+      name: 'Custom brief',
+      steps: TEMPLATE_STEPS,
+      parameters: {},
+    });
+    const staleResponse = {
+      id: 'blueprint-stale',
+      name: 'Custom brief',
+      steps: [
+        ...TEMPLATE_STEPS,
+        {
+          type: 'search',
+          name: '',
+          description: '',
+          parameters: {},
+          mode: 'deterministic' as const,
+          temperature: 0,
+        },
+      ],
+      parameters: {},
+    };
+    let resolveSave: (value: typeof staleResponse) => void = () => undefined;
+    vi.mocked(createBlueprint).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve;
+      })
+    );
+
+    renderEditor();
+    const start = await screen.findByRole('button', { name: 'Start run' });
+    expect(start).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
+    expect(screen.getByText('Steps (7)')).toBeInTheDocument();
+    expect(start).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(
+      await screen.findByRole('button', { name: 'Saving' })
+    ).toBeDisabled();
+    expect(vi.mocked(createBlueprint).mock.calls[0][1].steps).toHaveLength(7);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
+    expect(screen.getByText('Steps (8)')).toBeInTheDocument();
+
+    await act(async () => resolveSave(staleResponse));
+    await screen.findByRole('button', { name: 'Save' });
+    expect(start).toBeDisabled();
+    expect(screen.queryByText('blueprint-stale')).not.toBeInTheDocument();
+    fireEvent.click(start);
+    expect(startRun).not.toHaveBeenCalled();
   });
 });
 

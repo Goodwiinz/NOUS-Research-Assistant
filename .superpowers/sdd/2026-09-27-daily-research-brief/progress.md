@@ -217,4 +217,16 @@
   frontend `31 passed`; TypeScript, API type drift, changed-file ESLint,
   Prettier, and diff checks pass. Commit: `fix(research-ui): block stale
   blueprint runs` (this commit). Task 7 remains untouched.
+- Review round 2 found one remaining Important save-ordering race: an older
+  successful save response could clear the dirty guard and replace the run
+  target after a newer topology edit occurred while the request was pending.
+- Fix round 2 started from `9356d18f057377bde47d49f970905765baf54d71`.
+  The deferred response regression was RED at `1 failed, 7 passed` and GREEN
+  at `8 passed`. Topology changes now advance a monotonic revision, and a save
+  response becomes the displayed/runnable blueprint only when its captured
+  revision still matches the current draft.
+- Fix verification: Task 6 frontend `29 passed`; adjacent research-engine
+  frontend `32 passed`; TypeScript, API type drift, changed-file ESLint,
+  Prettier, and diff checks pass. Commit: `fix(research-ui): ignore stale
+  blueprint saves` (this commit). Task 7 remains untouched.
 - Task 6: complete.

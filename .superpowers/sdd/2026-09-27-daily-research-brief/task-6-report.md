@@ -55,13 +55,13 @@ Frontend service and setup/editor contracts:
 corepack pnpm@10.18.2 --dir frontend exec vitest run src/services/__tests__/researchEngineService.test.ts src/components/research-engine/__tests__/DailyResearchBriefSetup.test.tsx src/components/research-engine/__tests__/BlueprintEditor.test.tsx
 ```
 
-Result after the review fix: `3 passed` files, `28 passed` tests.
+Result after the review fixes: `3 passed` files, `29 passed` tests.
 
 The final setup case initially exposed a real duplicate-capability ordering bug: a `Map` retained the last label for a canonical provider ID. The implementation now retains the first canonical capability; the original assertions remain unchanged and `DailyResearchBriefSetup.test.tsx` passes `3/3`.
 
 ## Adjacent regression evidence
 
-- Adjacent research-engine component and service tests after the review fix: `4 passed` files, `31 passed` tests.
+- Adjacent research-engine component and service tests after the review fixes: `4 passed` files, `32 passed` tests.
 - Adjacent backend endpoint, template, schema, review, and export tests: `121 passed, 5 warnings in 12.00s`.
 - Full frontend suite: `311 passed` files, `2325 passed` tests in `125.49s`.
 
@@ -104,6 +104,22 @@ handler. A failed save preserves that state. Only a successful save binds the
 returned blueprint and clears the dirty guard, after which the new custom
 blueprint starts without a Daily Brief scope payload.
 
+## Review fix: save-response ordering
+
+A second review found that an in-flight successful save could still clear the
+dirty guard after the user made a newer topology edit. The deferred-promise
+regression saves a seven-step custom draft, adds an eighth step while that
+request is pending, and then resolves the older response. Before the fix the
+editor file was RED at `1 failed, 7 passed`: Start became enabled for the stale
+saved response. After the fix it passes `8/8`.
+
+Topology changes now advance a monotonic draft revision. Save captures that
+revision before sending its request and accepts the returned blueprint as the
+displayed and runnable target only when the revision still matches. A response
+for an older topology is discarded for current-draft purposes, leaving the
+newer draft dirty and Start disabled. The existing rejected-save case and the
+unchanged successful-save case remain green.
+
 ## Files changed
 
 - `backend/openapi.json` (generated)
@@ -123,7 +139,7 @@ blueprint starts without a Daily Brief scope payload.
 
 - Confirmed every public request and response type in the research-engine service is either a generated schema alias or a local presentation adapter for the legacy untyped template-summary endpoint.
 - Confirmed selecting a template cannot apply summary data: the editor opens only after the detail request resolves.
-- Confirmed every topology edit clears both `template_source` and the Daily Brief scope confirmation, and blocks the old persisted run target until a successful save.
+- Confirmed every topology edit clears both `template_source` and the Daily Brief scope confirmation, advances the draft revision, and blocks old persisted or stale saved run targets until the current revision is successfully saved.
 - Confirmed source options exclude ineligible and unavailable capabilities, de-duplicate canonical IDs deterministically, and prevent zero or more than four selections.
 - Confirmed any scope edit clears confirmation and the Daily Brief run action stays disabled until the exact current scope is confirmed.
 - Confirmed error messages do not disclose thrown exception text and every changed interactive control has a stable accessible name or status role.
