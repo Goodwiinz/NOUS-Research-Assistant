@@ -414,6 +414,9 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
       workspace: { id: 'ws-A', name: 'Research' } as never,
     };
     const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+    act(() => {
+      result.current.harnessConnection?.selectProvider('codex');
+    });
     await waitFor(() =>
       expect(result.current.harnessConnection?.devices).toHaveLength(1)
     );

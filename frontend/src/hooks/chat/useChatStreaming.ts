@@ -1218,7 +1218,9 @@ export function useChatStreaming(
               useChatStore.setState({ streamingElapsedMs: elapsedMs });
             },
             onStatus: (phase, detail) => {
-              harnessConnection.receive({ type: 'status', detail });
+              if (harnessConnection.executionProvider === 'codex') {
+                harnessConnection.receive({ type: 'status', detail });
+              }
               turnProgress = appendProgressStep(turnProgress, phase, detail);
               useChatStore.setState({
                 streamingPhase: phase,
@@ -1233,10 +1235,12 @@ export function useChatStreaming(
               runIdByThreadRef.current[currentThreadId] = runId;
               useAgentActivityStore.getState().setRunId(currentThreadId, runId);
               const stopPending = isStoppedByUser();
-              harnessConnection.receive({
-                type: stopPending ? 'stopping' : 'accepted',
-                runId,
-              });
+              if (harnessConnection.executionProvider === 'codex') {
+                harnessConnection.receive({
+                  type: stopPending ? 'stopping' : 'accepted',
+                  runId,
+                });
+              }
               // Stop can race the accepted frame while the server is still
               // opening the response. Once the producer gives us its exact
               // identity, issue the fenced command instead of losing the
@@ -1250,9 +1254,13 @@ export function useChatStreaming(
               streamIdByThreadRef.current[currentThreadId] = sid;
             },
             onApprovalRequired: (requestId) => {
-              void harnessConnection.loadApproval(requestId).catch((error) => {
-                console.error('[Chat] Could not load native request:', error);
-              });
+              if (harnessConnection.executionProvider === 'codex') {
+                void harnessConnection
+                  .loadApproval(requestId)
+                  .catch((error) => {
+                    console.error('[Chat] Could not load native request:', error);
+                  });
+              }
             },
             onConnectionLost: () => {
               transportLost = true;
@@ -1452,7 +1460,9 @@ export function useChatStreaming(
                 doneIds = payload;
               }
               if (currentThreadId) {
-                harnessConnection.receive({ type: 'done' });
+                if (harnessConnection.executionProvider === 'codex') {
+                  harnessConnection.receive({ type: 'done' });
+                }
                 useAgentActivityStore
                   .getState()
                   .finishRun(currentThreadId, 'done');
@@ -1482,7 +1492,12 @@ export function useChatStreaming(
                 finishAuthRecoveryAttempt(authRecoveryAttempt);
                 return;
               }
-              if (!transportLost) harnessConnection.receive({ type: 'error' });
+              if (
+                !transportLost &&
+                harnessConnection.executionProvider === 'codex'
+              ) {
+                harnessConnection.receive({ type: 'error' });
+              }
               if (currentThreadId && !transportLost) {
                 useAgentActivityStore
                   .getState()

@@ -85,6 +85,7 @@ describe('useHarnessConnection', () => {
     ]);
     stopRun.mockResolvedValue(undefined);
     const view = renderConnectedHarness();
+    act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
     act(() => {
       view.result.current.selectProvider('codex');
@@ -107,6 +108,7 @@ describe('useHarnessConnection', () => {
       { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
     ]);
     const first = renderConnectedHarness('thread-a');
+    act(() => first.result.current.selectProvider('codex'));
     await waitFor(() => expect(first.result.current.devices).toHaveLength(1));
     act(() => {
       first.result.current.selectProvider('codex');
@@ -269,6 +271,7 @@ describe('useHarnessConnection', () => {
       { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
     ]);
     const view = renderConnectedHarness();
+    act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
     act(() => {
       view.result.current.selectProvider('codex');

@@ -121,13 +121,17 @@ export function useHarnessConnection(
   const devicesQuery = useQuery({
     queryKey: ['harness', 'devices', userId],
     queryFn: () => harnessService.listDevices(),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId && selection.executionProvider === 'codex'),
     staleTime: 30_000,
   });
   const workspacesQuery = useQuery({
     queryKey: ['harness', 'workspaces', userId, selection.deviceId],
     queryFn: () => harnessService.listWorkspaces(selection.deviceId!),
-    enabled: Boolean(userId && selection.deviceId),
+    enabled: Boolean(
+      userId &&
+        selection.executionProvider === 'codex' &&
+        selection.deviceId
+    ),
     staleTime: 30_000,
   });
 
