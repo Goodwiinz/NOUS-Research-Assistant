@@ -275,64 +275,78 @@
 ## Task 8 certification
 
 - Base: `68cc641938f43b99fa8d00e18822ccf2c62106e8`.
-- Original certification commit:
-  `efd76079be75fdbba9eef4215c1c831d829cacb4`. Independent-review source
-  commit: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`.
-- Added real PostgreSQL, Playwright browser-boundary, configured-model, and
-  frozen performance evidence for the Daily Research Brief lifecycle.
-- PostgreSQL passed `5` integration tests; the final browser suite passed all
-  `10` lifecycle scenarios with review p50 `565.1 ms` and p95 `647.4 ms`;
-  focused frontend passed `61` tests; the exact Node 24 type-check passed; the
-  earlier full frontend suite passed `2,368` tests; and the combined
-  optimization regression suite passed `81` backend tests.
-- Independent review found five Important gaps. The follow-up preserves manual
-  resume authorization across the intermediate paused GET; adds a fixed-corpus
-  semantic scorer independent of self-reported support labels; restores
-  baseline-equivalent performance sampling; commits bounded source-SHA-bound
-  transcripts; and races two real SSE consumers after duplicate resumes.
-- Numeric performance baselines and 20% ceilings were frozen before
-  optimization and never loosened. The nearest-rank function remains
-  unchanged. Final max-stage evidence uses the same 11 observations as the
-  baseline, so p95 is rank 11 (the maximum), with one warmup and GC enabled.
-  Three consecutive exact documented full-file invocations passed every
-  frozen ceiling, including 200 candidate rows, 25 screen/extract batches, ten
-  completed PostgreSQL lifecycles, zero duplicate stage rows, and 30 unique
-  review rows per invocation.
-- Earlier performance failures remain preserved. The repairs remove measured
-  request/executor cycles, quadratic source/coverage and usage-snapshot work,
-  repeated schema compilation, unnecessary discovery scans for provably unique
-  identifiers, and a private prompt-view deep copy while retaining public
-  envelope isolation and exact behavior.
-- The stream-race test is mutation-proven: deleting only the claim row-lock
-  guard produced expected RED `(200, 200)` plus duplicate extract execution;
-  exact restoration produced GREEN `(200, 409)`. The production mutation is
-  absent. Committed transcripts bind both outcomes to source `a92fcfa`.
-- OpenAPI/types and the disposable migration upgrade/downgrade/upgrade cycle
-  pass. Bandit and candidate Gitleaks pass as separate source/secret scans.
-- The dependency gate fails: pnpm audit reports `21` advisories and pip-audit
-  reports `5` vulnerabilities in `4` resolved packages. The authenticated
-  Safety scan is blocked by absent credentials; its anonymous fallback also
-  reports one active finding. Full `frontend validate` fails on the existing
-  all-tree lint debt even though the exact type-check/full test commands pass.
-- The eval file returned `13 passed, 1 skipped`. The fixed-corpus scorer passes
-  supported/contradictory/unsupported labels and rejects a false claim that
-  quotes real evidence while self-labeling supported. The actual configured-
-  model eval is still blocked because `ANTHROPIC_API_KEY` is absent; no live
-  score or citation baseline is frozen. Authenticated Safety is separately
-  blocked because `SAFETY_API_KEY` is absent.
-- Final local CI is `FAILED`: `29` repository-baseline backend tests and broad
-  inherited branch-window/debt gates remain red. Its final tree passed `6,293`
-  backend tests and every then-current Task 8 pause regression; no remaining
-  failure names a Task 8 path. The independent-review source was verified by
-  focused eval/PostgreSQL/frontend/type/performance commands; those passes do
-  not relabel the broad local-CI gate.
-- Remote candidate-SHA checks remain `NOT RUN` pending repository-write
-  authorization. Production configuration, deploy, feature/template
-  enablement, and rollback drill remain `NOT RUN` pending release authority.
-  No push, pull request, deployment, or production change was made.
-- Durable details: `docs/testing/daily-research-brief-verification.md`,
-  `task-8-report.md`, and committed bounded transcripts under
+- Source chain: original certification
+  `efd76079be75fdbba9eef4215c1c831d829cacb4`; independent review
+  `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`; final whole-feature source
+  `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`.
+- Earlier independent review closed five Important gaps: manual-resume
+  authorization survives the intermediate paused GET; a fixed-corpus semantic
+  scorer is independent of self-reported support labels; performance uses the
+  baseline-equivalent 11-sample nearest-rank p95=max method; evidence is
+  source-SHA-bound; and two actual PostgreSQL SSE consumers race after duplicate
+  resume attempts. Removing the claim row lock produced RED `(200, 200)` plus
+  duplicate extraction; restoring it produced GREEN `(200, 409)`.
+- Final whole-feature review closed five more Important gaps:
+  - renderers join extraction evidence to canonical source records, preserving
+    real-shaped OpenAlex/Crossref/PubMed DOI, year/date, URL, journal, and
+    evidence level across JSON/Markdown/CSV;
+  - final approval adds a hash-bound append-only attestation with the final
+    review/reviewer/timestamp/decision and report/output/verification hashes;
+    missing or corrupt attestation fails verified download closed while the
+    reviewed artifact bytes/hash remain unchanged and reconstructible;
+  - `DAILY_RESEARCH_BRIEF_ENABLED` is server-owned and defaults false; off hides
+    list/detail, refuses create/start including existing Daily blueprints, and
+    preserves read/export for existing runs; legacy/custom workflows remain;
+  - the full browser suite ran against exact source `9ca9d6a` with the flag
+    enabled only in the isolated test environment; and
+  - locked cancellation recovery preserves completed/failed terminal state.
+    Removing the terminal guard produced RED (`completed` became `paused`);
+    restoration produced GREEN. The mutation is absent.
+- Final-source focused results: affected backend `148 passed`; broader backend
+  `277 passed`; PostgreSQL lifecycle `5 passed`; focused frontend `61 passed`;
+  Node `24.20.0` type-check PASS; OpenAPI/type generation no drift; scoped
+  Ruff/format PASS; Bandit `1.9.4` and staged Gitleaks `8.30.1` PASS.
+- Exact-source browser result: `10 passed (2.6m)`. The 200-row review page used
+  11 cold reloads with p50 `519.3 ms` and p95 `745.9 ms`, below the frozen
+  `999.24 ms` ceiling. The scenario set includes three reloadable gates,
+  provenance/final attestation, partial/no evidence, verification override,
+  manual resume, 200 rows, stale/duplicate review behavior, and owner denials.
+- Prior browser failures are retained: one consumed-response assertion produced
+  one failure with nine tests not run; one unstable reconnect fixture produced
+  five passes, one failure, and four tests not run; three focused attempts
+  exposed Next dev response buffering. Incomplete-auth and host/channel attempts
+  are excluded environment evidence and are not passes.
+- Performance thresholds and nearest-rank function were never loosened. Final
+  method is one warmup plus 11 measured max-stage observations with GC enabled,
+  making p95 the maximum. Three consecutive full invocations passed on
+  `a92fcfa`; one exact documented final-source invocation returned `6 passed`
+  with six-stage p95 `19.962 ms`, export p95 `0.595 ms`, max
+  search/screen/extract `15.974/31.788/96.698 ms`, hydration `3.096 ms`, and
+  soak `1,149.907 ms`, all below frozen ceilings.
+- Earlier performance failures remain visible. Measured fixes remove
+  fixture/executor cycles, a production bound-method cycle, quadratic scans and
+  snapshots, repeated schema compilation, unnecessary unique-identity scans,
+  and a private prompt-view deep copy while preserving public isolation,
+  validation, exact behavior, frozen thresholds, and the comparable method.
+- Eval file: `13 passed, 1 skipped`. The deterministic scorer rejects a false
+  claim that quotes real contradictory evidence while self-labeling supported.
+  Live configured-model evaluation is BLOCKED because `ANTHROPIC_API_KEY` is
+  absent; no live score or citation baseline is claimed. Authenticated Safety is
+  separately BLOCKED because `SAFETY_API_KEY` is absent.
+- Dependency gate remains FAILED: pnpm audit reports 21 advisories and pip-audit
+  reports 5 vulnerabilities in 4 resolved packages. Anonymous legacy Safety is
+  FAILED on one active finding. Full `frontend validate` remains FAILED on the
+  existing full-tree lint debt. Final local CI remains FAILED with 29
+  repository-baseline backend failures and inherited broad debt gates; no
+  remaining failure names a Task 8 path.
+- Remote candidate checks, production configuration inspection/rollback, and
+  deploy/flag enablement remain NOT RUN. Production flag state was not inspected
+  or changed. Disable-first rollback is documented: set
+  `DAILY_RESEARCH_BRIEF_ENABLED=false` before application/schema rollback and
+  retain existing-run read/export access.
+- Canonical details: `docs/testing/daily-research-brief-verification.md`,
+  `task-8-report.md`, and bounded transcripts under
   `docs/testing/evidence/daily-research-brief-task8-followup-20260928/`.
-  Evidence names the executable source commit; its documentation-only child
-  commit is reported separately in the handoff to avoid self-reference.
-- Task 8: complete with a negative ship decision; the feature stays disabled.
+- No push, pull request, deployment, production inspection, or enablement was
+  performed. Task 8 is complete locally with a negative ship decision; the
+  feature stays disabled.

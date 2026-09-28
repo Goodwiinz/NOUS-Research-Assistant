@@ -6,147 +6,179 @@ Branch: `codex/daily-research-brief-20260927`
 
 Task base: `68cc641938f43b99fa8d00e18822ccf2c62106e8`
 
-Original certification commit: `efd76079be75fdbba9eef4215c1c831d829cacb4`
+Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
 
-Reviewed source commit: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`
+Independent-review source: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`
+
+Final whole-feature source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
 
 Disposition: **local follow-up complete; negative ship decision remains**
 
-The executable follow-up is isolated in the reviewed source commit. Its child
+The executable changes are frozen in the final whole-feature source. Its child
 commit contains only this report, the verification record, progress, and
-bounded transcripts under
+bounded evidence under
 `docs/testing/evidence/daily-research-brief-task8-followup-20260928/`. This
-two-commit scheme gives the committed evidence an immutable source SHA without
-making a commit try to contain its own hash.
+provenance lets every transcript name the exact executable source without a
+self-referential commit hash.
 
-## Independent-review findings
+## Review findings closed locally
 
-All five Important findings have local fixes and direct regression evidence.
+The earlier independent review closed five gaps: the UI preserves one-use
+manual-resume authorization through an intermediate paused response; the eval
+has a deterministic fixed-corpus semantic scorer independent of the model's
+self-label; performance uses the baseline-equivalent 11-observation method;
+bounded transcripts record exact commands and source; and the PostgreSQL test
+races two real SSE consumers after duplicate resume attempts. Removing the
+claim row-lock guard produced the required mutation RED `(200, 200)` and
+duplicate extraction; restoring it produced GREEN `(200, 409)`.
 
-1. The UI keeps one-use manual-resume authorization when the immediate refresh
-   still returns `paused`/`user_paused`. It clears the authorization at the
-   existing terminal and review transitions. The frontend regression performs
-   resume POST, paused GET, a real SSE GET, stream claim, and completion; it
-   does not stop after asserting the POST.
-2. The eval adds a deterministic scorer independent of the pipeline/model's
-   self-reported support label. Against the fixed eval corpus it distinguishes
-   supported, contradictory, and unsupported claims. A false increase claim
-   that quotes real decrease evidence and self-labels supported fails the
-   semantic gate. This proves only the fixed-corpus semantic check. The live
-   configured-model gate remains `BLOCKED` because `ANTHROPIC_API_KEY` is
-   absent, and no live score or citation threshold is claimed.
-3. Backend performance again uses the baseline-equivalent 11 max-stage
-   observations. The nearest-rank function and all frozen numeric thresholds
-   stayed unchanged; p95 is rank 11, the maximum. One warmup remains excluded,
-   garbage collection remains enabled, and a deterministic test locks the
-   sample policy.
-4. Exact documented pytest commands produced the committed bounded
-   transcripts. Each transcript names source SHA, command, exit status, and the
-   SHA-256 of its local raw capture. The documentation-only evidence commit is
-   intentionally separate from the source-under-test commit.
-5. The real PostgreSQL integration now races two actual SSE stream claims after
-   duplicate resume attempts. It proves one `200`, one `409`, one stage
-   execution, one review row, and one durable transition. Removing only the
-   row-lock guard produced the required RED `(200, 200)` and duplicate extract
-   execution; restoring the exact file produced GREEN.
+The final whole-feature review closed five additional gaps:
 
-## Final focused results
+1. Report rendering joins extraction evidence to canonical sources by
+   `source_id`. DOI, year, URL, journal/date, and `evidence_level` come from the
+   canonical nested connector shape. Real-shaped OpenAlex, Crossref, and
+   PubMed tests prove an abstract remains abstract and bibliography data
+   appears in JSON, Markdown, and CSV while reviewed report hash semantics stay
+   exact.
+2. Final approval now adds an append-only attestation around the already
+   reviewed immutable artifact. It binds the final review ID, reviewer ID,
+   timestamp, decision/kind/index, output hash, report hash, and verification
+   output hash. Verified JSON, Markdown, and CSV expose the full review history
+   and attestation; missing, mismatched, or corrupt attestations fail closed.
+3. `DAILY_RESEARCH_BRIEF_ENABLED` is a server-owned setting with default
+   `false`. When false, the Daily template is absent from list/detail, cannot
+   create a Daily blueprint, and cannot start a new Daily run even from an
+   existing blueprint. Existing persisted runs remain readable/exportable for
+   audit and recovery; legacy/custom workflows remain available. Tests and E2E
+   opt in explicitly.
+4. The complete 10-scenario browser suite ran against exact source
+   `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a` with the feature flag enabled in
+   the isolated test environment. It includes the manual-resume handoff and
+   200-row bound and passed `10/10` in 2.6 minutes.
+5. Cancellation recovery locks and rereads durable state before deciding to
+   pause. A disconnect after a completed or failed terminal commit can no
+   longer rewrite the run to paused. Removing only this terminal guard produced
+   mutation RED (`completed` became `paused`); exact restoration produced
+   GREEN. Existing manual pause/reconnect coverage stays green.
 
-| Gate | Result |
-| --- | --- |
-| Eval file | `13 passed, 1 skipped` in 3.84s; skip is the explicitly `BLOCKED` live call. |
-| PostgreSQL lifecycle file | `5 passed` in 4.64s. |
-| Stream-claim mutation RED | Expected failure: `(200, 200)` instead of `(200, 409)` and duplicate extract execution. |
-| Restored stream-claim GREEN | `1 passed` in 2.70s; production file SHA-256 restored exactly. |
-| Focused frontend | 5 files, `61 passed` in 5.21s. |
-| Node 24 type-check | PASS with Node 24.21.0 and pnpm 10.18.2. |
-| Scoped Python and frontend lint/format | PASS. |
+## Final exact-source results
 
-The full PostgreSQL suite continues to cover the six-stage lifecycle, all
-three reloadable review gates, partial/all provider failure, evidence levels,
-no evidence, verification override, reconnect, stale/duplicate/conflicting
-reviews, ownership denials, and exact persisted outputs. The final browser
-boundary evidence remains `10 passed (2.7m)` with 200-row review p50 `565.1
-ms` and p95 `647.4 ms` below the frozen `999.24 ms` ceiling. One login-redirect
-attempt is retained as invalid environment evidence, and host-channel losses
-remain excluded rather than relabeled as passes.
+| Gate                             | Result                                                                                  |
+| -------------------------------- | --------------------------------------------------------------------------------------- |
+| Affected backend                 | `148 passed` in 7.58s.                                                                  |
+| Broader focused backend          | `277 passed` in 14.85s.                                                                 |
+| PostgreSQL lifecycle             | `5 passed` in 4.88s.                                                                    |
+| Terminal-cancellation mutation   | Expected RED `1 failed`; restored GREEN `1 passed`.                                     |
+| Focused frontend                 | 5 files, `61 passed`.                                                                   |
+| Exact-source browser             | `10 passed (2.6m)`; 200-row p50 `519.3 ms`, p95 `745.9 ms`, frozen ceiling `999.24 ms`. |
+| Final-source frozen performance  | `6 passed` in 18.93s; every frozen ceiling passed.                                      |
+| Node 24 type-check               | PASS with Node `24.20.0` and pnpm `10.18.2`.                                            |
+| OpenAPI and generated TypeScript | PASS; regeneration produced no diff.                                                    |
+| Scoped Ruff/format               | PASS.                                                                                   |
+| Bandit 1.9.4                     | PASS; no in-scope source finding.                                                       |
+| Staged Gitleaks 8.30.1           | PASS; no staged-source secret finding.                                                  |
+
+The exact-source browser scenario performs resume POST, observes the immediate
+paused GET, starts the SSE request, confirms the stream claims the durable run,
+and reaches the next controlled lifecycle boundary. Because the local Next
+proxy buffers the deliberately held SSE response, the deterministic test
+confirms `running` through the real audit route and sends the pause through the
+same authenticated browser → Next → FastAPI boundary. It therefore proves more
+than issuance of a resume POST.
+
+Earlier browser failures remain visible in committed evidence: one source had
+an invalid consumed-response assertion (`1 failed, 9 not run`), another had an
+unstable reconnect fixture (`5 passed, 1 failed, 4 not run`), and three focused
+attempts exposed local Next response buffering. An incomplete-auth run and host
+channel losses are excluded environment evidence, never relabeled as passes.
 
 ## Frozen performance evidence
 
-The exact documented full-file pytest command ran three separate times against
-source `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`. All six tests passed in every
-invocation. The 11-observation candidate method is directly comparable with
-the 11-observation baseline; nearest-rank p95 is the maximum for both.
+Three baseline-equivalent full invocations passed on independent-review source
+`a92fcfa`, and one exact documented full invocation passed on final source
+`9ca9d6a`. The frozen numeric thresholds and nearest-rank percentile function
+never changed. Both baseline and final method use one warmup plus 11 measured
+max-stage observations with GC enabled, so p95 is rank 11, the maximum.
 
-| Metric | Run 1 | Run 2 | Run 3 | Frozen ceiling |
-| --- | ---: | ---: | ---: | ---: |
-| Six-stage p95 (ms) | 21.320 | 23.619 | 19.402 | 35.345 |
-| Export p95 (ms) | 0.638 | 0.723 | 0.555 | 0.826 |
-| 1-provider p95 (ms) | 3.898 | 3.294 | 3.393 | 7.893 |
-| 2-provider p95 (ms) | 6.595 | 6.165 | 6.763 | 13.541 |
-| 4-provider p95 (ms) | 13.412 | 12.665 | 13.415 | 37.944 |
-| Max search p95 (ms) | 14.170 | 13.709 | 13.839 | 38.572 |
-| Max screen p95 (ms) | 29.408 | 31.652 | 28.162 | 77.212 |
-| Max extract p95 (ms) | 88.468 | 89.163 | 84.095 | 849.648 |
-| Peak traced bytes | 3,039,372 | 3,042,789 | 3,034,855 | 4,349,228 |
-| Review projection p95 (ms) | 4.767 | 5.641 | 7.071 | 9.282 |
-| Cold hydration p95 (ms) | 2.736 | 2.607 | 3.346 | 3.983 |
-| Ten-run lifecycle p95 (ms) | 1,179.113 | 1,104.969 | 1,251.171 | 2,068.731 |
+| Metric                        |                  Final source |                 Frozen ceiling |
+| ----------------------------- | ----------------------------: | -----------------------------: |
+| Six-stage p95                 |                   `19.962 ms` |                    `35.345 ms` |
+| Export p95                    |                    `0.595 ms` |                     `0.826 ms` |
+| Export payload                |                    `15,498 B` |                     `18,353 B` |
+| 1/2/4-provider p95            |   `3.524 / 6.428 / 13.190 ms` |   `7.893 / 13.541 / 37.944 ms` |
+| Max search/screen/extract p95 | `15.974 / 31.788 / 96.698 ms` | `38.572 / 77.212 / 849.648 ms` |
+| Max-stage payload             |                 `1,152,543 B` |                  `1,383,052 B` |
+| Peak traced bytes             |                 `3,034,368 B` |                  `4,349,228 B` |
+| Review projection p95         |                    `6.145 ms` |                     `9.282 ms` |
+| Cold hydration p95            |                    `3.096 ms` |                     `3.983 ms` |
+| Ten-run lifecycle p95         |                `1,149.907 ms` |                 `2,068.731 ms` |
 
-All three runs produced the unchanged 15,294-byte export, 200 max-bound rows,
-25 screen batches, 25 extract batches, the unchanged 1,152,543-byte max-stage
-payload, the 24,094-byte review payload, ten completed lifecycles, zero
-duplicate stage rows, and 30 unique review rows.
+The final export grew by 204 bytes because canonical bibliography and approval
+attestation data are now represented correctly; it remains below the unchanged
+ceiling. The run produced 200 candidates, 25 screening batches, 25 extraction
+batches, 10 completed PostgreSQL lifecycles, zero duplicate stage rows, and 30
+unique review rows.
 
-Earlier failures stay visible. The first candidate failed max search at
-`46.135 ms` against `38.572 ms`; an immediate rerun barely passed at `37.816
-ms`. Later runs failed search at `48.231 ms`, hydration at `4.016 ms`, and
-screen at `191.853`, `190.960`, and `195.187 ms`. Profiling connected those
-failures to retained fixture request cycles, a production bound-method cycle,
-quadratic scans/copies, repeated schema compilation, discovery scans for
-provably unique identifiers, and a private prompt-view deep copy. The repairs
-retain exact behavior, public envelope isolation, validation, and frozen
-thresholds.
+Earlier performance failures remain part of the record: max search `46.135 ms`
+and `48.231 ms`, hydration `4.016 ms`, and screen `191.853`, `190.960`, and
+`195.187 ms`. The measured repairs removed fixture/executor cycles, a production
+bound-method cycle, quadratic scans/copies, repeated schema compilation,
+unnecessary unique-identity discovery scans, and a private prompt-view deep
+copy. Public envelope isolation, validation, exact behavior, thresholds, and
+the final baseline-equivalent measurement method remain intact.
 
 ## Release gate ledger
 
 PASS:
 
-- local PostgreSQL, browser, focused backend/frontend, type-check, OpenAPI/type
-  drift, disposable migration cycle, frozen performance, Bandit 1.9.4, and
-  candidate/staged Gitleaks 8.30.1 checks.
+- local PostgreSQL, exact-source browser, focused backend/frontend, type-check,
+  OpenAPI/type drift, disposable migration cycle, frozen performance, Bandit,
+  and staged Gitleaks checks.
 
 FAILED:
 
-- full `frontend validate`: 113 errors and 1,961 warnings in the existing
-  repository-wide lint debt;
+- full `frontend validate`: 113 errors and 1,961 warnings in existing full-tree
+  lint debt;
 - pnpm audit: 21 advisories across 1,900 dependencies, including 2 critical and
   9 high;
 - pip-audit: 5 vulnerabilities in 4 resolved packages;
 - anonymous legacy Safety: one active `gunicorn 22.0.0` finding, with 129
   automatically ignored unpinned findings; and
-- final local CI: 29 repository-baseline backend failures plus broad inherited
-  changed-file/debt gates. Its aggregate was `29 failed, 6,293 passed, 81
-  skipped, 523 deselected, 3 xpassed`; no remaining failure names a Task 8
-  path.
+- full local CI: 29 repository-baseline backend failures plus inherited broad
+  changed-file/debt gates (`29 failed, 6,293 passed, 81 skipped, 523
+deselected, 3 xpassed`). No remaining failure names a Task 8 path.
 
-Bandit is a source scan and does not offset either failed dependency audit.
+Bandit is a source scan and does not offset either dependency-audit failure.
 
 BLOCKED:
 
-- the configured-model eval because `ANTHROPIC_API_KEY` is absent; and
+- configured-model eval because `ANTHROPIC_API_KEY` is absent; and
 - authenticated Safety because `SAFETY_API_KEY` is absent.
+
+The deterministic fixed-corpus semantic eval passes, but it is not a live-model
+pass or a general entailment benchmark.
 
 NOT RUN:
 
-- remote branch-rule checks for the candidate SHA, pending repository-write
-  authorization;
+- candidate-SHA remote branch-rule checks, pending repository-write authority;
 - production configuration inspection and live rollback drill; and
-- deploy, template/feature enablement, or any release action, pending release
-  authorization.
+- deployment or production flag enablement, pending release authority.
 
-The source has no dedicated Daily Research Brief runtime toggle and the local
-template loader exposes the template. Production exposure control is unproven.
+## Release and rollback control
+
+`DAILY_RESEARCH_BRIEF_ENABLED` defaults to `false`; no production value was
+inspected or changed. A future authorized enable sequence is: deploy the
+backend and additive migration while the flag remains false, complete all
+release gates for the exact deployed candidate, inspect owner-only production
+controls, set the flag true, restart/roll out the backend configuration, and
+smoke list/detail/create/start plus existing-run read/export.
+
+Rollback begins by setting `DAILY_RESEARCH_BRIEF_ENABLED=false` and applying
+that configuration before reverting application code or schema. Confirm that
+list/detail/create/start are hidden or refused while existing persisted runs
+remain readable/exportable. Keep the additive review table through the normal
+migration rollback window.
+
 No push, pull request, deployment, production inspection, or enablement was
-performed. The feature stays disabled until every FAILED, BLOCKED, and
-release-critical NOT RUN gate is cleared for one exact release candidate.
+performed. The ship gate remains closed until every FAILED, BLOCKED, and
+release-critical NOT RUN item is cleared on one exact release candidate.

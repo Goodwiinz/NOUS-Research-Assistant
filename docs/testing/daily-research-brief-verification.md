@@ -6,65 +6,126 @@ Branch: `codex/daily-research-brief-20260927`
 
 Task 8 base: `68cc641938f43b99fa8d00e18822ccf2c62106e8`
 
+Final executable source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
+
+Independent-review source: `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`
+
+Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
+
 Disposition: **CERTIFICATION COMPLETE — NOT READY TO ENABLE**
 
-This record covers the local Daily Research Brief certification work and the
-independent-review follow-up. The executable follow-up is source commit
-`a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`, whose parent is the original
-certification commit `efd76079be75fdbba9eef4215c1c831d829cacb4`. This file
-and the bounded transcripts are committed in a documentation-only child. That
-two-commit provenance avoids a self-referential hash: the evidence names the
-immutable source-under-test SHA, and the final handoff names the evidence
-commit.
+The final executable source is followed by a documentation/evidence-only child
+commit. That scheme avoids a self-referential hash: committed transcripts name
+immutable source `9ca9d6a`, while the handoff names both commits. Earlier
+performance/eval transcripts stay bound to `a92fcfa` where they actually ran.
 
-The feature remains disabled. The live-model quality gate and authenticated
-Safety scan are blocked, dependency audits failed, and required remote and
-release actions were not run. A local passing test does not override any of
-those release gates.
+`DAILY_RESEARCH_BRIEF_ENABLED` is a server-owned setting and defaults to
+`false`. It was enabled only in isolated local tests. Production configuration
+was not inspected or changed. The live-model quality gate and authenticated
+Safety scan are BLOCKED; dependency audits, anonymous Safety, full frontend
+validation, and full local CI are FAILED; remote checks and release actions are
+NOT RUN. Local passing gates do not override those release blocks.
 
 ## Gate ledger
 
 `PASS` means the named local gate ran and met its assertions. `FAILED` means it
 ran and returned a failing result. `BLOCKED` means a required credential or
-authenticated service was unavailable. `NOT RUN` means the action was outside
-the authorized local scope.
+service was unavailable. `NOT RUN` means the action was outside authorized
+local scope or lacked the required release state.
 
-| Gate | Status | Evidence |
-| --- | --- | --- |
-| PostgreSQL lifecycle integration | PASS | 5 tests passed against disposable PostgreSQL; two real SSE consumers race after duplicate resumes and yield exactly one winner. Mutation RED and restored GREEN are committed. |
-| Browser/API/PostgreSQL lifecycle | PASS | 10 Playwright scenarios passed through the real browser-to-API-to-database boundary. |
-| Browser 200-row review rendering | PASS | Frozen p95 threshold `999.24 ms`; final candidate run observed p50 `565.1 ms`, p95 `647.4 ms` over 11 cold reloads. |
-| Frozen backend performance | PASS | Three consecutive exact documented pytest invocations passed every unchanged numeric threshold with the baseline-equivalent 11-observation nearest-rank method. |
-| Focused backend regression suite | PASS | 81 tests passed. |
-| Focused frontend regression suite | PASS | 5 files and 61 tests passed. |
-| Frontend type-check and full Vitest | PASS | Node `24.21.0`, pnpm `10.18.2`; 315 files and 2,368 tests passed. |
-| Full `frontend validate` command | FAILED | Full-tree lint stopped the command with 2,074 existing problems: 113 errors and 1,961 warnings. The command did not reach its later type/test steps. |
-| OpenAPI snapshot and generated TypeScript | PASS | OpenAPI check passed; API types regenerated with `openapi-typescript 7.13.0` and produced no diff. |
-| Alembic upgrade/downgrade/upgrade | PASS | `agent_ops_20260925 -> daily_brief_reviews_20260927 -> agent_ops_20260925 -> daily_brief_reviews_20260927` passed on disposable PostgreSQL and cleaned up. |
-| Bandit source scan | PASS | Bandit `1.9.4` returned no in-scope issues under the repository baseline and configured severity/confidence filters. |
-| Candidate secret scan | PASS | Gitleaks `8.30.1` found no leaks in the candidate-only snapshot. |
-| JavaScript dependency audit | FAILED | pnpm audit returned 21 advisories: 2 critical, 9 high, 8 moderate, and 2 low. |
-| Python dependency audit | FAILED | pip-audit returned 5 vulnerabilities in 4 resolved packages. |
-| Authenticated Safety scan | BLOCKED | Safety `3.8.1`; `SAFETY_API_KEY` was absent, so the authenticated database scan could not run. |
-| Anonymous legacy Safety check | FAILED | 1 active `gunicorn 22.0.0` finding; 129 findings were ignored by Safety's automatic unpinned-requirement policy. |
-| Fixed-corpus semantic eval | PASS | A deterministic scorer independent of pipeline/model support labels classified supported, contradictory, and unsupported cases and rejected a false self-supported claim quoting real evidence. |
-| Current configured-model evaluation | BLOCKED | `ANTHROPIC_API_KEY` was absent; 13 local prerequisite/semantic regressions passed and the live eval skipped with the explicit blocked reason. No citation baseline or candidate score was frozen. |
-| Final local CI script | FAILED | The final-tree rerun retained 29 repository-baseline backend failures and failed broad changed-file/debt gates inherited from the branch window. The Task 8 paths were repaired and passed focused reruns; no remaining failure names a Task 8 path. |
-| Candidate-SHA remote branch-rule checks | NOT RUN | Awaiting explicit repository-write authorization; no push was made solely to create checks. |
-| Production configuration and rollback drill | NOT RUN | No production environment or release controls were changed or inspected. |
-| Deploy and template/feature enablement | NOT RUN | Awaiting release authorization. |
+| Gate                                        | Status  | Evidence                                                                                                                                 |
+| ------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL lifecycle integration            | PASS    | Final source: 5 tests passed; duplicate resumes race two real stream claims with exactly one winner.                                     |
+| Browser → Next → FastAPI → PostgreSQL       | PASS    | Final source: all 10 serial scenarios passed with the flag explicitly enabled locally.                                                   |
+| Browser 200-row review rendering            | PASS    | 11 cold reloads: p50 `519.3 ms`, p95 `745.9 ms`, frozen ceiling `999.24 ms`.                                                             |
+| Frozen backend performance                  | PASS    | Three baseline-equivalent runs on `a92fcfa` and one exact documented run on final source passed all unchanged ceilings.                  |
+| Affected/broader backend                    | PASS    | Final source: `148 passed`; broader focused set `277 passed`.                                                                            |
+| Focused frontend                            | PASS    | 5 files and 61 tests passed; manual-resume boundary included.                                                                            |
+| Frontend type-check and earlier full Vitest | PASS    | Node `24.20.0`, pnpm `10.18.2`; type-check passed. Earlier full suite: 315 files, 2,368 tests.                                           |
+| Full `frontend validate`                    | FAILED  | Existing full-tree lint debt stopped the command: 113 errors and 1,961 warnings.                                                         |
+| OpenAPI and generated TypeScript            | PASS    | Snapshot check passed; regenerated types produced no diff.                                                                               |
+| Alembic upgrade/downgrade/upgrade           | PASS    | `agent_ops_20260925 → daily_brief_reviews_20260927 → agent_ops_20260925 → daily_brief_reviews_20260927` passed on disposable PostgreSQL. |
+| Bandit source scan                          | PASS    | Bandit `1.9.4` returned no in-scope finding under the repository baseline and configured filters.                                        |
+| Staged candidate secret scan                | PASS    | Gitleaks `8.30.1` found no staged-source secret.                                                                                         |
+| JavaScript dependency audit                 | FAILED  | pnpm audit returned 21 advisories: 2 critical, 9 high, 8 moderate, 2 low.                                                                |
+| Python dependency audit                     | FAILED  | pip-audit returned 5 vulnerabilities in 4 resolved packages.                                                                             |
+| Authenticated Safety                        | BLOCKED | Safety `3.8.1`; `SAFETY_API_KEY` absent.                                                                                                 |
+| Anonymous legacy Safety                     | FAILED  | One active `gunicorn 22.0.0` finding; 129 unpinned findings automatically ignored.                                                       |
+| Fixed-corpus semantic eval                  | PASS    | Independent deterministic labels distinguish supported, contradictory, and unsupported evidence and reject a false self-supported claim. |
+| Current configured-model eval               | BLOCKED | `ANTHROPIC_API_KEY` absent. No live score or citation threshold is claimed.                                                              |
+| Full local CI                               | FAILED  | 29 repository-baseline backend failures plus inherited changed-file/debt gates; no remaining failure names a Task 8 path.                |
+| Remote candidate-SHA checks                 | NOT RUN | No push was authorized solely to obtain checks.                                                                                          |
+| Production configuration/rollback           | NOT RUN | No production flag, owner policy, telemetry, or rollback drill was inspected or changed.                                                 |
+| Deploy/flag enablement                      | NOT RUN | No deployment or production enablement was authorized.                                                                                   |
+
+Bandit is a source scan. It does not offset either failed dependency audit.
 
 ## Test environment
 
-The local evidence was collected on Linux `6.8.0-124-generic` x86_64 with
-Python `3.12.3`, pytest `9.1.1`, Node `24.21.0`, pnpm `10.18.2`, and Docker
-`29.1.3`. Database commands used a disposable PostgreSQL instance through
-`$ORCHESTRATION_TEST_DATABASE_URL`; this document and the committed tests do
-not contain its password.
+Final local evidence used Linux `6.8.0-124-generic` x86_64, Python `3.12.3`,
+pytest `9.1.1`, Node `24.20.0`, pnpm `10.18.2`, Docker `29.1.3`, Bandit
+`1.9.4`, and Gitleaks `8.30.1`. Database commands used disposable PostgreSQL
+through `$ORCHESTRATION_TEST_DATABASE_URL`; no credential is committed.
+
+## Final behavior proved
+
+### Canonical provenance rendering
+
+Extraction evidence is joined to canonical source records by `source_id`.
+Rendering obtains `evidence_level`, DOI, publication year/date, URL, journal,
+and other bibliography fields from the canonical/nested connector shape rather
+than from extraction records that cannot carry those fields. Real-shaped
+OpenAlex, Crossref, and PubMed regressions prove an abstract source remains
+`abstract` and DOI/year survive into the supported JSON, Markdown, and CSV
+representations. Review and export hashes continue to use the exact canonical
+reviewed report bytes.
+
+### Final approval attestation
+
+The final review does not mutate the artifact it reviewed. After approval, an
+append-only attestation binds:
+
+- review ID, reviewer ID, timestamp, decision, kind, and review index;
+- the reviewed output hash and report hash; and
+- the verification output hash and canonical attestation hash.
+
+Verified downloads expose the complete review history and final attestation in
+JSON, Markdown, and CSV. The stored reviewed Markdown bytes remain
+reconstructible unchanged and their hash remains the attested report hash.
+Missing or mismatched review identity, output/report/verification hash, or
+attestation hash fails closed with `verified_artifact_attestation_invalid`.
+
+### Default-off runtime control
+
+`DAILY_RESEARCH_BRIEF_ENABLED=false` is the default. While false, the server:
+
+- omits the Daily template from enumeration;
+- returns the same not-found behavior for template detail;
+- refuses Daily blueprint creation; and
+- refuses starting a new Daily run from an already persisted Daily blueprint.
+
+Existing run read/audit/export paths remain available for recovery and legal or
+operational audit. Legacy and custom workflows remain available. The frontend
+uses the server template list and has no hard-coded bypass. Unit, integration,
+and browser fixtures that exercise Daily Brief opt in explicitly.
+
+### Durable terminal cancellation
+
+`recover_stream_cancellation` locks the run in the transaction and checks its
+current durable status before writing a pause. If terminal completion/failure
+won the race before terminal frame delivery, recovery returns without changing
+status or creating a user-pause/resume path.
+
+This guard is mutation-proven. Removing only the completed/failed early return
+made the focused route-boundary regression fail because `completed` became
+`paused` (`1 failed` in 4.42s). Restoring the guard passed (`1 passed` in
+4.13s). Bounded RED/GREEN transcripts and raw-capture digests are committed.
+Existing manual-pause and reconnect tests pass in the affected and broader
+focused suites.
 
 ## PostgreSQL lifecycle evidence
 
-Command:
+Exact command:
 
 ```bash
 PYTHONPATH=backend \
@@ -73,60 +134,29 @@ ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" \
   backend/tests/integration/test_daily_research_brief_postgres.py
 ```
 
-Result against source `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`:
-`5 passed, 1 warning in 4.64s`.
+Final-source result: `5 passed, 1 warning in 4.88s`.
 
-The suite proves these server-owned behaviors:
+The suite proves the six-stage happy path and all three reloadable review gates;
+partial/all provider failure; evidence levels and no-evidence output;
+verification failure and exact-hash override; reconnect; stale/conflicting and
+idempotent duplicate reviews; owner denials; exact persisted outputs; final
+approval attestation; and default-off behavior where applicable.
 
-- the six-stage happy path pauses at screening, extraction, and final review,
-  survives reloads at every gate, resumes exactly once, and reconstructs exact
-  persisted hashes, evidence links, review identifiers, overlays, and export
-  artifacts;
-- a partial provider failure retains successful evidence and complete coverage,
-  while all-provider failure and no-evidence produce their distinct durable
-  terminal outcomes;
-- duplicate sources, missing abstracts, and metadata-only sources retain their
-  canonical evidence-level semantics;
-- verification failure cannot reach final approval, and an unverified
-  continuation requires the exact failed verification-output hash;
-- reconnect, idempotent replay, stale and conflicting review attempts, and
-  duplicate submissions do not create duplicate stage or review rows;
-- after duplicate resume POSTs, two real SSE requests synchronize immediately
-  before `claim_stream`; the PostgreSQL row lock admits one `200` winner and
-  rejects one `409` loser, with exactly one stage execution, one review row,
-  one durable transition, and no remaining one-use authorization; and
-- same-organization and cross-tenant non-owners receive the same
-  non-enumerating denial.
+After duplicate resume POSTs, two actual SSE requests synchronize immediately
+before `claim_stream`. The PostgreSQL row lock admits one `200` and rejects one
+`409`. Assertions require exactly one stage execution, one review row, one
+durable transition, and no remaining one-use authorization. Removing only the
+claim row lock produced mutation RED `(200, 200)` plus duplicate extraction;
+restoring the exact production file produced GREEN `(200, 409)`.
 
-The concurrency assertion is mutation-proven. Removing only
-`await self._lock_run(run)` at
-`backend/src/services/research_engine/run_lifecycle.py:685` from
-`claim_stream` made both consumers win,
-executed extraction twice, and failed with `(200, 200)` versus expected
-`(200, 409)`. That expected RED returned exit 1. Restoring the exact production
-file (SHA-256
-`7a96b08ab56709178bcff0fc23b74b164c16cf1ad13a53bafc235bb67df72ec6`)
-returned `1 passed` with exit 0. The mutation is absent from the candidate.
-Both bounded transcripts are committed with their commands and raw-capture
-digests.
+## Exact-source browser evidence
 
-## Browser boundary evidence
+The test uses a real Chromium browser, Next application, Uvicorn FastAPI test
+application, and disposable PostgreSQL. Controlled provider/model fixtures stop
+at the external-provider seam. The browser, HTTP API, lifecycle, and database
+are not mocked.
 
-The browser suite uses a real Next application, the Uvicorn test API, and the
-disposable PostgreSQL database. Controlled connector/model fixtures stop at the
-external provider seam; no mock replaces the browser, HTTP API, lifecycle
-service, or database boundary.
-
-Server commands:
-
-```bash
-cd backend
-PYTHONPATH=. \
-ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" \
-../.venv/bin/python -m uvicorn \
-  tests.integration.test_daily_research_brief_postgres:create_e2e_app \
-  --factory --host 127.0.0.1 --port 8765
-```
+The offline Next server ran with this environment:
 
 ```bash
 BACKEND_URL=http://127.0.0.1:8765 \
@@ -136,35 +166,54 @@ NEXT_PUBLIC_AUTH_COOKIE_NAME=daily-brief-e2e-auth \
 NEXT_PUBLIC_SUPABASE_URL=http://localhost:3000/api/v1/auth-fixture \
 SUPABASE_SERVER_URL=http://127.0.0.1:8765/api/v1/auth-fixture \
 NEXT_PUBLIC_SUPABASE_ANON_KEY=e2e-anon-key \
-corepack pnpm@10.18.2 --dir frontend run dev:offline
+DAILY_RESEARCH_BRIEF_ENABLED=true \
+"$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+  --dir frontend run dev:offline
 ```
+
+The exact test command was:
 
 ```bash
+DAILY_RESEARCH_BRIEF_ENABLED=true \
 ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" \
-corepack pnpm@10.18.2 --dir frontend exec playwright test \
-  e2e/research-engine/daily-research-brief.spec.ts --project=chromium
+DAILY_BRIEF_E2E_PORT=8765 \
+"$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+  --dir frontend exec playwright test \
+  e2e/research-engine/daily-research-brief.spec.ts \
+  --project=chromium --reporter=line
 ```
 
-Result: `10 passed (2.7m)`. The scenarios cover all three reloadable review
-gates and exact downloads, partial provider failure, no-evidence output,
-verification failure, exact-hash override and unverified labels, reconnect
-without duplicate screening, the 200-row review bound, stale review refresh,
-immutable duplicate review replay, and owner-only denials.
+The Playwright fixture starts Uvicorn with the same flag and database URL. The
+precondition asserted a clean worktree at exact source
+`9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`.
 
-The review-page baseline was p50 `656.1 ms` and p95 `832.7 ms` from 11 cold
-reloads. The frozen ceiling is baseline p95 plus 20%, or `999.24 ms`. A focused
-candidate rerun observed p50 `648.4 ms` and p95 `793.7 ms`; an earlier valid
-combined run observed p50 `649.9 ms` and p95 `832.5 ms`. After the final
-frontend changes, the final combined ten-scenario run observed p50 `565.1 ms`
-and p95 `647.4 ms`. A preceding attempt redirected to login because the local
-Next server lacked the complete offline-auth environment; that run had one
-failure and nine tests not run, is preserved as environment-setup evidence,
-and is excluded from feature results. Earlier runs that lost their host channel
-are likewise excluded and are not reported as passes.
+Result: `10 passed (2.6m)`. The scenarios cover all three reloadable review
+gates and exact downloads; provenance/attestation; partial provider failure;
+no-evidence; verification failure and exact-hash override; manual resume after
+an intermediate paused GET; 200-row rendering; stale refresh; immutable
+replay; and same-organization/cross-tenant owner denials. Eleven cold 200-row
+reloads observed p50 `519.3 ms` and p95 `745.9 ms` below `999.24 ms`.
 
-## Current-model evaluation
+The manual-resume test performs the resume POST, lets the immediate refresh
+return paused, opens the SSE request, and verifies durable `running` through the
+real audit route. The deliberately held connector makes the local Next dev
+proxy buffer the body, so the test then sends the same authenticated pause
+through browser → Next → FastAPI and resumes to the next lifecycle boundary.
+It counts two resumed stream attempts: the controlled transient failure and the
+winning claim. This proves the authorization survives the intermediate paused
+response and is consumed by a real stream, rather than only proving a POST was
+issued.
 
-Command:
+Earlier attempts remain committed as failed/excluded evidence. One source had
+a consumed-download-response assertion (`1 failed, 9 not run`); another had an
+unstable reconnect boundary (`5 passed, 1 failed, 4 not run`); three focused
+attempts exposed Next response buffering. A login redirect caused by incomplete
+offline auth and host/channel interruptions are environment evidence. None is
+reported as a pass.
+
+## Configured-model evaluation
+
+Exact command:
 
 ```bash
 PYTHONPATH=backend \
@@ -172,47 +221,27 @@ PYTHONPATH=backend \
   backend/tests/eval/test_daily_research_brief_eval.py
 ```
 
-Result against source `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`:
-the local prerequisite and fixed-corpus semantic regressions are `PASS` at
-`13 passed`; the configured-model gate is separately `BLOCKED`, with `1
-skipped` because `ANTHROPIC_API_KEY` was absent. The full command returned exit
-0 with `13 passed, 1 skipped, 1 warning in 3.84s`. A skip is not a live-model
-pass.
+Result on independent-review source: `13 passed, 1 skipped` in 3.84s. Local
+prerequisite and fixed-corpus semantic regressions PASS. The configured-model
+call is separately BLOCKED because `ANTHROPIC_API_KEY` is absent. A skip is not
+a live-model pass.
 
-The prerequisite matrix proves that an absent key, the integration fixture
-key, and candidate mode without a frozen citation threshold all stop before a
-model call. Baseline mode without a threshold and candidate mode with a valid
-threshold proceed to the call boundary. Supplied malformed, negative, and
-greater-than-one thresholds fail before a call. Missing prerequisites are
-therefore reported as `BLOCKED`; invalid supplied configuration remains a test
-failure.
+The prerequisite matrix stops before a model call for a missing key, fixture
+key, and candidate mode without a frozen citation threshold. Baseline mode
+without a threshold and candidate mode with a valid threshold proceed to the
+call boundary. Supplied malformed or out-of-range thresholds fail.
 
-When credentials are present, the eval calls the configured
-`claude-sonnet-4-6` model through all six stages over fixed external evidence.
-It requires at least one claim and citation, exact coverage labels, grounded
-quotes, exact screen/extract coverage, the complete six-stage output sequence,
-verified claim-set equality, and exact verification/report hash reconstruction.
-It also applies a deterministic labeled semantic scorer that does not read or
-trust the pipeline/model's own `supported` label. Against the fixed corpus the
-scorer distinguishes supported, contradictory, and unsupported claims. Its
-adversarial regression uses a false increase claim, a real quote from evidence
-showing a decrease, and a self-reported supported label; the semantic gate
-returns zero and the claim is counted unsupported and contradictory.
-
-That deterministic scorer proves semantic discrimination only for the fixed
-eval evidence and labeled relations encoded by this suite. It is not a general
-entailment benchmark or a substitute for the unavailable live-provider run.
-PostgreSQL and browser evidence separately prove persistence and lifecycle
-gates; no YAML/template text is counted as gate compliance.
-
-Live citation correctness must first be measured with
-`DAILY_BRIEF_EVAL_MODE=baseline`; the resulting value then becomes the frozen
-candidate threshold. Because no live call ran, neither a citation baseline nor
-a candidate result exists. Template-only output cannot satisfy this gate.
+The deterministic scorer does not read the pipeline/model's own `supported`
+label. Fixed evidence includes supported, contradictory, and unsupported
+relations. An adversarial false increase claim quotes real evidence showing a
+decrease and self-labels supported; the scorer rejects it. This proves only the
+encoded fixed-corpus relations. It is not a general entailment benchmark and
+does not replace the unavailable live-provider lifecycle evaluation. No live
+citation baseline or candidate score was frozen.
 
 ## Frozen performance evidence
 
-Command used for each full invocation:
+Exact command for every full invocation:
 
 ```bash
 PYTHONPATH=backend \
@@ -222,331 +251,140 @@ DAILY_BRIEF_PERF_CAPTURE=1 \
   backend/tests/performance/test_daily_research_brief_performance.py
 ```
 
-The numeric thresholds were frozen from the pre-optimization baseline at 20%
-headroom and were never loosened. The nearest-rank percentile function also
-stayed unchanged. The final candidate restores direct method equivalence with
-the baseline: 11 measured max-stage observations, where nearest-rank p95 is
-rank 11 (the maximum). A deterministic regression locks that exact policy.
-Each max-stage test has one complete untimed warmup, leaves GC enabled, and
-clears the controlled provider's request recording after each timed stage.
-The intervening 40-sample/rank-38 method was rejected as non-comparable and is
-not used for the final PASS.
+The numeric thresholds are the frozen pre-optimization baseline plus 20% and
+were never loosened. The nearest-rank function did not change. Final method
+matches the baseline: one complete untimed warmup, then 11 measured max-stage
+observations with GC enabled. Nearest-rank p95 is therefore rank 11, the
+maximum. A deterministic regression locks this policy. The intervening
+40-sample/rank-38 method was rejected as non-comparable.
 
-| Metric | Measured baseline | Frozen ceiling |
-| --- | ---: | ---: |
-| Six-stage p95 | `29.454 ms` | `35.345 ms` |
-| Export p95 | `0.688 ms` | `0.826 ms` |
-| Export payload | `15,294 B` | `18,353 B` |
-| 1-provider search p95 | `6.577 ms` | `7.893 ms` |
-| 2-provider search p95 | `11.284 ms` | `13.541 ms` |
-| 4-provider search p95 | `31.620 ms` | `37.944 ms` |
-| Max search p95 | `32.143 ms` | `38.572 ms` |
-| Max screening p95 | `64.343 ms` | `77.212 ms` |
-| Max extraction p95 | `708.040 ms` | `849.648 ms` |
-| Max-stage payload | `1,152,543 B` | `1,383,052 B` |
-| Max-stage traced peak | `3,624,356 B` | `4,349,228 B` |
-| Review projection p95 | `7.735 ms` | `9.282 ms` |
-| Review payload | `24,094 B` | `28,913 B` |
-| Cold hydration p95 | `3.319 ms` | `3.983 ms` |
-| Ten-run lifecycle soak p95 | `1,723.942 ms` | `2,068.731 ms` |
+Three consecutive invocations on `a92fcfa` passed all six tests. Their max
+search/screen/extract p95 values were `14.170/29.408/88.468`,
+`13.709/31.652/89.163`, and `13.839/28.162/84.095 ms`.
 
-Three consecutive idle full-file invocations passed:
+After the final rendering/attestation/lifecycle changes, the exact documented
+command ran again on final source `9ca9d6a` and returned `6 passed` in 18.93s:
 
-| Metric | Run 1 | Run 2 | Run 3 | Ceiling |
-| --- | ---: | ---: | ---: | ---: |
-| Six-stage p95 (ms) | 21.320 | 23.619 | 19.402 | 35.345 |
-| Export p95 (ms) | 0.638 | 0.723 | 0.555 | 0.826 |
-| 1/2/4-provider p95 (ms) | 3.898 / 6.595 / 13.412 | 3.294 / 6.165 / 12.665 | 3.393 / 6.763 / 13.415 | 7.893 / 13.541 / 37.944 |
-| Max search/screen/extract p95 (ms) | 14.170 / 29.408 / 88.468 | 13.709 / 31.652 / 89.163 | 13.839 / 28.162 / 84.095 | 38.572 / 77.212 / 849.648 |
-| Peak traced bytes | 3,039,372 | 3,042,789 | 3,034,855 | 4,349,228 |
-| Review projection p95 (ms) | 4.767 | 5.641 | 7.071 | 9.282 |
-| Cold hydration p95 (ms) | 2.736 | 2.607 | 3.346 | 3.983 |
-| Soak lifecycle p95 (ms) | 1,179.113 | 1,104.969 | 1,251.171 | 2,068.731 |
+| Metric                        |                  Final source |                 Frozen ceiling |
+| ----------------------------- | ----------------------------: | -----------------------------: |
+| Six-stage p95                 |                   `19.962 ms` |                    `35.345 ms` |
+| Export p95                    |                    `0.595 ms` |                     `0.826 ms` |
+| Export payload                |                    `15,498 B` |                     `18,353 B` |
+| 1/2/4-provider p95            |   `3.524 / 6.428 / 13.190 ms` |   `7.893 / 13.541 / 37.944 ms` |
+| Max search/screen/extract p95 | `15.974 / 31.788 / 96.698 ms` | `38.572 / 77.212 / 849.648 ms` |
+| Max-stage payload             |                 `1,152,543 B` |                  `1,383,052 B` |
+| Peak traced bytes             |                 `3,034,368 B` |                  `4,349,228 B` |
+| Review projection p95         |                    `6.145 ms` |                     `9.282 ms` |
+| Review payload                |                    `24,094 B` |                     `28,913 B` |
+| Cold hydration p95            |                    `3.096 ms` |                     `3.983 ms` |
+| Ten-run lifecycle p95         |                `1,149.907 ms` |                 `2,068.731 ms` |
 
-Every run produced the unchanged `15,294 B` export, 200 candidate rows, 25
-screen batches, 25 extraction batches, the unchanged `1,152,543 B` max-stage
-payload, the `24,094 B` review payload, ten completed soak lifecycles, zero
-duplicate stage rows, and 30 unique review rows.
+The 204-byte export increase reflects correct canonical bibliography and final
+attestation data and remains below the unchanged ceiling. Every run produced
+200 candidates, 25 screen batches, 25 extract batches, ten completed soak
+lifecycles, zero duplicate stage rows, and 30 unique review rows.
 
-Earlier failures are retained because a single favorable rerun did not prove
-stability. The initial candidate failed max-search p95 at `46.135 ms` against
-`38.572 ms`; its immediate rerun barely passed at `37.816 ms`. Later full runs
-failed search at `48.231 ms`, hydration at `4.016 ms`, screening at
-`191.853/190.960 ms`, and screening at `195.187 ms`. Profiling found fixture
-request/executor reference cycles, a production bound-method handler cycle,
-quadratic source/coverage scans, repeated schema compilation, quadratic usage
-snapshot copying, discovery candidate scans for provably unique identifiers,
-and a deep copy of the roughly 1 MB stage envelope used only as a prompt view.
+Earlier failures remain visible: search `46.135` and `48.231 ms`, hydration
+`4.016 ms`, and screen `191.853/190.960/195.187 ms`. Profiling connected them
+to retained fixture/executor cycles, a production bound-method cycle,
+quadratic source/coverage and usage-snapshot work, repeated schema compilation,
+unnecessary merge scans for provably unique identifiers, and a private prompt
+view deep copy. The fixes keep exact behavior, public envelope isolation,
+validation, thresholds, and the final baseline-equivalent method intact.
 
-The repairs keep public isolation and validation semantics intact: dispatch
-uses class-level handler names; screen/extract offsets use indexed maps; extract
-reuses one `Draft202012Validator`; contract injection makes a shallow top-level
-copy; discovery skips scans only when no exact identity pair can merge and
-otherwise runs the original full algorithm; accounting snapshots copy only the
-list while retaining immutable metadata entries; and the private prompt path
-uses a shallow top-level snapshot while the public envelope API still deep
-copies. Regression tests cover input immutability, all six legacy routes,
-weak-reference reclamation without forced GC, 200 unique and bridging/conflict
-identity cases, multipart offsets/order, schema compile count and later invalid
-records, stable accounting snapshots, and prompt-hash/isolation equivalence.
+## Frontend, contracts, and migration
 
-## Frontend and contract checks
+Focused frontend result: 5 files and 61 tests passed. Node `24.20.0` type-check
+passed. The earlier full Vitest suite passed 315 files and 2,368 tests. Full
+`frontend validate` remains FAILED at its lint phase with 113 errors and 1,961
+warnings; later steps were not reached by that aggregate command.
 
-Focused command:
-
-```bash
-corepack pnpm@10.18.2 --dir frontend exec vitest run --project unit \
-  src/components/research-engine/__tests__/BlueprintEditor.test.tsx \
-  src/components/research-engine/__tests__/ReviewPanel.test.tsx \
-  src/components/research-engine/__tests__/RunResults.test.tsx \
-  src/components/research-engine/__tests__/RunView.test.tsx \
-  src/services/__tests__/researchEngineService.test.ts
-```
-
-Result against source `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`:
-5 files and 61 tests passed in `5.21s`. The manual-resume regression performs
-the resume POST, receives the still-paused intermediate GET, opens the SSE
-stream, observes the claim/start events, and reaches durable completion. This
-proves the authorization survives the backend's one-use handoff window.
-
-The exact Node 24 full checks passed:
-
-```bash
-corepack pnpm@10.18.2 --dir frontend run type-check
-corepack pnpm@10.18.2 --dir frontend test
-```
-
-Result: type-check passed; 315 files and 2,368 tests passed in `84.99s`.
-
-The requested aggregate command failed during its first full-tree lint phase:
-
-```bash
-corepack pnpm@10.18.2 --dir frontend validate
-```
-
-Result: 113 errors and 1,961 warnings. That result is recorded as `FAILED`,
-even though the exact type-check and test phases pass separately. The final
-local CI run separately evaluates the repository's changed-file frontend debt
-ratchet.
-
-Contract commands:
+Contract checks:
 
 ```bash
 .venv/bin/python scripts/ci/generate_openapi.py --check
-corepack pnpm@10.18.2 --dir frontend run generate:api-types
+"$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+  --dir frontend run generate:api-types
 git diff --exit-code -- backend/openapi.json \
   frontend/src/types/generated/api.d.ts
 ```
 
-Result: OpenAPI was current and regenerated TypeScript had no drift.
+OpenAPI was current and regenerated TypeScript produced no diff.
 
-## Final local CI
+The disposable PostgreSQL migration cycle started at actual parent
+`agent_ops_20260925`, upgraded to `daily_brief_reviews_20260927`, downgraded to
+`agent_ops_20260925`, upgraded again, and cleaned up. The migration is additive;
+its downgrade drops the review indexes/table.
 
-`$NODE24_BIN_DIR` was the directory containing the Node `24.21.0` executable.
+## Broad local CI and scans
 
-Command:
+The full local CI command remains FAILED. Its aggregate was `29 failed, 6,293
+passed, 81 skipped, 523 deselected, 3 xpassed`; broad `ruff (changed)`, `black
+(changed)`, `isort (changed)`, `mypy (added)`, frontend quality, and tsconfig
+ratchets also failed across the inherited Tasks 1–7 branch window. Two Task
+8-owned failures originally exposed by CI were fixed and rerun. None of the 29
+remaining failures names a Task 8 path. Focused passes do not relabel this gate.
 
-```bash
-PATH="$PWD/.venv/bin:$NODE24_BIN_DIR:$PATH" \
-ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" \
-PYTHON=.venv/bin/python \
-bash scripts/ci/run_local_ci.sh --base origin/main --frontend
-```
+Bandit `1.9.4` scanned `backend/src` under the repository baseline and
+configured severity/confidence filters and found no in-scope issue. Staged
+Gitleaks `8.30.1` found no source or docs/evidence secret. These PASS results are
+separate from dependency outcomes.
 
-Result: `FAILED`. The final-tree backend aggregate returned `29 failed, 6,293
-passed, 81 skipped, 523 deselected, 3 xpassed, 122 warnings in 198.66s`. The
-script also
-reported failures for `ruff (changed)`, `black (changed)`, `isort (changed)`,
-`mypy (added)`, `pytest`, `frontend quality ratchet`, and `tsconfig exclusion
-ratchet`. Its `origin/main` branch window includes the inherited Tasks 1–7
-history (about 1,455 Python files), so those broad changed-file/debt gates do
-not isolate Task 8; repo-wide Black would reformat 192 files. The advisory full
-frontend lint in this run reproduced the 2,074-problem result above.
+`pnpm audit --json` evaluated 1,900 dependencies and FAILED with 21 advisories:
+2 critical, 9 high, 8 moderate, 2 low. No advisory was muted. `pip-audit
+-r backend/requirements.txt --format json` FAILED with 5 vulnerabilities in 4
+resolved packages: `torch 2.12.1`, `setuptools 71.1.0` (two advisories),
+`lxml 5.4.0`, and `ecdsa 0.19.2`. No vulnerability was ignored.
 
-Two failures initially found in Task 8 paths were treated as candidate
-failures and repaired: unavailable live-eval prerequisites now skip with an
-explicit `BLOCKED` reason before any model call, and the Task 5 pause regression
-now asserts the deliberately content-free pause descriptor rather than stale
-context. That full collection passed its then-current eval prerequisites,
-skipped the unavailable live call, and passed every Task 8 pause regression.
-None of the 29 remaining backend failures names a Task 8 file.
+Authenticated Safety `3.8.1` is BLOCKED because `SAFETY_API_KEY` is absent. The
+anonymous legacy fallback is separately FAILED: one active `gunicorn 22.0.0`
+finding and 129 findings automatically ignored by its unpinned-requirement
+policy. The fallback does not substitute for authenticated Safety.
 
-The independent-review source commit came afterward and was verified with the
-focused commands recorded in the committed evidence: eval `13 passed, 1
-skipped`, PostgreSQL `5 passed`, frontend `61 passed`, Node 24 type-check, and
-three full frozen performance invocations. The broad local-CI script was not
-relabeled by those results; its classification remains `FAILED`.
+## Release control and rollback
 
-## Migration evidence
+Production configuration inspection remains NOT RUN. The exact configuration
+name is `DAILY_RESEARCH_BRIEF_ENABLED`; source default is `false`.
 
-The disposable PostgreSQL cycle started at the actual parent revision,
-`agent_ops_20260925`, and ran:
+Authorized enable sequence:
 
-```text
-upgrade daily_brief_reviews_20260927
-downgrade agent_ops_20260925
-upgrade daily_brief_reviews_20260927
-```
+1. Keep the flag false while deploying the backend and additive migration.
+2. Resolve dependency findings and run authenticated Safety.
+3. Run live-model baseline/candidate evaluation with the same configured model.
+4. Obtain required remote checks for the exact candidate SHA.
+5. Inspect production owner-only access and confirm existing-run audit/export.
+6. Set the flag true, apply the backend configuration, then smoke
+   list/detail/create/start and read/export.
 
-The cycle passed and cleaned its isolated schema. The migration is additive;
-its downgrade drops the review indexes and table. Release ordering remains API
-and model first, then frontend exposure. During an application rollback,
-template selection must be disabled first and the additive review table should
-remain until the normal migration rollback window.
+Disable-first rollback:
 
-## Security and dependency scans
+1. Set `DAILY_RESEARCH_BRIEF_ENABLED=false` and apply that configuration before
+   application or database rollback.
+2. Confirm list/detail/create/start hide or refuse Daily Brief.
+3. Confirm existing persisted runs remain readable/exportable.
+4. Revert application code if required; retain the additive review table until
+   the normal migration rollback window.
 
-Bandit and dependency outcomes are intentionally separate. A passing source
-scan does not make a dependency audit green.
-
-### Bandit — PASS
-
-```bash
-bandit -r backend/src -ll -ii -x tests \
-  -b backend/.bandit-baseline.json
-```
-
-Bandit `1.9.4` scanned 184,380 lines and returned no in-scope issues. The
-repository baseline was generated at `2026-07-12T06:23:59Z` and contains ten
-medium findings (`B108` x3, `B104` x4, `B615` x2, and `B314` x1). Four checks
-are specifically disabled in source. The run used no additional Task 8
-suppression.
-
-### Gitleaks — PASS
-
-Gitleaks `8.30.1` scanned a candidate-only snapshot with its default rules plus
-`.gitleaks.toml` and found no leaks. The configuration excludes repository
-metadata/worktrees, installed dependencies and virtual environments,
-coverage/result artifacts, documented fixture paths, the example tfvars file,
-and deliberate eval secret-shaped fixtures. The final staged candidate was
-rescanned after this report was added.
-
-### pnpm audit — FAILED
-
-```bash
-corepack pnpm@10.18.2 audit --json
-```
-
-The npm advisory service evaluated 1,900 dependencies from the committed
-`pnpm-lock.yaml`. No advisory was muted. It returned 21 advisories: 2 critical,
-9 high, 8 moderate, and 2 low. Affected modules include `next`,
-`@tiptap/core`, `extract-zip`, `fast-uri`, `js-yaml`, `sharp`, `hono`, `qs`,
-`@vitest/mocker`/`vitest`, and `joi`. This blocks the dependency gate.
-
-### pip-audit — FAILED
-
-```bash
-pip-audit -r backend/requirements.txt --format json
-```
-
-pip-audit `2.9.0` used its default PyPI vulnerability service and resolved a
-fresh compatible environment from the partially unpinned requirements. No
-vulnerability was ignored. It evaluated 301 dependencies and found:
-
-| Package | Resolved version | Advisory | Fix |
-| --- | --- | --- | --- |
-| `torch` | 2.12.1 | `GHSA-rrmf-rvhw-rf47` | 2.13.0 |
-| `setuptools` | 71.1.0 | `PYSEC-2025-49` | 78.1.1 |
-| `setuptools` | 71.1.0 | `PYSEC-2026-3447` | 83.0.0 |
-| `lxml` | 5.4.0 | `PYSEC-2026-87` | 6.1.0 |
-| `ecdsa` | 0.19.2 | `PYSEC-2026-1325` | no published fix |
-
-This also blocks the dependency gate.
-
-### Safety — BLOCKED and FAILED
-
-The authenticated Safety `3.8.1` scan is `BLOCKED`: `SAFETY_API_KEY` was not
-available, and the noninteractive command terminated at its login prompt. It
-must be rerun with authorized credentials before release.
-
-The deprecated anonymous fallback check is recorded separately as `FAILED`.
-It inspected 88 packages in `backend/requirements.txt`, found one active
-`gunicorn 22.0.0` advisory (Safety ID `72809`), and automatically ignored 129
-findings because Safety's default policy ignores unresolved unpinned
-requirements. No explicit ignore flag or local policy file was supplied. This
-fallback does not substitute for the blocked authenticated scan.
-
-## Production controls, monitoring, and rollback
-
-No dedicated Daily Research Brief runtime flag was found in this local source,
-and the local template loader exposes the template. The design permits a
-feature-control mechanism if one applies, but production configuration was not
-inspected. Because this candidate was not deployed or enabled, the feature
-remains disabled for this release decision. Production template-selection
-control and its rollback behavior remain unproven and are release blockers.
-
-Version 1 remains owner-only. The stored organization ID is audit context; it
-does not authorize another user. Local PostgreSQL and browser evidence proves
-same-organization and cross-tenant non-owner denials, but production policy
-configuration was not inspected.
-
-The application emits content-safe dimensions such as run ID, organization ID,
-step index/type, duration, provider and outcome, returned/deduplicated counts,
-pause/review kind, review wait, extraction decision/count, verification and
-override outcome, export format/outcome/error kind, and terminal status. It
-does not emit research questions, abstracts, quotes, decisions' free text, or
-report bodies. Candidate release monitoring should implement alerts for:
-
-- run and provider failure rate by outcome;
-- p50/p95 stage duration by stage type, including a 200-row max-bound view;
-- persisted rehydration and SSE reconnect/error rate;
-- review wait, stale/conflict/duplicate review outcomes, and simultaneous
-  resume conflicts;
-- verification failure and exact-hash override rate; and
-- export failure by format/error kind and terminal no-evidence/unverified rate.
-
-These are proposed production queries over content-safe fields. No production
-telemetry query or alert was run or changed during Task 8.
-
-Local database rollback evidence is `PASS`. Application rollback, production
-template disablement, branch-rule checks, deployment, enablement, and a live
-rollback drill are `NOT RUN`. Required release sequence:
-
-1. resolve dependency findings and run authenticated Safety;
-2. run the live-model baseline and candidate evaluation with the same model;
-3. obtain required remote checks for the exact candidate SHA;
-4. verify production owner-only and template-selection controls;
-5. deploy the backend/migration before any frontend exposure; and
-6. enable only after an authorized release owner accepts every gate, with
-   template disablement as the first rollback action.
+No production flag value, deployment, telemetry query, alert, or rollback drill
+was inspected or changed. No push or pull request was made. The feature stays
+disabled for this release decision.
 
 ## Evidence artifacts
 
-The canonical independent-review evidence is committed under
-`docs/testing/evidence/daily-research-brief-task8-followup-20260928/`. Its
-index explains the two-commit provenance scheme. Bounded transcripts include
-the exact source SHA, command, exit status, salient output, and SHA-256 of the
-local raw capture for:
+The committed evidence directory is
+`docs/testing/evidence/daily-research-brief-task8-followup-20260928/`. Its index
+explains source provenance. Bounded transcripts include exact source/candidate
+state, command, exit status, salient output, and raw-capture SHA-256 for:
 
-- three separate exact documented performance invocations;
-- the stream-claim guard mutation RED and exact-file restoration GREEN; and
-- focused eval, PostgreSQL, frontend, Node 24 type-check, and formatting gates.
+- three baseline-equivalent performance runs on `a92fcfa` and the final-source
+  performance run on `9ca9d6a`;
+- simultaneous stream-claim mutation RED/restored GREEN;
+- terminal-cancellation mutation RED/restored GREEN;
+- exact-source 10-scenario browser PASS plus prior failed/excluded attempts; and
+- affected/backend/PostgreSQL/frontend/type/OpenAPI/lint/Bandit/Gitleaks checks.
 
-Earlier detailed command output remains local under
-`.superpowers/sdd/2026-09-27-daily-research-brief/`. That directory ignores
-generated logs, so these older files are supplemental mutable evidence rather
-than the sole basis for the follow-up claims. Principal older artifacts are:
+Older ignored logs under the SDD task directory are supplemental mutable local
+records. They are not the sole basis of any final-source claim.
 
-- `task-8-postgres-integration.log`
-- `task-8-browser-max-bound-focused.log`
-- `task-8-browser-full.log`, `task-8-browser-full-final-candidate.log`, and the
-  excluded `task-8-browser-invalid-auth-environment.log`
-- `task-8-current-model-eval.log`, `task-8-eval-focused-final.log`, and
-  `task-8-eval-mixed-collection-final.log`
-- `task-8-performance-candidate.log` and later failed stability logs
-- `task-8-performance-prompt-view-stability-{1,2,3}.log`
-- `task-8-all-optimizations-focused.log`
-- `task-8-frontend-focused-final.log`, `task-8-frontend-vitest-final.log`, and
-  `task-8-frontend-validate-final.log`
-- `task-8-openapi-drift.log`, `task-8-types-generate.log`, and
-  `task-8-alembic-roundtrip.log`
-- `task-8-bandit.log`, `task-8-gitleaks.log`,
-  `task-8-gitleaks-final.log`, `task-8-pnpm-audit.json`,
-  `task-8-pip-audit.json`, `task-8-safety-authenticated.log`, and
-  `task-8-safety.log`
-- `task-8-local-ci-final-candidate-rerun.log`
-- `task-8-candidate-sha.log`
-
-The ship gate is closed until every `FAILED`, `BLOCKED`, and release-critical
-`NOT RUN` item is cleared on one exact candidate SHA. No push, pull request,
-deployment, production flag change, or template enablement was performed.
+The ship gate remains closed until every FAILED, BLOCKED, and release-critical
+NOT RUN item is cleared on one exact release candidate.
