@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
@@ -16,29 +16,19 @@ import {
   createBlueprint,
   startRun,
 } from '@/services/researchEngineService';
-import type { BlueprintStepDef } from '@/services/researchEngineService';
-import type { ResearchProject } from '@/store/research-engine-store';
-import type { SourceConnectorType } from '@/types/scispace';
+import type {
+  BlueprintResponse,
+  BlueprintStepDef,
+  BlueprintTemplateDetail,
+  DailyBriefScopeConfirmation,
+  ProjectResponse,
+} from '@/services/researchEngineService';
 import { StepCard } from './StepCard';
 import { SourceSelector } from './SourceSelector';
 import { TemplateSelector } from './TemplateSelector';
+import { DailyResearchBriefSetup } from './DailyResearchBriefSetup';
 
-interface Blueprint {
-  id: string;
-  name: string;
-  steps: BlueprintStepDef[];
-  parameters: Record<string, unknown>;
-  template_source?: string;
-}
-
-interface TemplateData {
-  slug: string;
-  name: string;
-  description?: string;
-  step_count: number;
-  steps?: BlueprintStepDef[];
-  parameters?: Record<string, unknown>;
-}
+type EditorProject = ProjectResponse & { blueprint_id?: string | null };
 
 let _stepKeyCounter = 0;
 function nextStepKey(): string {
@@ -57,6 +47,7 @@ const DEFAULT_STEP: BlueprintStepDef = {
   description: '',
   parameters: {},
   mode: 'deterministic',
+  temperature: 0,
 };
 
 export interface BlueprintEditorProps {
@@ -64,16 +55,14 @@ export interface BlueprintEditorProps {
 }
 
 async function loadProjectBlueprint(projectId: string): Promise<{
-  project: ResearchProject;
-  blueprint?: Blueprint;
+  project: EditorProject;
+  blueprint?: BlueprintResponse;
 }> {
-  const project = (await getProject(projectId)) as
-    (ResearchProject & { blueprint_id?: string }) | undefined;
+  const project = (await getProject(projectId)) as EditorProject | undefined;
   if (!project) throw new Error('Project not found');
   if (project.blueprint_id) {
     try {
-      const blueprint = (await getBlueprint(project.blueprint_id)) as
-        Blueprint | undefined;
+      const blueprint = await getBlueprint(project.blueprint_id);
       return { project, blueprint };
     } catch {
       // A missing blueprint opens the template selector.
@@ -82,11 +71,13 @@ async function loadProjectBlueprint(projectId: string): Promise<{
   return { project };
 }
 
-export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
+export function BlueprintEditor({
+  projectId,
+}: BlueprintEditorProps): ReactElement {
   const router = useRouter();
 
-  const [project, setProject] = useState<ResearchProject | null>(null);
-  const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
+  const [project, setProject] = useState<EditorProject | null>(null);
+  const [blueprint, setBlueprint] = useState<BlueprintResponse | null>(null);
   const [showTemplateSelector, setShowTemplateSelector] = useState(false);
 
   // Editor state
@@ -97,6 +88,9 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
   const [globalParamsError, setGlobalParamsError] = useState<string | null>(
     null
   );
+  const [templateSource, setTemplateSource] = useState<string | null>(null);
+  const [scopeConfirmation, setScopeConfirmation] =
+    useState<DailyBriefScopeConfirmation | null>(null);
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -104,7 +98,7 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+  const fetchData = useCallback((): Promise<void> => {
     return loadProjectBlueprint(projectId)
       .then(({ project: proj, blueprint: bp }) => {
         setError(null);
@@ -115,13 +109,15 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
           setSteps(bp.steps.map(withKey));
           setGlobalParams(bp.parameters);
           setGlobalParamsText(JSON.stringify(bp.parameters, null, 2));
+          setTemplateSource(bp.template_source ?? null);
+          setScopeConfirmation(null);
           setShowTemplateSelector(false);
         } else {
           setShowTemplateSelector(true);
         }
       })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to load project');
+      .catch(() => {
+        setError('Failed to load project.');
       })
       .finally(() => setLoading(false));
   }, [projectId]);
@@ -130,14 +126,19 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
     fetchData();
   }, [fetchData]);
 
-  const handleTemplateSelect = (template: TemplateData | null) => {
+  const handleTemplateSelect = (
+    template: BlueprintTemplateDetail | null
+  ): void => {
     setShowTemplateSelector(false);
+    setBlueprint(null);
+    setScopeConfirmation(null);
     if (template) {
       setBlueprintName(template.name);
-      setSteps((template.steps ?? []).map(withKey));
-      const params = template.parameters ?? {};
+      setSteps(template.steps.map(withKey));
+      const params = template.parameters;
       setGlobalParams(params);
       setGlobalParamsText(JSON.stringify(params, null, 2));
+      setTemplateSource(template.template_source);
     } else {
       // Blank blueprint
       setBlueprintName(
@@ -146,29 +147,35 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
       setSteps([]);
       setGlobalParams({});
       setGlobalParamsText('{}');
+      setTemplateSource(null);
     }
   };
 
-  const handleGlobalParamsChange = (value: string) => {
+  const handleGlobalParamsChange = (value: string): void => {
     setGlobalParamsText(value);
     try {
       const parsed = JSON.parse(value) as Record<string, unknown>;
       setGlobalParamsError(null);
       setGlobalParams(parsed);
+      setScopeConfirmation(null);
     } catch {
       setGlobalParamsError('Invalid JSON');
     }
   };
 
-  const handleStepChange = (index: number, updated: BlueprintStepDef) => {
+  const handleStepChange = (index: number, updated: BlueprintStepDef): void => {
+    setTemplateSource(null);
+    setScopeConfirmation(null);
     setSteps((prev) =>
       prev.map((s, i) => (i === index ? { ...updated, _key: s._key } : s))
     );
   };
 
-  const handleMoveStep = (index: number, direction: -1 | 1) => {
+  const handleMoveStep = (index: number, direction: -1 | 1): void => {
     const target = index + direction;
     if (target < 0 || target >= steps.length) return;
+    setTemplateSource(null);
+    setScopeConfirmation(null);
     setSteps((prev) => {
       const next = [...prev];
       [next[index], next[target]] = [next[target], next[index]];
@@ -176,15 +183,19 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
     });
   };
 
-  const handleRemoveStep = (index: number) => {
+  const handleRemoveStep = (index: number): void => {
+    setTemplateSource(null);
+    setScopeConfirmation(null);
     setSteps((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleAddStep = () => {
+  const handleAddStep = (): void => {
+    setTemplateSource(null);
+    setScopeConfirmation(null);
     setSteps((prev) => [...prev, withKey({ ...DEFAULT_STEP })]);
   };
 
-  const handleSave = async () => {
+  const handleSave = async (): Promise<void> => {
     if (!blueprintName.trim()) return;
     if (globalParamsError) return;
 
@@ -192,35 +203,47 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
     setError(null);
     try {
       const cleanSteps = steps.map(({ _key, ...rest }) => rest);
-      const bp = (await createBlueprint(projectId, {
+      const bp = await createBlueprint(projectId, {
         name: blueprintName.trim(),
         steps: cleanSteps,
         parameters: globalParams,
-      })) as Blueprint | undefined;
+        ...(templateSource ? { template_source: templateSource } : {}),
+      });
 
       if (bp) {
         setBlueprint(bp);
+        setTemplateSource(bp.template_source ?? null);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save blueprint');
+    } catch {
+      setError('Failed to save blueprint.');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleStartRun = async () => {
+  const handleStartRun = async (): Promise<void> => {
     if (!blueprint?.id) return;
+    if (
+      templateSource === 'daily_research_brief' &&
+      scopeConfirmation === null
+    ) {
+      return;
+    }
 
     setStarting(true);
     setError(null);
     try {
-      const run = (await startRun(blueprint.id, globalParams)) as
-        { id: string } | undefined;
+      const run = await startRun(blueprint.id, {
+        parameters_override: globalParams,
+        ...(templateSource === 'daily_research_brief'
+          ? { scope_confirmation: scopeConfirmation }
+          : {}),
+      });
       if (run?.id) {
         router.push(`/research-engine/runs/${run.id}`);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start run');
+    } catch {
+      setError('Failed to start run.');
       setStarting(false);
     }
   };
@@ -327,7 +350,12 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
             <button
               type="button"
               onClick={handleStartRun}
-              disabled={starting || steps.length === 0}
+              disabled={
+                starting ||
+                steps.length === 0 ||
+                (templateSource === 'daily_research_brief' &&
+                  scopeConfirmation === null)
+              }
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               {starting ? (
@@ -419,148 +447,165 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
         <div className="space-y-4">
           <div className="rounded-xl border border-border bg-card shadow-xs p-4">
             <h3 className="text-sm font-medium text-foreground mb-3">
-              Global parameters
+              {templateSource === 'daily_research_brief'
+                ? 'Daily Research Brief'
+                : 'Global parameters'}
             </h3>
 
-            {/* Quick fields for common params */}
-            <div className="space-y-3 mb-4">
-              <div>
-                <label
-                  htmlFor="param-topic"
-                  className="block text-xs font-medium text-muted-foreground mb-1"
-                >
-                  Topic
-                </label>
-                <input
-                  id="param-topic"
-                  type="text"
-                  value={(globalParams.topic as string) ?? ''}
-                  onChange={(e) =>
-                    setGlobalParams((prev) => {
-                      const next = {
-                        ...prev,
-                        topic: e.target.value || undefined,
-                      };
-                      if (!next.topic) delete next.topic;
-                      setGlobalParamsText(JSON.stringify(next, null, 2));
-                      return next;
-                    })
-                  }
-                  placeholder="Research topic"
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-hidden focus:border-primary focus-visible:ring-2 focus-visible:ring-ring transition-colors"
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="param-date-start"
-                  className="block text-xs font-medium text-muted-foreground mb-1"
-                >
-                  Date range start
-                </label>
-                <input
-                  id="param-date-start"
-                  type="date"
-                  value={(globalParams.date_start as string) ?? ''}
-                  onChange={(e) =>
-                    setGlobalParams((prev) => {
-                      const next = {
-                        ...prev,
-                        date_start: e.target.value || undefined,
-                      };
-                      if (!next.date_start) delete next.date_start;
-                      setGlobalParamsText(JSON.stringify(next, null, 2));
-                      return next;
-                    })
-                  }
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm text-foreground focus:outline-hidden focus:border-primary focus-visible:ring-2 focus-visible:ring-ring transition-colors"
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="param-date-end"
-                  className="block text-xs font-medium text-muted-foreground mb-1"
-                >
-                  Date range end
-                </label>
-                <input
-                  id="param-date-end"
-                  type="date"
-                  value={(globalParams.date_end as string) ?? ''}
-                  onChange={(e) =>
-                    setGlobalParams((prev) => {
-                      const next = {
-                        ...prev,
-                        date_end: e.target.value || undefined,
-                      };
-                      if (!next.date_end) delete next.date_end;
-                      setGlobalParamsText(JSON.stringify(next, null, 2));
-                      return next;
-                    })
-                  }
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm text-foreground focus:outline-hidden focus:border-primary focus-visible:ring-2 focus-visible:ring-ring transition-colors"
-                />
-              </div>
-
-              <div>
-                <span className="block text-xs font-medium text-muted-foreground mb-1">
-                  Search sources
-                </span>
-                <SourceSelector
-                  selected={
-                    (Array.isArray(globalParams.sources)
-                      ? globalParams.sources
-                      : (steps.find((step) => step.type === 'search')
-                          ?.parameters.sources ?? [])) as SourceConnectorType[]
-                  }
-                  onChange={(sources) => {
-                    setSteps((prev) =>
-                      prev.map((step) =>
-                        step.type === 'search'
-                          ? {
-                              ...step,
-                              parameters: { ...step.parameters, sources },
-                            }
-                          : step
-                      )
-                    );
-                    setGlobalParams((prev) => {
-                      const next = { ...prev, sources };
-                      setGlobalParamsText(JSON.stringify(next, null, 2));
-                      return next;
-                    });
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Raw JSON editor */}
-            <div>
-              <label
-                htmlFor="param-raw-json"
-                className="block text-xs font-medium text-muted-foreground mb-1"
-              >
-                Raw JSON
-              </label>
-              <textarea
-                id="param-raw-json"
-                value={globalParamsText}
-                onChange={(e) => handleGlobalParamsChange(e.target.value)}
-                rows={6}
-                aria-invalid={!!globalParamsError}
-                className={`w-full px-3 py-2 rounded-lg bg-background border text-xs font-mono text-foreground focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring resize-none transition-colors ${
-                  globalParamsError
-                    ? 'border-destructive/50 focus:border-destructive'
-                    : 'border-border focus:border-primary'
-                }`}
+            {templateSource === 'daily_research_brief' ? (
+              <DailyResearchBriefSetup
+                initialParameters={globalParams}
+                onChange={(parameters, confirmation) => {
+                  setGlobalParams(parameters);
+                  setGlobalParamsText(JSON.stringify(parameters, null, 2));
+                  setGlobalParamsError(null);
+                  setScopeConfirmation(confirmation);
+                }}
               />
-              {globalParamsError && (
-                <p role="alert" className="mt-1 text-xs text-destructive">
-                  {globalParamsError}
-                </p>
-              )}
-            </div>
+            ) : (
+              <>
+                {/* Quick fields for common params */}
+                <div className="space-y-3 mb-4">
+                  <div>
+                    <label
+                      htmlFor="param-topic"
+                      className="block text-xs font-medium text-muted-foreground mb-1"
+                    >
+                      Topic
+                    </label>
+                    <input
+                      id="param-topic"
+                      type="text"
+                      value={(globalParams.topic as string) ?? ''}
+                      onChange={(e) =>
+                        setGlobalParams((prev) => {
+                          const next = {
+                            ...prev,
+                            topic: e.target.value || undefined,
+                          };
+                          if (!next.topic) delete next.topic;
+                          setGlobalParamsText(JSON.stringify(next, null, 2));
+                          return next;
+                        })
+                      }
+                      placeholder="Research topic"
+                      className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-hidden focus:border-primary focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="param-date-start"
+                      className="block text-xs font-medium text-muted-foreground mb-1"
+                    >
+                      Date range start
+                    </label>
+                    <input
+                      id="param-date-start"
+                      type="date"
+                      value={(globalParams.date_start as string) ?? ''}
+                      onChange={(e) =>
+                        setGlobalParams((prev) => {
+                          const next = {
+                            ...prev,
+                            date_start: e.target.value || undefined,
+                          };
+                          if (!next.date_start) delete next.date_start;
+                          setGlobalParamsText(JSON.stringify(next, null, 2));
+                          return next;
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm text-foreground focus:outline-hidden focus:border-primary focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="param-date-end"
+                      className="block text-xs font-medium text-muted-foreground mb-1"
+                    >
+                      Date range end
+                    </label>
+                    <input
+                      id="param-date-end"
+                      type="date"
+                      value={(globalParams.date_end as string) ?? ''}
+                      onChange={(e) =>
+                        setGlobalParams((prev) => {
+                          const next = {
+                            ...prev,
+                            date_end: e.target.value || undefined,
+                          };
+                          if (!next.date_end) delete next.date_end;
+                          setGlobalParamsText(JSON.stringify(next, null, 2));
+                          return next;
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm text-foreground focus:outline-hidden focus:border-primary focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <span className="block text-xs font-medium text-muted-foreground mb-1">
+                      Search sources
+                    </span>
+                    <SourceSelector
+                      selected={
+                        (Array.isArray(globalParams.sources)
+                          ? globalParams.sources
+                          : (steps.find((step) => step.type === 'search')
+                              ?.parameters?.sources ?? [])) as string[]
+                      }
+                      onChange={(sources) => {
+                        setSteps((prev) =>
+                          prev.map((step) =>
+                            step.type === 'search'
+                              ? {
+                                  ...step,
+                                  parameters: { ...step.parameters, sources },
+                                }
+                              : step
+                          )
+                        );
+                        setGlobalParams((prev) => {
+                          const next = { ...prev, sources };
+                          setGlobalParamsText(JSON.stringify(next, null, 2));
+                          return next;
+                        });
+                        setScopeConfirmation(null);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Raw JSON editor */}
+                <div>
+                  <label
+                    htmlFor="param-raw-json"
+                    className="block text-xs font-medium text-muted-foreground mb-1"
+                  >
+                    Raw JSON
+                  </label>
+                  <textarea
+                    id="param-raw-json"
+                    value={globalParamsText}
+                    onChange={(e) => handleGlobalParamsChange(e.target.value)}
+                    rows={6}
+                    aria-invalid={!!globalParamsError}
+                    className={`w-full px-3 py-2 rounded-lg bg-background border text-xs font-mono text-foreground focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring resize-none transition-colors ${
+                      globalParamsError
+                        ? 'border-destructive/50 focus:border-destructive'
+                        : 'border-border focus:border-primary'
+                    }`}
+                  />
+                  {globalParamsError && (
+                    <p role="alert" className="mt-1 text-xs text-destructive">
+                      {globalParamsError}
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Blueprint info */}
@@ -576,11 +621,11 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
                     {blueprint.id}
                   </dd>
                 </div>
-                {blueprint.template_source && (
+                {templateSource && (
                   <div className="flex items-center gap-2">
                     <dt>Template</dt>
                     <dd className="text-foreground truncate">
-                      {blueprint.template_source}
+                      {templateSource}
                     </dd>
                   </div>
                 )}

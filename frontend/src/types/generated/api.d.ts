@@ -5547,6 +5547,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/blueprints/templates/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Template Detail
+         * @description Return the complete, validated server-owned template contract.
+         */
+        get: operations["get_template_detail_api_v1_research_engine_blueprints_templates__slug__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/blueprints/{blueprint_id}": {
         parameters: {
             query?: never;
@@ -5581,6 +5601,26 @@ export interface paths {
          * @description Start a new research run from a blueprint.
          */
         post: operations["start_run_api_v1_research_engine_blueprints__blueprint_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Connector Capabilities
+         * @description Return the safe projection of canonical research connectors.
+         */
+        get: operations["list_connector_capabilities_api_v1_research_engine_capabilities_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5651,6 +5691,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/runs/{run_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Run
+         * @description Download an owner-scoped artifact for a completed research run.
+         */
+        get: operations["export_run_api_v1_research_engine_runs__run_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/runs/{run_id}/manifest": {
         parameters: {
             query?: never;
@@ -5702,9 +5762,49 @@ export interface paths {
         put?: never;
         /**
          * Resume Run
-         * @description Resume a paused run.
+         * @description Authorize a paused run to be claimed exactly once by its stream.
          */
         post: operations["resume_run_api_v1_research_engine_runs__run_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/runs/{run_id}/reviews/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Pending Review
+         * @description Return the current owned review gate and its bounded persisted output.
+         */
+        get: operations["get_pending_review_api_v1_research_engine_runs__run_id__reviews_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/runs/{run_id}/reviews/{step_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Review
+         * @description Append one review bound to the current persisted stage envelope.
+         */
+        post: operations["submit_review_api_v1_research_engine_runs__run_id__reviews__step_index__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8813,7 +8913,7 @@ export interface components {
              * @description Export format for all threads
              * @default markdown
              */
-            format: components["schemas"]["ExportFormat"];
+            format: components["schemas"]["src__shared__export_schemas__ExportFormat"];
             /** @description Export customization options */
             options?: components["schemas"]["ExportOptions"];
             /**
@@ -8900,7 +9000,7 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Steps */
-            steps: components["schemas"]["BlueprintStepDefinition"][];
+            steps?: components["schemas"]["BlueprintStepDefinition"][];
             /** Template Source */
             template_source?: string | null;
         };
@@ -8973,6 +9073,39 @@ export interface components {
              */
             temperature: number;
             type: components["schemas"]["StepType"];
+        };
+        /**
+         * BlueprintTemplateDetailResponse
+         * @description Validated full content of one server-owned blueprint template.
+         */
+        BlueprintTemplateDetailResponse: {
+            /** Constraints */
+            constraints: {
+                [key: string]: unknown;
+            };
+            /** Contract Version */
+            contract_version: number;
+            /** Coverage */
+            coverage: {
+                [key: string]: unknown;
+            };
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: unknown;
+            };
+            /** Slug */
+            slug: string;
+            /** Steps */
+            steps: components["schemas"]["BlueprintStepDefinition"][];
+            /** Template Source */
+            template_source: string;
         };
         /** Body_cleanup_old_state_api_v1_arxiv_tracking_cleanup_post */
         Body_cleanup_old_state_api_v1_arxiv_tracking_cleanup_post: {
@@ -9820,6 +9953,33 @@ export interface components {
              */
             confirmed: boolean;
         };
+        /**
+         * ConnectorCapabilityResponse
+         * @description Non-sensitive connector metadata returned to setup clients.
+         */
+        ConnectorCapabilityResponse: {
+            /** Available */
+            available: boolean;
+            /** Daily Brief Eligible */
+            daily_brief_eligible: boolean;
+            features: components["schemas"]["ConnectorFeatures"];
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /**
+         * ConnectorFeatures
+         * @description Safe, behavioral search features for a research connector.
+         */
+        ConnectorFeatures: {
+            /** Cursor */
+            cursor: boolean;
+            /** Date Filter */
+            date_filter: boolean;
+            /** Full Text */
+            full_text: boolean;
+        };
         /** ConnectorSummary */
         ConnectorSummary: {
             /** Available */
@@ -10069,6 +10229,32 @@ export interface components {
              * @description Target entity ID
              */
             target_entity_id: string;
+        };
+        /**
+         * DailyBriefScopeConfirmation
+         * @description User-confirmed, bounded scope for a Daily Research Brief run.
+         */
+        DailyBriefScopeConfirmation: {
+            /**
+             * Confirmed
+             * @constant
+             */
+            confirmed: true;
+            /** Exclusion Criteria */
+            exclusion_criteria?: string[];
+            /** Inclusion Criteria */
+            inclusion_criteria: string[];
+            /** Limit Per Provider */
+            limit_per_provider: number;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Providers */
+            providers: string[];
+            /** Research Question */
+            research_question: string;
         };
         /**
          * DatasetEvaluationRequest
@@ -10612,12 +10798,6 @@ export interface components {
             thread_id?: string | null;
         };
         /**
-         * ExportFormat
-         * @description Supported export formats.
-         * @enum {string}
-         */
-        ExportFormat: "markdown" | "pdf" | "json" | "html";
-        /**
          * ExportOptions
          * @description Options for customizing export output.
          */
@@ -10689,6 +10869,23 @@ export interface components {
             name: string;
         };
         /**
+         * ExtractionItemDecision
+         * @description A review decision for exactly one persisted extraction source part.
+         */
+        ExtractionItemDecision: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accept" | "reject" | "unresolved";
+            /** Part Id */
+            part_id: string;
+            /** Reason */
+            reason?: string | null;
+            /** Source Id */
+            source_id: string;
+        };
+        /**
          * ExtractionMethod
          * @description Methods used for entity and relationship extraction
          * @enum {string}
@@ -10737,6 +10934,14 @@ export interface components {
              * @default true
              */
             update_knowledge_graph: boolean;
+        };
+        /**
+         * ExtractionReviewDecisionPayload
+         * @description Exact-set extraction decisions submitted for one stage output.
+         */
+        ExtractionReviewDecisionPayload: {
+            /** Items */
+            items: components["schemas"]["ExtractionItemDecision"][];
         };
         /** FileListResponse */
         FileListResponse: {
@@ -10797,6 +11002,11 @@ export interface components {
             /** Upload Timestamp */
             upload_timestamp: string;
         };
+        /**
+         * FinalReviewDecisionPayload
+         * @description Final review carries no client-authored report or evidence fields.
+         */
+        FinalReviewDecisionPayload: Record<string, never>;
         /**
          * GraphAnalytics
          * @description Model for graph analytics and statistics
@@ -11770,6 +11980,21 @@ export interface components {
             total_pages: number;
         };
         /**
+         * PendingReviewResponse
+         * @description Owned pending review state, optionally including bounded stage output.
+         */
+        PendingReviewResponse: {
+            accepted_review?: components["schemas"]["StageReviewResponse"] | null;
+            descriptor?: components["schemas"]["ReviewDescriptor"] | null;
+            /** Pending */
+            pending: boolean;
+            /** Stage Output */
+            stage_output?: {
+                [key: string]: unknown;
+            } | null;
+            validation?: components["schemas"]["ReviewValidationVocabulary"] | null;
+        };
+        /**
          * PermissionCategoryResponse
          * @description Response model for permission category
          */
@@ -12518,6 +12743,61 @@ export interface components {
             organization_wide: boolean;
         };
         /**
+         * ReviewDecision
+         * @description Top-level reviewer disposition for a persisted stage output.
+         * @enum {string}
+         */
+        ReviewDecision: "approve" | "decline";
+        /**
+         * ReviewDescriptor
+         * @description Content-free durable descriptor for the current review gate.
+         */
+        ReviewDescriptor: {
+            /** Contract Version */
+            contract_version: number;
+            /** Created At */
+            created_at?: string | null;
+            /** Output Hash */
+            output_hash: string;
+            /** Review Id */
+            review_id?: string | null;
+            review_kind: components["schemas"]["ReviewKind"];
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Stage Type
+             * @enum {string}
+             */
+            stage_type: "screen" | "extract" | "export";
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "approved";
+            /** Step Index */
+            step_index: number;
+        };
+        /**
+         * ReviewKind
+         * @description Durable review gates supported by the Daily Research Brief contract.
+         * @enum {string}
+         */
+        ReviewKind: "screening" | "extraction" | "final";
+        /**
+         * ReviewValidationVocabulary
+         * @description Bounded decision vocabulary used to render a pending gate.
+         */
+        ReviewValidationVocabulary: {
+            /** Item Decisions */
+            item_decisions?: string[];
+            /** Reason Required For */
+            reason_required_for?: string[];
+        };
+        /**
          * RewriteRequest
          * @description Request to rewrite text with a specific tone.
          */
@@ -12675,6 +12955,7 @@ export interface components {
             parameters_override?: {
                 [key: string]: unknown;
             };
+            scope_confirmation?: components["schemas"]["DailyBriefScopeConfirmation"] | null;
         };
         /**
          * RunResponse
@@ -12700,9 +12981,16 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Output Hash */
+            output_hash?: string | null;
+            /** Pause Reason */
+            pause_reason?: ("user_paused" | "review_required" | "verification_failed") | null;
+            review_kind?: components["schemas"]["ReviewKind"] | null;
             /** Started At */
             started_at?: string | null;
             status: components["schemas"]["RunStatus"];
+            /** Step Index */
+            step_index?: number | null;
             /**
              * Total Tokens
              * @default 0
@@ -12713,6 +13001,19 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * RunResumeRequest
+         * @description Bounded authorization supplied only for exceptional run continuation.
+         */
+        RunResumeRequest: {
+            /**
+             * Continue Unverified
+             * @default false
+             */
+            continue_unverified: boolean;
+            /** Output Hash */
+            output_hash?: string | null;
         };
         /**
          * RunStatus
@@ -12753,6 +13054,31 @@ export interface components {
             message: string;
             /** Severity */
             severity: string;
+        };
+        /**
+         * ScreeningItemDecision
+         * @description A review decision for exactly one persisted screening source part.
+         */
+        ScreeningItemDecision: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "unresolved";
+            /** Part Id */
+            part_id: string;
+            /** Reason */
+            reason?: string | null;
+            /** Source Id */
+            source_id: string;
+        };
+        /**
+         * ScreeningReviewDecisionPayload
+         * @description Exact-set screening decisions submitted for one stage output.
+         */
+        ScreeningReviewDecisionPayload: {
+            /** Items */
+            items: components["schemas"]["ScreeningItemDecision"][];
         };
         /**
          * SearchAnalytics
@@ -13457,6 +13783,68 @@ export interface components {
          * @enum {string}
          */
         SortOrder: "asc" | "desc";
+        /**
+         * StageReviewRequest
+         * @description Strict exact-hash decision for one persisted review gate.
+         */
+        StageReviewRequest: {
+            decision: components["schemas"]["ReviewDecision"];
+            /** Decision Payload */
+            decision_payload: components["schemas"]["ScreeningReviewDecisionPayload"] | components["schemas"]["ExtractionReviewDecisionPayload"] | components["schemas"]["FinalReviewDecisionPayload"];
+            /** Note */
+            note?: string | null;
+            /** Output Hash */
+            output_hash: string;
+            review_kind: components["schemas"]["ReviewKind"];
+        };
+        /**
+         * StageReviewResponse
+         * @description The immutable accepted ledger row plus replay metadata.
+         */
+        StageReviewResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            decision: components["schemas"]["ReviewDecision"];
+            /** Decision Payload */
+            decision_payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Note */
+            note?: string | null;
+            /** Output Hash */
+            output_hash: string;
+            /**
+             * Replay
+             * @default false
+             */
+            replay: boolean;
+            review_kind: components["schemas"]["ReviewKind"];
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Stage Type
+             * @enum {string}
+             */
+            stage_type: "screen" | "extract" | "export";
+            /** Step Index */
+            step_index: number;
+        };
         /**
          * Stance
          * @description Stance classification options
@@ -14855,6 +15243,12 @@ export interface components {
          */
         src__schemas__chat__ThreadStatus: "active" | "resolved" | "archived";
         /**
+         * ExportFormat
+         * @description Portable formats supported by the audited research export endpoint.
+         * @enum {string}
+         */
+        src__schemas__research_engine__ExportFormat: "markdown" | "json" | "csv";
+        /**
          * ProjectCreate
          * @description Schema for creating a research project.
          */
@@ -14899,6 +15293,12 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * ExportFormat
+         * @description Supported export formats.
+         * @enum {string}
+         */
+        src__shared__export_schemas__ExportFormat: "markdown" | "pdf" | "json" | "html";
         /**
          * CitationCreate
          * @description Create a new citation
@@ -20555,7 +20955,7 @@ export interface operations {
     preview_export_api_v1_export_preview__thread_id__post: {
         parameters: {
             query?: {
-                format?: components["schemas"]["ExportFormat"];
+                format?: components["schemas"]["src__shared__export_schemas__ExportFormat"];
             };
             header?: never;
             path: {
@@ -20591,7 +20991,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Export format */
-                format?: components["schemas"]["ExportFormat"];
+                format?: components["schemas"]["src__shared__export_schemas__ExportFormat"];
                 /** @description Include system messages */
                 include_system_messages?: boolean;
                 /** @description Include citations */
@@ -20662,7 +21062,7 @@ export interface operations {
     export_thread_stream_api_v1_export_thread__thread_id__stream_post: {
         parameters: {
             query?: {
-                format?: components["schemas"]["ExportFormat"];
+                format?: components["schemas"]["src__shared__export_schemas__ExportFormat"];
                 include_citations?: boolean;
             };
             header?: never;
@@ -24256,6 +24656,37 @@ export interface operations {
             };
         };
     };
+    get_template_detail_api_v1_research_engine_blueprints_templates__slug__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlueprintTemplateDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_blueprint_api_v1_research_engine_blueprints__blueprint_id__get: {
         parameters: {
             query?: never;
@@ -24318,6 +24749,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_connector_capabilities_api_v1_research_engine_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorCapabilityResponse"][];
                 };
             };
         };
@@ -24448,6 +24899,39 @@ export interface operations {
             };
         };
     };
+    export_run_api_v1_research_engine_runs__run_id__export_get: {
+        parameters: {
+            query?: {
+                format?: components["schemas"]["src__schemas__research_engine__ExportFormat"];
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_manifest_api_v1_research_engine_runs__run_id__manifest_get: {
         parameters: {
             query?: never;
@@ -24519,7 +25003,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RunResumeRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -24528,6 +25016,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pending_review_api_v1_research_engine_runs__run_id__reviews_pending_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_review_api_v1_research_engine_runs__run_id__reviews__step_index__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                step_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StageReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StageReviewResponse"];
                 };
             };
             /** @description Validation Error */

@@ -5,12 +5,17 @@ import {
   createProject,
   getProject,
   listTemplates,
+  getTemplateDetail,
+  getCapabilities,
   createBlueprint,
   getBlueprint,
   startRun,
   getRun,
   pauseRun,
   resumeRun,
+  getPendingReview,
+  submitReview,
+  getRunExportUrl,
   getRunManifest,
   listSteps,
   getStep,
@@ -62,9 +67,25 @@ describe('researchEngineService', () => {
     it('calls GET /blueprints/templates', async () => {
       mockApi.get.mockResolvedValue([]);
       await listTemplates();
+      expect(mockApi.get).toHaveBeenCalledWith(`${BASE}/blueprints/templates`);
+    });
+  });
+
+  describe('getTemplateDetail', () => {
+    it('loads the complete server-owned template before it is applied', async () => {
+      mockApi.get.mockResolvedValue({ slug: 'daily_research_brief' });
+      await getTemplateDetail('daily_research_brief');
       expect(mockApi.get).toHaveBeenCalledWith(
-        `${BASE}/blueprints/templates`
+        `${BASE}/blueprints/templates/daily_research_brief`
       );
+    });
+  });
+
+  describe('getCapabilities', () => {
+    it('loads the safe connector registry projection', async () => {
+      mockApi.get.mockResolvedValue([]);
+      await getCapabilities();
+      expect(mockApi.get).toHaveBeenCalledWith(`${BASE}/capabilities`);
     });
   });
 
@@ -100,13 +121,27 @@ describe('researchEngineService', () => {
   });
 
   describe('startRun', () => {
-    it('calls POST /blueprints/:blueprintId/runs with parameters_override', async () => {
-      const params = { temperature: 0.5 };
+    it('posts the generated RunCreate contract including confirmed scope', async () => {
+      const request = {
+        parameters_override: {
+          providers: ['openalex'],
+          limit_per_provider: 10,
+        },
+        scope_confirmation: {
+          research_question: 'What changed?',
+          inclusion_criteria: ['Peer reviewed'],
+          exclusion_criteria: [],
+          providers: ['openalex'],
+          limit_per_provider: 10,
+          notes: '',
+          confirmed: true as const,
+        },
+      };
       mockApi.post.mockResolvedValue({ id: 'r1' });
-      await startRun('b1', params);
+      await startRun('b1', request);
       expect(mockApi.post).toHaveBeenCalledWith(
         `${BASE}/blueprints/b1/runs`,
-        { parameters_override: params }
+        request
       );
     });
   });
@@ -128,10 +163,50 @@ describe('researchEngineService', () => {
   });
 
   describe('resumeRun', () => {
-    it('calls POST /runs/:runId/resume', async () => {
+    it('posts the typed verification override when supplied', async () => {
       mockApi.post.mockResolvedValue({ status: 'running' });
-      await resumeRun('r1');
-      expect(mockApi.post).toHaveBeenCalledWith(`${BASE}/runs/r1/resume`);
+      const request = {
+        continue_unverified: true,
+        output_hash: 'a'.repeat(64),
+      };
+      await resumeRun('r1', request);
+      expect(mockApi.post).toHaveBeenCalledWith(
+        `${BASE}/runs/r1/resume`,
+        request
+      );
+    });
+  });
+
+  describe('reviews', () => {
+    it('loads the durable pending review descriptor', async () => {
+      mockApi.get.mockResolvedValue({ pending: false });
+      await getPendingReview('r1');
+      expect(mockApi.get).toHaveBeenCalledWith(
+        `${BASE}/runs/r1/reviews/pending`
+      );
+    });
+
+    it('submits an exact-hash stage review', async () => {
+      const request = {
+        review_kind: 'final' as const,
+        output_hash: 'b'.repeat(64),
+        decision: 'approve' as const,
+        decision_payload: {},
+      };
+      mockApi.post.mockResolvedValue({ id: 'review-1' });
+      await submitReview('r1', 5, request);
+      expect(mockApi.post).toHaveBeenCalledWith(
+        `${BASE}/runs/r1/reviews/5`,
+        request
+      );
+    });
+  });
+
+  describe('getRunExportUrl', () => {
+    it('builds the owned export endpoint for a generated export format', () => {
+      expect(getRunExportUrl('r1', 'csv')).toBe(
+        `${BASE}/runs/r1/export?format=csv`
+      );
     });
   });
 
@@ -139,9 +214,7 @@ describe('researchEngineService', () => {
     it('calls GET /runs/:runId/manifest', async () => {
       mockApi.get.mockResolvedValue({ manifest: {} });
       await getRunManifest('r1');
-      expect(mockApi.get).toHaveBeenCalledWith(
-        `${BASE}/runs/r1/manifest`
-      );
+      expect(mockApi.get).toHaveBeenCalledWith(`${BASE}/runs/r1/manifest`);
     });
   });
 

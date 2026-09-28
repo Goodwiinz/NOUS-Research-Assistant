@@ -75,7 +75,7 @@
 - Task 3: complete
 - Task 4: complete
 - Task 5: complete
-- Task 6: pending
+- Task 6: complete
 - Task 7: pending
 - Task 8: pending
 
@@ -181,3 +181,27 @@
   passing. Ruff, Black, isort, diff, and unchanged `14`-diagnostic MyPy delta
   checks pass. Commit: `fix(research): validate persisted stage markers` (this
   commit). Task 6 has not started.
+
+## Task 6 implementation
+
+- Base: `0e5b0665a26e64509b93f29cfdb6701a4cc849c9`.
+- Initial RED: the new OpenAPI contract tests failed `2/2`; the new frontend
+  Task 6 batch failed `10` tests and passed `14` before implementation.
+- Generated `backend/openapi.json` and
+  `frontend/src/types/generated/api.d.ts` with the repository generators; the
+  final API drift check passes.
+- Added generated schema aliases and typed research-engine service methods,
+  full-detail template application, capability-backed source selection, the
+  bounded Daily Brief scope/confirmation form, template-source invalidation,
+  and the exact six-step backend vocabulary.
+- Focused GREEN: backend OpenAPI `2 passed`; frontend Task 6 `27 passed` across
+  three files. Adjacent GREEN: frontend research-engine/service `30 passed` and
+  backend endpoint/template/schema/review/export `121 passed`.
+- Full frontend regression: `311 passed` files and `2325 passed` tests.
+- TypeScript type-check, API type drift, ESLint, Prettier, Ruff, Black, isort,
+  and diff checks pass. Task 7 has not started.
+- The local CI changed-file, contract, migration, NOUS, and frontend ratchet
+  gates pass. Its repo-wide backend phase retains `30` unrelated failures with
+  `6264` passes, including unavailable/misconfigured PostgreSQL and Redis
+  surfaces; no failure is in a Task 6 changed path.
+- Task 6: complete.

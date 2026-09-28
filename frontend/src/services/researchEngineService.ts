@@ -1,72 +1,124 @@
 import { api } from '@/services/api-client';
+import type { components } from '@/types/generated/api';
 
 const BASE = '/api/v1/research-engine';
 
-// Types
-export interface ProjectCreate {
+export type ProjectCreate =
+  components['schemas']['src__schemas__research_engine__ProjectCreate'];
+export type ProjectResponse =
+  components['schemas']['src__schemas__research_engine__ProjectResponse'];
+export type BlueprintStepDef = components['schemas']['BlueprintStepDefinition'];
+export type BlueprintCreate = components['schemas']['BlueprintCreate'];
+export type BlueprintResponse = components['schemas']['BlueprintResponse'];
+export type BlueprintTemplateDetail =
+  components['schemas']['BlueprintTemplateDetailResponse'];
+export type ConnectorCapability =
+  components['schemas']['ConnectorCapabilityResponse'];
+export type DailyBriefScopeConfirmation =
+  components['schemas']['DailyBriefScopeConfirmation'];
+export type RunCreate = components['schemas']['RunCreate'];
+export type RunResponse = components['schemas']['RunResponse'];
+export type RunResumeRequest = components['schemas']['RunResumeRequest'];
+export type PendingReviewResponse =
+  components['schemas']['PendingReviewResponse'];
+export type StageReviewRequest = components['schemas']['StageReviewRequest'];
+export type StageReviewResponse = components['schemas']['StageReviewResponse'];
+export type ResearchExportFormat =
+  components['schemas']['src__schemas__research_engine__ExportFormat'];
+export type StepResponse = components['schemas']['StepResponse'];
+
+/** Presentation model for the legacy untyped template-summary endpoint. */
+export type BlueprintTemplateSummary = {
+  id: string;
+  slug: string;
   name: string;
   description?: string;
-  settings?: Record<string, unknown>;
-}
+  step_count: number;
+};
 
-export interface BlueprintStepDef {
-  type: string;
-  name: string;
-  description?: string;
-  parameters: Record<string, unknown>;
-  model_id?: string;
-  model_version?: string;
-  mode: 'deterministic' | 'exploratory';
-  temperature?: number;
-  seed?: number;
-}
+type BlueprintTemplateWireSummary = Omit<BlueprintTemplateSummary, 'id'> & {
+  id?: string;
+};
 
-export interface BlueprintCreate {
-  name: string;
-  template_source?: string;
-  steps: BlueprintStepDef[];
-  parameters: Record<string, unknown>;
-}
+export const listProjects = (): Promise<ProjectResponse[]> =>
+  api.get<ProjectResponse[]>(`${BASE}/projects`);
 
-// Functions
-export const listProjects = () => api.get(`${BASE}/projects`);
+export const createProject = (data: ProjectCreate): Promise<ProjectResponse> =>
+  api.post<ProjectResponse>(`${BASE}/projects`, data);
 
-export const createProject = (data: ProjectCreate) =>
-  api.post(`${BASE}/projects`, data);
+export const getProject = (id: string): Promise<ProjectResponse> =>
+  api.get<ProjectResponse>(`${BASE}/projects/${id}`);
 
-export const getProject = (id: string) =>
-  api.get(`${BASE}/projects/${id}`);
+export const listTemplates = async (): Promise<BlueprintTemplateSummary[]> => {
+  const templates = await api.get<BlueprintTemplateWireSummary[]>(
+    `${BASE}/blueprints/templates`
+  );
+  return templates.map((template) => ({
+    ...template,
+    id: template.id ?? template.slug,
+  }));
+};
 
-export const listTemplates = () =>
-  api.get(`${BASE}/blueprints/templates`);
+export const getTemplateDetail = (
+  slug: string
+): Promise<BlueprintTemplateDetail> =>
+  api.get<BlueprintTemplateDetail>(`${BASE}/blueprints/templates/${slug}`);
 
-export const createBlueprint = (projectId: string, data: BlueprintCreate) =>
-  api.post(`${BASE}/blueprints/projects/${projectId}`, data);
+export const getCapabilities = (): Promise<ConnectorCapability[]> =>
+  api.get<ConnectorCapability[]>(`${BASE}/capabilities`);
 
-export const getBlueprint = (id: string) =>
-  api.get(`${BASE}/blueprints/${id}`);
+export const createBlueprint = (
+  projectId: string,
+  data: BlueprintCreate
+): Promise<BlueprintResponse> =>
+  api.post<BlueprintResponse>(`${BASE}/blueprints/projects/${projectId}`, data);
+
+export const getBlueprint = (id: string): Promise<BlueprintResponse> =>
+  api.get<BlueprintResponse>(`${BASE}/blueprints/${id}`);
 
 export const startRun = (
   blueprintId: string,
-  parametersOverride: Record<string, unknown>
-) =>
-  api.post(`${BASE}/blueprints/${blueprintId}/runs`, {
-    parameters_override: parametersOverride,
-  });
+  request: RunCreate
+): Promise<RunResponse> =>
+  api.post<RunResponse>(`${BASE}/blueprints/${blueprintId}/runs`, request);
 
-export const getRun = (runId: string) => api.get(`${BASE}/runs/${runId}`);
+export const getRun = (runId: string): Promise<RunResponse> =>
+  api.get<RunResponse>(`${BASE}/runs/${runId}`);
 
-export const pauseRun = (runId: string) =>
-  api.post(`${BASE}/runs/${runId}/pause`);
+export const pauseRun = (runId: string): Promise<RunResponse> =>
+  api.post<RunResponse>(`${BASE}/runs/${runId}/pause`);
 
-export const resumeRun = (runId: string) =>
-  api.post(`${BASE}/runs/${runId}/resume`);
+export const resumeRun = (
+  runId: string,
+  request: RunResumeRequest = { continue_unverified: false }
+): Promise<RunResponse> =>
+  api.post<RunResponse>(`${BASE}/runs/${runId}/resume`, request);
 
-export const getRunManifest = (runId: string) =>
-  api.get(`${BASE}/runs/${runId}/manifest`);
+export const getPendingReview = (
+  runId: string
+): Promise<PendingReviewResponse> =>
+  api.get<PendingReviewResponse>(`${BASE}/runs/${runId}/reviews/pending`);
 
-export const listSteps = (runId: string) =>
-  api.get(`${BASE}/runs/${runId}/steps`);
+export const submitReview = (
+  runId: string,
+  stepIndex: number,
+  request: StageReviewRequest
+): Promise<StageReviewResponse> =>
+  api.post<StageReviewResponse>(
+    `${BASE}/runs/${runId}/reviews/${stepIndex}`,
+    request
+  );
 
-export const getStep = (stepId: string) =>
-  api.get(`${BASE}/steps/${stepId}`);
+export const getRunExportUrl = (
+  runId: string,
+  format: ResearchExportFormat
+): string => `${BASE}/runs/${runId}/export?${new URLSearchParams({ format })}`;
+
+export const getRunManifest = (runId: string): Promise<unknown> =>
+  api.get<unknown>(`${BASE}/runs/${runId}/manifest`);
+
+export const listSteps = (runId: string): Promise<StepResponse[]> =>
+  api.get<StepResponse[]>(`${BASE}/runs/${runId}/steps`);
+
+export const getStep = (stepId: string): Promise<StepResponse> =>
+  api.get<StepResponse>(`${BASE}/steps/${stepId}`);
