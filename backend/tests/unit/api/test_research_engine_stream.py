@@ -15,7 +15,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -26,8 +26,10 @@ from src.api.research_engine.runs import pause_run, resume_run, router, stream_r
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.research_stage_review import ResearchStageReview
+from src.models.user import User
 from src.schemas.research_engine import RunResponse, RunResumeRequest
 from src.services.research_engine.contracts import canonical_stage_output_hash
+from src.services.research_engine.observability import ResearchObservability
 
 # ============================================================================
 # Helpers
@@ -717,6 +719,7 @@ class TestStreamEndpointSuccess:
             }
 
         operations: list[str] = []
+        observer = ResearchObservability()
 
         async def rollback():
             operations.append("rollback")
@@ -735,6 +738,7 @@ class TestStreamEndpointSuccess:
             patch("src.api.research_engine.runs.StepExecutor"),
             patch("src.api.research_engine.runs.ArxivConnector"),
             patch("src.api.research_engine.runs.SemanticScholarConnector"),
+            patch("src.api.research_engine.runs.research_observability", observer),
         ):
             engine = Mock()
             engine.run = completed_step
@@ -756,7 +760,10 @@ class TestStreamEndpointSuccess:
         ]
         assert mock_run.status == "failed"
         assert mock_run.reproducibility_manifest is None
-        assert "db write failed" in "".join(chunks)
+        stream = "".join(chunks)
+        assert "db write failed" not in stream
+        assert "Research stream failed" in stream
+        assert observer.snapshot()["counters"]["sse_errors"]["stream_failure"] == 1
 
 
 # ============================================================================
@@ -821,16 +828,19 @@ class TestStreamEndpointErrors:
     async def test_post_resume_then_stream_claims_paused_run(self):
         run_id = uuid.uuid4()
         bp_id = uuid.uuid4()
+        started_at = datetime(2026, 9, 27, 11, 0, tzinfo=timezone.utc)
         run = _make_run(
             id=run_id,
             blueprint_id=bp_id,
             status="paused",
+            started_at=started_at,
             reproducibility_manifest={
                 "parameters_override": {},
                 "resume_authorization": _resume_authorization(),
             },
         )
         blueprint = _make_blueprint(id=bp_id)
+        blueprint.template_source = "daily_research_brief"
         blueprint_result = Mock()
         blueprint_result.scalars.return_value.first.return_value = blueprint
         last_step_result = Mock()
@@ -852,8 +862,10 @@ class TestStreamEndpointErrors:
         db.add = Mock()
         user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
         seen_context: dict[str, Any] = {}
+        seen_kwargs: dict[str, Any] = {}
 
         async def engine_run(**kwargs):
+            seen_kwargs.update(kwargs)
             seen_context.update(kwargs["initial_context"])
             yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
 
@@ -886,7 +898,114 @@ class TestStreamEndpointErrors:
 
         assert run.status == "completed"
         assert "event: run_complete" in "".join(chunks)
-        assert seen_context == {}
+        assert seen_kwargs["record_run_started"] is False
+        assert seen_context["artifact_provenance"]["generated_at"] == (
+            started_at.isoformat()
+        )
+
+    @pytest.mark.asyncio
+    async def test_stream_rehydration_gap_records_content_free_reconnect_error(
+        self,
+    ) -> None:
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        run = _make_run(id=run_id, blueprint_id=bp_id, status="paused")
+        blueprint = _make_blueprint(id=bp_id)
+        first = SimpleNamespace(
+            step_index=0,
+            output={
+                "contract_version": 1,
+                "stage_type": "search",
+                "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+                "source_records": [],
+                "coverage": {"exhaustive": False},
+                "selected_sources": ["openalex"],
+            },
+        )
+        third = SimpleNamespace(
+            step_index=2,
+            output={
+                "contract_version": 1,
+                "stage_type": "verify",
+                "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+                "verification": {"passed": False, "claims": []},
+                "processing_coverage": {},
+            },
+        )
+        blueprint_result = Mock()
+        blueprint_result.scalars.return_value.first.return_value = blueprint
+        last_step_result = Mock()
+        last_step_result.scalars.return_value.first.return_value = third
+        history_result = Mock()
+        history_result.scalars.return_value.all.return_value = [first, third]
+        db = AsyncMock()
+        db.execute = AsyncMock(
+            side_effect=[blueprint_result, last_step_result, history_result]
+        )
+        user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+        observer = ResearchObservability()
+
+        with (
+            patch(
+                "src.api.research_engine.runs._get_owned_run",
+                new=AsyncMock(return_value=run),
+            ),
+            patch("src.api.research_engine.runs.research_observability", observer),
+        ):
+            with pytest.raises(HTTPException) as raised:
+                await stream_run(run_id, cast(User, user), db)
+
+        assert raised.value.status_code == 409
+        assert raised.value.detail == {
+            "code": "run_reconstruction_failed",
+            "message": "Persisted run stages cannot be resumed",
+        }
+        assert (
+            observer.snapshot()["counters"]["rehydration_errors"]["invalid_history"]
+            == 1
+        )
+
+    @pytest.mark.asyncio
+    async def test_executor_exception_content_never_reaches_sse_or_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        run_id = uuid.uuid4()
+        blueprint_id = uuid.uuid4()
+        run = _make_run(id=run_id, blueprint_id=blueprint_id, status="pending")
+        blueprint = _make_blueprint(
+            id=blueprint_id,
+            steps=[{"id": "extract", "type": "extract", "parameters": {}}],
+        )
+        db = _mock_db_returning(run_result=run, blueprint_result=blueprint)
+        user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+        executor = Mock()
+        executor.execute = AsyncMock(
+            side_effect=RuntimeError("PRIVATE_RESEARCH_QUESTION")
+        )
+
+        with (
+            caplog.at_level("INFO"),
+            patch("src.api.research_engine.runs._build_connectors", return_value={}),
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.StepExecutor", return_value=executor),
+        ):
+            response = await stream_run(run_id, cast(User, user), db)
+            chunks = [
+                chunk.decode() if isinstance(chunk, bytes) else chunk
+                async for chunk in response.body_iterator
+            ]
+
+        body = "".join(chunks)
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "event: step_error" in body
+        assert "event: run_failed" in body
+        assert "PRIVATE_RESEARCH_QUESTION" not in body
+        assert "PRIVATE_RESEARCH_QUESTION" not in log_text
+        assert '"error_category": "unexpected_step_error"' in body
+        assert run.status == "failed"
 
     @pytest.mark.asyncio
     async def test_stream_claim_loser_does_not_start_resumed_run(self):

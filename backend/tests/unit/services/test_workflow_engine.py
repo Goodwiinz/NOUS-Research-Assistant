@@ -1,6 +1,7 @@
 """Tests for the workflow engine, step executor, and verification service."""
 
 import asyncio
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -10,6 +11,7 @@ import pytest
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
 from src.services.research_engine.contracts import canonical_stage_output_hash
 from src.services.research_engine.engine import WorkflowEngine
+from src.services.research_engine.observability import ResearchObservability
 from src.services.research_engine.providers.base import (
     LLMProvider,
     LLMRequest,
@@ -206,6 +208,147 @@ class TestWorkflowEngine:
     """Tests for WorkflowEngine."""
 
     @pytest.mark.asyncio
+    async def test_production_engine_records_safe_run_stage_provider_dedupe_and_verify_metrics(
+        self,
+    ) -> None:
+        observer = ResearchObservability()
+        mock_executor = AsyncMock(spec=StepExecutor)
+        mock_executor.execute.side_effect = [
+            StepResult(
+                output={
+                    "contract_version": 1,
+                    "stage_type": "search",
+                    "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+                    "source_records": [],
+                    "coverage": {
+                        "providers": {
+                            "openalex": {"status": "ok", "returned": 3, "limit": 5}
+                        },
+                        "deduplication": {"before": 3, "after": 2},
+                        "exhaustive": False,
+                    },
+                    "selected_sources": ["openalex"],
+                }
+            ),
+            StepResult(
+                output={
+                    "contract_version": 1,
+                    "stage_type": "verify",
+                    "usage": {"model_calls": 1, "total_tokens": 1, "batches": []},
+                    "verification": {"passed": True, "claims": []},
+                    "processing_coverage": {},
+                }
+            ),
+        ]
+        engine = WorkflowEngine(step_executor=mock_executor, observer=observer)
+
+        events = [
+            event
+            async for event in engine.run(
+                {"steps": [{"type": "search"}, {"type": "verify"}]}, uuid4()
+            )
+        ]
+        snapshot = observer.snapshot()
+
+        assert events[-1]["event"] == "run_complete"
+        assert snapshot["counters"]["runs"]["started"] == 1
+        assert snapshot["counters"]["runs"]["completed"] == 1
+        assert snapshot["counters"]["provider_outcomes"]["ok"] == 1
+        assert snapshot["counters"]["deduplication"]["removed"] == 1
+        assert snapshot["counters"]["verification"]["passed"] == 1
+        assert len(snapshot["histograms"]["stage_duration_seconds"]["search"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_executor_exception_content_never_reaches_engine_events_or_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        mock_executor = AsyncMock(spec=StepExecutor)
+        mock_executor.execute.side_effect = RuntimeError("PRIVATE_RESEARCH_QUESTION")
+        observer = ResearchObservability()
+        engine = WorkflowEngine(step_executor=mock_executor, observer=observer)
+
+        with caplog.at_level("INFO"):
+            events = [
+                event
+                async for event in engine.run(
+                    {"steps": [{"id": "extract", "type": "extract"}]}, uuid4()
+                )
+            ]
+
+        serialized = (
+            json.dumps(events)
+            + "\n"
+            + "\n".join(record.getMessage() for record in caplog.records)
+        )
+        assert "PRIVATE_RESEARCH_QUESTION" not in serialized
+        assert events[-1] == {
+            "event": "run_failed",
+            "run_id": events[-1]["run_id"],
+            "error": "Research step execution failed",
+            "error_category": "unexpected_step_error",
+            "step_index": 0,
+            "step_id": "extract",
+        }
+        assert (
+            observer.snapshot()["counters"]["validation_errors"][
+                "unexpected_step_error"
+            ]
+            == 1
+        )
+
+    @pytest.mark.asyncio
+    async def test_malformed_telemetry_value_cannot_fail_run_or_leak_content(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        mock_executor = AsyncMock(spec=StepExecutor)
+        mock_executor.execute.return_value = StepResult(
+            output={
+                "coverage": {
+                    "providers": {
+                        "openalex": {
+                            "status": "ok",
+                            "returned": "PRIVATE_RESEARCH_QUESTION",
+                        }
+                    }
+                }
+            }
+        )
+        engine = WorkflowEngine(step_executor=mock_executor)
+
+        with caplog.at_level("INFO"):
+            events = [
+                event
+                async for event in engine.run(
+                    {"steps": [{"id": "search", "type": "search"}]}, uuid4()
+                )
+            ]
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert events[-1]["event"] == "run_complete"
+        assert "PRIVATE_RESEARCH_QUESTION" not in log_text
+
+    @pytest.mark.asyncio
+    async def test_resume_does_not_double_count_run_started(self) -> None:
+        observer = ResearchObservability()
+        engine = WorkflowEngine(
+            step_executor=AsyncMock(spec=StepExecutor), observer=observer
+        )
+
+        events = [
+            event
+            async for event in engine.run(
+                {"steps": []},
+                uuid4(),
+                record_run_started=False,
+            )
+        ]
+
+        assert events[-1]["event"] == "run_complete"
+        counters = observer.snapshot()["counters"]["runs"]
+        assert counters.get("started", 0) == 0
+        assert counters["completed"] == 1
+
+    @pytest.mark.asyncio
     async def test_run_blueprint(self):
         mock_executor = AsyncMock(spec=StepExecutor)
         mock_executor.execute.return_value = StepResult(
@@ -377,7 +520,8 @@ class TestWorkflowEngine:
             output=output,
             quality_marks=[QualityMark("semantic_verification", False, "failed")],
         )
-        engine = WorkflowEngine(step_executor=mock_executor)
+        observer = ResearchObservability()
+        engine = WorkflowEngine(step_executor=mock_executor, observer=observer)
 
         events = [
             event
@@ -392,6 +536,8 @@ class TestWorkflowEngine:
         assert paused["output_hash"] == canonical_stage_output_hash(output)
         assert "context" not in paused
         assert "quality_marks" not in paused
+        assert observer.snapshot()["counters"].get("pauses", {}) == {}
+        assert observer.snapshot()["counters"]["verification"]["failed"] == 1
 
     @pytest.mark.asyncio
     async def test_incomplete_gated_stage_uses_review_descriptor_without_context(self):
@@ -415,7 +561,8 @@ class TestWorkflowEngine:
             output=output,
             quality_marks=[QualityMark("screening_coverage", False, "incomplete")],
         )
-        engine = WorkflowEngine(step_executor=mock_executor)
+        observer = ResearchObservability()
+        engine = WorkflowEngine(step_executor=mock_executor, observer=observer)
 
         events = [
             event
@@ -439,6 +586,7 @@ class TestWorkflowEngine:
         assert paused["output_hash"] == canonical_stage_output_hash(output)
         assert "context" not in paused
         assert "quality_marks" not in paused
+        assert observer.snapshot()["counters"].get("pauses", {}) == {}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

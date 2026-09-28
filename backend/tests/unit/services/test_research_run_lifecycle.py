@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.research_step import ResearchStep
 from src.schemas.research_engine import ReviewKind
 from src.services.research_engine.contracts import canonical_stage_output_hash
+from src.services.research_engine.observability import ResearchObservability
 from src.services.research_engine.run_lifecycle import (
     PauseDescriptor,
     ResearchRunLifecycleService,
@@ -158,6 +159,11 @@ def _step_definition() -> dict[str, object]:
     }
 
 
+class _ExplodingObserver:
+    def record_pause(self, **_fields: object) -> None:
+        raise RuntimeError("PRIVATE_RESEARCH_QUESTION")
+
+
 @pytest.mark.asyncio
 async def test_gated_step_persists_envelope_hash_tokens_manifest_and_pause_atomically() -> (
     None
@@ -166,7 +172,10 @@ async def test_gated_step_persists_envelope_hash_tokens_manifest_and_pause_atomi
 
     run = _run()
     session = _Session(run)
-    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+    observer = ResearchObservability()
+    service = ResearchRunLifecycleService(
+        cast(AsyncSession, session), now=lambda: NOW, observer=observer
+    )
     source = SimpleNamespace(run_id=run.id, external_id="source-1")
 
     transition = await service.persist_step_completion(
@@ -207,6 +216,66 @@ async def test_gated_step_persists_envelope_hash_tokens_manifest_and_pause_atomi
         "status": "pending",
         "created_at": NOW.isoformat(),
     }
+    assert observer.snapshot()["counters"]["pauses"]["review_required"] == 1
+
+
+@pytest.mark.asyncio
+async def test_verification_override_records_override_and_verification_metrics() -> (
+    None
+):
+    run = _run()
+    run.status = "paused"
+    output_hash = "a" * 64
+    run.reproducibility_manifest["verification_failure"] = {
+        "run_id": str(run.id),
+        "step_index": 4,
+        "stage_type": "verify",
+        "output_hash": output_hash,
+        "status": "pending",
+    }
+    session = _Session(run)
+    observer = ResearchObservability()
+    service = ResearchRunLifecycleService(
+        cast(AsyncSession, session), now=lambda: NOW, observer=observer
+    )
+
+    transition = await service.authorize_resume(
+        run=run,
+        actor_id=uuid4(),
+        request={"continue_unverified": True, "output_hash": output_hash},
+    )
+    replay = await service.authorize_resume(
+        run=run,
+        actor_id=uuid4(),
+        request={"continue_unverified": True, "output_hash": output_hash},
+    )
+
+    assert transition.authorization_kind == "continue_unverified"
+    assert replay.authorization_kind == "continue_unverified"
+    metrics = observer.snapshot()["counters"]
+    assert metrics["overrides"]["continued_unverified"] == 1
+    assert metrics["verification"]["overridden"] == 1
+
+
+@pytest.mark.asyncio
+async def test_observability_failure_cannot_rollback_a_persisted_pause() -> None:
+    run = _run()
+    session = _Session(run)
+    service = ResearchRunLifecycleService(
+        cast(AsyncSession, session),
+        now=lambda: NOW,
+        observer=cast(Any, _ExplodingObserver()),
+    )
+
+    transition = await service.persist_step_completion(
+        run=run,
+        event=_event(),
+        step_definition=_step_definition(),
+    )
+
+    assert transition.pause is not None
+    assert session.commits == 1
+    assert run.status == "paused"
 
 
 @pytest.mark.asyncio
@@ -242,7 +311,10 @@ async def test_duplicate_step_complete_event_is_idempotent() -> None:
 
     run = _run()
     session = _Session(run)
-    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+    observer = ResearchObservability()
+    service = ResearchRunLifecycleService(
+        cast(AsyncSession, session), now=lambda: NOW, observer=observer
+    )
     event = _event()
 
     first = await service.persist_step_completion(
@@ -265,6 +337,7 @@ async def test_duplicate_step_complete_event_is_idempotent() -> None:
     assert run.reproducibility_manifest["stage_hashes"] == {
         "1": canonical_stage_output_hash(_screen_output())
     }
+    assert observer.snapshot()["counters"]["pauses"]["review_required"] == 1
 
 
 def test_reload_descriptor_is_derived_from_durable_manifest_only() -> None:
@@ -413,7 +486,10 @@ async def test_zero_item_gated_stage_persists_terminal_no_evidence_audit(
 ) -> None:
     run = _run()
     session = _Session(run)
-    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+    observer = ResearchObservability()
+    service = ResearchRunLifecycleService(
+        cast(AsyncSession, session), now=lambda: NOW, observer=observer
+    )
     step_definition = {
         "id": stage_type,
         "type": stage_type,
@@ -449,6 +525,7 @@ async def test_zero_item_gated_stage_persists_terminal_no_evidence_audit(
         "output_hash": canonical_stage_output_hash(output),
         "created_at": NOW.isoformat(),
     }
+    assert observer.snapshot()["counters"]["final_status"]["no_evidence"] == 1
 
 
 @pytest.mark.asyncio

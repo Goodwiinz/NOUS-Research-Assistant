@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence, cast
+from datetime import datetime, timezone
+from typing import Any, Callable, Mapping, Sequence, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -35,6 +36,11 @@ from src.schemas.research_engine import (
 from src.services.research_engine.contracts import (
     canonical_json_sha256,
     canonical_stage_output_hash,
+)
+from src.services.research_engine.observability import (
+    ResearchObservability,
+    research_observability,
+    safely_observe,
 )
 
 
@@ -77,8 +83,16 @@ _STAGE_FOR_KIND: dict[str, str] = {
 class ResearchReviewService:
     """Validate and append decisions bound to complete persisted stage envelopes."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        observer: ResearchObservability | None = None,
+        now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
         self.session = session
+        self.observer = observer or research_observability
+        self.now = now
 
     async def get_pending_review(
         self, *, run_id: UUID, owner_id: UUID
@@ -201,7 +215,7 @@ class ResearchReviewService:
             await self.session.rollback()
         canonical = self._canonical_decision(request)
         try:
-            return await self._submit_transaction(
+            response, wait_seconds = await self._submit_transaction(
                 run_id=run_id,
                 step_index=step_index,
                 owner_id=owner_id,
@@ -210,6 +224,30 @@ class ResearchReviewService:
                 request=request,
                 canonical=canonical,
             )
+            if not response.replay:
+                self._record_review_observability(
+                    run_id=run_id,
+                    organization_id=organization_id,
+                    request=request,
+                    wait_seconds=wait_seconds,
+                )
+            return response
+        except ResearchReviewError as error:
+            safely_observe(
+                self.observer,
+                "record_review",
+                run_id=run_id,
+                organization_id=organization_id,
+                review_kind=request.review_kind.value,
+                outcome=(
+                    "stale"
+                    if error.code
+                    in {"review_output_stale", "verification_output_stale"}
+                    else "failed"
+                ),
+                wait_seconds=0.0,
+            )
+            raise
         except IntegrityError:
             # A concurrent winner may have committed the unique gate while this
             # transaction waited. Reload its immutable row after clearing the
@@ -224,7 +262,15 @@ class ResearchReviewService:
             )
             if existing is None:
                 raise
-            return self._resolve_existing(existing, canonical)
+            response = self._resolve_existing(existing, canonical)
+            if not response.replay:
+                self._record_review_observability(
+                    run_id=run_id,
+                    organization_id=organization_id,
+                    request=request,
+                    wait_seconds=0.0,
+                )
+            return response
 
     async def _submit_transaction(
         self,
@@ -236,7 +282,7 @@ class ResearchReviewService:
         reviewer_id: UUID,
         request: StageReviewRequest,
         canonical: _CanonicalDecision,
-    ) -> StageReviewResponse:
+    ) -> tuple[StageReviewResponse, float]:
         async with self.session.begin():
             shared_lock = request.decision == ReviewDecision.DECLINE
             run = await self._load_owned_run(
@@ -291,7 +337,9 @@ class ResearchReviewService:
                 shared=shared_lock,
             )
             if existing is not None:
-                return self._resolve_existing(existing, canonical)
+                return self._resolve_existing(existing, canonical), self._review_wait(
+                    descriptor
+                )
 
             review = ResearchStageReview(
                 owner_id=owner_id,
@@ -317,7 +365,70 @@ class ResearchReviewService:
                 manifest["pending_review"] = approved
                 run.reproducibility_manifest = manifest
 
-            return self._response(review, replay=False)
+            return self._response(review, replay=False), self._review_wait(descriptor)
+
+    def _review_wait(self, descriptor: ReviewDescriptor) -> float:
+        created_at = descriptor.created_at
+        if created_at is None:
+            return 0.0
+        if created_at.tzinfo is None or created_at.utcoffset() is None:
+            return 0.0
+        return max(0.0, (self.now() - created_at).total_seconds())
+
+    @staticmethod
+    def _iso_timestamp(value: Any) -> str | None:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value).isoformat()
+            except ValueError:
+                return None
+        return None
+
+    def _record_review_observability(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        request: StageReviewRequest,
+        wait_seconds: float,
+    ) -> None:
+        outcome = (
+            "approved" if request.decision == ReviewDecision.APPROVE else "declined"
+        )
+        safely_observe(
+            self.observer,
+            "record_review",
+            run_id=run_id,
+            organization_id=organization_id,
+            review_kind=request.review_kind.value,
+            outcome=outcome,
+            wait_seconds=wait_seconds,
+        )
+        if (
+            request.review_kind == ReviewKind.EXTRACTION
+            and request.decision == ReviewDecision.APPROVE
+        ):
+            payload = request.decision_payload.model_dump(
+                mode="json", exclude_none=True
+            )
+            items = payload.get("items") if isinstance(payload, dict) else None
+            for item_outcome in ("accept", "reject"):
+                count = sum(
+                    1
+                    for item in items or []
+                    if isinstance(item, dict) and item.get("decision") == item_outcome
+                )
+                if count:
+                    safely_observe(
+                        self.observer,
+                        "record_extraction_decision",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        outcome=item_outcome,
+                        count=count,
+                    )
 
     async def apply_approved_overlays(
         self,
@@ -387,7 +498,9 @@ class ResearchReviewService:
                     "step_index": review.step_index,
                     "review_kind": review.review_kind,
                     "output_hash": review.output_hash,
+                    "decision": review.decision,
                     "decision_payload": copy.deepcopy(review.decision_payload),
+                    "created_at": self._iso_timestamp(review.created_at),
                 }
             )
 

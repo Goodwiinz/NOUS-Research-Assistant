@@ -2,11 +2,17 @@
 
 import asyncio
 import inspect
+import logging
 import time
 from typing import Any, AsyncGenerator, Callable, Dict
 from uuid import UUID
 
 from src.schemas.research_engine import validate_blueprint_runtime
+from src.services.research_engine.observability import (
+    ResearchObservability,
+    research_observability,
+    safely_observe,
+)
 from src.services.research_engine.step_executor import (
     ExecutionBudget,
     StepExecutionError,
@@ -15,6 +21,7 @@ from src.services.research_engine.step_executor import (
 
 MAX_RUN_TOKENS = 50_000
 MAX_RUN_WALL_TIME_SECONDS = 15 * 60
+logger = logging.getLogger(__name__)
 
 
 class WorkflowEngine:
@@ -27,12 +34,14 @@ class WorkflowEngine:
         max_total_tokens: int = MAX_RUN_TOKENS,
         max_wall_time_seconds: float = MAX_RUN_WALL_TIME_SECONDS,
         clock: Callable[[], float] = time.time,
+        observer: ResearchObservability | None = None,
     ) -> None:
         self.step_executor = step_executor
         self.pause_on_quality_failure = pause_on_quality_failure
         self.max_total_tokens = max_total_tokens
         self.max_wall_time_seconds = max_wall_time_seconds
         self.clock = clock
+        self.observer = observer or research_observability
 
     async def run(
         self,
@@ -42,6 +51,8 @@ class WorkflowEngine:
         initial_context: Dict[str, Any] | None = None,
         initial_total_tokens: int = 0,
         started_at: float | None = None,
+        organization_id: UUID | None = None,
+        record_run_started: bool = True,
     ) -> AsyncGenerator[Dict, None]:
         """Execute a blueprint and yield events as dicts.
 
@@ -58,6 +69,22 @@ class WorkflowEngine:
         try:
             validate_blueprint_runtime(blueprint)
         except ValueError:
+            safely_observe(
+                self.observer,
+                "record_validation_error",
+                run_id=run_id,
+                organization_id=organization_id,
+                stage_type="blueprint",
+                error_kind="runtime_limits",
+                count=1,
+            )
+            safely_observe(
+                self.observer,
+                "record_run",
+                run_id=run_id,
+                organization_id=organization_id,
+                status="failed",
+            )
             yield {
                 "event": "run_failed",
                 "run_id": str(run_id),
@@ -79,6 +106,15 @@ class WorkflowEngine:
             used_calls=prior_calls,
         )
 
+        if record_run_started:
+            safely_observe(
+                self.observer,
+                "record_run",
+                run_id=run_id,
+                organization_id=organization_id,
+                status="started",
+            )
+
         yield {"event": "run_start", "run_id": str(run_id), "total_steps": len(steps)}
 
         try:
@@ -86,6 +122,13 @@ class WorkflowEngine:
                 steps[start_from_step:], start=start_from_step
             ):
                 if total_tokens >= self.max_total_tokens:
+                    safely_observe(
+                        self.observer,
+                        "record_run",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        status="failed",
+                    )
                     yield {
                         "event": "run_failed",
                         "run_id": str(run_id),
@@ -93,6 +136,13 @@ class WorkflowEngine:
                     }
                     return
                 if self.clock() - started_at >= self.max_wall_time_seconds:
+                    safely_observe(
+                        self.observer,
+                        "record_run",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        status="failed",
+                    )
                     yield {
                         "event": "run_failed",
                         "run_id": str(run_id),
@@ -109,6 +159,7 @@ class WorkflowEngine:
                     "step_id": step_id,
                 }
 
+                stage_started = time.monotonic()
                 try:
                     if step_def.get("type") == "search":
                         # Previous search outputs (including resumed ones) contain
@@ -120,6 +171,13 @@ class WorkflowEngine:
                         self.clock() - started_at
                     )
                     if remaining_wall_time <= 0:
+                        safely_observe(
+                            self.observer,
+                            "record_run",
+                            run_id=run_id,
+                            organization_id=organization_id,
+                            status="failed",
+                        )
                         yield {
                             "event": "run_failed",
                             "run_id": str(run_id),
@@ -147,6 +205,23 @@ class WorkflowEngine:
                         timeout=remaining_wall_time,
                     )
                 except asyncio.TimeoutError:
+                    safely_observe(
+                        self.observer,
+                        "record_stage_duration",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        step_index=idx,
+                        stage_type=str(step_def.get("type") or "unknown"),
+                        duration_seconds=time.monotonic() - stage_started,
+                        status="failed",
+                    )
+                    safely_observe(
+                        self.observer,
+                        "record_run",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        status="failed",
+                    )
                     yield {
                         "event": "run_failed",
                         "run_id": str(run_id),
@@ -156,12 +231,32 @@ class WorkflowEngine:
                 except StepExecutionError as exc:
                     consumed_tokens = max(0, int(exc.consumed_tokens))
                     total_tokens += consumed_tokens
+                    safely_observe(
+                        self.observer,
+                        "record_stage_duration",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        step_index=idx,
+                        stage_type=str(step_def.get("type") or "unknown"),
+                        duration_seconds=time.monotonic() - stage_started,
+                        status="failed",
+                    )
+                    safely_observe(
+                        self.observer,
+                        "record_validation_error",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        stage_type=str(step_def.get("type") or "unknown"),
+                        error_kind="step_execution",
+                        count=1,
+                    )
                     yield {
                         "event": "step_error",
                         "run_id": str(run_id),
                         "step_index": idx,
                         "step_id": step_id,
-                        "error": str(exc),
+                        "error": "Research step execution failed",
+                        "error_category": "step_execution_error",
                         "consumed_tokens": consumed_tokens,
                         "model_calls": max(0, int(exc.model_calls)),
                         "batch_metadata": exc.batch_metadata,
@@ -169,23 +264,89 @@ class WorkflowEngine:
                     yield {
                         "event": "run_failed",
                         "run_id": str(run_id),
-                        "error": f"Step {step_id} failed: {exc}",
+                        "error": "Research step execution failed",
+                        "error_category": "step_execution_error",
+                        "step_index": idx,
+                        "step_id": step_id,
                     }
+                    safely_observe(
+                        self.observer,
+                        "record_run",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        status="failed",
+                    )
                     return
-                except Exception as exc:
+                except Exception:
+                    logger.error(
+                        "Research step execution failed",
+                        extra={
+                            "run_id": str(run_id),
+                            "step_index": idx,
+                            "error_category": "unexpected_step_error",
+                        },
+                    )
+                    safely_observe(
+                        self.observer,
+                        "record_stage_duration",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        step_index=idx,
+                        stage_type=str(step_def.get("type") or "unknown"),
+                        duration_seconds=time.monotonic() - stage_started,
+                        status="failed",
+                    )
+                    safely_observe(
+                        self.observer,
+                        "record_validation_error",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        stage_type=str(step_def.get("type") or "unknown"),
+                        error_kind="unexpected_step_error",
+                        count=1,
+                    )
                     yield {
                         "event": "step_error",
                         "run_id": str(run_id),
                         "step_index": idx,
                         "step_id": step_id,
-                        "error": str(exc),
+                        "error": "Research step execution failed",
+                        "error_category": "unexpected_step_error",
                     }
                     yield {
                         "event": "run_failed",
                         "run_id": str(run_id),
-                        "error": f"Step {step_id} failed: {exc}",
+                        "error": "Research step execution failed",
+                        "error_category": "unexpected_step_error",
+                        "step_index": idx,
+                        "step_id": step_id,
                     }
+                    safely_observe(
+                        self.observer,
+                        "record_run",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        status="failed",
+                    )
                     return
+
+                stage_type = str(step_def.get("type") or "unknown")
+                safely_observe(
+                    self.observer,
+                    "record_stage_duration",
+                    run_id=run_id,
+                    organization_id=organization_id,
+                    step_index=idx,
+                    stage_type=stage_type,
+                    duration_seconds=time.monotonic() - stage_started,
+                    status="completed",
+                )
+                self._record_stage_outcomes(
+                    run_id=run_id,
+                    organization_id=organization_id,
+                    stage_type=stage_type,
+                    output=result.output,
+                )
 
                 # Versioned envelopes merge only stage-owned data. Legacy
                 # custom executors retain their existing output shape.
@@ -228,6 +389,13 @@ class WorkflowEngine:
                 }
 
                 if total_tokens > self.max_total_tokens:
+                    safely_observe(
+                        self.observer,
+                        "record_run",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        status="failed",
+                    )
                     yield {
                         "event": "run_failed",
                         "run_id": str(run_id),
@@ -237,6 +405,13 @@ class WorkflowEngine:
 
                 terminal_reason = no_evidence_reason(result.output)
                 if terminal_reason is not None:
+                    safely_observe(
+                        self.observer,
+                        "record_run",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        status="no_evidence",
+                    )
                     yield {
                         "event": "run_complete",
                         "run_id": str(run_id),
@@ -296,11 +471,90 @@ class WorkflowEngine:
                     }
                     return
 
+            safely_observe(
+                self.observer,
+                "record_run",
+                run_id=run_id,
+                organization_id=organization_id,
+                status="completed",
+            )
             yield {"event": "run_complete", "run_id": str(run_id), "context": context}
 
-        except Exception as exc:
+        except Exception:
+            logger.error(
+                "Research workflow failed",
+                extra={"run_id": str(run_id), "error_category": "workflow_error"},
+            )
+            safely_observe(
+                self.observer,
+                "record_run",
+                run_id=run_id,
+                organization_id=organization_id,
+                status="failed",
+            )
             yield {
                 "event": "run_failed",
                 "run_id": str(run_id),
-                "error": str(exc)[:256],
+                "error": "Research workflow failed",
+                "error_category": "workflow_error",
             }
+
+    def _record_stage_outcomes(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        stage_type: str,
+        output: dict[str, Any],
+    ) -> None:
+        if stage_type == "search":
+            coverage = output.get("coverage")
+            if isinstance(coverage, dict):
+                providers = coverage.get("providers")
+                if isinstance(providers, dict):
+                    for provider, result in sorted(providers.items()):
+                        if not isinstance(result, dict):
+                            continue
+                        safely_observe(
+                            self.observer,
+                            "record_provider_outcome",
+                            run_id=run_id,
+                            organization_id=organization_id,
+                            provider=str(provider),
+                            outcome=str(result.get("status") or "unknown"),
+                            returned_count=result.get("returned", 0),
+                        )
+                deduplication = coverage.get("deduplication")
+                if isinstance(deduplication, dict):
+                    safely_observe(
+                        self.observer,
+                        "record_deduplication",
+                        run_id=run_id,
+                        organization_id=organization_id,
+                        before_count=deduplication.get("before", 0),
+                        after_count=deduplication.get("after", 0),
+                    )
+        elif stage_type == "verify":
+            verification = output.get("verification")
+            outcome = (
+                "passed"
+                if isinstance(verification, dict) and verification.get("passed") is True
+                else "failed"
+            )
+            safely_observe(
+                self.observer,
+                "record_verification",
+                run_id=run_id,
+                organization_id=organization_id,
+                outcome=outcome,
+            )
+        elif stage_type == "export":
+            safely_observe(
+                self.observer,
+                "record_export",
+                run_id=run_id,
+                organization_id=organization_id,
+                format=str(output.get("format") or "unknown"),
+                outcome="success",
+                error_kind="none",
+            )

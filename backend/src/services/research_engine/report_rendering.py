@@ -9,6 +9,7 @@ from urllib.parse import quote, urlparse
 
 from src.services.research_engine.contracts import (
     CONTRACT_VERSION,
+    canonical_stage_output_hash,
     normalize_evidence_level,
 )
 
@@ -109,7 +110,8 @@ def _stage_audit(context: dict[str, Any], provenance: dict[str, Any]) -> list[di
             {
                 "step_index": int(index),
                 "stage_type": output.get("stage_type"),
-                "output_hash": stage_hashes.get(index),
+                "output_hash": stage_hashes.get(index)
+                or canonical_stage_output_hash(output),
                 "output": output,
             }
         )
@@ -205,7 +207,13 @@ def build_report(context: dict[str, Any]) -> dict[str, Any]:
         "providers": context.get("provider_manifest")
         or provenance.get("provider_manifest")
         or [],
-        "deduplication": context.get("deduplication") or {},
+        "deduplication": context.get("deduplication")
+        or (
+            search_coverage.get("deduplication")
+            if isinstance(search_coverage, dict)
+            else {}
+        )
+        or {},
         "stages": _stage_audit(context, provenance),
         "reviews": reviews if isinstance(reviews, list) else [],
         "claims": claims,
@@ -214,6 +222,10 @@ def build_report(context: dict[str, Any]) -> dict[str, Any]:
         "timestamps": {
             "started_at": provenance.get("started_at"),
             "completed_at": provenance.get("completed_at"),
+            "generated_at": provenance.get("generated_at")
+            or provenance.get("exported_at")
+            or provenance.get("completed_at")
+            or provenance.get("started_at"),
             "exported_at": provenance.get("exported_at"),
         },
         "limitations": provenance.get("limitations")
@@ -371,6 +383,31 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"- `{_plain(source.get('source_id'))}` — {label} ({_plain(source.get('evidence_level'))})"
             )
         lines.append("")
+
+    lines.extend(["## Limitations", ""])
+    limitations = report.get("limitations") or [
+        "Bounded provider search; results are not exhaustive."
+    ]
+    for limitation in limitations:
+        lines.append(f"- {_plain(limitation)}")
+    lines.append("")
+
+    lines.extend(["## Provenance", ""])
+    run = report.get("run") or {}
+    blueprint = report.get("blueprint") or {}
+    template = report.get("template") or {}
+    timestamps = report.get("timestamps") or {}
+    lines.extend(
+        [
+            f"- Run: `{_plain(run.get('id'))}`",
+            f"- Blueprint: `{_plain(blueprint.get('id'))}` version {_plain(blueprint.get('version'))}",
+            f"- Template: `{_plain(template.get('source'))}` contract {_plain(template.get('contract_version'))}",
+            f"- Generated: {_plain(timestamps.get('generated_at'))}",
+            f"- Artifact status: {_plain(report.get('final_status'))}",
+            "- Search exhaustive: false",
+            "",
+        ]
+    )
     return "\n".join(lines).rstrip() + "\n"
 
 

@@ -32,6 +32,11 @@ from src.services.research_engine.contracts import (
     canonical_stage_output_hash,
     no_evidence_reason,
 )
+from src.services.research_engine.observability import (
+    ResearchObservability,
+    research_observability,
+    safely_observe,
+)
 
 PauseReason = Literal["user_paused", "review_required", "verification_failed"]
 
@@ -126,9 +131,11 @@ class ResearchRunLifecycleService:
         session: AsyncSession,
         *,
         now: Callable[[], datetime] = _utc_now,
+        observer: ResearchObservability | None = None,
     ) -> None:
         self.session = session
         self.now = now
+        self.observer = observer or research_observability
 
     @asynccontextmanager
     async def _atomic(self) -> AsyncIterator[None]:
@@ -335,6 +342,28 @@ class ResearchRunLifecycleService:
                 )
 
         assert transition is not None
+        organization_id = self._organization_id(run)
+        if transition.pause is not None and not transition.duplicate:
+            safely_observe(
+                self.observer,
+                "record_pause",
+                run_id=cast(UUID, run.id),
+                organization_id=organization_id,
+                pause_kind=transition.pause.pause_reason,
+                review_kind=(
+                    transition.pause.review_kind.value
+                    if transition.pause.review_kind is not None
+                    else "none"
+                ),
+            )
+        if transition.terminal_status is not None and not transition.duplicate:
+            safely_observe(
+                self.observer,
+                "record_final_status",
+                run_id=cast(UUID, run.id),
+                organization_id=organization_id,
+                status=transition.terminal_status,
+            )
         return transition
 
     async def persist_user_pause(
@@ -390,6 +419,16 @@ class ResearchRunLifecycleService:
                 code="run_not_paused",
                 message="Run does not have a durable pause descriptor",
             )
+        safely_observe(
+            self.observer,
+            "record_pause",
+            run_id=cast(UUID, run.id),
+            organization_id=self._organization_id(run),
+            pause_kind=result.pause_reason,
+            review_kind=(
+                result.review_kind.value if result.review_kind is not None else "none"
+            ),
+        )
         return result
 
     async def current_user_pause_descriptor(self, *, run: Any) -> PauseDescriptor:
@@ -432,6 +471,7 @@ class ResearchRunLifecycleService:
         continue_unverified = self._request_value(request, "continue_unverified", False)
         requested_hash = self._request_value(request, "output_hash", None)
         result: ResumeTransition | None = None
+        created_verification_override = False
 
         async with self._atomic():
             await self._lock_run(run)
@@ -484,6 +524,10 @@ class ResearchRunLifecycleService:
                     "step_index": review_step_index,
                     "review_kind": review_kind,
                     "output_hash": review_output_hash,
+                    "decision": str(review.decision),
+                    "created_at": (
+                        review.created_at.isoformat() if review.created_at else None
+                    ),
                 }
                 if audit_entry not in history:
                     history.append(audit_entry)
@@ -566,6 +610,7 @@ class ResearchRunLifecycleService:
                     )
                     manifest.pop("verification_failure", None)
                     run.reproducibility_manifest = manifest
+                    created_verification_override = True
                     result = ResumeTransition(
                         authorized=True,
                         completed=False,
@@ -600,7 +645,37 @@ class ResearchRunLifecycleService:
                     )
 
         assert result is not None
+        organization_id = self._organization_id(run)
+        if result.final_status is not None:
+            safely_observe(
+                self.observer,
+                "record_final_status",
+                run_id=cast(UUID, run.id),
+                organization_id=organization_id,
+                status=result.final_status,
+            )
+        if created_verification_override:
+            safely_observe(
+                self.observer,
+                "record_override",
+                run_id=cast(UUID, run.id),
+                organization_id=organization_id,
+                override_kind="verification",
+                outcome="continued_unverified",
+            )
+            safely_observe(
+                self.observer,
+                "record_verification",
+                run_id=cast(UUID, run.id),
+                organization_id=organization_id,
+                outcome="overridden",
+            )
         return result
+
+    @staticmethod
+    def _organization_id(run: Any) -> UUID | None:
+        value = getattr(run, "organization_id", None)
+        return value if isinstance(value, UUID) else None
 
     async def claim_stream(self, *, run: Any) -> StreamClaim:
         """Claim a pending run or consume one paused-run authorization once."""

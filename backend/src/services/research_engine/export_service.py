@@ -1,7 +1,9 @@
 """Export service for research engine results."""
 
 import copy
+import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, List, cast
 from uuid import UUID
 
@@ -17,13 +19,30 @@ from src.models.research_step import ResearchStep
 from src.schemas.research_engine import ExportFormat
 from src.services.research_engine.contracts import (
     canonical_json_bytes,
+    canonical_json_sha256,
     canonical_stage_output_hash,
     rehydrate_stage_outputs,
+)
+from src.services.research_engine.observability import (
+    ResearchObservability,
+    research_observability,
+    safely_observe,
 )
 from src.services.research_engine.report_rendering import (
     build_report,
     render_csv,
     render_markdown,
+)
+
+logger = logging.getLogger(__name__)
+
+_SCOPE_FIELDS = (
+    "research_question",
+    "inclusion_criteria",
+    "exclusion_criteria",
+    "providers",
+    "limit_per_provider",
+    "notes",
 )
 
 
@@ -51,6 +70,9 @@ class ResearchExportError(RuntimeError):
 
 class ExportService:
     """Exports research run results as structured JSON reports."""
+
+    def __init__(self, *, observer: ResearchObservability | None = None) -> None:
+        self.observer = observer or research_observability
 
     async def export(
         self,
@@ -86,12 +108,24 @@ class ExportService:
         result = await db.execute(statement)
         run = result.scalar_one_or_none()
         if run is None:
+            self._record_export_failure(
+                run_id=run_id,
+                organization_id=None,
+                export_format=export_format,
+                error_kind="not_found",
+            )
             raise ResearchExportError(
                 status_code=404,
                 code="run_not_found",
                 message="Run not found",
             )
         if run.status != "completed":
+            self._record_export_failure(
+                run_id=run_id,
+                organization_id=self._organization_id(run),
+                export_format=export_format,
+                error_kind="not_completed",
+            )
             raise ResearchExportError(
                 status_code=409,
                 code="run_not_completed",
@@ -107,7 +141,31 @@ class ExportService:
         try:
             context = rehydrate_stage_outputs(steps)
         except ValueError:
-            context = {}
+            logger.error(
+                "Research export reconstruction failed",
+                extra={"run_id": str(run.id), "error_category": "invalid_history"},
+            )
+            safely_observe(
+                self.observer,
+                "record_rehydration_error",
+                run_id=cast(UUID, run.id),
+                organization_id=self._organization_id(run),
+                error_kind="invalid_history",
+            )
+            safely_observe(
+                self.observer,
+                "record_export",
+                run_id=cast(UUID, run.id),
+                organization_id=self._organization_id(run),
+                format=export_format.value,
+                outcome="failed",
+                error_kind="reconstruction",
+            )
+            raise ResearchExportError(
+                status_code=500,
+                code="export_reconstruction_failed",
+                message="Export could not be reconstructed from persisted artifacts",
+            ) from None
         reviews = self._review_audit(run, manifest)
         audit_context = copy.deepcopy(context)
         audit_context["approved_review_overlays"] = copy.deepcopy(reviews)
@@ -122,33 +180,46 @@ class ExportService:
         context["no_evidence"] = manifest.get("final_status") == "no_evidence"
         context["artifact_provenance"] = self._provenance(run, steps, manifest)
 
+        persisted_output = self._persisted_export_output(steps)
         report = self._persisted_report(steps) or build_report(context)
+        trusted_verified = self._is_trusted_verified_daily_brief(
+            run=run,
+            manifest=manifest,
+            steps=steps,
+            export_output=persisted_output,
+        )
         if run.blueprint.template_source != "daily_research_brief":
             report["final_status"] = "unverified"
             report["warning"] = (
                 "UNVERIFIED: legacy and custom runs cannot be approved as a "
                 "Daily Research Brief."
             )
-        elif manifest.get("final_status") == "unverified":
-            report["final_status"] = "unverified"
-            report["warning"] = (
-                "UNVERIFIED: this artifact has not passed all verification checks."
-            )
         elif manifest.get("final_status") == "no_evidence":
             report["final_status"] = "no_evidence"
             report["warning"] = (
                 "NO EVIDENCE: no reader-facing research conclusion was produced."
             )
+        elif not trusted_verified:
+            report["final_status"] = "unverified"
+            report["warning"] = (
+                "UNVERIFIED: this artifact has not passed all verification checks."
+            )
 
         base_name = f"daily-research-brief-{run.id}"
         if export_format is ExportFormat.JSON:
-            return ExportArtifact(
+            artifact = ExportArtifact(
                 content=canonical_json_bytes(report),
                 media_type="application/json",
                 filename=f"{base_name}.json",
             )
-        if export_format is ExportFormat.MARKDOWN:
+        elif export_format is ExportFormat.MARKDOWN:
             if report.get("final_status") == "no_evidence":
+                self._record_export_failure(
+                    run_id=run_id,
+                    organization_id=self._organization_id(run),
+                    export_format=export_format,
+                    error_kind="no_evidence",
+                )
                 raise ResearchExportError(
                     status_code=409,
                     code="brief_not_available_no_evidence",
@@ -156,49 +227,204 @@ class ExportService:
                         "No research brief was produced because no evidence remained."
                     ),
                 )
-            return ExportArtifact(
-                content=render_markdown(report).encode("utf-8"),
+            persisted_markdown = (
+                self._persisted_markdown(persisted_output) if trusted_verified else None
+            )
+            artifact = ExportArtifact(
+                content=(
+                    persisted_markdown
+                    if persisted_markdown is not None
+                    else render_markdown(report)
+                ).encode("utf-8"),
                 media_type="text/markdown; charset=utf-8",
                 filename=f"{base_name}.md",
             )
-        rows = self._csv_rows(audit_context)
-        return ExportArtifact(
-            content=render_csv(
-                rows, final_status=str(report.get("final_status") or "unverified")
-            ).encode("utf-8"),
-            media_type="text/csv; charset=utf-8",
-            filename=f"{base_name}.csv",
+        else:
+            rows = self._csv_rows(audit_context)
+            artifact = ExportArtifact(
+                content=render_csv(
+                    rows, final_status=str(report.get("final_status") or "unverified")
+                ).encode("utf-8"),
+                media_type="text/csv; charset=utf-8",
+                filename=f"{base_name}.csv",
+            )
+        safely_observe(
+            self.observer,
+            "record_export",
+            run_id=cast(UUID, run.id),
+            organization_id=self._organization_id(run),
+            format=export_format.value,
+            outcome="success",
+            error_kind="none",
+        )
+        return artifact
+
+    @staticmethod
+    def _organization_id(run: ResearchRun) -> UUID | None:
+        value = getattr(run, "organization_id", None)
+        return value if isinstance(value, UUID) else None
+
+    def _record_export_failure(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        export_format: ExportFormat,
+        error_kind: str,
+    ) -> None:
+        safely_observe(
+            self.observer,
+            "record_export",
+            run_id=run_id,
+            organization_id=organization_id,
+            format=export_format.value,
+            outcome="failed",
+            error_kind=error_kind,
         )
 
     @staticmethod
-    def _persisted_report(steps: list[Any]) -> dict[str, Any] | None:
+    def _persisted_export_output(steps: list[Any]) -> dict[str, Any] | None:
         for step in reversed(steps):
             output = step.output if isinstance(step.output, dict) else {}
-            if output.get("stage_type") != "export":
-                continue
-            report = output.get("exported")
-            if isinstance(report, dict):
-                return copy.deepcopy(report)
+            if output.get("stage_type") == "export":
+                return copy.deepcopy(output)
         return None
+
+    @staticmethod
+    def _persisted_report(steps: list[Any]) -> dict[str, Any] | None:
+        output = ExportService._persisted_export_output(steps)
+        report = output.get("exported") if isinstance(output, dict) else None
+        if isinstance(report, dict):
+            return copy.deepcopy(report)
+        return None
+
+    @staticmethod
+    def _persisted_markdown(output: dict[str, Any] | None) -> str | None:
+        if not isinstance(output, dict):
+            return None
+        markdown = output.get("markdown")
+        if isinstance(markdown, str):
+            return markdown
+        content = output.get("content")
+        if output.get("format") == "markdown" and isinstance(content, str):
+            return content
+        return None
+
+    @classmethod
+    def _is_trusted_verified_daily_brief(
+        cls,
+        *,
+        run: ResearchRun,
+        manifest: dict[str, Any],
+        steps: list[Any],
+        export_output: dict[str, Any] | None,
+    ) -> bool:
+        if (
+            run.blueprint.template_source != "daily_research_brief"
+            or manifest.get("final_status") != "verified"
+            or not cls._trusted_scope(manifest)
+            or not isinstance(export_output, dict)
+            or export_output.get("contract_version") != 1
+            or export_output.get("stage_type") != "export"
+        ):
+            return False
+        report = export_output.get("exported")
+        if (
+            not isinstance(report, dict)
+            or report.get("final_status") != "verified"
+            or export_output.get("report_hash") != canonical_json_sha256(report)
+        ):
+            return False
+        verify_outputs = [
+            step.output
+            for step in steps
+            if isinstance(step.output, dict)
+            and step.output.get("stage_type") == "verify"
+        ]
+        if not verify_outputs:
+            return False
+        verify_output = verify_outputs[-1]
+        verification = verify_output.get("verification")
+        if (
+            not isinstance(verification, dict)
+            or verification.get("passed") is not True
+            or verification.get("continued_after_failure") is True
+            or export_output.get("verification_output_hash")
+            != canonical_stage_output_hash(verify_output)
+        ):
+            return False
+        export_step = next(
+            (
+                step
+                for step in reversed(steps)
+                if isinstance(step.output, dict)
+                and step.output.get("stage_type") == "export"
+            ),
+            None,
+        )
+        if export_step is None:
+            return False
+        output_hash = canonical_stage_output_hash(export_output)
+        reviews: list[Any] = run.reviews if isinstance(run.reviews, list) else []
+        return any(
+            review.review_kind == "final"
+            and review.decision == "approve"
+            and int(review.step_index) == int(export_step.step_index)
+            and review.output_hash == output_hash
+            for review in reviews
+        )
+
+    @staticmethod
+    def _trusted_scope(manifest: dict[str, Any]) -> bool:
+        scope = manifest.get("scope_confirmation")
+        if not isinstance(scope, dict) or scope.get("confirmed") is not True:
+            return False
+        try:
+            UUID(str(scope.get("confirmed_by")))
+            confirmed_at = datetime.fromisoformat(str(scope.get("confirmed_at")))
+        except (TypeError, ValueError):
+            return False
+        if confirmed_at.tzinfo is None or confirmed_at.utcoffset() is None:
+            return False
+        configuration = {
+            "contract_version": 1,
+            **{field: copy.deepcopy(scope.get(field)) for field in _SCOPE_FIELDS},
+        }
+        if scope.get("configuration_hash") != canonical_json_sha256(configuration):
+            return False
+        parameters = manifest.get("parameters")
+        if isinstance(parameters, dict):
+            expected = {
+                "contract_version": parameters.get("contract_version"),
+                **{
+                    field: copy.deepcopy(parameters.get(field))
+                    for field in _SCOPE_FIELDS
+                },
+            }
+            if expected != configuration:
+                return False
+        return True
 
     @staticmethod
     def _provenance(
         run: ResearchRun, steps: list[Any], manifest: dict[str, Any]
     ) -> dict[str, Any]:
         stage_hashes = {
-            str(step.step_index): (
-                step.outputs_hash
-                if isinstance(step.outputs_hash, str)
-                else canonical_stage_output_hash(step.output)
-            )
+            str(step.step_index): canonical_stage_output_hash(step.output)
             for step in steps
             if isinstance(step.output, dict)
+            and step.output.get("stage_type") != "export"
         }
-        models = [
-            {"step_index": step.step_index, "model_id": step.model_id}
-            for step in steps
-            if isinstance(step.model_id, str) and step.model_id
-        ]
+        models = []
+        for step_index, definition in enumerate(run.blueprint.steps or []):
+            if not isinstance(definition, dict):
+                continue
+            parameters = definition.get("parameters") or definition.get("params") or {}
+            model_id = definition.get("model_id")
+            if not model_id and isinstance(parameters, dict):
+                model_id = parameters.get("model_id")
+            if isinstance(model_id, str) and model_id:
+                models.append({"step_index": step_index, "model_id": model_id})
         return {
             **copy.deepcopy(manifest),
             "run_id": str(run.id),
@@ -208,6 +434,11 @@ class ExportService:
             "template_contract_version": 1,
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "generated_at": manifest.get("generated_at")
+            or manifest.get("completed_at")
+            or (run.completed_at.isoformat() if run.completed_at else None)
+            or (run.started_at.isoformat() if run.started_at else None)
+            or (run.created_at.isoformat() if run.created_at else None),
             "stage_hashes": stage_hashes,
             "models": models,
             "limitations": manifest.get("limitations")
@@ -235,9 +466,22 @@ class ExportService:
             if review.decision == "approve"
         ]
         if audit:
-            return audit
+            return sorted(audit, key=ExportService._review_sort_key)
         history = manifest.get("review_history")
-        return copy.deepcopy(history) if isinstance(history, list) else []
+        return (
+            sorted(copy.deepcopy(history), key=ExportService._review_sort_key)
+            if isinstance(history, list)
+            else []
+        )
+
+    @staticmethod
+    def _review_sort_key(review: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            int(review.get("step_index") or 0),
+            str(review.get("review_kind") or ""),
+            str(review.get("created_at") or ""),
+            str(review.get("review_id") or ""),
+        )
 
     @staticmethod
     def _apply_review_overlays(
@@ -290,6 +534,11 @@ class ExportService:
                 payload_value = review.get("decision_payload")
                 if isinstance(payload_value, dict):
                     payload = payload_value
+            if (
+                not isinstance(review, dict)
+                or review.get("review_kind") != "extraction"
+            ):
+                continue
             for item in payload.get("items") or []:
                 if isinstance(item, dict):
                     decisions[(item.get("source_id"), item.get("part_id"))] = (
@@ -444,8 +693,28 @@ class ExportService:
                 sorted(run.steps, key=lambda item: item.step_index)
             )
         except ValueError:
-            # Existing immutable legacy rows may have gaps and remain readable.
-            typed_context = {}
+            logger.error(
+                "Research export reconstruction failed",
+                extra={"run_id": str(run.id), "error_category": "invalid_history"},
+            )
+            safely_observe(
+                self.observer,
+                "record_rehydration_error",
+                run_id=cast(UUID, run.id),
+                organization_id=self._organization_id(run),
+                error_kind="invalid_history",
+            )
+            self._record_export_failure(
+                run_id=cast(UUID, run.id),
+                organization_id=self._organization_id(run),
+                export_format=ExportFormat.JSON,
+                error_kind="reconstruction",
+            )
+            raise ResearchExportError(
+                status_code=500,
+                code="export_reconstruction_failed",
+                message="Export could not be reconstructed from persisted artifacts",
+            ) from None
         report = build_report(typed_context)
         manifest: Dict[str, Any] = (
             cast(Dict[str, Any], run.reproducibility_manifest) or {}

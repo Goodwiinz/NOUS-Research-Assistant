@@ -109,3 +109,132 @@ No Task 5 schema, migration, locking, or transaction behavior changed, so a new 
 ## Concerns
 
 None for Task 5. Generated OpenAPI and client artifacts remain assigned to Task 6.
+
+## Important-review repair — 2026-09-28
+
+The first Task 5 review found seven Important gaps. The repair stayed within
+Task 5 and the controller-approved adjacent lifecycle, engine, discovery,
+review, route, and test surfaces.
+
+1. Verified Daily Brief Markdown now returns the exact persisted
+   `markdown`/`content` bytes bound by the export envelope and final approval.
+   The regression covers both `# EXACT APPROVED ARTIFACT\n` and an empty
+   approved artifact. Only legacy output that cannot claim approved Daily Brief
+   status may use the renderer fallback.
+2. A noncontiguous persisted step history now fails closed with the stable,
+   content-free `export_reconstruction_failed` error. The modern and legacy
+   JSON exporters keep the completed run unchanged and emit only identifiers
+   and an `invalid_history` category.
+3. A Daily Brief is verified only when its persisted manifest has
+   `final_status=verified`, its confirmed scope has a matching trusted
+   configuration hash, its v1 verification envelope passed, the export binds
+   that verification hash and report hash, and an exact final-approval row
+   binds the persisted export envelope. Missing any durable evidence produces
+   an unverified artifact.
+4. Review audit input is sorted deterministically. CSV screening and extraction
+   decisions no longer share a last-write-wins map; extraction rows use only
+   extraction-review decisions and reasons. Reversing review-row order produces
+   identical bytes and preserves rejection reasons.
+5. Provenance now hashes every actual pre-export typed envelope instead of a
+   stale route snapshot, excludes the self-referential export hash, includes
+   configured blueprint models, before/after deduplication counts, generation
+   and review timestamps, and keeps `coverage.exhaustive=false`. Generated
+   Markdown contains stable Limitations and Provenance appendices while the
+   persisted approved reader report remains the final-review target.
+6. Content-safe observability now has production call sites for run start and
+   terminal outcomes, stage durations and validation failures, provider counts,
+   deduplication, pauses, review outcomes and waits, extraction decisions,
+   verification and override outcomes, exports, rehydration failures, and SSE
+   failures. Replay and duplicate lifecycle transitions do not increment review,
+   pause, override, or run-start counters twice. Emission failures are isolated
+   from persisted lifecycle state.
+7. Generic engine and route failures no longer serialize or log exception text.
+   Engine and route regressions raise
+   `RuntimeError('PRIVATE_RESEARCH_QUESTION')` and prove that value appears in
+   neither SSE events nor logs. Stable error messages and categories retain only
+   the structural fields needed by callers.
+
+The previously approved `contracts.py` seam remains limited to the Task 5
+export-owned `verification_output_hash` and `report_hash` keys. This repair did
+not broaden it. Deduplication metadata is added to the persisted search manifest
+through the existing search-output contract shape.
+
+### Repair TDD evidence
+
+- The first focused review batch selected one direct regression for each of the
+  seven findings and failed `7/7` before implementation.
+- Production observability and exception-redaction engine tests then failed
+  `2/2`; production call-site capture initially reported `3 failed, 2 passed`.
+- The post-resume provenance batch initially reported `1 failed, 1 passed`.
+- Self-review RED cases separately caught empty approved Markdown fallback,
+  legacy exporter reconstruction fallback, pre-persistence observability
+  failure, malformed telemetry state corruption, ISO review timestamp handling,
+  duplicate pause/review/override telemetry, and use of stale `outputs_hash`
+  provenance. Each focused case passed after its narrow repair.
+
+The exact final Task 5 command was:
+
+```text
+PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q backend/tests/unit/services/test_export_service.py backend/tests/unit/services/test_research_observability.py backend/tests/unit/api/test_research_engine_exports.py
+```
+
+Result: `36 passed, 2 warnings in 10.80s`.
+
+The final Task 3/4/template adjacency command was:
+
+```text
+PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/unit/services/test_research_template_contracts.py backend/tests/unit/services/test_research_review_overlays.py backend/tests/unit/services/test_research_review_service.py backend/tests/unit/services/test_research_run_lifecycle.py backend/tests/unit/api/test_research_engine_reviews.py backend/tests/unit/services/test_task4_astra_repairs.py
+```
+
+Result: `96 passed, 3 warnings in 12.64s`.
+
+The final workflow and stream/security commands were:
+
+```text
+PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q backend/tests/unit/services/test_workflow_engine.py
+PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/unit/api/test_research_engine_stream.py
+```
+
+Results: `26 passed, 1 warning in 4.82s` and
+`33 passed, 1 warning in 6.36s`.
+
+The changed discovery and deterministic-rendering adjacency commands were:
+
+```text
+PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/unit/services/test_paper_discovery.py
+PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q -o log_cli=false backend/tests/unit/services/test_determinism_golden.py
+```
+
+Results: `15 passed, 1 warning in 4.95s` and
+`9 passed, 1 warning in 5.17s`.
+
+### Repair quality gates
+
+- `.venv/bin/ruff check` on all 13 changed Python paths: `All checks passed!`.
+- `.venv/bin/ruff check backend/src`: `All checks passed!`; this also confirms
+  the duplicate literal keys identified during review are gone.
+- `.venv/bin/black --check` on all 13 changed Python paths:
+  `13 files would be left unchanged`.
+- `.venv/bin/isort --check-only` on all 13 changed Python paths: exit `0`.
+- The exact MyPy gate was run on the same 13 paths with
+  `.venv/bin/mypy --ignore-missing-imports --follow-imports=silent`. Baseline
+  `43fdac2b5` and the final repair each report `144 errors in 5 files`; zero
+  diagnostics were introduced.
+- `git diff --check`: passed after the report and ledger update.
+
+### Repair self-review
+
+- Re-read every production observability call site and confirmed that its
+  fields are identifiers, enum-like categories, counts, or durations. No
+  question, criterion, abstract, quote, extraction, prompt, review note, or
+  report body is accepted by the event schema.
+- Inspected final lifecycle and review call sites for duplicate emissions.
+  Replays and duplicate persistence transitions are guarded, and resumed SSE
+  connections do not emit another run-start metric.
+- Searched all changed production paths for raw exception serialization and
+  found no remaining `str(exc)` or `repr(exc)` path.
+- Inspected the final test diff for weakened assertions. Compatibility
+  assertions changed only where the new content-free security contract
+  intentionally replaces raw exception text.
+- No Task 6 source, generated contract, client, UI, deployment, or remote state
+  was changed.

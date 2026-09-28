@@ -135,3 +135,23 @@
 - Final focused GREEN: 27 passed; report-rendering contracts: 35 passed; adjacent Task 3/4 tests: 93 passed; full stream regression: 31 passed.
 - Quality gates: changed-file and repo-wide Ruff passed; Black and isort passed; three added files are MyPy-clean; all seven modified legacy files match their base diagnostic counts; diff check passed.
 - Task 5: complete; Task 6 has not started.
+- Review round 2 found seven Important gaps: exact persisted Markdown bytes,
+  fail-closed reconstruction, durable verified trust evidence, deterministic
+  extraction-owned CSV review projection, complete post-resume provenance,
+  production observability wiring, and content-free generic SSE/errors.
+- Fix round 2 used direct RED regressions for all seven findings plus focused
+  self-review cases for empty artifacts, legacy reconstruction, malformed
+  telemetry, ISO timestamps, replay/duplicate metrics, and actual-envelope
+  hashes. The controller authorized the narrowly required engine, discovery,
+  review, lifecycle, route, and related test surfaces; the existing
+  `contracts.py` export-hash seam was not broadened.
+- Fix round 2 commit: `fix(research): harden audited brief exports` (this
+  commit).
+- Fix verification: Task 5 `36 passed`; Task 3/4/template adjacency `96
+  passed`; stream/security `33 passed`; workflow `26 passed`; discovery `15
+  passed`; deterministic rendering `9 passed`. Changed-file and repo-wide Ruff,
+  Black, isort, and diff checks passed. The 13-file MyPy comparison is unchanged
+  at `144` legacy diagnostics on both base `43fdac2b5` and the repair, with zero
+  introduced diagnostics.
+- Scoped self-review: all seven findings ADDRESSED; no unresolved Critical or
+  Important issue; Task 6 has not started.

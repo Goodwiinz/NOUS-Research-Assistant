@@ -139,10 +139,12 @@ async def search_sources(
     providers = {name: result[1] for name, result in zip(names, results)}
     if all(item["status"] == "failed" for item in providers.values()):
         raise RuntimeError("All selected research providers failed")
-    docs = prepare_sources([doc for result, _ in results for doc in result])
+    raw_documents = [doc for result, _ in results for doc in result]
+    docs = prepare_sources(raw_documents)
     return docs, {
         "partial": any(item["status"] == "failed" for item in providers.values()),
         "providers": providers,
         "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        "deduplication": {"before": len(raw_documents), "after": len(docs)},
         "exhaustive": False,
     }

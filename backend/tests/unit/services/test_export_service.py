@@ -6,6 +6,7 @@ import io
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -19,9 +20,11 @@ from src.services.research_engine.contracts import (
     validate_envelope,
 )
 from src.services.research_engine.export_service import (
+    ExportArtifact,
     ExportService,
     ResearchExportError,
 )
+from src.services.research_engine.observability import ResearchObservability
 from src.services.research_engine.step_executor import StepExecutor
 
 # ---------------------------------------------------------------------------
@@ -646,7 +649,9 @@ async def test_export_service_json_has_complete_daily_brief_provenance() -> None
     ):
         step = _make_step(run.id, index, step_type=stage_type)
         step.output = output
-        step.outputs_hash = canonical_stage_output_hash(output)
+        step.outputs_hash = (
+            "f" * 64 if index == 3 else canonical_stage_output_hash(output)
+        )
         run.steps.append(step)
     db = _mock_db_for_run(run)
 
@@ -675,8 +680,12 @@ async def test_export_service_json_has_complete_daily_brief_provenance() -> None
         "limitations",
     ):
         assert key in payload
-    assert payload["final_status"] == "verified"
+    assert payload["final_status"] == "unverified"
+    assert "UNVERIFIED" in payload["warning"]
     assert payload["coverage"]["exhaustive"] is False
+    assert payload["stages"][3]["output_hash"] == canonical_stage_output_hash(
+        run.steps[3].output
+    )
 
 
 @pytest.mark.asyncio
@@ -837,3 +846,343 @@ async def test_no_evidence_has_audit_exports_but_no_markdown_brief() -> None:
             _mock_db_for_run(run),
         )
     assert error.value.code == "brief_not_available_no_evidence"
+
+
+def _trusted_daily_export_run(
+    *, markdown: str = "# EXACT APPROVED ARTIFACT\n"
+) -> MagicMock:
+    """Build a completed Daily Brief with durable terminal trust evidence."""
+    context, verification = _daily_brief_context()
+    scope = copy.deepcopy(context["scope_confirmation"])
+    scope.pop("actor_id", None)
+    scope["confirmed_by"] = str(uuid4())
+    configuration = {
+        "contract_version": 1,
+        **{
+            key: scope.get(key)
+            for key in (
+                "research_question",
+                "inclusion_criteria",
+                "exclusion_criteria",
+                "providers",
+                "limit_per_provider",
+                "notes",
+            )
+        },
+    }
+    scope["configuration_hash"] = canonical_json_sha256(configuration)
+    report = {
+        "artifact_version": 1,
+        "contract_version": 1,
+        "final_status": "verified",
+        "verification": verification["verification"],
+        "limitations": ["Bounded provider search; results are not exhaustive."],
+    }
+    export_output = {
+        "contract_version": 1,
+        "stage_type": "export",
+        "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+        "format": "markdown",
+        "exported": report,
+        "markdown": markdown,
+        "content": markdown,
+        "media_type": "text/markdown; charset=utf-8",
+        "verification_output_hash": canonical_stage_output_hash(verification),
+        "report_hash": canonical_json_sha256(report),
+    }
+    run, _step, _source = _make_run(
+        status="completed",
+        manifest={
+            "final_status": "verified",
+            "scope_confirmation": scope,
+            "provider_manifest": context["provider_manifest"],
+        },
+    )
+    run.blueprint.template_source = "daily_research_brief"
+    run.blueprint.steps = [
+        {"id": "verify", "type": "verify", "parameters": {"model_id": "verify-v1"}},
+        {"id": "export", "type": "export", "parameters": {"review_gate": "final"}},
+    ]
+    verify_step = _make_step(run.id, 0, step_type="verify")
+    verify_step.output = verification
+    verify_step.outputs_hash = canonical_stage_output_hash(verification)
+    export_step = _make_step(run.id, 1, step_type="export")
+    export_step.output = export_output
+    export_step.outputs_hash = canonical_stage_output_hash(export_output)
+    run.steps = [verify_step, export_step]
+    run.reviews = [
+        SimpleNamespace(
+            id=uuid4(),
+            step_index=1,
+            stage_type="export",
+            review_kind="final",
+            output_hash=export_step.outputs_hash,
+            decision="approve",
+            decision_payload={},
+            created_at=datetime(2026, 9, 27, 10, 10, tzinfo=timezone.utc),
+        )
+    ]
+    return cast(MagicMock, run)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("# EXACT APPROVED ARTIFACT\n", b"# EXACT APPROVED ARTIFACT\n"),
+        ("", b""),
+    ],
+)
+async def test_markdown_download_uses_exact_persisted_approved_artifact_bytes(
+    markdown: str, expected: bytes
+) -> None:
+    run = _trusted_daily_export_run(markdown=markdown)
+    observer = ResearchObservability()
+
+    artifact = await ExportService(observer=observer).export(
+        run.id, uuid4(), ExportFormat.MARKDOWN, _mock_db_for_run(run)
+    )
+
+    assert artifact.content == expected
+    assert observer.snapshot()["counters"]["exports"]["markdown:success:none"] == 1
+
+
+@pytest.mark.asyncio
+async def test_export_reconstruction_gap_returns_stable_content_free_error() -> None:
+    run, _step, _source = _make_run(status="completed")
+    first = _make_step(run.id, 0, step_type="search")
+    first.output = {
+        "contract_version": 1,
+        "stage_type": "search",
+        "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+        "source_records": [],
+        "coverage": {"exhaustive": False},
+        "selected_sources": ["openalex"],
+    }
+    third = _make_step(run.id, 2, step_type="verify")
+    third.output = {
+        "contract_version": 1,
+        "stage_type": "verify",
+        "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+        "verification": {"passed": False, "claims": []},
+        "processing_coverage": {},
+    }
+    run.steps = [first, third]
+    observer = ResearchObservability()
+
+    with pytest.raises(ResearchExportError) as raised:
+        await ExportService(observer=observer).export(
+            run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+        )
+
+    assert raised.value.status_code == 500
+    assert raised.value.code == "export_reconstruction_failed"
+    assert "PRIVATE" not in raised.value.message
+    assert run.status == "completed"
+    metrics = observer.snapshot()["counters"]
+    assert metrics["rehydration_errors"]["invalid_history"] == 1
+    assert metrics["exports"]["json:failed:reconstruction"] == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_json_export_refuses_noncontiguous_persisted_history() -> None:
+    run, _step, _source = _make_run(status="completed")
+    first = _make_step(run.id, 0, step_type="search")
+    first.output = {
+        "contract_version": 1,
+        "stage_type": "search",
+        "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+        "source_records": [],
+        "coverage": {"exhaustive": False},
+        "selected_sources": ["openalex"],
+    }
+    third = _make_step(run.id, 2, step_type="verify")
+    third.output = {
+        "contract_version": 1,
+        "stage_type": "verify",
+        "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+        "verification": {"passed": False, "claims": []},
+        "processing_coverage": {},
+    }
+    run.steps = [first, third]
+    observer = ResearchObservability()
+
+    with pytest.raises(ResearchExportError) as raised:
+        await ExportService(observer=observer).export_json(
+            run.id, _mock_db_for_run(run)
+        )
+
+    assert raised.value.code == "export_reconstruction_failed"
+    assert raised.value.status_code == 500
+    assert run.status == "completed"
+    metrics = observer.snapshot()["counters"]
+    assert metrics["rehydration_errors"]["invalid_history"] == 1
+    assert metrics["exports"]["json:failed:reconstruction"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["terminal_status", "scope", "final_review"])
+async def test_verified_daily_export_requires_all_durable_trust_evidence(
+    missing: str,
+) -> None:
+    run = _trusted_daily_export_run()
+    if missing == "terminal_status":
+        run.reproducibility_manifest.pop("final_status")
+    elif missing == "scope":
+        run.reproducibility_manifest.pop("scope_confirmation")
+    else:
+        run.reviews = []
+
+    artifact = await ExportService().export(
+        run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+    )
+
+    payload = json.loads(artifact.content)
+    assert payload["final_status"] == "unverified"
+    assert "UNVERIFIED" in payload["warning"]
+
+
+@pytest.mark.asyncio
+async def test_csv_review_projection_is_order_independent_and_extraction_owned() -> (
+    None
+):
+    context, _verification = _daily_brief_context()
+    source_id = context["extractions"][0]["source_id"]
+    reviews = [
+        SimpleNamespace(
+            id=uuid4(),
+            step_index=1,
+            review_kind="screening",
+            output_hash="a" * 64,
+            decision="approve",
+            decision_payload={
+                "items": [
+                    {
+                        "source_id": source_id,
+                        "part_id": "p0001",
+                        "decision": "include",
+                        "reason": "screening reason",
+                    }
+                ]
+            },
+            created_at=datetime(2026, 9, 27, 10, 1, tzinfo=timezone.utc),
+        ),
+        SimpleNamespace(
+            id=uuid4(),
+            step_index=2,
+            review_kind="extraction",
+            output_hash="b" * 64,
+            decision="approve",
+            decision_payload={
+                "items": [
+                    {
+                        "source_id": source_id,
+                        "part_id": "p0001",
+                        "decision": "reject",
+                        "reason": "extraction reason",
+                    }
+                ]
+            },
+            created_at=datetime(2026, 9, 27, 10, 2, tzinfo=timezone.utc),
+        ),
+    ]
+
+    async def rendered(review_rows: list[SimpleNamespace]) -> ExportArtifact:
+        run, _step, _source = _make_run(
+            status="completed", manifest={"final_status": "unverified"}
+        )
+        run.blueprint.template_source = "daily_research_brief"
+        search = _make_step(run.id, 0, step_type="search")
+        search.output = {
+            "contract_version": 1,
+            "stage_type": "search",
+            "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+            "source_records": context["source_records"],
+            "coverage": context["coverage"],
+            "selected_sources": ["openalex"],
+        }
+        extract = _make_step(run.id, 1, step_type="extract")
+        extract.output = {
+            "contract_version": 1,
+            "stage_type": "extract",
+            "usage": {"model_calls": 1, "total_tokens": 2, "batches": []},
+            "extractions": context["extractions"],
+            "processing_coverage": {},
+        }
+        run.steps = [search, extract]
+        run.reviews = review_rows
+        return await ExportService().export(
+            run.id, uuid4(), ExportFormat.CSV, _mock_db_for_run(run)
+        )
+
+    forward = await rendered(reviews)
+    reverse = await rendered(list(reversed(reviews)))
+    row = list(csv.DictReader(io.StringIO(forward.content.decode())))[0]
+
+    assert forward.content == reverse.content
+    assert (row["decision"], row["reason"]) == ("reject", "extraction reason")
+
+
+@pytest.mark.asyncio
+async def test_post_resume_export_has_complete_deterministic_provenance() -> None:
+    context, verification = _daily_brief_context()
+    context["artifact_provenance"]["stage_hashes"] = {"0": "a" * 64}
+    context["artifact_provenance"]["models"] = [
+        {"step_index": 1, "model_id": "screen-v1"},
+        {"step_index": 2, "model_id": "extract-v1"},
+        {"step_index": 3, "model_id": "synthesize-v1"},
+        {"step_index": 4, "model_id": "verify-v1"},
+    ]
+    context["artifact_provenance"]["generated_at"] = "2026-09-27T10:05:00+00:00"
+    context["deduplication"] = {"before": 3, "after": 2}
+    context["approved_review_overlays"][0]["created_at"] = "2026-09-27T10:04:00+00:00"
+    context["stage_results"] = {
+        "0": {
+            "contract_version": 1,
+            "stage_type": "search",
+            "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+            "source_records": context["source_records"],
+            "coverage": context["coverage"],
+            "selected_sources": ["openalex"],
+        },
+        "1": {
+            "contract_version": 1,
+            "stage_type": "screen",
+            "usage": {"model_calls": 1, "total_tokens": 1, "batches": []},
+            "screening": context["screening"],
+            "included_source_ids": context["included_source_ids"],
+            "processing_coverage": {},
+        },
+        "2": {
+            "contract_version": 1,
+            "stage_type": "extract",
+            "usage": {"model_calls": 1, "total_tokens": 1, "batches": []},
+            "extractions": context["extractions"],
+            "processing_coverage": {},
+        },
+        "3": {
+            "contract_version": 1,
+            "stage_type": "synthesize",
+            "usage": {"model_calls": 1, "total_tokens": 1, "batches": []},
+            "synthesis": context["synthesis"],
+            "processing_coverage": {},
+        },
+        "4": verification,
+    }
+
+    result = await StepExecutor(connectors={}, providers={}).execute(
+        {"type": "export", "parameters": {"contract_version": 1, "format": "markdown"}},
+        context,
+    )
+    report = result.output["exported"]
+
+    assert [item["step_index"] for item in report["stages"]] == [0, 1, 2, 3, 4]
+    assert all(item["output_hash"] for item in report["stages"])
+    assert report["deduplication"] == {"before": 3, "after": 2}
+    assert len(report["models"]) == 4
+    assert report["timestamps"]["generated_at"] == "2026-09-27T10:05:00+00:00"
+    assert report["reviews"][0]["created_at"] == "2026-09-27T10:04:00+00:00"
+    assert report["coverage"]["exhaustive"] is False
+    assert "## Limitations" in result.output["markdown"]
+    assert "## Provenance" in result.output["markdown"]
+    assert all(item["stage_type"] != "export" for item in report["stages"])

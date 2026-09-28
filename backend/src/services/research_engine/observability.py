@@ -15,6 +15,7 @@ _MAX_CATEGORY_CHARS = 64
 _MAX_COUNT = 1_000_000
 _MAX_DURATION_SECONDS = 7 * 24 * 60 * 60
 _EVENT_FIELDS = {
+    "run": {"run_id", "organization_id", "status"},
     "stage_duration": {
         "run_id",
         "organization_id",
@@ -57,6 +58,28 @@ _EVENT_FIELDS = {
         "error_kind",
         "count",
     },
+    "deduplication": {
+        "run_id",
+        "organization_id",
+        "before_count",
+        "after_count",
+    },
+    "extraction_decision": {
+        "run_id",
+        "organization_id",
+        "outcome",
+        "count",
+    },
+    "verification": {"run_id", "organization_id", "outcome"},
+    "export": {
+        "run_id",
+        "organization_id",
+        "format",
+        "outcome",
+        "error_kind",
+    },
+    "rehydration_error": {"run_id", "organization_id", "error_kind"},
+    "sse_error": {"run_id", "organization_id", "error_kind"},
 }
 
 
@@ -102,7 +125,7 @@ class ResearchObservability:
             return str(value) if value is not None else None
         if field == "step_index":
             return cls._count(value, field)
-        if field in {"returned_count", "count"}:
+        if field in {"returned_count", "count", "before_count", "after_count"}:
             return cls._count(value, field)
         if field in {"duration_seconds", "wait_seconds"}:
             return cls._duration(value, field)
@@ -148,6 +171,21 @@ class ResearchObservability:
         self._histograms["stage_duration_seconds"][stage_type].append(
             float(duration_seconds)
         )
+
+    def record_run(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        status: str,
+    ) -> None:
+        self.record(
+            "run",
+            run_id=run_id,
+            organization_id=organization_id,
+            status=status,
+        )
+        self._counters["runs"][status] += 1
 
     def record_provider_outcome(
         self,
@@ -256,6 +294,106 @@ class ResearchObservability:
         )
         self._counters["validation_errors"][error_kind] += count
 
+    def record_deduplication(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        before_count: int,
+        after_count: int,
+    ) -> None:
+        self.record(
+            "deduplication",
+            run_id=run_id,
+            organization_id=organization_id,
+            before_count=before_count,
+            after_count=after_count,
+        )
+        self._counters["deduplication"]["before"] += before_count
+        self._counters["deduplication"]["after"] += after_count
+        self._counters["deduplication"]["removed"] += max(0, before_count - after_count)
+
+    def record_extraction_decision(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        outcome: str,
+        count: int,
+    ) -> None:
+        self.record(
+            "extraction_decision",
+            run_id=run_id,
+            organization_id=organization_id,
+            outcome=outcome,
+            count=count,
+        )
+        self._counters["extraction_decisions"][outcome] += count
+
+    def record_verification(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        outcome: str,
+    ) -> None:
+        self.record(
+            "verification",
+            run_id=run_id,
+            organization_id=organization_id,
+            outcome=outcome,
+        )
+        self._counters["verification"][outcome] += 1
+
+    def record_export(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        format: str,
+        outcome: str,
+        error_kind: str,
+    ) -> None:
+        self.record(
+            "export",
+            run_id=run_id,
+            organization_id=organization_id,
+            format=format,
+            outcome=outcome,
+            error_kind=error_kind,
+        )
+        self._counters["exports"][f"{format}:{outcome}:{error_kind}"] += 1
+
+    def record_rehydration_error(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        error_kind: str,
+    ) -> None:
+        self.record(
+            "rehydration_error",
+            run_id=run_id,
+            organization_id=organization_id,
+            error_kind=error_kind,
+        )
+        self._counters["rehydration_errors"][error_kind] += 1
+
+    def record_sse_error(
+        self,
+        *,
+        run_id: UUID,
+        organization_id: UUID | None,
+        error_kind: str,
+    ) -> None:
+        self.record(
+            "sse_error",
+            run_id=run_id,
+            organization_id=organization_id,
+            error_kind=error_kind,
+        )
+        self._counters["sse_errors"][error_kind] += 1
+
     def snapshot(self) -> dict[str, dict[str, dict[str, Any]]]:
         """Return an isolated metrics snapshot for collection or tests."""
         return {
@@ -269,3 +407,13 @@ class ResearchObservability:
 
 
 research_observability = ResearchObservability()
+
+
+def safely_observe(
+    observer: ResearchObservability, method: str, /, **fields: Any
+) -> None:
+    """Best-effort emission that cannot alter research lifecycle state."""
+    try:
+        getattr(observer, method)(**fields)
+    except Exception:
+        logger.warning("Research observability emission failed")

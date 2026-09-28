@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from importlib import import_module
 from types import ModuleType
 from typing import Any, cast
@@ -29,6 +30,7 @@ from src.services.research_engine.contracts import (
     canonical_json_sha256,
     canonical_stage_output_hash,
 )
+from src.services.research_engine.observability import ResearchObservability
 
 
 def _review_module() -> ModuleType:
@@ -339,6 +341,43 @@ async def test_submit_review_records_exact_set_approval_without_mutating_output(
 
 
 @pytest.mark.asyncio
+async def test_review_submission_records_wait_and_extraction_outcomes(
+    db: AsyncSession,
+) -> None:
+    output = _extract_output()
+    owner_id, organization_id, run, step = await _seed_gate(
+        db, output=output, review_kind="extraction", step_index=2
+    )
+    observer = ResearchObservability()
+    service = _review_module().ResearchReviewService(
+        db,
+        observer=observer,
+        now=lambda: datetime(2026, 9, 27, 12, 0, 30, tzinfo=timezone.utc),
+    )
+
+    await service.submit_review(
+        run_id=run.id,
+        step_index=step.step_index,
+        owner_id=owner_id,
+        organization_id=organization_id,
+        reviewer_id=owner_id,
+        request=_request(
+            kind="extraction",
+            output_hash=canonical_stage_output_hash(output),
+            payload=_extract_payload(),
+        ),
+    )
+
+    metrics = observer.snapshot()
+    assert metrics["counters"]["reviews"]["approved"] == 1
+    assert metrics["counters"]["extraction_decisions"] == {
+        "accept": 1,
+        "reject": 1,
+    }
+    assert metrics["histograms"]["review_wait_seconds"]["extraction"] == [30.0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("kind", "output", "payload"),
     [
@@ -544,9 +583,10 @@ async def test_stale_hash_returns_only_current_content_free_descriptor(
 ) -> None:
     owner_id, organization_id, run, step = await _seed_gate(db)
     service_module = _review_module()
+    observer = ResearchObservability()
 
     with pytest.raises(service_module.ResearchReviewError) as error:
-        await service_module.ResearchReviewService(db).submit_review(
+        await service_module.ResearchReviewService(db, observer=observer).submit_review(
             run_id=run.id,
             step_index=step.step_index,
             owner_id=owner_id,
@@ -576,6 +616,7 @@ async def test_stale_hash_returns_only_current_content_free_descriptor(
     serialized = str(dumped)
     assert "machine recommendation" not in serialized
     assert "source-a" not in serialized
+    assert observer.snapshot()["counters"]["reviews"]["stale"] == 1
 
 
 @pytest.mark.asyncio
@@ -625,7 +666,8 @@ async def test_identical_canonical_replay_returns_original_and_different_replay_
     output = _screen_output()
     owner_id, organization_id, run, step = await _seed_gate(db, output=output)
     service_module = _review_module()
-    service = service_module.ResearchReviewService(db)
+    observer = ResearchObservability()
+    service = service_module.ResearchReviewService(db, observer=observer)
     first_payload = _screen_payload()
     first_items = cast(list[dict[str, object]], first_payload["items"])
     first_payload["items"] = list(reversed(first_items))
@@ -660,6 +702,7 @@ async def test_identical_canonical_replay_returns_original_and_different_replay_
     assert replay.id == first.id
     assert replay.replay is True
     assert await db.scalar(select(func.count()).select_from(ResearchStageReview)) == 1
+    assert observer.snapshot()["counters"]["reviews"]["approved"] == 1
 
     different = _screen_payload(second="include", second_reason=None)
     with pytest.raises(service_module.ResearchReviewError) as error:
@@ -728,10 +771,11 @@ async def test_decline_is_durable_and_keeps_run_paused(
 ) -> None:
     output = _screen_output()
     owner_id, organization_id, run, step = await _seed_gate(db, output=output)
+    observer = ResearchObservability()
 
     response = (
         await _review_module()
-        .ResearchReviewService(db)
+        .ResearchReviewService(db, observer=observer)
         .submit_review(
             run_id=run.id,
             step_index=step.step_index,
@@ -754,6 +798,7 @@ async def test_decline_is_durable_and_keeps_run_paused(
     assert run.reproducibility_manifest["pending_review"]["status"] == "pending"
     stored = await db.scalar(select(ResearchStageReview))
     assert stored is not None and stored.decision == "decline"
+    assert observer.snapshot()["counters"]["reviews"]["declined"] == 1
 
 
 @pytest.mark.asyncio

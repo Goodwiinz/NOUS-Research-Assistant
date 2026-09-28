@@ -49,6 +49,10 @@ from src.services.research_engine.export_service import (
     ExportService,
     ResearchExportError,
 )
+from src.services.research_engine.observability import (
+    research_observability,
+    safely_observe,
+)
 from src.services.research_engine.providers import (
     ClaudeProvider,
     OllamaProvider,
@@ -567,11 +571,25 @@ async def stream_run(
     )
     try:
         prior_outputs = rehydrate_stage_outputs(history)
-    except ValueError as exc:
+    except ValueError:
+        safely_observe(
+            research_observability,
+            "record_rehydration_error",
+            run_id=run_id,
+            organization_id=(
+                current_user.organization_id
+                if isinstance(getattr(current_user, "organization_id", None), UUID)
+                else None
+            ),
+            error_kind="invalid_history",
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Persisted run stages cannot be resumed: {exc}",
-        ) from exc
+            detail={
+                "code": "run_reconstruction_failed",
+                "message": "Persisted run stages cannot be resumed",
+            },
+        ) from None
 
     manifest = dict(run.reproducibility_manifest or {})
     scope_confirmation = manifest.get("scope_confirmation")
@@ -587,11 +605,25 @@ async def stream_run(
                 owner_id=current_user.id,
                 context=prior_outputs,
             )
-        except ValueError as exc:
+        except ValueError:
+            safely_observe(
+                research_observability,
+                "record_rehydration_error",
+                run_id=run_id,
+                organization_id=(
+                    current_user.organization_id
+                    if isinstance(getattr(current_user, "organization_id", None), UUID)
+                    else None
+                ),
+                error_kind="review_overlay",
+            )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Approved review overlays cannot be resumed: {exc}",
-            ) from exc
+                detail={
+                    "code": "review_overlay_reconstruction_failed",
+                    "message": "Approved review overlays cannot be resumed",
+                },
+            ) from None
 
     required_models = sorted(
         {
@@ -617,6 +649,20 @@ async def stream_run(
         blueprint, run
     )
     if blueprint.template_source == "daily_research_brief":
+        generated_at = (
+            manifest.get("generated_at")
+            or manifest.get("completed_at")
+            or (
+                run.started_at.isoformat()
+                if isinstance(run.started_at, datetime)
+                else None
+            )
+            or (
+                run.created_at.isoformat()
+                if isinstance(run.created_at, datetime)
+                else None
+            )
+        )
         prior_outputs["artifact_provenance"] = {
             "run_id": str(run.id),
             "blueprint_id": str(blueprint.id),
@@ -625,15 +671,21 @@ async def stream_run(
             "template_contract_version": effective_parameters.get("contract_version"),
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": None,
+            "generated_at": generated_at,
             "stage_hashes": {
                 str(step.step_index): step.outputs_hash
                 for step in history
                 if isinstance(step.outputs_hash, str)
             },
             "models": [
-                {"step_index": step.step_index, "model_id": step.model_id}
-                for step in history
-                if isinstance(step.model_id, str) and step.model_id
+                {
+                    "step_index": step_index,
+                    "model_id": str(
+                        step.get("model_id") or _get_step_params(step).get("model_id")
+                    ),
+                }
+                for step_index, step in enumerate(blueprint.steps or [])
+                if step.get("model_id") or _get_step_params(step).get("model_id")
             ],
             "review_history": manifest.get("review_history") or [],
             "scope_confirmation": scope_confirmation or {},
@@ -774,6 +826,8 @@ async def stream_run(
                         else None
                     )
                 ),
+                organization_id=organization_id,
+                record_run_started=not was_paused,
             ):
                 event_type = event.get("event")
                 await db.refresh(run)
@@ -942,9 +996,16 @@ async def stream_run(
             # Client disconnected; persist paused state so run can resume later.
             await _run_interrupted_cleanup(recover_run(RunStatus.PAUSED.value))
             raise
-        except Exception as exc:
+        except Exception:
             # If streaming fails unexpectedly, mark run as failed
             logger.error("Research stream failed for run %s", run_id)
+            safely_observe(
+                research_observability,
+                "record_sse_error",
+                run_id=run_id,
+                organization_id=organization_id,
+                error_kind="stream_failure",
+            )
             try:
                 await recover_run(RunStatus.FAILED.value, completed=True)
             except Exception:
@@ -952,7 +1013,13 @@ async def stream_run(
                     "Failed to persist terminal state for research run %s",
                     run_id,
                 )
-            error_event = json.dumps({"event": "run_failed", "error": str(exc)})
+            error_event = json.dumps(
+                {
+                    "event": "run_failed",
+                    "error": "Research stream failed",
+                    "error_category": "stream_failure",
+                }
+            )
             yield f"event: run_failed\ndata: {error_event}\n\n"
 
     return StreamingResponse(
