@@ -38,11 +38,17 @@ for await (const line of readline.createInterface({input:process.stdin})) {
    if(c.mode==='malformed') { process.stdout.write('{broken}\n'); continue; }
    if(c.mode==='oversized') { process.stdout.write('x'.repeat(1048577)); continue; }
    if(c.request) send({id:41,method:c.request.method,params:c.request.params});
+   if(c.resolveRequest) send({method:'serverRequest/resolved',params:{threadId:c.resolveThread || 's',requestId:41}});
+   if(c.resolveCount) for(let id=0;id<c.resolveCount;id++) send({method:'serverRequest/resolved',params:{threadId:'s',requestId:id}});
    const msg = JSON.stringify({method:'item/agentMessage/delta',params:{threadId:'s',turnId:'t',itemId:'i',delta:c.text || 'early'}})+'\n';
    if(c.mode==='split') { process.stdout.write(msg.slice(0,25)); await new Promise(r=>setTimeout(r,10)); process.stdout.write(msg.slice(25)); } else process.stdout.write(msg);
    if(c.mode==='flood') for(let i=0;i<500;i++) send({method:'item/agentMessage/delta',params:{threadId:'s',turnId:'t',delta:'part'+i}});
    send({id:m.id,result:{turn:{id:'t',status:'inProgress',items:[],error:null}}});
    if(c.terminal) send({method:'turn/completed',params:{threadId:'s',turn:{id:'t',status:c.terminal,items:[],error:null}}});
+ }
+ if(m.id===41 && m.result && c.replayRequest) {
+   send({id:41,method:c.request.method,params:c.request.params});
+   send({method:'turn/completed',params:{threadId:'s',turn:{id:'t',status:'completed',items:[],error:null}}});
  }
  if(m.method==='turn/interrupt') send({id:m.id,result:{}});
 }
@@ -585,4 +591,112 @@ test("malformed credential JSON errors do not reveal secrets", async (t) => {
     (error) =>
       error instanceof Error && error.message === "invalid stored JSON",
   );
+});
+
+test("answered native callback cannot be replayed", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.configure({
+    replayRequest: true,
+    request: {
+      method: "item/fileChange/requestApproval",
+      params: { threadId: "s", turnId: "t", itemId: "i", startedAtMs: 1 },
+    },
+  });
+  await adapter.startSession(options);
+  let requests = 0;
+  const consume = (async () => {
+    for await (const event of adapter.events(new AbortController().signal)) {
+      if (event.kind === "request") {
+        requests++;
+        await adapter.respondToRequest(event.requestId, {
+          kind: "decision",
+          allow: false,
+        });
+      }
+      if (event.kind === "terminal") break;
+    }
+  })();
+  const rejected = assert.rejects(consume, /duplicate native callback ID/);
+  await adapter.startTurn("s", "x", "c");
+  await rejected;
+  assert.equal(requests, 1);
+});
+
+for (const threadId of ["s", "foreign"])
+  test("native resolution respects session " + threadId, async (t) => {
+    const { server, adapter, options } = setup(t);
+    server.configure({
+      resolveRequest: true,
+      resolveThread: threadId,
+      request: {
+        method: "item/fileChange/requestApproval",
+        params: { threadId: "s", turnId: "t", itemId: "i", startedAtMs: 1 },
+      },
+    });
+    await adapter.startSession(options);
+    const ac = new AbortController();
+    const iterator = adapter.events(ac.signal)[Symbol.asyncIterator]();
+    const first = iterator.next();
+    await adapter.startTurn("s", "x", "c"); // Resolution precedes this acknowledgment on the wire.
+    assert.equal((await first).value?.kind, "request");
+    if (threadId === "s")
+      await assert.rejects(
+        adapter.respondToRequest(41, { kind: "decision", allow: true }),
+        /stale/,
+      );
+    else await adapter.respondToRequest(41, { kind: "decision", allow: false });
+    ac.abort();
+    await iterator.return?.();
+  });
+
+test("escaped deltas reserve envelope bytes and retain complete text", async (t) => {
+  const { server, adapter, options } = setup(t);
+  const text = '\n\u0000\t\r"\\😀'.repeat(5000);
+  server.configure({ text, terminal: "completed" });
+  await adapter.startSession(options);
+  const chunks: string[] = [];
+  const consume = (async () => {
+    for await (const event of adapter.events(new AbortController().signal)) {
+      if (event.kind === "delta") {
+        assert.ok(
+          Buffer.byteLength(JSON.stringify(event)) <= 12 * 1024,
+          "serialized event must reserve 4 KiB of the 16 KiB durable limit",
+        );
+        chunks.push(event.text);
+      }
+      if (event.kind === "terminal") break;
+    }
+  })();
+  // Attach rejection before starting native work to avoid an unhandled assertion.
+  const observed = consume.then(
+    () => ({ error: undefined }),
+    (error) => ({ error }),
+  );
+  const start = adapter.startTurn("s", "x", "c").then(
+    () => ({ error: undefined }),
+    (error) => ({ error }),
+  );
+  const result = await observed;
+  const started = await start;
+  if (result.error) throw result.error;
+  if (started.error) throw started.error;
+  assert.equal(chunks.join(""), text);
+});
+
+test("native callback identity history fails closed at its resource bound", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.configure({ resolveCount: 4097 });
+  await adapter.startSession(options);
+  const iterator = adapter
+    .events(new AbortController().signal)
+    [Symbol.asyncIterator]();
+  const rejected = assert.rejects(
+    iterator.next(),
+    /callback identity capacity exceeded/,
+  );
+  await assert.rejects(
+    adapter.startTurn("s", "x", "c"),
+    /callback identity capacity exceeded/,
+  );
+  await rejected;
 });

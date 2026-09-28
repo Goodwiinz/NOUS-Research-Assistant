@@ -25,6 +25,10 @@ import {
 } from "../rpc.ts";
 
 export const SUPPORTED_CODEX_VERSION = "0.153.4";
+// Leave 4 KiB for Task 4 durable envelope metadata within the 16 KiB limit.
+const MAX_SERIALIZED_DELTA_BYTES = 12 * 1024;
+const MAX_SEEN_CALLBACKS = 4096;
+const MAX_CALLBACK_ID_BYTES = 64 * 1024;
 const ajv = new Ajv({ strict: false });
 ajv.addFormat("int64", { type: "number", validate: Number.isSafeInteger });
 ajv.addFormat("uint64", {
@@ -59,6 +63,9 @@ export class CodexAdapter implements HarnessAdapter {
     NativeRequestId,
     { method: string; params: Record<string, any> }
   >();
+  // Tombstones last for this native process, including answered/denied callbacks.
+  private seenRequestIds = new Set<NativeRequestId>();
+  private seenRequestIdBytes = 0;
   private executable: { command: string; args?: string[] };
   constructor(
     executable: { command: string; args?: string[] } = {
@@ -335,14 +342,28 @@ export class CodexAdapter implements HarnessAdapter {
   }
   async closeSession(): Promise<void> {
     this.requests.clear();
+    this.seenRequestIds.clear();
+    this.seenRequestIdBytes = 0;
     this.rpc?.close();
     this.session = undefined;
+  }
+  private rememberRequestId(id: NativeRequestId): void {
+    if (this.seenRequestIds.has(id)) return;
+    const bytes = typeof id === "string" ? Buffer.byteLength(id) : 8;
+    if (
+      this.seenRequestIds.size >= MAX_SEEN_CALLBACKS ||
+      this.seenRequestIdBytes + bytes > MAX_CALLBACK_ID_BYTES
+    )
+      throw new TransportLoss("native callback identity capacity exceeded");
+    this.seenRequestIds.add(id);
+    this.seenRequestIdBytes += bytes;
   }
   private async receive(message: RpcMessage): Promise<void> {
     const p = message.params;
     if (message.id !== undefined) {
-      if (this.requests.has(message.id))
+      if (this.seenRequestIds.has(message.id))
         throw new TransportLoss("duplicate native callback ID");
+      this.rememberRequestId(message.id);
       const validate = validators.get(message.method!);
       const supported =
         validate &&
@@ -384,6 +405,19 @@ export class CodexAdapter implements HarnessAdapter {
       });
       return;
     }
+    // This pinned notification has no turnId and must precede turn filtering.
+    if (message.method === "serverRequest/resolved") {
+      if (
+        record(p) &&
+        this.session &&
+        p.threadId === this.session.id &&
+        (typeof p.requestId === "string" || Number.isSafeInteger(p.requestId))
+      ) {
+        this.rememberRequestId(p.requestId);
+        this.requests.delete(p.requestId);
+      }
+      return;
+    }
     if (!record(p) || p.threadId !== this.session?.id || !this.active) return;
     const turnId =
       message.method === "turn/completed" && record(p.turn)
@@ -401,18 +435,32 @@ export class CodexAdapter implements HarnessAdapter {
       message.method === "item/agentMessage/delta" &&
       typeof p.delta === "string"
     ) {
-      // Bound by UTF-8 bytes without splitting surrogate pairs; preserve every character.
+      // JSON escaping can expand control characters sixfold. Count the actual
+      // serialized event, including identities, while preserving Unicode points.
+      const overhead = Buffer.byteLength(
+        JSON.stringify({ ...position, kind: "delta", text: "" }),
+      );
+      const textBudget = MAX_SERIALIZED_DELTA_BYTES - overhead;
+      if (textBudget < 6)
+        throw new TransportLoss("delta identity exceeds event budget");
       let text = "",
-        bytes = 0;
+        rawBytes = 0,
+        serializedBytes = 0;
       for (const character of p.delta) {
-        const size = Buffer.byteLength(character);
-        if (bytes + size > 8192) {
+        const rawSize = Buffer.byteLength(character);
+        const serializedSize = Buffer.byteLength(JSON.stringify(character)) - 2;
+        if (
+          rawBytes + rawSize > 8192 ||
+          serializedBytes + serializedSize > textBudget
+        ) {
           await this.queue.push({ ...position, kind: "delta", text });
           text = "";
-          bytes = 0;
+          rawBytes = 0;
+          serializedBytes = 0;
         }
         text += character;
-        bytes += size;
+        rawBytes += rawSize;
+        serializedBytes += serializedSize;
       }
       if (text) await this.queue.push({ ...position, kind: "delta", text });
     } else if (
