@@ -304,3 +304,15 @@ __all__ += ["SearchFeedback"]
 from .evidence import StanceClassificationModel, StanceEnum  # noqa: E402
 
 __all__ += ["StanceClassificationModel", "StanceEnum"]
+
+from .bridge_device import BridgeDevice, WorkspaceBinding
+from .harness_session import HarnessNativeRequest, HarnessSession
+from .integration_grant import IntegrationGrant, IntegrationGrantRequest
+
+__all__ += [
+    "HarnessSession",
+    "BridgeDevice",
+    "WorkspaceBinding",
+    "IntegrationGrant",
+    "IntegrationGrantRequest",
+]

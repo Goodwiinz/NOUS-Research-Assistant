@@ -115,6 +115,9 @@ async def upsert_run(
     thread_uuid = _coerce_uuid(thread_id)
 
     run = await db.get(AgentRun, job_id)
+    if run is not None and run.execution_provider != "nous":
+        # Native job-store projections are not evidence of remote execution.
+        return run
     if run is None:
         if user_uuid is None:
             logger.warning(
@@ -450,6 +453,7 @@ async def claim_execution(
         .where(
             AgentRun.job_id == job_id,
             AgentRun.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),
+            AgentRun.execution_provider == "nous",
             AgentRun.lease_owner.is_(None),
         )
         .values(
