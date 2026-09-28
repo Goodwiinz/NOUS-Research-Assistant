@@ -9,11 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.integrations.auth import (
+    integration_context,
     require_cli_user,
     require_interactive_user,
     require_pairing_user,
 )
 from src.core.database import get_db
+from src.core.dependencies import get_current_user
+from src.core.security import TokenData, get_current_user_token
 from src.models.user import User
 from src.schemas.integration_context import (
     GrantDecision,
@@ -102,9 +105,19 @@ async def renew_grant(
 @router.delete("/grants/{grant_id}", status_code=204)
 async def delete_grant(
     grant_id: UUID,
-    user: User = Depends(require_pairing_user),
+    request: Request,
+    user: User = Depends(get_current_user),
+    token: TokenData = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    await call(service.owned_grant(db, user, grant_id))
+    grant = await call(service.owned_grant(db, user, grant_id))
+    if token.is_cli:
+        context = await integration_context(
+            request, next(iter(grant.scopes), ""), db, token, user
+        )
+        if context.grant_id != grant_id:
+            raise HTTPException(403, "Integration access denied")
+    else:
+        await require_interactive_user(request, token, user)
     await service.revoke_integration_grant(db, grant_id)
     return Response(status_code=204)

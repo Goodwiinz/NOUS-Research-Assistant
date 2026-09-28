@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import insert, text, update
+from sqlalchemy import delete, insert, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.requests import Request
 
@@ -284,9 +284,15 @@ async def test_public_project_denied_but_explicit_cross_org_member_allowed(
 ) -> None:
     from src.models.workspace import WorkspaceRole
 
+    owning_org = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=owning_org, name="Project owning org", storage_limit_bytes=1000000
+        )
+    )
     await db.execute(
         update(Workspace).values(
-            owner_id=uuid4(), organization_id=uuid4(), is_public=True
+            owner_id=uuid4(), organization_id=owning_org, is_public=True
         )
     )
     await db.commit()
@@ -447,3 +453,151 @@ async def test_device_bound_mint_requires_consumed_browser_consent(
     assert (
         await resolve_integration_context(db, issued.token, required_scope="tools:read")
     ).project_id == PROJECT
+
+
+@pytest.mark.parametrize("owning_org_state", ["inactive", "deleted", "missing"])
+async def test_cross_org_project_requires_live_owning_organization(
+    db: AsyncSession, owner: Any, pending: Any, owning_org_state: str
+) -> None:
+    from src.models.workspace import WorkspaceRole
+    from src.services.integrations.context import (
+        decide_request,
+        exchange_request,
+        renew_grant,
+    )
+
+    owning_org = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=owning_org, name="Owning organization", storage_limit_bytes=1000000
+        )
+    )
+    await db.execute(
+        update(Workspace).values(organization_id=owning_org, owner_id=uuid4())
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    # Both organizations are persisted and active; an explicitly invited member
+    # retains the actor's org in context and may mint, resolve and renew.
+    unbound = await mint_integration_grant(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        scopes=frozenset({"tools:read"}),
+    )
+    assert (
+        await resolve_integration_context(
+            db, unbound.token, required_scope="tools:read"
+        )
+    ).organization_id == ORG
+    await decide_request(db, owner, pending.id, True)
+    bound = await exchange_request(db, owner, pending.id)
+    bound = await renew_grant(db, owner, bound.grant_id)
+    assert (
+        await resolve_integration_context(db, bound.token, required_scope="tools:read")
+    ).organization_id == ORG
+
+    if owning_org_state == "missing":
+        await db.execute(delete(Organization).where(Organization.id == owning_org))
+    else:
+        changes = (
+            {"is_active": False}
+            if owning_org_state == "inactive"
+            else {"is_deleted": True}
+        )
+        await db.execute(
+            update(Organization).where(Organization.id == owning_org).values(**changes)
+        )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await mint_integration_grant(
+            db,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=PROJECT,
+            scopes=frozenset({"tools:read"}),
+        )
+    for token in (unbound.token, bound.token):
+        with pytest.raises(IntegrationAccessDenied):
+            await resolve_integration_context(db, token, required_scope="tools:read")
+    with pytest.raises(IntegrationAccessDenied):
+        await renew_grant(db, owner, bound.grant_id)
+
+
+async def test_http_owner_revocation_supports_cli_dual_credentials_and_browser(
+    db: AsyncSession, owner: Any, pending: Any
+) -> None:
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from src.api.integrations import router
+    from src.core.database import get_db
+    from src.core.dependencies import get_current_user
+    from src.core.security import TokenData, get_current_user_token
+    from src.services.integrations.context import decide_request, exchange_request
+
+    await decide_request(db, owner, pending.id, True)
+    issued = await exchange_request(db, owner, pending.id)
+    browser_grant = await mint_integration_grant(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        scopes=frozenset({"tools:read"}),
+    )
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db
+    actor = owner
+    app.dependency_overrides[get_current_user] = lambda: actor
+    token = TokenData(is_cli=True, user_id=str(USER), organization_id=str(ORG))
+    app.dependency_overrides[get_current_user_token] = lambda: token
+    headers = {
+        "Authorization": "Bearer verified-cli-jwt",
+        "X-NOUS-Integration-Grant": issued.token,
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        url = f"/api/v1/integrations/grants/{issued.grant_id}"
+        actor = SimpleNamespace(id=uuid4(), organization_id=ORG)
+        token.user_id = str(actor.id)
+        assert (await client.delete(url, headers=headers)).status_code == 403
+        actor = owner
+        token.user_id = str(USER)
+        assert (
+            await client.delete(
+                url,
+                headers={**headers, "X-NOUS-Integration-Grant": browser_grant.token},
+            )
+        ).status_code == 403
+        assert (await client.delete(url, headers=headers)).status_code == 204
+        with pytest.raises(IntegrationAccessDenied):
+            await resolve_integration_context(
+                db, issued.token, required_scope="tools:read"
+            )
+        browser_url = f"/api/v1/integrations/grants/{browser_grant.grant_id}"
+        assert (
+            await client.delete(
+                browser_url, headers={"Authorization": "Bearer verified-cli-jwt"}
+            )
+        ).status_code == 403
+        token.is_cli = False
+        assert (await client.delete(browser_url, headers=headers)).status_code == 403
+        actor = SimpleNamespace(id=uuid4(), organization_id=ORG)
+        token.user_id = str(actor.id)
+        assert (await client.delete(browser_url)).status_code == 403
+        actor = owner
+        token.user_id = str(USER)
+        assert (await client.delete(browser_url)).status_code == 204
+        with pytest.raises(IntegrationAccessDenied):
+            await resolve_integration_context(
+                db, browser_grant.token, required_scope="tools:read"
+            )

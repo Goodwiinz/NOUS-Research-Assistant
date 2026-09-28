@@ -70,6 +70,11 @@ async def authorized_project(
                 Workspace.is_deleted.is_(False),
                 or_(Workspace.owner_id == user_id, member),
                 exists().where(
+                    Organization.id == Workspace.organization_id,
+                    Organization.is_deleted.is_(False),
+                    Organization.is_active.is_(True),
+                ),
+                exists().where(
                     User.id == user_id,
                     User.organization_id == organization_id,
                     User.is_active.is_(True),
