@@ -6,9 +6,11 @@ from typing import Any, Dict, List
 import yaml
 from pydantic import ValidationError
 
+from src.core.config import settings
 from src.schemas.research_engine import BlueprintStepDefinition, StepType
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+DAILY_RESEARCH_BRIEF_TEMPLATE = "daily_research_brief"
 
 # Pre-compute valid step type values for validation.
 _VALID_STEP_TYPES = {t.value for t in StepType}
@@ -17,8 +19,18 @@ _VALID_STEP_TYPES = {t.value for t in StepType}
 class BlueprintLoader:
     """Loads, lists, and validates YAML blueprint templates."""
 
-    def __init__(self, templates_dir: Path = TEMPLATES_DIR) -> None:
+    def __init__(
+        self,
+        templates_dir: Path = TEMPLATES_DIR,
+        *,
+        daily_research_brief_enabled: bool | None = None,
+    ) -> None:
         self._templates_dir = templates_dir
+        self._daily_research_brief_enabled = (
+            settings.DAILY_RESEARCH_BRIEF_ENABLED
+            if daily_research_brief_enabled is None
+            else daily_research_brief_enabled
+        )
 
     def list_templates(self) -> List[Dict[str, Any]]:
         """List all available YAML templates.
@@ -27,6 +39,11 @@ class BlueprintLoader:
         """
         results: List[Dict[str, Any]] = []
         for path in sorted(self._templates_dir.glob("*.yaml")):
+            if (
+                path.stem == DAILY_RESEARCH_BRIEF_TEMPLATE
+                and not self._daily_research_brief_enabled
+            ):
+                continue
             data = self.load_template(path.stem)
             results.append(
                 {
@@ -43,6 +60,11 @@ class BlueprintLoader:
 
         Raises FileNotFoundError if the template does not exist.
         """
+        if (
+            slug == DAILY_RESEARCH_BRIEF_TEMPLATE
+            and not self._daily_research_brief_enabled
+        ):
+            raise FileNotFoundError(f"Blueprint template not found: {slug}")
         templates_dir = self._templates_dir.resolve()
         path = (templates_dir / f"{slug}.yaml").resolve()
         if path.parent != templates_dir:
@@ -58,7 +80,10 @@ class BlueprintLoader:
             raise ValueError(f"invalid template '{slug}': template must be an object")
         data: Dict[str, Any] = loaded
         errors = self.validate_template(data)
-        if slug == "daily_research_brief" and data.get("template_source") != slug:
+        if (
+            slug == DAILY_RESEARCH_BRIEF_TEMPLATE
+            and data.get("template_source") != slug
+        ):
             errors.append(
                 "daily_research_brief template_source must be daily_research_brief"
             )

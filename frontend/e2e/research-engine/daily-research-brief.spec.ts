@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const fixturePort = Number(process.env.DAILY_BRIEF_E2E_PORT ?? '8765');
@@ -24,11 +25,13 @@ type RunAudit = {
   steps: AuditStep[];
   reviews: Array<{
     id: string;
+    reviewer_id: string;
     step_index: number;
     review_kind: string;
     output_hash: string;
     decision: string;
     decision_payload: Record<string, unknown>;
+    created_at: string;
   }>;
   reconnect_failures: number;
 };
@@ -214,6 +217,20 @@ async function auditRun(page: Page, runId: string): Promise<RunAudit> {
   }, runId);
 }
 
+async function accessToken(page: Page): Promise<string> {
+  const cookie = (await page.context().cookies()).find(
+    ({ name }) => name === 'daily-brief-e2e-auth'
+  );
+  if (!cookie?.value.startsWith('base64-')) {
+    throw new Error('E2E auth session cookie is missing');
+  }
+  const session = JSON.parse(
+    Buffer.from(cookie.value.slice('base64-'.length), 'base64').toString('utf8')
+  ) as { access_token?: string };
+  if (!session.access_token) throw new Error('E2E access token is missing');
+  return session.access_token;
+}
+
 test.describe.serial('Daily Research Brief real lifecycle', () => {
   test.describe.configure({ timeout: 120_000 });
 
@@ -236,6 +253,7 @@ test.describe.serial('Daily Research Brief real lifecycle', () => {
         env: {
           ...process.env,
           PYTHONPATH: '.',
+          DAILY_RESEARCH_BRIEF_ENABLED: 'true',
           ORCHESTRATION_TEST_DATABASE_URL:
             process.env.ORCHESTRATION_TEST_DATABASE_URL ?? '',
         },
@@ -370,6 +388,24 @@ test.describe.serial('Daily Research Brief real lifecycle', () => {
     expect(exported.verification_output_hash).toBe(audit.steps[4].outputs_hash);
     expect(exported.report_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(exported.markdown).toContain('Treatment reduced the measured score');
+    const finalAttestation = audit.manifest.final_approval_attestation as {
+      review_id: string;
+      reviewer_id: string;
+      reviewed_at: string;
+      output_hash: string;
+      report_hash: string;
+      verification_output_hash: string;
+      attestation_hash: string;
+    };
+    expect(finalAttestation.review_id).toBe(audit.reviews[2].id);
+    expect(finalAttestation.reviewer_id).toBe(audit.reviews[2].reviewer_id);
+    expect(finalAttestation.reviewed_at).toBe(audit.reviews[2].created_at);
+    expect(finalAttestation.output_hash).toBe(audit.steps[5].outputs_hash);
+    expect(finalAttestation.report_hash).toBe(exported.report_hash);
+    expect(finalAttestation.verification_output_hash).toBe(
+      exported.verification_output_hash
+    );
+    expect(finalAttestation.attestation_hash).toMatch(/^[0-9a-f]{64}$/);
 
     // The real authenticated download must cross the same browser/API boundary.
     for (const format of ['markdown', 'json', 'csv'] as const) {
@@ -378,12 +414,37 @@ test.describe.serial('Daily Research Brief real lifecycle', () => {
           response.url().includes(`/runs/${runId}/export?format=${format}`) &&
           response.request().method() === 'GET'
       );
+      const browserDownload = page.waitForEvent('download');
       await page
         .getByRole('button', {
           name: `Download ${format === 'markdown' ? 'Markdown' : format.toUpperCase()}`,
         })
         .click();
-      expect((await downloadResponse).status()).toBe(200);
+      const [completedDownload, downloadedFile] = await Promise.all([
+        downloadResponse,
+        browserDownload,
+      ]);
+      expect(completedDownload.status()).toBe(200);
+      const downloadedPath = await downloadedFile.path();
+      expect(downloadedPath).not.toBeNull();
+      const body = await readFile(downloadedPath!, 'utf8');
+      if (format === 'json') {
+        const payload = JSON.parse(body) as {
+          reviewed_artifact_hash: string;
+          review_history: Array<{ reviewer_id: string }>;
+          final_approval_attestation: typeof finalAttestation;
+        };
+        expect(payload.reviewed_artifact_hash).toBe(exported.report_hash);
+        expect(payload.review_history).toHaveLength(3);
+        expect(payload.review_history[2].reviewer_id).toBe(
+          audit.reviews[2].reviewer_id
+        );
+        expect(payload.final_approval_attestation).toEqual(finalAttestation);
+      } else if (format === 'markdown') {
+        expect(body).toContain('DAILY_RESEARCH_BRIEF_POST_APPROVAL_AUDIT_V1');
+      } else {
+        expect(body).toContain('final_attestation');
+      }
     }
   });
 
@@ -549,19 +610,87 @@ test.describe.serial('Daily Research Brief real lifecycle', () => {
     expect(audit.steps[5].output.report_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test('reconnects once to the same PostgreSQL run without duplicating its screening gate', async ({
+  test('reconnects and manually resumes the same run without duplicating its screening gate', async ({
     page,
   }) => {
     await login(page);
     const runId = await startDailyBrief(
       page,
-      'What are the controlled treatment outcomes? [reconnect]',
-      'reconnect'
+      'What are the controlled treatment outcomes? [manual-pause] [reconnect-after-resume]',
+      'reconnect and manual resume'
     );
 
+    // The Next development proxy buffers the fixture's streamed body while the
+    // controlled connector is held. Confirm the real stream has claimed the
+    // run, then issue the same authenticated pause request as RunView.
+    await expect
+      .poll(async () => (await auditRun(page, runId)).status)
+      .toBe('running');
+    const pauseResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/research-engine/runs/${runId}/pause`) &&
+        response.request().method() === 'POST'
+    );
+    const token = await accessToken(page);
+    const pauseStatus = await page.evaluate(
+      async ({ id, accessToken: bearer }) => {
+        const response = await fetch(
+          `/api/v1/research-engine/runs/${id}/pause`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${bearer}` },
+          }
+        );
+        return response.status;
+      },
+      { id: runId, accessToken: token }
+    );
+    expect(pauseStatus).toBe(200);
+    expect((await pauseResponse).status()).toBe(200);
+    const released = await page.evaluate(async () => {
+      const response = await fetch('/api/v1/e2e/manual-pause/release', {
+        method: 'POST',
+      });
+      return response.status;
+    });
+    expect(released).toBe(200);
+    const resume = page.getByRole('button', { name: 'Resume', exact: true });
+    await expect(resume).toBeVisible();
+    const resumeResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/research-engine/runs/${runId}/resume`) &&
+        response.request().method() === 'POST'
+    );
+    const pausedRefresh = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/research-engine/runs/${runId}`) &&
+        response.request().method() === 'GET'
+    );
+    const resumedStream = page.waitForRequest(
+      (request) =>
+        request.url().endsWith(`/research-engine/runs/${runId}/stream`) &&
+        request.method() === 'GET'
+    );
+    const resumedStreamRequests: string[] = [];
+    page.on('request', (request) => {
+      if (
+        request.url().endsWith(`/research-engine/runs/${runId}/stream`) &&
+        request.method() === 'GET'
+      ) {
+        resumedStreamRequests.push(request.url());
+      }
+    });
+    await resume.click();
+    expect((await resumeResponse).status()).toBe(200);
+    const intermediate = (await pausedRefresh).json() as Promise<{
+      status: string;
+    }>;
+    expect((await intermediate).status).toBe('paused');
+    await resumedStream;
     await expect(
       page.getByRole('heading', { name: 'Screening review' })
     ).toBeVisible();
+    expect(resumedStreamRequests).toHaveLength(2);
     const audit = await auditRun(page, runId);
     expect(audit.reconnect_failures).toBe(1);
     expect(audit.steps.map((step) => step.step_type)).toEqual([

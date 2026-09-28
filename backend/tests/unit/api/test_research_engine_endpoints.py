@@ -99,6 +99,11 @@ def mock_db():
 
 
 @pytest.fixture
+def daily_brief_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", True)
+
+
+@pytest.fixture
 def client(test_app, mock_current_user, mock_db):
     """Create a test client with auth and db overrides."""
     from contextlib import asynccontextmanager
@@ -282,8 +287,38 @@ class TestStartRun:
         assert created_run.reproducibility_manifest == {"parameters_override": {}}
 
     @patch("src.api.research_engine.runs.select")
-    def test_daily_brief_requires_scope_confirmation(
+    def test_disabled_daily_brief_cannot_start_from_existing_blueprint(
         self, mock_select, client, mock_db, mock_current_user
+    ):
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(
+            id=blueprint_id,
+            template_source="daily_research_brief",
+            parameters={},
+        )
+        result = Mock()
+        scalars = Mock()
+        scalars.first.return_value = blueprint
+        result.scalars.return_value = scalars
+        mock_db.execute = AsyncMock(return_value=result)
+
+        response = client.post(
+            f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+            json={},
+        )
+
+        assert response.status_code == 404
+        assert blueprint.is_immutable is False
+        mock_db.add.assert_not_called()
+
+    @patch("src.api.research_engine.runs.select")
+    def test_daily_brief_requires_scope_confirmation(
+        self,
+        mock_select,
+        client,
+        mock_db,
+        mock_current_user,
+        daily_brief_enabled,
     ):
         blueprint_id = uuid.uuid4()
         blueprint = _make_mock_blueprint(
@@ -320,7 +355,12 @@ class TestStartRun:
 
     @patch("src.api.research_engine.runs.select")
     def test_daily_brief_stores_confirmed_effective_scope_with_server_metadata(
-        self, mock_select, client, mock_db, mock_current_user
+        self,
+        mock_select,
+        client,
+        mock_db,
+        mock_current_user,
+        daily_brief_enabled,
     ):
         blueprint_id = uuid.uuid4()
         blueprint = _make_mock_blueprint(
@@ -384,7 +424,12 @@ class TestStartRun:
 
     @patch("src.api.research_engine.runs.select")
     def test_daily_brief_rejects_confirmation_that_differs_from_effective_scope(
-        self, mock_select, client, mock_db, mock_current_user
+        self,
+        mock_select,
+        client,
+        mock_db,
+        mock_current_user,
+        daily_brief_enabled,
     ):
         blueprint_id = uuid.uuid4()
         blueprint = _make_mock_blueprint(

@@ -600,7 +600,7 @@ async def test_export_service_json_has_complete_daily_brief_provenance() -> None
             "scope_confirmation": context["scope_confirmation"],
             "provider_manifest": context["provider_manifest"],
             "review_history": context["approved_review_overlays"],
-            "final_status": "verified",
+            "final_status": "unverified",
         },
     )
     run.blueprint.template_source = "daily_research_brief"
@@ -714,6 +714,7 @@ async def test_csv_has_stable_audit_fields_bounds_cells_and_neutralizes_formulas
     parsed = list(csv.DictReader(io.StringIO(rendered)))
 
     assert list(parsed[0]) == [
+        "record_type",
         "artifact_status",
         "warning",
         "source_id",
@@ -723,6 +724,16 @@ async def test_csv_has_stable_audit_fields_bounds_cells_and_neutralizes_formulas
         "evidence_level",
         "decision",
         "reason",
+        "review_id",
+        "reviewer_id",
+        "review_kind",
+        "reviewed_at",
+        "review_output_hash",
+        "review_payload",
+        "review_note",
+        "report_hash",
+        "verification_output_hash",
+        "attestation_hash",
     ]
     assert parsed[0]["artifact_status"] == "unverified"
     assert "UNVERIFIED" in parsed[0]["warning"]
@@ -771,7 +782,7 @@ async def test_csv_keeps_accepted_and_rejected_extraction_audit_rows() -> None:
         manifest={
             **context["artifact_provenance"],
             "review_history": reviews,
-            "final_status": "verified",
+            "final_status": "unverified",
         },
     )
     run.blueprint.template_source = "daily_research_brief"
@@ -916,18 +927,38 @@ def _trusted_daily_export_run(
     export_step.output = export_output
     export_step.outputs_hash = canonical_stage_output_hash(export_output)
     run.steps = [verify_step, export_step]
-    run.reviews = [
-        SimpleNamespace(
-            id=uuid4(),
-            step_index=1,
-            stage_type="export",
-            review_kind="final",
-            output_hash=export_step.outputs_hash,
-            decision="approve",
-            decision_payload={},
-            created_at=datetime(2026, 9, 27, 10, 10, tzinfo=timezone.utc),
-        )
-    ]
+    review_id = uuid4()
+    reviewer_id = uuid4()
+    reviewed_at = datetime(2026, 9, 27, 10, 10, tzinfo=timezone.utc)
+    review = SimpleNamespace(
+        id=review_id,
+        reviewer_id=reviewer_id,
+        step_index=1,
+        stage_type="export",
+        review_kind="final",
+        output_hash=export_step.outputs_hash,
+        decision="approve",
+        decision_payload={},
+        note=None,
+        created_at=reviewed_at,
+    )
+    run.reviews = [review]
+    unsigned_attestation = {
+        "schema_version": 1,
+        "review_id": str(review_id),
+        "reviewer_id": str(reviewer_id),
+        "reviewed_at": reviewed_at.isoformat(),
+        "decision": "approve",
+        "review_kind": "final",
+        "step_index": 1,
+        "output_hash": export_step.outputs_hash,
+        "report_hash": export_output["report_hash"],
+        "verification_output_hash": export_output["verification_output_hash"],
+    }
+    run.reproducibility_manifest["final_approval_attestation"] = {
+        **unsigned_attestation,
+        "attestation_hash": canonical_json_sha256(unsigned_attestation),
+    }
     return cast(MagicMock, run)
 
 
@@ -949,7 +980,10 @@ async def test_markdown_download_uses_exact_persisted_approved_artifact_bytes(
         run.id, uuid4(), ExportFormat.MARKDOWN, _mock_db_for_run(run)
     )
 
-    assert artifact.content == expected
+    assert artifact.content[: len(expected)] == expected
+    assert b"DAILY_RESEARCH_BRIEF_POST_APPROVAL_AUDIT_V1" in artifact.content
+    assert b'"reviewer_id"' in artifact.content
+    assert b'"final_approval_attestation"' in artifact.content
     assert observer.snapshot()["counters"]["exports"]["markdown:success:none"] == 1
 
 
@@ -1153,13 +1187,18 @@ async def test_verified_daily_export_requires_all_durable_trust_evidence(
     else:
         run.reviews = []
 
-    artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
-    )
-
-    payload = json.loads(artifact.content)
-    assert payload["final_status"] == "unverified"
-    assert "UNVERIFIED" in payload["warning"]
+    if missing == "terminal_status":
+        artifact = await ExportService().export(
+            run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+        )
+        payload = json.loads(artifact.content)
+        assert payload["final_status"] == "unverified"
+    else:
+        with pytest.raises(ResearchExportError) as raised:
+            await ExportService().export(
+                run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+            )
+        assert raised.value.code == "verified_artifact_attestation_invalid"
 
 
 @pytest.mark.asyncio
@@ -1195,15 +1234,86 @@ async def test_verified_markdown_requires_exact_canonical_persisted_bytes(
     export_step.outputs_hash = canonical_stage_output_hash(output)
     run.reviews[0].output_hash = export_step.outputs_hash
 
-    artifact = await ExportService().export(
-        run.id,
-        uuid4(),
-        ExportFormat.MARKDOWN,
-        _mock_db_for_run(run),
-    )
+    with pytest.raises(ResearchExportError) as raised:
+        await ExportService().export(
+            run.id,
+            uuid4(),
+            ExportFormat.MARKDOWN,
+            _mock_db_for_run(run),
+        )
+    assert raised.value.code == "verified_artifact_attestation_invalid"
 
-    assert artifact.content != b"# REVIEWED MARKDOWN\n"
-    assert b"UNVERIFIED" in artifact.content
+
+@pytest.mark.asyncio
+async def test_verified_json_wraps_immutable_report_with_complete_approval_audit() -> (
+    None
+):
+    run = _trusted_daily_export_run()
+    original_report = copy.deepcopy(run.steps[-1].output["exported"])
+
+    artifact = await ExportService().export(
+        run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+    )
+    payload = json.loads(artifact.content)
+
+    assert payload["download_envelope_version"] == 1
+    assert payload["reviewed_artifact"] == original_report
+    assert (
+        canonical_json_sha256(payload["reviewed_artifact"])
+        == payload["final_approval_attestation"]["report_hash"]
+    )
+    assert payload["review_history"][-1]["reviewer_id"] == str(
+        run.reviews[-1].reviewer_id
+    )
+    assert payload["final_approval_attestation"]["review_id"] == str(run.reviews[-1].id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corruption", ["missing", "wrong_review", "wrong_hash"])
+async def test_verified_download_fails_closed_on_missing_or_wrong_attestation(
+    corruption: str,
+) -> None:
+    run = _trusted_daily_export_run()
+    if corruption == "missing":
+        run.reproducibility_manifest.pop("final_approval_attestation")
+    elif corruption == "wrong_review":
+        run.reproducibility_manifest["final_approval_attestation"]["review_id"] = str(
+            uuid4()
+        )
+    else:
+        run.reproducibility_manifest["final_approval_attestation"]["report_hash"] = (
+            "0" * 64
+        )
+
+    with pytest.raises(ResearchExportError) as raised:
+        await ExportService().export(
+            run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+        )
+
+    assert raised.value.code == "verified_artifact_attestation_invalid"
+
+
+@pytest.mark.asyncio
+async def test_verified_csv_exposes_complete_review_and_final_attestation() -> None:
+    run = _trusted_daily_export_run()
+
+    artifact = await ExportService().export(
+        run.id, uuid4(), ExportFormat.CSV, _mock_db_for_run(run)
+    )
+    rows = list(csv.DictReader(io.StringIO(artifact.content.decode("utf-8"))))
+
+    review_row = next(row for row in rows if row["record_type"] == "review")
+    attestation_row = next(
+        row for row in rows if row["record_type"] == "final_attestation"
+    )
+    assert review_row["review_id"] == str(run.reviews[-1].id)
+    assert review_row["reviewer_id"] == str(run.reviews[-1].reviewer_id)
+    assert attestation_row["review_output_hash"] == run.steps[-1].outputs_hash
+    assert attestation_row["report_hash"] == run.steps[-1].output["report_hash"]
+    assert (
+        attestation_row["verification_output_hash"]
+        == run.steps[-1].output["verification_output_hash"]
+    )
 
 
 @pytest.mark.asyncio

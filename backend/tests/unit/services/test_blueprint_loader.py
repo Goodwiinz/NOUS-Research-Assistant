@@ -3,6 +3,7 @@
 import pytest
 import yaml
 
+from src.core.config import Settings
 from src.schemas.research_engine import BlueprintStepDefinition
 from src.services.research_engine.blueprints.loader import BlueprintLoader
 
@@ -33,6 +34,35 @@ class TestListTemplates:
             assert "step_count" in t
             assert isinstance(t["step_count"], int)
             assert t["step_count"] > 0
+
+    def test_daily_brief_is_hidden_by_default_and_available_only_when_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The server-owned release switch defaults closed at the loader boundary."""
+        monkeypatch.setattr(
+            "src.services.research_engine.blueprints.loader.settings.DAILY_RESEARCH_BRIEF_ENABLED",
+            False,
+            raising=False,
+        )
+
+        disabled = BlueprintLoader()
+        assert "daily_research_brief" not in {
+            item["slug"] for item in disabled.list_templates()
+        }
+        with pytest.raises(FileNotFoundError):
+            disabled.load_template("daily_research_brief")
+
+        enabled = BlueprintLoader(daily_research_brief_enabled=True)
+        assert "daily_research_brief" in {
+            item["slug"] for item in enabled.list_templates()
+        }
+        assert (
+            enabled.load_template("daily_research_brief")["template_source"]
+            == "daily_research_brief"
+        )
+
+    def test_daily_brief_release_setting_defaults_false(self) -> None:
+        assert Settings.model_fields["DAILY_RESEARCH_BRIEF_ENABLED"].default is False
 
     def test_list_templates_rejects_invalid_bundled_template(self, tmp_path) -> None:
         """Invalid bundled YAML must fail before metadata reaches callers."""

@@ -549,6 +549,35 @@ async def test_user_pause_before_first_step_uses_safe_sentinel_descriptor() -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["completed", "failed"])
+async def test_stream_cancellation_recovery_never_rewrites_terminal_state(
+    terminal_status: str,
+) -> None:
+    """A disconnect after the terminal commit cannot mint a resume path."""
+    run = _run()
+    run.status = terminal_status
+    run.reproducibility_manifest = {
+        "final_status": "verified" if terminal_status == "completed" else "failed",
+        "terminal_marker": "immutable",
+    }
+    original = copy.deepcopy(run.reproducibility_manifest)
+    session = _Session(run)
+    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+
+    descriptor = await service.recover_stream_cancellation(
+        run=run,
+        step_index=-1,
+        output_hash="a" * 64,
+        total_tokens=99,
+    )
+
+    assert descriptor is None
+    assert run.status == terminal_status
+    assert run.reproducibility_manifest == original
+    assert run.total_tokens == 5
+
+
+@pytest.mark.asyncio
 async def test_user_pause_anchors_latest_step_and_reconnect_restores_retry_state() -> (
     None
 ):

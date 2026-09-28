@@ -364,6 +364,13 @@ class ResearchReviewService:
                 approved["status"] = "approved"
                 approved["review_id"] = str(review.id)
                 manifest["pending_review"] = approved
+                if request.review_kind == ReviewKind.FINAL:
+                    manifest["final_approval_attestation"] = (
+                        self._final_approval_attestation(
+                            review=review,
+                            export_output=output,
+                        )
+                    )
                 run.reproducibility_manifest = manifest
 
             return self._response(review, replay=False), self._review_wait(descriptor)
@@ -498,6 +505,7 @@ class ResearchReviewService:
                     "review_id": str(review.id),
                     "step_index": review.step_index,
                     "review_kind": review.review_kind,
+                    "reviewer_id": str(review.reviewer_id),
                     "output_hash": review.output_hash,
                     "decision": review.decision,
                     "decision_payload": copy.deepcopy(review.decision_payload),
@@ -508,6 +516,31 @@ class ResearchReviewService:
         if audit:
             projected["approved_review_overlays"] = audit
         return projected
+
+    @staticmethod
+    def _final_approval_attestation(
+        *,
+        review: ResearchStageReview,
+        export_output: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        reviewed_at = ResearchReviewService._iso_timestamp(review.created_at)
+        if reviewed_at is None:
+            raise ResearchReviewService._payload_incomplete()
+        unsigned = {
+            "schema_version": 1,
+            "review_id": str(review.id),
+            "reviewer_id": str(review.reviewer_id),
+            "reviewed_at": reviewed_at,
+            "decision": str(review.decision),
+            "review_kind": str(review.review_kind),
+            "step_index": int(review.step_index),
+            "output_hash": str(review.output_hash),
+            "report_hash": str(export_output.get("report_hash")),
+            "verification_output_hash": str(
+                export_output.get("verification_output_hash")
+            ),
+        }
+        return {**unsigned, "attestation_hash": canonical_json_sha256(unsigned)}
 
     async def _load_owned_run(
         self,

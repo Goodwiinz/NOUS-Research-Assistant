@@ -32,9 +32,83 @@ def _safe_url(value: Any) -> str | None:
 _MAX_CSV_CELL_CHARS = 8192
 
 
+def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
+    """Return connector metadata, including legacy nested snapshots."""
+
+    value = source.get("metadata")
+    if not isinstance(value, dict):
+        return {}
+    nested = value.get("metadata")
+    return {**nested, **value} if isinstance(nested, dict) else value
+
+
+def _source_doi(source: dict[str, Any]) -> str | None:
+    metadata = _source_metadata(source)
+    identifiers = metadata.get("identifiers")
+    raw = identifiers.get("doi") if isinstance(identifiers, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        raw = metadata.get("doi") or source.get("doi")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return re.sub(
+        r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", raw.strip(), flags=re.I
+    )
+
+
+def _publication_year(source: dict[str, Any]) -> int | None:
+    metadata = _source_metadata(source)
+    candidate: Any = (
+        source.get("publication_year")
+        or source.get("year")
+        or metadata.get("publication_year")
+        or metadata.get("year")
+        or metadata.get("publication_date")
+        or metadata.get("published")
+    )
+    if isinstance(candidate, dict):
+        candidate = candidate.get("date-parts")
+    while isinstance(candidate, list) and candidate:
+        candidate = candidate[0]
+    if isinstance(candidate, int) and 1000 <= candidate <= 9999:
+        return candidate
+    if isinstance(candidate, str):
+        match = re.search(r"(?<!\d)(\d{4})(?!\d)", candidate)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _source_projection(source: dict[str, Any]) -> dict[str, Any]:
+    metadata = _source_metadata(source)
+    identifiers = metadata.get("identifiers")
+    return {
+        "source_id": source.get("source_id"),
+        "external_id": source.get("external_id"),
+        "title": source.get("title") or "Untitled source",
+        "authors": source.get("authors") or [],
+        "publication_year": _publication_year(source),
+        "publication_date": metadata.get("publication_date")
+        or metadata.get("published"),
+        "doi": _source_doi(source),
+        "journal": metadata.get("journal"),
+        "publication_type": metadata.get("publication_type"),
+        "identifiers": dict(identifiers) if isinstance(identifiers, dict) else {},
+        "connector_type": source.get("connector_type"),
+        "evidence_level": normalize_evidence_level(
+            source.get("evidence_level") or metadata.get("evidence_level")
+        ),
+        "url": _safe_url(source.get("url") or metadata.get("url")),
+    }
+
+
 def _claim_and_evidence_maps(
     context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    source_by_id = {
+        source.get("source_id"): source
+        for source in context.get("source_records") or []
+        if isinstance(source, dict) and isinstance(source.get("source_id"), str)
+    }
     evidence: list[dict[str, Any]] = []
     evidence_by_id: dict[str, dict[str, Any]] = {}
     for extraction in context.get("extractions") or []:
@@ -54,7 +128,12 @@ def _claim_and_evidence_maps(
                 "quote": item.get("quote"),
                 "page_reference": item.get("page_reference"),
                 "evidence_level": normalize_evidence_level(
-                    extraction.get("evidence_level")
+                    source_by_id.get(extraction.get("source_id"), {}).get(
+                        "evidence_level"
+                    )
+                    or _source_metadata(
+                        source_by_id.get(extraction.get("source_id"), {})
+                    ).get("evidence_level")
                 ),
             }
             evidence_by_id[evidence_id] = projected
@@ -129,20 +208,7 @@ def build_report(context: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(source_id, str) or source_id in seen_source_ids:
             continue
         seen_source_ids.add(source_id)
-        sources.append(
-            {
-                "source_id": source_id,
-                "title": source.get("title") or "Untitled source",
-                "authors": source.get("authors") or [],
-                "publication_year": source.get("publication_year", source.get("year")),
-                "doi": source.get("doi"),
-                "connector_type": source.get("connector_type"),
-                "evidence_level": normalize_evidence_level(
-                    source.get("evidence_level")
-                ),
-                "url": _safe_url(source.get("url")),
-            }
-        )
+        sources.append(_source_projection(source))
 
     verification = context.get("verification")
     if not isinstance(verification, dict):
@@ -379,8 +445,20 @@ def render_markdown(report: dict[str, Any]) -> str:
             title = _plain(source.get("title"))
             url = _safe_url(source.get("url"))
             label = f"[{title}]({url})" if url else title
+            bibliography = "; ".join(
+                value
+                for value in (
+                    ", ".join(_plain(author) for author in source.get("authors") or []),
+                    _plain(source.get("publication_year")),
+                    _plain(source.get("journal")),
+                    (f"DOI: {_plain(source.get('doi'))}" if source.get("doi") else ""),
+                )
+                if value
+            )
+            details = f" — {bibliography}" if bibliography else ""
             lines.append(
-                f"- `{_plain(source.get('source_id'))}` — {label} ({_plain(source.get('evidence_level'))})"
+                f"- `{_plain(source.get('source_id'))}` — {label}{details} "
+                f"({_plain(source.get('evidence_level'))})"
             )
         lines.append("")
 
@@ -431,20 +509,29 @@ def _csv_cell(value: Any) -> str:
 
 
 def _bibliography(source: dict[str, Any]) -> str:
-    title = str(source.get("title") or "Untitled source")
-    authors = ", ".join(str(item) for item in source.get("authors") or [])
-    year = source.get("publication_year") or source.get("year") or ""
-    doi = source.get("doi") or ""
-    url = source.get("url") or ""
+    projected = _source_projection(source)
+    title = str(projected["title"])
+    authors = ", ".join(str(item) for item in projected["authors"])
+    year = projected["publication_year"] or ""
+    journal = projected["journal"] or ""
+    doi = projected["doi"] or ""
+    url = projected["url"] or ""
     details = "; ".join(
-        item for item in (authors, str(year), str(doi), str(url)) if item
+        item for item in (authors, str(year), str(journal), str(doi), str(url)) if item
     )
     return f"{title}. {details}".rstrip()
 
 
-def render_csv(rows: list[dict[str, Any]], *, final_status: str) -> str:
+def render_csv(
+    rows: list[dict[str, Any]],
+    *,
+    final_status: str,
+    review_history: list[dict[str, Any]] | None = None,
+    final_attestation: dict[str, Any] | None = None,
+) -> str:
     """Render stable, bounded audit rows safe for spreadsheet applications."""
     fieldnames = [
+        "record_type",
         "artifact_status",
         "warning",
         "source_id",
@@ -454,6 +541,16 @@ def render_csv(rows: list[dict[str, Any]], *, final_status: str) -> str:
         "evidence_level",
         "decision",
         "reason",
+        "review_id",
+        "reviewer_id",
+        "review_kind",
+        "reviewed_at",
+        "review_output_hash",
+        "review_payload",
+        "review_note",
+        "report_hash",
+        "verification_output_hash",
+        "attestation_hash",
     ]
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=fieldnames, lineterminator="\r\n")
@@ -479,6 +576,7 @@ def render_csv(rows: list[dict[str, Any]], *, final_status: str) -> str:
             extraction = extraction_value
         writer.writerow(
             {
+                "record_type": "source",
                 "artifact_status": _csv_cell(final_status),
                 "warning": _csv_cell(warning),
                 "source_id": _csv_cell(
@@ -488,10 +586,45 @@ def render_csv(rows: list[dict[str, Any]], *, final_status: str) -> str:
                 "extracted": _csv_cell(extraction.get("data")),
                 "evidence": _csv_cell(extraction.get("evidence")),
                 "evidence_level": _csv_cell(
-                    extraction.get("evidence_level") or source.get("evidence_level")
+                    _source_projection(source)["evidence_level"]
                 ),
                 "decision": _csv_cell(row.get("decision")),
                 "reason": _csv_cell(row.get("reason")),
+            }
+        )
+    for review in review_history or []:
+        writer.writerow(
+            {
+                "record_type": "review",
+                "artifact_status": _csv_cell(final_status),
+                "decision": _csv_cell(review.get("decision")),
+                "review_id": _csv_cell(review.get("review_id")),
+                "reviewer_id": _csv_cell(review.get("reviewer_id")),
+                "review_kind": _csv_cell(review.get("review_kind")),
+                "reviewed_at": _csv_cell(review.get("created_at")),
+                "review_output_hash": _csv_cell(review.get("output_hash")),
+                "review_payload": _csv_cell(review.get("decision_payload")),
+                "review_note": _csv_cell(review.get("note")),
+            }
+        )
+    if final_attestation is not None:
+        writer.writerow(
+            {
+                "record_type": "final_attestation",
+                "artifact_status": _csv_cell(final_status),
+                "decision": _csv_cell(final_attestation.get("decision")),
+                "review_id": _csv_cell(final_attestation.get("review_id")),
+                "reviewer_id": _csv_cell(final_attestation.get("reviewer_id")),
+                "review_kind": _csv_cell(final_attestation.get("review_kind")),
+                "reviewed_at": _csv_cell(final_attestation.get("reviewed_at")),
+                "review_output_hash": _csv_cell(final_attestation.get("output_hash")),
+                "report_hash": _csv_cell(final_attestation.get("report_hash")),
+                "verification_output_hash": _csv_cell(
+                    final_attestation.get("verification_output_hash")
+                ),
+                "attestation_hash": _csv_cell(
+                    final_attestation.get("attestation_hash")
+                ),
             }
         )
     return output.getvalue()

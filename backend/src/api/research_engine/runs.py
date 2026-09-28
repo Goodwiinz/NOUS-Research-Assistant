@@ -16,6 +16,7 @@ from sqlalchemy import cast, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.research_blueprint import ResearchBlueprint
@@ -319,6 +320,15 @@ async def start_run(
     result = await db.execute(query)
     blueprint = result.scalars().first()
     if not blueprint:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blueprint not found",
+        )
+
+    if (
+        blueprint.template_source == "daily_research_brief"
+        and not settings.DAILY_RESEARCH_BRIEF_ENABLED
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Blueprint not found",
@@ -793,7 +803,7 @@ async def stream_run(
             await db.rollback()
             await db.refresh(run)
             if status_value == RunStatus.PAUSED.value:
-                await lifecycle.persist_user_pause(
+                await lifecycle.recover_stream_cancellation(
                     run=run,
                     step_index=pause_anchor_index,
                     output_hash=pause_anchor_hash,

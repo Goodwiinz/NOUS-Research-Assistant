@@ -38,7 +38,7 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.research_blueprint import ResearchBlueprint
 from src.models.research_project import ResearchProject
-from src.models.research_run import ResearchRun
+from src.models.research_run import ResearchRun, RunStatus
 from src.models.research_source import ResearchSource
 from src.models.research_stage_review import ResearchStageReview
 from src.models.research_step import ResearchStep
@@ -79,6 +79,8 @@ class _PersistedLifecycle:
     stage_outputs: tuple[dict[str, Any], ...]
     gate_hashes: tuple[str, ...]
     review_ids: tuple[str, ...]
+    reviewer_ids: tuple[str, ...]
+    review_created_at: tuple[str, ...]
     review_hashes: tuple[str, ...]
     manifest: dict[str, Any]
     status: str
@@ -954,6 +956,10 @@ async def _daily_brief_lifecycle(
                 ),
                 gate_hashes=tuple(gate_hashes),
                 review_ids=tuple(str(review.id) for review in reviews),
+                reviewer_ids=tuple(str(review.reviewer_id) for review in reviews),
+                review_created_at=tuple(
+                    review.created_at.isoformat() for review in reviews
+                ),
                 review_hashes=tuple(review.output_hash for review in reviews),
                 manifest=cast(dict[str, Any], run.reproducibility_manifest),
                 status=run.status,
@@ -1026,6 +1032,24 @@ async def test_controlled_lifecycle_persists_each_stage_exactly_once() -> None:
         assert verification["claims"][0]["evidence_ids"] == [evidence_id]
         assert exported["verification_output_hash"] == persisted.stage_hashes[4]
         assert exported["report_hash"] == canonical_json_sha256(exported["exported"])
+        attestation = persisted.manifest["final_approval_attestation"]
+        assert attestation["review_id"] == persisted.review_ids[-1]
+        assert attestation["reviewer_id"] == persisted.reviewer_ids[-1]
+        assert attestation["reviewed_at"] == persisted.review_created_at[-1]
+        assert attestation["output_hash"] == persisted.stage_hashes[5]
+        assert attestation["report_hash"] == exported["report_hash"]
+        assert (
+            attestation["verification_output_hash"]
+            == exported["verification_output_hash"]
+        )
+        unsigned_attestation = {
+            key: value
+            for key, value in attestation.items()
+            if key != "attestation_hash"
+        }
+        assert attestation["attestation_hash"] == canonical_json_sha256(
+            unsigned_attestation
+        )
         assert exported["exported"]["claims"][0]["evidence_ids"] == [evidence_id]
         assert "Treatment reduced the measured score" in exported["markdown"]
 
@@ -1496,6 +1520,12 @@ class _E2EConnector(SourceConnector):
     ) -> list[SourceDocument]:
         del kwargs
         self.fixture_state["last_question"] = query
+        if "[manual-pause]" in query:
+            # Hold the first paid stage at a deterministic boundary until the
+            # browser has issued the real pause request. The shared event lets
+            # every selected connector resume together without a timing race.
+            release = self.fixture_state["manual_pause_release"]
+            await asyncio.wait_for(release.wait(), timeout=30.0)
         if "[no-evidence]" in query:
             return []
         if "[partial]" in query and self.provider_id == "crossref":
@@ -1582,6 +1612,7 @@ def create_e2e_app() -> FastAPI:
         "intruder_org_id": intruder_org_id,
         "last_question": "",
         "reconnect_failures": set(),
+        "manual_pause_release": asyncio.Event(),
     }
 
     @asynccontextmanager
@@ -1694,20 +1725,36 @@ def create_e2e_app() -> FastAPI:
         if match:
             run_id = uuid.UUID(match.group(1))
             async with app.state.db_factory() as db:
-                question = (
+                run_projection = (
                     await db.execute(
-                        select(ResearchBlueprint.parameters)
+                        select(
+                            ResearchBlueprint.parameters,
+                            ResearchRun.status,
+                            ResearchRun.reproducibility_manifest,
+                        )
                         .join(
                             ResearchRun,
                             ResearchRun.blueprint_id == ResearchBlueprint.id,
                         )
                         .where(ResearchRun.id == run_id)
                     )
-                ).scalar_one_or_none()
+                ).one_or_none()
             failed = cast(set[uuid.UUID], fixture_state["reconnect_failures"])
+            question = run_projection[0] if run_projection is not None else None
+            run_status = run_projection[1] if run_projection is not None else None
+            manifest = run_projection[2] if run_projection is not None else None
+            authorization = (
+                manifest.get("resume_authorization")
+                if isinstance(manifest, dict)
+                else None
+            )
             if (
                 isinstance(question, dict)
-                and "[reconnect]" in str(question.get("research_question", ""))
+                and "[reconnect-after-resume]"
+                in str(question.get("research_question", ""))
+                and run_status == RunStatus.PAUSED.value
+                and isinstance(authorization, dict)
+                and not authorization.get("consumed_at")
                 and run_id not in failed
             ):
                 failed.add(run_id)
@@ -1838,6 +1885,11 @@ def create_e2e_app() -> FastAPI:
             await db.commit()
         return JSONResponse(content={"old_hash": old_hash, "new_hash": new_hash})
 
+    @app.post("/api/v1/e2e/manual-pause/release")
+    async def release_manual_pause_stage() -> dict[str, str]:
+        fixture_state["manual_pause_release"].set()
+        return {"status": "released"}
+
     @app.get("/api/v1/e2e/runs/{run_id}/audit")
     async def audit(run_id: uuid.UUID) -> JSONResponse:
         async with app.state.db_factory() as db:
@@ -1885,11 +1937,13 @@ def create_e2e_app() -> FastAPI:
                 "reviews": [
                     {
                         "id": str(review.id),
+                        "reviewer_id": str(review.reviewer_id),
                         "step_index": review.step_index,
                         "review_kind": review.review_kind,
                         "output_hash": review.output_hash,
                         "decision": review.decision,
                         "decision_payload": review.decision_payload,
+                        "created_at": review.created_at.isoformat(),
                     }
                     for review in reviews
                 ],

@@ -458,7 +458,9 @@ class TestBlueprintTemplateDetailResponse:
     def test_validates_full_server_template(self):
         from src.services.research_engine.blueprints.loader import BlueprintLoader
 
-        template = BlueprintLoader().load_template("daily_research_brief")
+        template = BlueprintLoader(daily_research_brief_enabled=True).load_template(
+            "daily_research_brief"
+        )
         response = research_schemas.BlueprintTemplateDetailResponse(
             slug="daily_research_brief",
             **template,

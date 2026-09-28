@@ -376,42 +376,91 @@ class ResearchRunLifecycleService:
     ) -> PauseDescriptor:
         """Persist a reloadable manual-pause anchor without research content."""
 
-        result: PauseDescriptor | None = None
         async with self._atomic():
             await self._lock_run(run)
-            manifest: dict[str, Any] = copy.deepcopy(run.reproducibility_manifest or {})
-
-            # A review or failed-verification gate owns the pause when it was
-            # committed at the same boundary as the user's request.
-            if isinstance(manifest.get("pending_review"), dict) or isinstance(
-                manifest.get("verification_failure"), dict
-            ):
-                manifest.pop("user_pause", None)
-                manifest.pop(_PAUSE_REQUESTED_KEY, None)
-                run.status = RunStatus.PAUSED.value
-                run.reproducibility_manifest = manifest
-                result = self.pause_descriptor(run)
-            else:
-                resolved_index = step_index
-                resolved_hash = output_hash
-                if resolved_index is None or resolved_hash is None:
-                    anchor = await self.current_user_pause_descriptor(run=run)
-                    resolved_index = anchor.step_index
-                    resolved_hash = anchor.output_hash
-                if type(resolved_index) is not int or resolved_index < -1:
-                    raise ValueError("user pause step index must be -1 or greater")
-                if not self._is_hash(resolved_hash):
-                    raise ValueError("user pause output hash must be canonical")
-                result = self._store_user_pause(
-                    manifest,
-                    step_index=resolved_index,
-                    output_hash=cast(str, resolved_hash),
+            if run.status in {RunStatus.COMPLETED.value, RunStatus.FAILED.value}:
+                raise ResearchRunLifecycleError(
+                    status_code=409,
+                    code="run_not_pauseable",
+                    message="A terminal run cannot be paused",
                 )
-                run.status = RunStatus.PAUSED.value
-                run.reproducibility_manifest = manifest
+            result = await self._persist_user_pause_locked(
+                run=run,
+                step_index=step_index,
+                output_hash=output_hash,
+                total_tokens=total_tokens,
+            )
+        self._observe_pause(run, result)
+        return result
 
-            if total_tokens is not None:
-                run.total_tokens = max(0, int(total_tokens))
+    async def recover_stream_cancellation(
+        self,
+        *,
+        run: Any,
+        step_index: int | None = None,
+        output_hash: str | None = None,
+        total_tokens: int | None = None,
+    ) -> PauseDescriptor | None:
+        """Pause interrupted work while preserving an already-terminal commit."""
+
+        async with self._atomic():
+            await self._lock_run(run)
+            # This check is deliberately inside the locked transaction. A
+            # terminal commit may win after the route last inspected its ORM
+            # object but before disconnect recovery takes the row lock.
+            if run.status in {RunStatus.COMPLETED.value, RunStatus.FAILED.value}:
+                return None
+            result = await self._persist_user_pause_locked(
+                run=run,
+                step_index=step_index,
+                output_hash=output_hash,
+                total_tokens=total_tokens,
+            )
+        self._observe_pause(run, result)
+        return result
+
+    async def _persist_user_pause_locked(
+        self,
+        *,
+        run: Any,
+        step_index: int | None,
+        output_hash: str | None,
+        total_tokens: int | None,
+    ) -> PauseDescriptor:
+        manifest: dict[str, Any] = copy.deepcopy(run.reproducibility_manifest or {})
+        result: PauseDescriptor | None
+
+        # A review or failed-verification gate owns the pause when it was
+        # committed at the same boundary as the user's request.
+        if isinstance(manifest.get("pending_review"), dict) or isinstance(
+            manifest.get("verification_failure"), dict
+        ):
+            manifest.pop("user_pause", None)
+            manifest.pop(_PAUSE_REQUESTED_KEY, None)
+            run.status = RunStatus.PAUSED.value
+            run.reproducibility_manifest = manifest
+            result = self.pause_descriptor(run)
+        else:
+            resolved_index = step_index
+            resolved_hash = output_hash
+            if resolved_index is None or resolved_hash is None:
+                anchor = await self.current_user_pause_descriptor(run=run)
+                resolved_index = anchor.step_index
+                resolved_hash = anchor.output_hash
+            if type(resolved_index) is not int or resolved_index < -1:
+                raise ValueError("user pause step index must be -1 or greater")
+            if not self._is_hash(resolved_hash):
+                raise ValueError("user pause output hash must be canonical")
+            result = self._store_user_pause(
+                manifest,
+                step_index=resolved_index,
+                output_hash=cast(str, resolved_hash),
+            )
+            run.status = RunStatus.PAUSED.value
+            run.reproducibility_manifest = manifest
+
+        if total_tokens is not None:
+            run.total_tokens = max(0, int(total_tokens))
 
         if result is None:
             raise ResearchRunLifecycleError(
@@ -419,6 +468,9 @@ class ResearchRunLifecycleService:
                 code="run_not_paused",
                 message="Run does not have a durable pause descriptor",
             )
+        return result
+
+    def _observe_pause(self, run: Any, result: PauseDescriptor) -> None:
         safely_observe(
             self.observer,
             "record_pause",
@@ -429,7 +481,6 @@ class ResearchRunLifecycleService:
                 result.review_kind.value if result.review_kind is not None else "none"
             ),
         )
-        return result
 
     async def current_user_pause_descriptor(self, *, run: Any) -> PauseDescriptor:
         """Resolve the latest safe manual-pause anchor without mutating the run."""
@@ -521,6 +572,7 @@ class ResearchRunLifecycleService:
                 history = list(manifest.get("review_history") or [])
                 audit_entry = {
                     "review_id": str(review.id),
+                    "reviewer_id": str(review.reviewer_id),
                     "step_index": review_step_index,
                     "review_kind": review_kind,
                     "output_hash": review_output_hash,

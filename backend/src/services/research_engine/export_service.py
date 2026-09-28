@@ -1,6 +1,7 @@
 """Export service for research engine results."""
 
 import copy
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -167,17 +168,20 @@ class ExportService:
                 code="export_reconstruction_failed",
                 message="Export could not be reconstructed from persisted artifacts",
             ) from None
-        reviews = self._review_audit(run, manifest)
+        review_history = self._review_audit(run, manifest)
+        approved_reviews = [
+            review for review in review_history if review.get("decision") == "approve"
+        ]
         audit_context = copy.deepcopy(context)
-        audit_context["approved_review_overlays"] = copy.deepcopy(reviews)
-        context = self._apply_review_overlays(context, reviews)
+        audit_context["approved_review_overlays"] = copy.deepcopy(approved_reviews)
+        context = self._apply_review_overlays(context, approved_reviews)
         context["scope_confirmation"] = copy.deepcopy(
             manifest.get("scope_confirmation") or {}
         )
         context["provider_manifest"] = copy.deepcopy(
             manifest.get("provider_manifest") or []
         )
-        context["approved_review_overlays"] = copy.deepcopy(reviews)
+        context["approved_review_overlays"] = copy.deepcopy(approved_reviews)
         context["no_evidence"] = manifest.get("final_status") == "no_evidence"
         context["artifact_provenance"] = self._provenance(run, steps, manifest)
 
@@ -189,6 +193,22 @@ class ExportService:
             steps=steps,
             export_output=persisted_output,
         )
+        if (
+            run.blueprint.template_source == "daily_research_brief"
+            and manifest.get("final_status") == "verified"
+            and not trusted_verified
+        ):
+            self._record_export_failure(
+                run_id=run_id,
+                organization_id=self._organization_id(run),
+                export_format=export_format,
+                error_kind="attestation",
+            )
+            raise ResearchExportError(
+                status_code=409,
+                code="verified_artifact_attestation_invalid",
+                message="Verified artifact approval attestation is missing or invalid",
+            )
         if run.blueprint.template_source != "daily_research_brief":
             report["final_status"] = "unverified"
             report["warning"] = (
@@ -208,8 +228,19 @@ class ExportService:
 
         base_name = f"daily-research-brief-{run.id}"
         if export_format is ExportFormat.JSON:
+            payload = (
+                self._verified_download_envelope(
+                    report=report,
+                    review_history=review_history,
+                    attestation=cast(
+                        dict[str, Any], manifest["final_approval_attestation"]
+                    ),
+                )
+                if trusted_verified
+                else report
+            )
             artifact = ExportArtifact(
-                content=canonical_json_bytes(report),
+                content=canonical_json_bytes(payload),
                 media_type="application/json",
                 filename=f"{base_name}.json",
             )
@@ -231,12 +262,22 @@ class ExportService:
             persisted_markdown = (
                 self._persisted_markdown(persisted_output) if trusted_verified else None
             )
+            markdown = (
+                persisted_markdown
+                if persisted_markdown is not None
+                else render_markdown(report)
+            )
+            if trusted_verified:
+                markdown = self._markdown_with_approval_audit(
+                    markdown=markdown,
+                    report_hash=cast(str, persisted_output["report_hash"]),
+                    review_history=review_history,
+                    attestation=cast(
+                        dict[str, Any], manifest["final_approval_attestation"]
+                    ),
+                )
             artifact = ExportArtifact(
-                content=(
-                    persisted_markdown
-                    if persisted_markdown is not None
-                    else render_markdown(report)
-                ).encode("utf-8"),
+                content=markdown.encode("utf-8"),
                 media_type="text/markdown; charset=utf-8",
                 filename=f"{base_name}.md",
             )
@@ -244,7 +285,14 @@ class ExportService:
             rows = self._csv_rows(audit_context)
             artifact = ExportArtifact(
                 content=render_csv(
-                    rows, final_status=str(report.get("final_status") or "unverified")
+                    rows,
+                    final_status=str(report.get("final_status") or "unverified"),
+                    review_history=review_history if trusted_verified else None,
+                    final_attestation=(
+                        cast(dict[str, Any], manifest["final_approval_attestation"])
+                        if trusted_verified
+                        else None
+                    ),
                 ).encode("utf-8"),
                 media_type="text/csv; charset=utf-8",
                 filename=f"{base_name}.csv",
@@ -303,6 +351,52 @@ class ExportService:
     def _persisted_markdown(output: dict[str, Any] | None) -> str | None:
         return canonical_markdown_content(output)
 
+    @staticmethod
+    def _verified_download_envelope(
+        *,
+        report: dict[str, Any],
+        review_history: list[dict[str, Any]],
+        attestation: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "download_envelope_version": 1,
+            "reviewed_artifact": copy.deepcopy(report),
+            "reviewed_artifact_hash": attestation["report_hash"],
+            "review_history": copy.deepcopy(review_history),
+            "final_approval_attestation": copy.deepcopy(attestation),
+        }
+
+    @staticmethod
+    def _markdown_with_approval_audit(
+        *,
+        markdown: str,
+        report_hash: str,
+        review_history: list[dict[str, Any]],
+        attestation: dict[str, Any],
+    ) -> str:
+        reviewed_bytes = markdown.encode("utf-8")
+        audit = {
+            "reviewed_artifact": {
+                "format": "markdown",
+                "byte_length": len(reviewed_bytes),
+                "sha256": hashlib.sha256(reviewed_bytes).hexdigest(),
+                "report_hash": report_hash,
+            },
+            "review_history": copy.deepcopy(review_history),
+            "final_approval_attestation": copy.deepcopy(attestation),
+        }
+        separator = "" if not markdown or markdown.endswith("\n") else "\n"
+        return (
+            markdown
+            + separator
+            + "\n<!-- DAILY_RESEARCH_BRIEF_POST_APPROVAL_AUDIT_V1 -->\n"
+            + "## Post-approval audit\n\n"
+            + "The reviewed Markdown is the exact byte prefix described below.\n\n"
+            + "```json\n"
+            + canonical_json_bytes(audit).decode("utf-8")
+            + "\n```\n"
+        )
+
     @classmethod
     def _is_trusted_verified_daily_brief(
         cls,
@@ -360,13 +454,49 @@ class ExportService:
             return False
         output_hash = canonical_stage_output_hash(export_output)
         reviews: list[Any] = run.reviews if isinstance(run.reviews, list) else []
-        return any(
-            review.review_kind == "final"
+        final_reviews = [
+            review
+            for review in reviews
+            if review.review_kind == "final"
             and review.decision == "approve"
             and int(review.step_index) == int(export_step.step_index)
             and review.output_hash == output_hash
-            for review in reviews
+        ]
+        if len(final_reviews) != 1:
+            return False
+        return cls._attestation_matches(
+            manifest.get("final_approval_attestation"),
+            review=final_reviews[0],
+            export_output=export_output,
         )
+
+    @staticmethod
+    def _attestation_matches(
+        value: Any,
+        *,
+        review: Any,
+        export_output: dict[str, Any],
+    ) -> bool:
+        if not isinstance(value, dict) or not isinstance(
+            getattr(review, "created_at", None), datetime
+        ):
+            return False
+        unsigned = {
+            "schema_version": 1,
+            "review_id": str(review.id),
+            "reviewer_id": str(review.reviewer_id),
+            "reviewed_at": review.created_at.isoformat(),
+            "decision": str(review.decision),
+            "review_kind": str(review.review_kind),
+            "step_index": int(review.step_index),
+            "output_hash": str(review.output_hash),
+            "report_hash": str(export_output.get("report_hash")),
+            "verification_output_hash": str(
+                export_output.get("verification_output_hash")
+            ),
+        }
+        expected = {**unsigned, "attestation_hash": canonical_json_sha256(unsigned)}
+        return value == expected
 
     @staticmethod
     def _trusted_scope(manifest: dict[str, Any]) -> bool:
@@ -447,17 +577,23 @@ class ExportService:
         audit = [
             {
                 "review_id": str(review.id),
+                "reviewer_id": (
+                    str(review.reviewer_id)
+                    if getattr(review, "reviewer_id", None) is not None
+                    else None
+                ),
                 "step_index": review.step_index,
+                "stage_type": getattr(review, "stage_type", None),
                 "review_kind": review.review_kind,
                 "output_hash": review.output_hash,
                 "decision": review.decision,
                 "decision_payload": copy.deepcopy(review.decision_payload),
+                "note": getattr(review, "note", None),
                 "created_at": (
                     review.created_at.isoformat() if review.created_at else None
                 ),
             }
             for review in rows
-            if review.decision == "approve"
         ]
         if audit:
             return sorted(audit, key=ExportService._review_sort_key)

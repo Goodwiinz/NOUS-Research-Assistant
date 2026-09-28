@@ -20,7 +20,10 @@ from src.schemas.research_engine import (
     BlueprintStepDefinition,
     BlueprintTemplateDetailResponse,
 )
-from src.services.research_engine.blueprints.loader import BlueprintLoader
+from src.services.research_engine.blueprints.loader import (
+    BlueprintLoader,
+    DAILY_RESEARCH_BRIEF_TEMPLATE,
+)
 from src.services.research_engine.connectors.registry import (
     normalize_connector_selection,
 )
@@ -158,7 +161,18 @@ async def create_blueprint(
     if body.template_source:
         try:
             template = BlueprintLoader().load_template(body.template_source)
-        except (FileNotFoundError, ValueError):
+        except FileNotFoundError as exc:
+            if body.template_source == DAILY_RESEARCH_BRIEF_TEMPLATE:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Blueprint template not found",
+                ) from exc
+            if not concrete_steps:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Custom blueprints require at least one step",
+                ) from exc
+        except ValueError:
             if not concrete_steps:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

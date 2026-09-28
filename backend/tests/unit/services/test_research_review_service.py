@@ -1058,6 +1058,25 @@ async def test_final_approval_accepts_exact_verified_export_bindings(
 
     assert response.decision.value == "approve"
     assert response.decision_payload == {}
+    await db.refresh(run)
+    attestation = run.reproducibility_manifest["final_approval_attestation"]
+    assert attestation == {
+        "schema_version": 1,
+        "review_id": str(response.id),
+        "reviewer_id": str(owner_id),
+        "reviewed_at": response.created_at.isoformat(),
+        "decision": "approve",
+        "review_kind": "final",
+        "step_index": 5,
+        "output_hash": canonical_stage_output_hash(export),
+        "report_hash": export["report_hash"],
+        "verification_output_hash": export["verification_output_hash"],
+        "attestation_hash": attestation["attestation_hash"],
+    }
+    unsigned = {
+        key: value for key, value in attestation.items() if key != "attestation_hash"
+    }
+    assert attestation["attestation_hash"] == canonical_json_sha256(unsigned)
 
 
 @pytest.mark.asyncio

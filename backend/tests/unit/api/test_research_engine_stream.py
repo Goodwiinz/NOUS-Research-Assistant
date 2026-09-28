@@ -693,6 +693,52 @@ class TestStreamEndpointSuccess:
         assert "_pause_requested" not in mock_run.reproducibility_manifest
 
     @pytest.mark.asyncio
+    async def test_disconnect_after_terminal_commit_cannot_rewrite_run_to_paused(self):
+        """Cancellation at terminal frame delivery preserves the committed outcome."""
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        mock_run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="pending",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        mock_bp = _make_blueprint(id=bp_id)
+        db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        async def terminal_engine(*_args, **_kwargs):
+            yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
+            await asyncio.Event().wait()
+
+        with (
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+            patch("src.api.research_engine.runs.ArxivConnector"),
+            patch("src.api.research_engine.runs.SemanticScholarConnector"),
+        ):
+            engine = Mock()
+            engine.run = terminal_engine
+            engine_cls.return_value = engine
+            response = await stream_run(run_id, current_user, db)
+            iterator = response.body_iterator
+
+            terminal_frame = await anext(iterator)
+            assert "event: run_complete" in terminal_frame
+            assert mock_run.status == "completed"
+
+            with pytest.raises(asyncio.CancelledError):
+                await iterator.athrow(asyncio.CancelledError("client disconnected"))
+
+        assert mock_run.status == "completed"
+        assert "user_pause" not in mock_run.reproducibility_manifest
+        assert "resume_authorization" not in mock_run.reproducibility_manifest
+
+    @pytest.mark.asyncio
     async def test_stream_commit_failure_refreshes_after_rollback(self):
         """A failed write is rolled back and refreshed before terminal recovery."""
         run_id = uuid.uuid4()

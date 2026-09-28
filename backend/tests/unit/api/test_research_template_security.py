@@ -22,7 +22,12 @@ TemplateAPI = tuple[TestClient, Any, list[Any]]
 
 
 @pytest.fixture
-def template_api(test_app: FastAPI) -> Iterator[TemplateAPI]:
+def daily_brief_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", True)
+
+
+@pytest.fixture
+def template_api(test_app: FastAPI, daily_brief_enabled: None) -> Iterator[TemplateAPI]:
     user = Mock(
         id=uuid.uuid4(),
         email="researcher@example.com",
@@ -76,8 +81,10 @@ def test_template_detail_route_returns_validated_full_template_before_uuid_route
     response = client.get(
         "/api/v1/research-engine/blueprints/templates/daily_research_brief"
     )
+    listed = client.get("/api/v1/research-engine/blueprints/templates")
 
     assert response.status_code == 200
+    assert "daily_research_brief" in {item["slug"] for item in listed.json()}
     body = response.json()
     assert body["slug"] == "daily_research_brief"
     assert body["contract_version"] == 1
@@ -100,6 +107,42 @@ def test_unknown_template_detail_returns_404(template_api: TemplateAPI) -> None:
     response = client.get("/api/v1/research-engine/blueprints/templates/unknown")
     assert response.status_code == 404
     assert response.json()["error"]["message"] == "Blueprint template not found"
+
+
+def test_disabled_daily_template_is_hidden_and_cannot_be_instantiated(
+    template_api: TemplateAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, project, created = template_api
+    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", False)
+
+    listed = client.get("/api/v1/research-engine/blueprints/templates")
+    detail = client.get(
+        "/api/v1/research-engine/blueprints/templates/daily_research_brief"
+    )
+    created_response = client.post(
+        f"/api/v1/research-engine/blueprints/projects/{project.id}",
+        json={
+            "name": "Disabled Daily Brief",
+            "template_source": "daily_research_brief",
+            "steps": [{"type": "search", "name": "Attempted bypass"}],
+        },
+    )
+
+    assert "daily_research_brief" not in {item["slug"] for item in listed.json()}
+    assert detail.status_code == 404
+    assert created_response.status_code == 404
+    assert created == []
+
+    custom_response = client.post(
+        f"/api/v1/research-engine/blueprints/projects/{project.id}",
+        json={
+            "name": "Custom Search Still Available",
+            "steps": [{"type": "search", "name": "Custom search"}],
+            "parameters": {"query": "bounded"},
+        },
+    )
+    assert custom_response.status_code == 201, custom_response.text
+    assert created[-1].template_source is None
 
 
 def test_known_template_is_expanded_and_persisted_from_server_owned_steps(
@@ -163,7 +206,9 @@ def test_known_template_rejects_client_topology_changes(
     template_api: TemplateAPI, tampering: str
 ) -> None:
     client, project, _created = template_api
-    template = BlueprintLoader().load_template("daily_research_brief")
+    template = BlueprintLoader(daily_research_brief_enabled=True).load_template(
+        "daily_research_brief"
+    )
     steps = copy.deepcopy(template["steps"])
     if tampering == "reorder":
         steps[0], steps[1] = steps[1], steps[0]
@@ -213,7 +258,9 @@ def test_persisted_template_steps_do_not_follow_later_loader_mutation(
     template_api: TemplateAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client, project, created = template_api
-    template = BlueprintLoader().load_template("daily_research_brief")
+    template = BlueprintLoader(daily_research_brief_enabled=True).load_template(
+        "daily_research_brief"
+    )
     mutable_template = copy.deepcopy(template)
     monkeypatch.setattr(
         "src.api.research_engine.blueprints.BlueprintLoader.load_template",
