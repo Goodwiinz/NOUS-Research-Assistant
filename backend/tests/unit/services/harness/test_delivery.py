@@ -11,6 +11,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.core.config import settings
+from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.agent_run_event import AgentRunEvent
 from src.models.bridge_device import BridgeDevice
@@ -33,7 +34,7 @@ from src.services.integrations.context import (
     renew_grant,
     resolve_integration_context,
 )
-from src.shared.enums import JobStatus
+from src.shared.enums import AgentOutboxStatus, JobStatus
 from tests.unit.services.harness.test_runs import (  # noqa: F401
     DEVICE,
     LOCAL,
@@ -312,6 +313,72 @@ async def cancel(db: AsyncSession, run_id: str) -> None:
         reason="user",
     )
     await db.commit()
+
+
+async def test_queued_cancellation_before_dispatch_releases_workspace(
+    db: AsyncSession,
+    context: IntegrationContext,
+    external_run: Any,
+) -> None:
+    await cancel(db, str(external_run.id))
+
+    assert await dispatch_pending(db) == 0
+
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(
+        select(HarnessSession).where(HarnessSession.run_id == str(external_run.id))
+    )
+    outbox = await db.scalar(
+        select(AgentOutbox).where(AgentOutbox.run_id == str(external_run.id))
+    )
+    terminal_event = await db.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == str(external_run.id))
+        .order_by(AgentRunEvent.seq.desc())
+    )
+    assert run is not None and run.status == JobStatus.CANCELLED.value
+    assert session is not None and not session.workspace_locked
+    assert outbox is not None and outbox.status == AgentOutboxStatus.FAILED.value
+    assert terminal_event is not None and terminal_event.event_type == "run.cancelled"
+
+
+@pytest.mark.parametrize("failure", ["revoked_grant", "missing_message"])
+async def test_undeliverable_outbox_fails_run_and_releases_workspace(
+    db: AsyncSession,
+    context: IntegrationContext,
+    external_run: Any,
+    failure: str,
+) -> None:
+    run = await db.get(AgentRun, str(external_run.id))
+    assert run is not None
+    if failure == "revoked_grant":
+        grant = await db.get(IntegrationGrant, context.grant_id)
+        assert grant is not None
+        grant.revoked_at = datetime.now(timezone.utc)
+    else:
+        setattr(run, "user_message_id", None)
+    await db.commit()
+
+    assert await dispatch_pending(db) == 0
+
+    db.expire_all()
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(
+        select(HarnessSession).where(HarnessSession.run_id == str(external_run.id))
+    )
+    outbox = await db.scalar(
+        select(AgentOutbox).where(AgentOutbox.run_id == str(external_run.id))
+    )
+    terminal_event = await db.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == str(external_run.id))
+        .order_by(AgentRunEvent.seq.desc())
+    )
+    assert run is not None and run.status == JobStatus.FAILED.value
+    assert run.error_code == "harness_dispatch_failed"
+    assert session is not None and not session.workspace_locked
+    assert outbox is not None and outbox.status == AgentOutboxStatus.FAILED.value
+    assert terminal_event is not None and terminal_event.event_type == "run.failed"
 
 
 @pytest.mark.parametrize(

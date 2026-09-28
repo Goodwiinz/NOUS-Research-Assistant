@@ -222,11 +222,16 @@ async def mint_integration_grant(
             )
             .execution_options(populate_existing=True)
         )
-        request_id = next(
-            (consent.id for consent in consents if scopes <= set(consent.scopes)), None
-        )
-        if request_id is None:
+        matching_consents = [
+            consent for consent in consents if scopes <= set(consent.scopes)
+        ]
+        # A device may have more than one consumed consent lineage. Selecting
+        # the first database row is nondeterministic and can mint run authority
+        # that the currently paired bridge credential cannot renew. Fail closed
+        # until the owner leaves one unambiguous active consent for this device.
+        if len(matching_consents) != 1:
             raise IntegrationAccessDenied()
+        request_id = matching_consents[0].id
     grant, issued = _new_grant(
         user_id=user_id,
         organization_id=organization_id,
