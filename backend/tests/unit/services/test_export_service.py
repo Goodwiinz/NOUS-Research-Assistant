@@ -2,6 +2,7 @@
 
 import copy
 import csv
+import hashlib
 import io
 import json
 from datetime import datetime, timezone
@@ -984,6 +985,27 @@ async def test_markdown_download_uses_exact_persisted_approved_artifact_bytes(
     assert b"DAILY_RESEARCH_BRIEF_POST_APPROVAL_AUDIT_V1" in artifact.content
     assert b'"reviewer_id"' in artifact.content
     assert b'"final_approval_attestation"' in artifact.content
+    rendered = artifact.content.decode("utf-8")
+    reviewed_prefix, audit_section = rendered.split(
+        "\n<!-- DAILY_RESEARCH_BRIEF_POST_APPROVAL_AUDIT_V1 -->", 1
+    )
+    audit = json.loads(audit_section.split("```json\n", 1)[1].split("\n```", 1)[0])
+    export_output = run.steps[-1].output
+    attestation = audit["final_approval_attestation"]
+    assert reviewed_prefix.encode("utf-8") == expected
+    assert audit["reviewed_artifact"]["sha256"] == hashlib.sha256(expected).hexdigest()
+    assert audit["reviewed_artifact"]["report_hash"] == canonical_json_sha256(
+        export_output["exported"]
+    )
+    assert attestation["report_hash"] == export_output["report_hash"]
+    assert (
+        attestation["verification_output_hash"]
+        == export_output["verification_output_hash"]
+    )
+    assert attestation["output_hash"] == canonical_stage_output_hash(export_output)
+    mutated_output = copy.deepcopy(export_output)
+    mutated_output["content"] += "tampered"
+    assert canonical_stage_output_hash(mutated_output) != attestation["output_hash"]
     assert observer.snapshot()["counters"]["exports"]["markdown:success:none"] == 1
 
 

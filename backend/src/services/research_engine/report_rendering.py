@@ -31,15 +31,78 @@ def _safe_url(value: Any) -> str | None:
 
 _MAX_CSV_CELL_CHARS = 8192
 
+_PROVENANCE_BIBLIOGRAPHY_FIELDS = (
+    "doi",
+    "publication_year",
+    "year",
+    "publication_date",
+    "published",
+    "journal",
+    "publication_type",
+    "url",
+)
+
+
+def _has_metadata_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (dict, list, tuple, set)):
+        return bool(value)
+    return value is not None
+
+
+def _flatten_metadata(value: Any) -> dict[str, Any]:
+    """Flatten connector wrappers without exposing origin snapshots."""
+
+    if not isinstance(value, dict):
+        return {}
+    nested = _flatten_metadata(value.get("metadata"))
+    flattened = dict(nested)
+    for key, candidate in value.items():
+        if key in {"metadata", "provenance"}:
+            continue
+        if _has_metadata_value(candidate) or key not in flattened:
+            flattened[key] = candidate
+    return flattened
+
+
+def _provenance_snapshots(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return []
+    snapshots = value.get("provenance")
+    result = [item for item in snapshots or [] if isinstance(item, dict)]
+    result.extend(_provenance_snapshots(value.get("metadata")))
+    return result
+
 
 def _source_metadata(source: dict[str, Any]) -> dict[str, Any]:
-    """Return connector metadata, including legacy nested snapshots."""
+    """Return canonical metadata enriched from retained provider snapshots."""
 
     value = source.get("metadata")
     if not isinstance(value, dict):
         return {}
-    nested = value.get("metadata")
-    return {**nested, **value} if isinstance(nested, dict) else value
+    metadata = _flatten_metadata(value)
+    identifiers = metadata.get("identifiers")
+    merged_identifiers = dict(identifiers) if isinstance(identifiers, dict) else {}
+    for snapshot in _provenance_snapshots(value):
+        candidate = _flatten_metadata(snapshot)
+        for key in _PROVENANCE_BIBLIOGRAPHY_FIELDS:
+            if not _has_metadata_value(metadata.get(key)) and _has_metadata_value(
+                candidate.get(key)
+            ):
+                metadata[key] = candidate[key]
+        candidate_identifiers = candidate.get("identifiers")
+        if isinstance(candidate_identifiers, dict):
+            for kind, identifier in candidate_identifiers.items():
+                if _has_metadata_value(identifier):
+                    merged_identifiers.setdefault(kind, identifier)
+        for kind in ("doi", "pmid", "pmcid", "arxiv", "openalex"):
+            identifier = candidate.get(kind)
+            if _has_metadata_value(identifier):
+                merged_identifiers.setdefault(kind, identifier)
+    if merged_identifiers:
+        metadata["identifiers"] = merged_identifiers
+    return metadata
 
 
 def _source_doi(source: dict[str, Any]) -> str | None:
