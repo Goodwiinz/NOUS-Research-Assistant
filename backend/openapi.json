@@ -1264,6 +1264,11 @@
             "title": "Project Id",
             "type": "string"
           },
+          "research_engine_project_id": {
+            "format": "uuid",
+            "title": "Research Engine Project Id",
+            "type": "string"
+          },
           "steps": {
             "items": {
               "$ref": "#/components/schemas/BlueprintStepDefinition"
@@ -1295,6 +1300,7 @@
         "required": [
           "id",
           "project_id",
+          "research_engine_project_id",
           "name",
           "version",
           "steps",
@@ -6574,6 +6580,65 @@
         "title": "LLMBulkIngestionStatus",
         "type": "object"
       },
+      "LegacyProjectResponse": {
+        "properties": {
+          "collection_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Id"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "research_engine_project_id": {
+            "format": "uuid",
+            "title": "Research Engine Project Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "research_engine_project_id",
+          "name",
+          "status"
+        ],
+        "title": "LegacyProjectResponse",
+        "type": "object"
+      },
       "LinkThreadRequest": {
         "description": "Request to link an existing thread to a project",
         "properties": {
@@ -8121,6 +8186,16 @@
       "ProjectDetailResponse": {
         "description": "Detailed project response with additional context.",
         "properties": {
+          "can_edit": {
+            "default": false,
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "title": "Can Manage",
+            "type": "boolean"
+          },
           "color": {
             "anyOf": [
               {
@@ -8240,6 +8315,18 @@
             "title": "Recent Notes",
             "type": "array"
           },
+          "research_engine_project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Engine Project Id"
+          },
           "research_goals": {
             "anyOf": [
               {
@@ -8265,6 +8352,11 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "workspace_archived": {
+            "default": false,
+            "title": "Workspace Archived",
+            "type": "boolean"
           },
           "workspace_id": {
             "format": "uuid",
@@ -9442,6 +9534,77 @@
         "title": "RelationshipType",
         "type": "string"
       },
+      "ResearchProjectRole": {
+        "enum": [
+          "reviewer",
+          "adjudicator",
+          "supervisor"
+        ],
+        "title": "ResearchProjectRole",
+        "type": "string"
+      },
+      "ResearchProjectRoleCreate": {
+        "properties": {
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "title": "ResearchProjectRoleCreate",
+        "type": "object"
+      },
+      "ResearchProjectRoleResponse": {
+        "properties": {
+          "assigned_by_id": {
+            "format": "uuid",
+            "title": "Assigned By Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "user_id",
+          "role",
+          "assigned_by_id",
+          "created_at"
+        ],
+        "title": "ResearchProjectRoleResponse",
+        "type": "object"
+      },
       "ResearchStatus": {
         "description": "Research project status",
         "enum": [
@@ -9895,6 +10058,16 @@
             "title": "Id",
             "type": "string"
           },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "research_engine_project_id": {
+            "format": "uuid",
+            "title": "Research Engine Project Id",
+            "type": "string"
+          },
           "started_at": {
             "anyOf": [
               {
@@ -9924,6 +10097,8 @@
         "required": [
           "id",
           "blueprint_id",
+          "project_id",
+          "research_engine_project_id",
           "blueprint_version",
           "status",
           "created_at",
@@ -14745,6 +14920,18 @@
       "src__schemas__research_engine__ProjectResponse": {
         "description": "Schema for project API responses.",
         "properties": {
+          "blueprint_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blueprint Id"
+          },
           "collection_id": {
             "anyOf": [
               {
@@ -14782,6 +14969,23 @@
             "title": "Name",
             "type": "string"
           },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "research_engine_project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Engine Project Id"
+          },
           "settings": {
             "additionalProperties": true,
             "title": "Settings",
@@ -14799,6 +15003,7 @@
         },
         "required": [
           "id",
+          "project_id",
           "name",
           "status",
           "settings",
@@ -15395,8 +15600,18 @@
         "type": "object"
       },
       "src__shared__research_schemas__ProjectResponse": {
-        "description": "Research project response",
+        "description": "Research project response; id is the canonical Collection identifier.",
         "properties": {
+          "can_edit": {
+            "default": false,
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "title": "Can Manage",
+            "type": "boolean"
+          },
           "color": {
             "anyOf": [
               {
@@ -15481,6 +15696,18 @@
           "project_type": {
             "$ref": "#/components/schemas/ProjectType"
           },
+          "research_engine_project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Engine Project Id"
+          },
           "research_goals": {
             "anyOf": [
               {
@@ -15506,6 +15733,11 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "workspace_archived": {
+            "default": false,
+            "title": "Workspace Archived",
+            "type": "boolean"
           },
           "workspace_id": {
             "format": "uuid",
@@ -31374,9 +31606,86 @@
         ]
       }
     },
+    "/api/v1/research-engine/legacy-projects": {
+      "get": {
+        "operationId": "list_legacy_projects_api_v1_research_engine_legacy_projects_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LegacyProjectResponse"
+                  },
+                  "title": "Response List Legacy Projects Api V1 Research Engine Legacy Projects Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Legacy Projects",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/legacy-projects/{engine_id}": {
+      "get": {
+        "operationId": "get_legacy_project_api_v1_research_engine_legacy_projects__engine_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "engine_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Engine Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Legacy Project",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects": {
       "get": {
-        "description": "List research projects for the current user.",
         "operationId": "list_projects_api_v1_research_engine_projects_get",
         "parameters": [
           {
@@ -31433,7 +31742,6 @@
         ]
       },
       "post": {
-        "description": "Create a new research project.",
         "operationId": "create_project_api_v1_research_engine_projects_post",
         "requestBody": {
           "content": {
@@ -31478,9 +31786,66 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{engine_id}/collection": {
+      "patch": {
+        "operationId": "link_project_collection_api_v1_research_engine_projects__engine_id__collection_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "engine_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Engine Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectLink"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/src__schemas__research_engine__ProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Link Project Collection",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}": {
       "get": {
-        "description": "Get a single research project.",
         "operationId": "get_project_api_v1_research_engine_projects__project_id__get",
         "parameters": [
           {
@@ -31527,10 +31892,9 @@
         ]
       }
     },
-    "/api/v1/research-engine/projects/{project_id}/collection": {
-      "patch": {
-        "description": "Owner-only, one-time explicit mapping for a historical engine project.",
-        "operationId": "link_project_collection_api_v1_research_engine_projects__project_id__collection_patch",
+    "/api/v1/research-engine/projects/{project_id}/roles": {
+      "get": {
+        "operationId": "list_project_roles_api_v1_research_engine_projects__project_id__roles_get",
         "parameters": [
           {
             "in": "path",
@@ -31543,22 +31907,16 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProjectLink"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/src__schemas__research_engine__ProjectResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/ResearchProjectRoleResponse"
+                  },
+                  "title": "Response List Project Roles Api V1 Research Engine Projects  Project Id  Roles Get",
+                  "type": "array"
                 }
               }
             },
@@ -31580,7 +31938,122 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Link Project Collection",
+        "summary": "List Project Roles",
+        "tags": [
+          "research-engine"
+        ]
+      },
+      "put": {
+        "operationId": "assign_project_role_api_v1_research_engine_projects__project_id__roles_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchProjectRoleCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProjectRoleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Assign Project Role",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/roles/{user_id}/{role}": {
+      "delete": {
+        "operationId": "delete_project_role_api_v1_research_engine_projects__project_id__roles__user_id___role__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ResearchProjectRole"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Project Role",
         "tags": [
           "research-engine"
         ]
@@ -31931,7 +32404,7 @@
     },
     "/api/v1/research/extraction-tasks/{task_id}": {
       "get": {
-        "description": "Get the status of a background extraction task.",
+        "description": "Get a task only through its authorized, retained matrix.",
         "operationId": "get_extraction_task_status_api_v1_research_extraction_tasks__task_id__get",
         "parameters": [
           {

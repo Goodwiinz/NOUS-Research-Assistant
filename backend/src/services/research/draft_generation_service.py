@@ -217,21 +217,9 @@ class DraftGenerationService:
         collection. With document_ids, results are the intersection of those ids
         and the project's documents — foreign/other-org ids are dropped rather
         than read (tenant isolation)."""
-        from src.models.collection import CollectionDocument
+        from src.services.research_engine.project_access import project_documents_query
 
-        query = (
-            select(Document)
-            .join(CollectionDocument, Document.id == CollectionDocument.document_id)
-            .where(
-                CollectionDocument.collection_id == project_id,
-                # Soft-deleted docs keep their junction row; without this
-                # filter retracted/removed papers get synthesized into the
-                # draft and cited (sibling read paths already guard it).
-                Document.is_deleted.is_(False),
-                CollectionDocument.is_deleted.is_(False),
-            )
-            .order_by(Document.id)
-        )
+        query = project_documents_query(project_id).order_by(Document.id)
         if document_ids:
             query = query.where(Document.id.in_(document_ids))
         return query
@@ -241,11 +229,9 @@ class DraftGenerationService:
         db: AsyncSession, project_id: UUID
     ) -> None:
         """Serialize version allocation for every draft write in a project."""
-        result = await db.execute(
-            select(Collection.id).where(Collection.id == project_id).with_for_update()
-        )
-        if result.scalar_one_or_none() is None:
-            raise ValueError("Project was not found while saving the draft")
+        from src.services.research_engine.project_access import lock_active_project
+
+        await lock_active_project(db, project_id)
 
     async def _generate_draft_async(
         self,
@@ -1057,6 +1043,7 @@ class DraftGenerationService:
         except ValueError:
             outcome = "blocked"
 
+        await cls._lock_project_for_draft_version(db, project_id)
         record = DraftReview(
             project_id=project_id,
             base_draft_id=base_draft_id,

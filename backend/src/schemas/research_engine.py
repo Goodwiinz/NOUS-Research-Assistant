@@ -145,13 +145,43 @@ class ProjectResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     id: UUID
+    project_id: UUID
     collection_id: Optional[UUID] = None
+    research_engine_project_id: Optional[UUID] = None
+    blueprint_id: Optional[UUID] = None
     name: str
     description: Optional[str] = None
     status: str
     settings: Dict[str, Any]
     created_at: datetime
     updated_at: datetime
+
+
+class LegacyProjectResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    research_engine_project_id: UUID
+    project_id: Optional[UUID] = None
+    collection_id: Optional[UUID] = None
+    name: str
+    description: Optional[str] = None
+    status: str
+
+
+class ResearchProjectRoleCreate(BaseModel):
+    user_id: UUID
+    role: str
+
+
+class ResearchProjectRoleResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    project_id: UUID
+    user_id: UUID
+    role: str
+    assigned_by_id: UUID
+    created_at: datetime
 
 
 # ============================================================================
@@ -232,6 +262,7 @@ class BlueprintResponse(BaseModel):
 
     id: UUID
     project_id: UUID
+    research_engine_project_id: UUID
     name: str
     template_source: Optional[str] = None
     version: int
@@ -265,6 +296,8 @@ class RunResponse(BaseModel):
 
     id: UUID
     blueprint_id: UUID
+    project_id: UUID
+    research_engine_project_id: UUID
     blueprint_version: int
     status: RunStatus
     started_at: Optional[datetime] = None

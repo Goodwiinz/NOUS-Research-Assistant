@@ -61,6 +61,7 @@ const DEFAULT_STEP: BlueprintStepDef = {
 
 export interface BlueprintEditorProps {
   projectId: string;
+  readOnly?: boolean;
 }
 
 async function loadProjectBlueprint(projectId: string): Promise<{
@@ -82,7 +83,10 @@ async function loadProjectBlueprint(projectId: string): Promise<{
   return { project };
 }
 
-export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
+export function BlueprintEditor({
+  projectId,
+  readOnly = false,
+}: BlueprintEditorProps) {
   const router = useRouter();
 
   const [project, setProject] = useState<ResearchProject | null>(null);
@@ -252,6 +256,17 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
     );
   }
 
+  if (readOnly && showTemplateSelector) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-5">
+        <h2 className="font-medium text-foreground">Research blueprint</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          No blueprint was saved before this project was archived.
+        </p>
+      </div>
+    );
+  }
+
   // Template selector
   if (showTemplateSelector) {
     return (
@@ -297,6 +312,7 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
             id="blueprint-name"
             type="text"
             value={blueprintName}
+            disabled={readOnly}
             onChange={(e) => setBlueprintName(e.target.value)}
             className="text-xl font-semibold bg-transparent text-foreground border-none outline-hidden w-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded placeholder:text-muted-foreground/60 transition-colors"
             placeholder="Blueprint name"
@@ -312,7 +328,9 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving || !blueprintName.trim() || !!globalParamsError}
+            disabled={
+              readOnly || saving || !blueprintName.trim() || !!globalParamsError
+            }
             className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-card text-sm font-medium text-foreground hover:border-primary/40 hover:bg-muted/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             {saving ? (
@@ -327,7 +345,7 @@ export function BlueprintEditor({ projectId }: BlueprintEditorProps) {
             <button
               type="button"
               onClick={handleStartRun}
-              disabled={starting || steps.length === 0}
+              disabled={readOnly || starting || steps.length === 0}
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               {starting ? (

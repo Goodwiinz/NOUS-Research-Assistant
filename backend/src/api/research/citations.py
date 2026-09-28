@@ -34,6 +34,7 @@ from src.models import (
 )
 from src.services.research.bibliography_service import BibliographyService
 from src.services.research.citation_extraction_service import CitationExtractionService
+from src.services.research_engine.project_access import ResearchAction, resolve_project
 from src.shared.research_schemas import (
     CitationCreate,
     CitationListResponse,
@@ -124,24 +125,10 @@ async def _ensure_project_access(
     project_id: UUID,
     current_user: User,
     db: AsyncSession,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> None:
-    result = await db.execute(
-        select(Collection.id)
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            and_(
-                Collection.id == project_id,
-                Workspace.owner_id == current_user.id,
-                Collection.is_deleted.is_(False),
-                Workspace.is_deleted.is_(False),
-            )
-        )
-    )
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    """Apply the canonical project authorization and lifecycle boundary."""
+    await resolve_project(db, project_id, current_user.id, action)
 
 
 class CitationExtractRequest(BaseModel):

@@ -74,12 +74,9 @@ def _mock_db_returning(
     - Query 3: get last completed step (for paused runs)
     """
     db = AsyncMock()
+    db.expire_all = Mock()
+    db._run_result = run_result
     results = []
-
-    # Query 1: _get_owned_run JOIN query
-    run_mock = Mock()
-    run_mock.scalars.return_value.first.return_value = run_result
-    results.append(run_mock)
 
     if run_result is not None:
         # Only add more results for streamable statuses
@@ -116,6 +113,32 @@ def _mock_db_returning(
     db.refresh = AsyncMock()
     db.add = Mock()
     return db
+
+
+@pytest.fixture(autouse=True)
+def patch_shared_run_access(monkeypatch):
+    """Keep stream tests focused on SSE behavior, not resolver SQL shape."""
+
+    async def fake_require_run(db, run_id, user_id, action):
+        run = db._run_result
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return run
+
+    context = SimpleNamespace(
+        collection=SimpleNamespace(id=uuid.uuid4()),
+        engine=SimpleNamespace(id=uuid.uuid4()),
+    )
+
+    monkeypatch.setattr("src.api.research_engine.runs.require_run", fake_require_run)
+    monkeypatch.setattr(
+        "src.api.research_engine.runs.resolve_engine_project_context",
+        AsyncMock(return_value=context),
+    )
+    monkeypatch.setattr(
+        "src.api.research_engine.runs.resolve_project",
+        AsyncMock(return_value=context),
+    )
 
 
 # ============================================================================

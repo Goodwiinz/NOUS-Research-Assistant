@@ -5607,42 +5607,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/research-engine/projects": {
+    "/api/v1/research-engine/legacy-projects": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Projects
-         * @description List research projects for the current user.
-         */
-        get: operations["list_projects_api_v1_research_engine_projects_get"];
-        put?: never;
-        /**
-         * Create Project
-         * @description Create a new research project.
-         */
-        post: operations["create_project_api_v1_research_engine_projects_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/research-engine/projects/{project_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Project
-         * @description Get a single research project.
-         */
-        get: operations["get_project_api_v1_research_engine_projects__project_id__get"];
+        /** List Legacy Projects */
+        get: operations["list_legacy_projects_api_v1_research_engine_legacy_projects_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5651,7 +5624,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/research-engine/projects/{project_id}/collection": {
+    "/api/v1/research-engine/legacy-projects/{engine_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Legacy Project */
+        get: operations["get_legacy_project_api_v1_research_engine_legacy_projects__engine_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Projects */
+        get: operations["list_projects_api_v1_research_engine_projects_get"];
+        put?: never;
+        /** Create Project */
+        post: operations["create_project_api_v1_research_engine_projects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{engine_id}/collection": {
         parameters: {
             query?: never;
             header?: never;
@@ -5664,11 +5672,60 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /**
-         * Link Project Collection
-         * @description Owner-only, one-time explicit mapping for a historical engine project.
-         */
-        patch: operations["link_project_collection_api_v1_research_engine_projects__project_id__collection_patch"];
+        /** Link Project Collection */
+        patch: operations["link_project_collection_api_v1_research_engine_projects__engine_id__collection_patch"];
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project */
+        get: operations["get_project_api_v1_research_engine_projects__project_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Roles */
+        get: operations["list_project_roles_api_v1_research_engine_projects__project_id__roles_get"];
+        /** Assign Project Role */
+        put: operations["assign_project_role_api_v1_research_engine_projects__project_id__roles_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/roles/{user_id}/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Project Role */
+        delete: operations["delete_project_role_api_v1_research_engine_projects__project_id__roles__user_id___role__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/research-engine/runs/{run_id}": {
@@ -5823,7 +5880,7 @@ export interface paths {
         };
         /**
          * Get Extraction Task Status
-         * @description Get the status of a background extraction task.
+         * @description Get a task only through its authorized, retained matrix.
          */
         get: operations["get_extraction_task_status_api_v1_research_extraction_tasks__task_id__get"];
         put?: never;
@@ -8972,6 +9029,11 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
+            /**
+             * Research Engine Project Id
+             * Format: uuid
+             */
+            research_engine_project_id: string;
             /** Steps */
             steps: components["schemas"]["BlueprintStepDefinition"][];
             /** Template Source */
@@ -11442,6 +11504,24 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** LegacyProjectResponse */
+        LegacyProjectResponse: {
+            /** Collection Id */
+            collection_id?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** Project Id */
+            project_id?: string | null;
+            /**
+             * Research Engine Project Id
+             * Format: uuid
+             */
+            research_engine_project_id: string;
+            /** Status */
+            status: string;
+        };
         /**
          * LinkThreadRequest
          * @description Request to link an existing thread to a project
@@ -12043,6 +12123,16 @@ export interface components {
          * @description Detailed project response with additional context.
          */
         ProjectDetailResponse: {
+            /**
+             * Can Edit
+             * @default false
+             */
+            can_edit: boolean;
+            /**
+             * Can Manage
+             * @default false
+             */
+            can_manage: boolean;
             /** Color */
             color?: string | null;
             /**
@@ -12110,6 +12200,8 @@ export interface components {
             recent_notes?: {
                 [key: string]: unknown;
             }[];
+            /** Research Engine Project Id */
+            research_engine_project_id?: string | null;
             /** Research Goals */
             research_goals?: string | null;
             research_status: components["schemas"]["ResearchStatus"];
@@ -12120,6 +12212,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Workspace Archived
+             * @default false
+             */
+            workspace_archived: boolean;
             /**
              * Workspace Id
              * Format: uuid
@@ -12614,6 +12711,51 @@ export interface components {
          */
         RelationshipType: "WORKS_FOR" | "KNOWS" | "RELATED_TO" | "LOCATED_IN" | "PART_OF" | "MENTIONED_IN" | "APPEARS_WITH" | "CREATED_BY" | "OWNS" | "MANAGES" | "COLLABORATES_WITH" | "REPORTS_TO" | "MEMBER_OF" | "ATTENDED" | "SPOKE_AT" | "PUBLISHED_BY" | "CITED" | "REFERENCES" | "CUSTOM";
         /**
+         * ResearchProjectRole
+         * @enum {string}
+         */
+        ResearchProjectRole: "reviewer" | "adjudicator" | "supervisor";
+        /** ResearchProjectRoleCreate */
+        ResearchProjectRoleCreate: {
+            /** Role */
+            role: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /** ResearchProjectRoleResponse */
+        ResearchProjectRoleResponse: {
+            /**
+             * Assigned By Id
+             * Format: uuid
+             */
+            assigned_by_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Role */
+            role: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /**
          * ResearchStatus
          * @description Research project status
          * @enum {string}
@@ -12828,6 +12970,16 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Research Engine Project Id
+             * Format: uuid
+             */
+            research_engine_project_id: string;
             /** Started At */
             started_at?: string | null;
             status: components["schemas"]["RunStatus"];
@@ -15003,6 +15155,8 @@ export interface components {
          * @description Schema for project API responses.
          */
         src__schemas__research_engine__ProjectResponse: {
+            /** Blueprint Id */
+            blueprint_id?: string | null;
             /** Collection Id */
             collection_id?: string | null;
             /**
@@ -15019,6 +15173,13 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Research Engine Project Id */
+            research_engine_project_id?: string | null;
             /** Settings */
             settings: {
                 [key: string]: unknown;
@@ -15260,9 +15421,19 @@ export interface components {
         };
         /**
          * ProjectResponse
-         * @description Research project response
+         * @description Research project response; id is the canonical Collection identifier.
          */
         src__shared__research_schemas__ProjectResponse: {
+            /**
+             * Can Edit
+             * @default false
+             */
+            can_edit: boolean;
+            /**
+             * Can Manage
+             * @default false
+             */
+            can_manage: boolean;
             /** Color */
             color?: string | null;
             /**
@@ -15304,6 +15475,8 @@ export interface components {
              */
             note_count: number;
             project_type: components["schemas"]["ProjectType"];
+            /** Research Engine Project Id */
+            research_engine_project_id?: string | null;
             /** Research Goals */
             research_goals?: string | null;
             research_status: components["schemas"]["ResearchStatus"];
@@ -15314,6 +15487,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Workspace Archived
+             * @default false
+             */
+            workspace_archived: boolean;
             /**
              * Workspace Id
              * Format: uuid
@@ -24487,6 +24665,57 @@ export interface operations {
             };
         };
     };
+    list_legacy_projects_api_v1_research_engine_legacy_projects_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyProjectResponse"][];
+                };
+            };
+        };
+    };
+    get_legacy_project_api_v1_research_engine_legacy_projects__engine_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_projects_api_v1_research_engine_projects_get: {
         parameters: {
             query?: {
@@ -24551,6 +24780,41 @@ export interface operations {
             };
         };
     };
+    link_project_collection_api_v1_research_engine_projects__engine_id__collection_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectLink"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["src__schemas__research_engine__ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_project_api_v1_research_engine_projects__project_id__get: {
         parameters: {
             query?: never;
@@ -24582,7 +24846,38 @@ export interface operations {
             };
         };
     };
-    link_project_collection_api_v1_research_engine_projects__project_id__collection_patch: {
+    list_project_roles_api_v1_research_engine_projects__project_id__roles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchProjectRoleResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_project_role_api_v1_research_engine_projects__project_id__roles_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -24593,7 +24888,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ProjectLink"];
+                "application/json": components["schemas"]["ResearchProjectRoleCreate"];
             };
         };
         responses: {
@@ -24603,8 +24898,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["src__schemas__research_engine__ProjectResponse"];
+                    "application/json": components["schemas"]["ResearchProjectRoleResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_project_role_api_v1_research_engine_projects__project_id__roles__user_id___role__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                user_id: string;
+                role: components["schemas"]["ResearchProjectRole"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

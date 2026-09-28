@@ -113,7 +113,7 @@ async def test_stream_claims_before_shared_admission(
             reproducibility_manifest=None,
         ),
     )
-    blueprint = SimpleNamespace(steps=[], parameters={}, version=1)
+    blueprint = SimpleNamespace(steps=[], parameters={}, version=1, project_id=uuid4())
     blueprint_result = Mock()
     blueprint_result.scalars.return_value.first.return_value = blueprint
     last_step_result = Mock()
@@ -139,6 +139,11 @@ async def test_stream_claims_before_shared_admission(
         return True
 
     monkeypatch.setattr("src.api.research_engine.runs.admit_expensive_work", admit)
+    project_context = SimpleNamespace(collection=SimpleNamespace(id=uuid4()))
+    monkeypatch.setattr(
+        "src.api.research_engine.runs.resolve_engine_project_context",
+        AsyncMock(return_value=project_context),
+    )
     with patch(
         "src.api.research_engine.runs._get_owned_run", AsyncMock(return_value=run)
     ):
@@ -164,7 +169,7 @@ async def test_stream_denied_admission_releases_claim(
             reproducibility_manifest=None,
         ),
     )
-    blueprint = SimpleNamespace(steps=[], parameters={}, version=1)
+    blueprint = SimpleNamespace(steps=[], parameters={}, version=1, project_id=uuid4())
     blueprint_result = Mock()
     blueprint_result.scalars.return_value.first.return_value = blueprint
     last_step_result = Mock()
@@ -182,6 +187,10 @@ async def test_stream_denied_admission_releases_claim(
     monkeypatch.setattr(
         "src.api.research_engine.runs.admit_expensive_work",
         AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "src.api.research_engine.runs.resolve_engine_project_context",
+        AsyncMock(return_value=SimpleNamespace(collection=SimpleNamespace(id=uuid4()))),
     )
     with patch(
         "src.api.research_engine.runs._get_owned_run", AsyncMock(return_value=run)

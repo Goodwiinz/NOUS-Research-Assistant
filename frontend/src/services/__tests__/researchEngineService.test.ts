@@ -15,6 +15,10 @@ import {
   getRunManifest,
   listSteps,
   getStep,
+  getLegacyProject,
+  listProjectRoles,
+  assignProjectRole,
+  removeProjectRole,
 } from '../researchEngineService';
 import { api } from '../api-client';
 
@@ -23,6 +27,8 @@ vi.mock('../api-client', () => ({
     get: vi.fn(),
     post: vi.fn(),
     patch: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -45,10 +51,50 @@ describe('researchEngineService', () => {
 
   describe('createProject', () => {
     it('calls POST /projects with data', async () => {
-      const data = { name: 'Test Project', description: 'A test' };
+      const data = { collection_id: 'collection-1', name: 'Canonical project' };
       mockApi.post.mockResolvedValue({ id: '1', ...data });
       await createProject(data);
       expect(mockApi.post).toHaveBeenCalledWith(`${BASE}/projects`, data);
+    });
+  });
+
+  describe('canonical project compatibility', () => {
+    it('resolves historical engine ids separately', async () => {
+      mockApi.get.mockResolvedValue({
+        research_engine_project_id: 'engine-1',
+        collection_id: 'collection-1',
+      });
+
+      await getLegacyProject('engine-1');
+
+      expect(mockApi.get).toHaveBeenCalledWith(
+        `${BASE}/legacy-projects/engine-1`
+      );
+    });
+
+    it('uses the canonical collection id for independent roles', async () => {
+      mockApi.get.mockResolvedValue([]);
+      mockApi.put.mockResolvedValue({
+        id: 'assignment-1',
+        project_id: 'collection-1',
+        user_id: 'user-1',
+        role: 'reviewer',
+      });
+
+      await listProjectRoles('collection-1');
+      await assignProjectRole('collection-1', 'user-1', 'reviewer');
+      await removeProjectRole('collection-1', 'user-1', 'reviewer');
+
+      expect(mockApi.get).toHaveBeenCalledWith(
+        `${BASE}/projects/collection-1/roles`
+      );
+      expect(mockApi.put).toHaveBeenCalledWith(
+        `${BASE}/projects/collection-1/roles`,
+        { user_id: 'user-1', role: 'reviewer' }
+      );
+      expect(mockApi.delete).toHaveBeenCalledWith(
+        `${BASE}/projects/collection-1/roles/user-1/reviewer`
+      );
     });
   });
 
@@ -75,9 +121,7 @@ describe('researchEngineService', () => {
     it('calls GET /blueprints/templates', async () => {
       mockApi.get.mockResolvedValue([]);
       await listTemplates();
-      expect(mockApi.get).toHaveBeenCalledWith(
-        `${BASE}/blueprints/templates`
-      );
+      expect(mockApi.get).toHaveBeenCalledWith(`${BASE}/blueprints/templates`);
     });
   });
 
@@ -117,10 +161,9 @@ describe('researchEngineService', () => {
       const params = { temperature: 0.5 };
       mockApi.post.mockResolvedValue({ id: 'r1' });
       await startRun('b1', params);
-      expect(mockApi.post).toHaveBeenCalledWith(
-        `${BASE}/blueprints/b1/runs`,
-        { parameters_override: params }
-      );
+      expect(mockApi.post).toHaveBeenCalledWith(`${BASE}/blueprints/b1/runs`, {
+        parameters_override: params,
+      });
     });
   });
 
@@ -152,9 +195,7 @@ describe('researchEngineService', () => {
     it('calls GET /runs/:runId/manifest', async () => {
       mockApi.get.mockResolvedValue({ manifest: {} });
       await getRunManifest('r1');
-      expect(mockApi.get).toHaveBeenCalledWith(
-        `${BASE}/runs/r1/manifest`
-      );
+      expect(mockApi.get).toHaveBeenCalledWith(`${BASE}/runs/r1/manifest`);
     });
   });
 

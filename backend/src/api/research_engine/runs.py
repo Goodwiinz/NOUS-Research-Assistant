@@ -36,9 +36,12 @@ from src.services.research_engine.connectors import (
 from src.services.research_engine.connectors.registry import build_connectors
 from src.services.research_engine.engine import WorkflowEngine
 from src.services.research_engine.project_access import (
+    ProjectContext,
     ResearchAction,
     require_blueprint,
     require_run,
+    resolve_engine_project_context,
+    resolve_project,
 )
 from src.services.research_engine.providers import (
     ClaudeProvider,
@@ -142,10 +145,21 @@ async def _get_owned_run(
     run_id: UUID,
     user_id: UUID,
     db: AsyncSession,
-    action: ResearchAction = ResearchAction.REVIEW,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> ResearchRun:
     """Resolve a run through the shared mapped-project access policy."""
     return await require_run(db, run_id, user_id, action)
+
+
+def _run_response(run: ResearchRun, context: ProjectContext) -> RunResponse:
+    assert context.engine is not None
+    return RunResponse.model_validate(
+        {
+            **run.__dict__,
+            "project_id": context.collection.id,
+            "research_engine_project_id": context.engine.id,
+        }
+    )
 
 
 def _get_step_params(step_def: Dict[str, Any]) -> Dict[str, Any]:
@@ -305,7 +319,10 @@ async def start_run(
         body = RunCreate()
 
     blueprint = await require_blueprint(
-        db, blueprint_id, current_user.id, ResearchAction.SUPERVISE
+        db, blueprint_id, current_user.id, ResearchAction.EDIT
+    )
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
     )
 
     # Mark blueprint as immutable
@@ -323,7 +340,7 @@ async def start_run(
     db.add(run)
     await db.commit()
     await db.refresh(run)
-    return RunResponse.model_validate(run)
+    return _run_response(run, context)
 
 
 @router.get(
@@ -336,8 +353,13 @@ async def get_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Get run status."""
-    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.REVIEW)
-    return RunResponse.model_validate(run)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
+    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
+    assert blueprint is not None
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.VIEW
+    )
+    return _run_response(run, context)
 
 
 @router.post(
@@ -350,7 +372,7 @@ async def pause_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Pause a running run."""
-    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.SUPERVISE)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.EDIT)
     if run.status != RunStatus.RUNNING.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -378,7 +400,12 @@ async def pause_run(
         )
     await db.commit()
     await db.refresh(run)
-    return RunResponse.model_validate(run)
+    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
+    assert blueprint is not None
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
+    )
+    return _run_response(run, context)
 
 
 @router.post(
@@ -391,7 +418,7 @@ async def resume_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Resume a paused run."""
-    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.SUPERVISE)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.EDIT)
     if run.status != RunStatus.PAUSED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -400,7 +427,12 @@ async def resume_run(
     run.status = RunStatus.RUNNING.value
     await db.commit()
     await db.refresh(run)
-    return RunResponse.model_validate(run)
+    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
+    assert blueprint is not None
+    context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
+    )
+    return _run_response(run, context)
 
 
 @router.get(
@@ -412,7 +444,7 @@ async def get_manifest(
     db: AsyncSession = Depends(get_db),
 ):
     """Get reproducibility manifest for a completed run."""
-    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.REVIEW)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
     if run.status != RunStatus.COMPLETED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -434,7 +466,7 @@ async def stream_run(
     Accepts runs in PENDING or PAUSED status. Returns 404 for missing runs,
     409 for runs in non-streamable states (completed, failed, running).
     """
-    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.SUPERVISE)
+    run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.EDIT)
 
     # Only pending or paused runs can be streamed
     streamable = {RunStatus.PENDING.value, RunStatus.PAUSED.value}
@@ -456,12 +488,18 @@ async def stream_run(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Blueprint not found",
         )
+    lifecycle_context = await resolve_engine_project_context(
+        db, blueprint.project_id, current_user.id, ResearchAction.EDIT
+    )
 
     # Determine resume offset from persisted steps for both paused and resumed runs.
     start_from = 0
     step_query = (
         select(ResearchStep)
-        .where(ResearchStep.run_id == run_id)
+        .where(
+            ResearchStep.run_id == run_id,
+            ResearchStep.is_deleted.is_(False),
+        )
         .order_by(ResearchStep.step_index.desc())
     )
     step_result = await db.execute(step_query)
@@ -586,7 +624,10 @@ async def stream_run(
             (
                 await db.execute(
                     select(ResearchStep)
-                    .where(ResearchStep.run_id == run_id)
+                    .where(
+                        ResearchStep.run_id == run_id,
+                        ResearchStep.is_deleted.is_(False),
+                    )
                     .order_by(ResearchStep.step_index.asc())
                 )
             )
@@ -638,6 +679,17 @@ async def stream_run(
                     break
 
                 if event_type == "step_complete":
+                    # Paid work may finish after an administrator archives or
+                    # deletes the project. Re-read the lifecycle before any
+                    # new output/source row is persisted or published.
+                    db.expire_all()
+                    await resolve_project(
+                        db,
+                        lifecycle_context.collection.id,
+                        current_user.id,
+                        ResearchAction.EDIT,
+                        require_engine=True,
+                    )
                     step_index = int(event.get("step_index") or 0)
                     step_def = {}
                     if 0 <= step_index < len(blueprint_dict["steps"]):

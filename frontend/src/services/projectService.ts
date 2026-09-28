@@ -26,6 +26,10 @@ export interface Project {
   citation_count?: number;
   note_count?: number;
   draft_count?: number;
+  research_engine_project_id?: string | null;
+  can_edit?: boolean;
+  can_manage?: boolean;
+  workspace_archived?: boolean;
 }
 
 export interface ProjectCreate {
@@ -118,6 +122,23 @@ export interface ProjectListResponse {
   has_prev?: boolean;
   skip?: number;
   limit?: number;
+}
+
+export async function listWorkflowLinkOptions(): Promise<Project[]> {
+  const projects: Project[] = [];
+  const limit = 100;
+  for (let skip = 0; ; skip += limit) {
+    const page = await projectService.listProjects({ skip, limit });
+    projects.push(...page.projects);
+    if (!page.has_next && page.projects.length < limit) break;
+  }
+  return projects.filter(
+    (project) =>
+      project.can_manage === true &&
+      project.workspace_archived !== true &&
+      project.research_status !== 'archived' &&
+      !project.research_engine_project_id
+  );
 }
 
 export interface ProjectDocumentListResponse {
