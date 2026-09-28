@@ -135,6 +135,20 @@ class NativeResponseAck(WireModel):
     approvalRecordId: UUID
 
 
+class NativeRequestDTO(BaseModel):
+    """Browser-safe, owner-authenticated view of a pending native request."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    id: UUID
+    run_id: UUID = Field(alias="runId")
+    method: str
+    target: dict[str, Any]
+    target_hash: str = Field(alias="targetHash")
+    expires_at: datetime = Field(alias="expiresAt")
+    consumed: bool
+    expired: bool
+
+
 class BridgeEvent(Envelope):
     sourceId: str = Field(min_length=1, max_length=128)
     sourceSeq: int = Field(ge=1, le=2**53 - 1, strict=True)

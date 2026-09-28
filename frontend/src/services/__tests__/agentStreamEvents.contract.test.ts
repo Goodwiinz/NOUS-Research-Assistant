@@ -44,6 +44,7 @@ const EXPECTED_WIRE_VALUES = [
   'heartbeat',
   'status',
   'confirmation',
+  'approval_required',
   'done',
   'error',
 ];

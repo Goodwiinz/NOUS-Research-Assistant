@@ -318,6 +318,7 @@ class AgentStreamEvent(StrEnum):
     HEARTBEAT = "heartbeat"
     STATUS = "status"
     CONFIRMATION = "confirmation"
+    APPROVAL_REQUIRED = "approval_required"
     DONE = "done"
     ERROR = "error"
 

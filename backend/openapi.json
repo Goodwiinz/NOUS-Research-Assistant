@@ -7645,6 +7645,60 @@
         "title": "NativeDecision",
         "type": "object"
       },
+      "NativeRequestDTO": {
+        "additionalProperties": false,
+        "description": "Browser-safe, owner-authenticated view of a pending native request.",
+        "properties": {
+          "consumed": {
+            "title": "Consumed",
+            "type": "boolean"
+          },
+          "expired": {
+            "title": "Expired",
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "target": {
+            "additionalProperties": true,
+            "title": "Target",
+            "type": "object"
+          },
+          "targetHash": {
+            "title": "Targethash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "runId",
+          "method",
+          "target",
+          "targetHash",
+          "expiresAt",
+          "consumed",
+          "expired"
+        ],
+        "title": "NativeRequestDTO",
+        "type": "object"
+      },
       "NoteListResponse": {
         "description": "Paginated list of notes.",
         "properties": {
@@ -27157,9 +27211,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Read Native Request Api V1 Harness Requests  Request Id  Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/NativeRequestDTO"
                 }
               }
             },

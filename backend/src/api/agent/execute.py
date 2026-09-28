@@ -1326,6 +1326,49 @@ async def resume_stream(
     # identity to this caller, so an editor cannot replay another member's run.
     await _require_editable_agent_thread(db, current_user, thread_uuid)
 
+    # External runs own a PostgreSQL event ledger and keep executing when this
+    # browser goes away. Reattach directly to that durable observation path;
+    # Redis stream buffers are only for native in-process LangGraph producers.
+    active_external = await get_active_run_for_thread(
+        db,
+        thread_uuid,
+        organization_id=getattr(current_user, "organization_id", None),
+        user_id=current_user.id,
+    )
+    external_run = (
+        active_external
+        if active_external is not None and active_external.execution_provider == "codex"
+        else None
+    )
+    if external_run is None:
+        latest_run = await get_latest_run_for_thread(
+            db,
+            thread_uuid,
+            organization_id=getattr(current_user, "organization_id", None),
+            user_id=current_user.id,
+        )
+        if latest_run is not None and latest_run.execution_provider == "codex":
+            external_run = latest_run
+    if external_run is not None:
+        from src.api.agent.harness_streaming import (
+            context_for_accepted_run,
+            stream_harness_run,
+        )
+
+        external_context = await context_for_accepted_run(
+            db, run_id=_uuid.UUID(external_run.job_id), current_user=current_user
+        )
+        return StreamingResponse(
+            stream_harness_run(
+                request,
+                _uuid.UUID(external_run.job_id),
+                external_context,
+                after_seq=after,
+            ),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
     sid = await _stream_buffer.active_stream_id(thread_id)
     # Run correlation (codex audit CX1): the client's seq cursor is only
     # meaningful against the stream it was read from. If the caller names its

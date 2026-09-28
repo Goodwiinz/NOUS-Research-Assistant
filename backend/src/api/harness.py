@@ -22,7 +22,7 @@ from src.core.dependencies import get_current_user
 from src.core.websocket_auth import WebSocketAuthenticator, WebSocketAuthError
 from src.models.integration_grant import IntegrationGrant
 from src.models.user import User
-from src.schemas.harness import BridgeEvent
+from src.schemas.harness import BridgeEvent, NativeRequestDTO
 from src.services.harness.approvals import (
     NativeDecision,
     NativeRequestConflict,
@@ -45,7 +45,7 @@ from src.services.integrations.context import (
 router = APIRouter(prefix="/harness", tags=["harness"])
 
 
-@router.get("/requests/{request_id}")
+@router.get("/requests/{request_id}", response_model=NativeRequestDTO)
 async def read_native_request(
     request_id: UUID,
     user: User = Depends(require_interactive_user),

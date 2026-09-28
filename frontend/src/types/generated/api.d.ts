@@ -12243,6 +12243,39 @@ export interface components {
             targetHash?: string | null;
         };
         /**
+         * NativeRequestDTO
+         * @description Browser-safe, owner-authenticated view of a pending native request.
+         */
+        NativeRequestDTO: {
+            /** Consumed */
+            consumed: boolean;
+            /** Expired */
+            expired: boolean;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Method */
+            method: string;
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+            /** Target */
+            target: {
+                [key: string]: unknown;
+            };
+            /** Targethash */
+            targetHash: string;
+        };
+        /**
          * NoteListResponse
          * @description Paginated list of notes.
          */
@@ -22293,9 +22326,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["NativeRequestDTO"];
                 };
             };
             /** @description Validation Error */
