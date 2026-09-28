@@ -612,3 +612,109 @@ test("ambiguous non-interrupt response is not replayed", async () => {
     f.cleanup();
   }
 });
+
+function gate() {
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { wait, release };
+}
+
+test("concurrent interrupt redelivery waits for the first successful receipt", async () => {
+  const f = fixture(),
+    j = new Journal(f.path, () => options),
+    c = command(),
+    a = adapter();
+  a.startTurn = async () => ({ id: "turn" });
+  const firstEntered = gate(),
+    firstRelease = gate(),
+    secondRelease = gate();
+  const stop: BridgeCommand = {
+    ...c,
+    commandId: randomUUID(),
+    body: { kind: "interrupt", sessionId: "session", turnId: "turn" },
+  };
+  let calls = 0;
+  a.interruptTurn = async () => {
+    calls++;
+    if (calls === 1) {
+      await firstRelease.wait;
+      firstEntered.release();
+    } else {
+      await secondRelease.wait;
+      throw new Error("late failure");
+    }
+  };
+  try {
+    await j.execute(c, a);
+    const first = j.execute(stop, a);
+    const second = j.execute(stop, a);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const concurrentCalls = calls;
+    firstRelease.release();
+    await firstEntered.wait;
+    await first;
+    assert.equal(j.state(stop.commandId), "delivered");
+    secondRelease.release();
+    await second;
+    assert.equal(j.state(stop.commandId), "delivered");
+    await j.execute(stop, a);
+    assert.equal(concurrentCalls, 1);
+    assert.equal(calls, 1);
+  } finally {
+    firstRelease.release();
+    secondRelease.release();
+    j.close();
+    f.cleanup();
+  }
+});
+
+test("late interrupt failure through another journal cannot overwrite delivered", async () => {
+  const f = fixture(),
+    first = new Journal(f.path, () => options),
+    c = command(),
+    a = adapter();
+  a.startTurn = async () => ({ id: "turn" });
+  const goodRelease = gate(),
+    badRelease = gate();
+  const stop: BridgeCommand = {
+    ...c,
+    commandId: randomUUID(),
+    body: { kind: "interrupt", sessionId: "session", turnId: "turn" },
+  };
+  let calls = 0;
+  a.interruptTurn = async () => {
+    calls++;
+    if (calls === 1) await goodRelease.wait;
+    else {
+      await badRelease.wait;
+      throw new Error("late failure");
+    }
+  };
+  let second: Journal | undefined;
+  try {
+    await first.execute(c, a);
+    const good = first.execute(stop, a);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    second = new Journal(f.path, () => options);
+    const bad = second.execute(stop, a);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(calls, 2);
+    goodRelease.release();
+    await good;
+    assert.equal(first.state(stop.commandId), "delivered");
+    badRelease.release();
+    await bad;
+    assert.equal(second.state(stop.commandId), "delivered");
+    await first.execute(stop, a);
+    await second.execute(stop, a);
+    assert.equal(calls, 2);
+  } finally {
+    goodRelease.release();
+    badRelease.release();
+    second?.close();
+    first.close();
+    f.cleanup();
+  }
+});

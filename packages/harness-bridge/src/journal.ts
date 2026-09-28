@@ -37,6 +37,7 @@ export class Journal {
   private db: DatabaseSync;
   private inTransaction = false;
   private closed = false;
+  private executions = new Map<string, Promise<void>>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private consumers = new WeakSet<HarnessAdapter>();
   constructor(
@@ -103,7 +104,7 @@ export class Journal {
     if (this.closed) return;
     this.db
       .prepare(
-        "UPDATE commands SET state='recovering' WHERE id=? AND state NOT IN ('completed','failed','interrupted','terminal_pending')",
+        "UPDATE commands SET state='recovering' WHERE id=? AND state NOT IN ('completed','failed','interrupted','terminal_pending','delivered')",
       )
       .run(id);
   }
@@ -149,6 +150,25 @@ export class Journal {
   }
   async execute(value: BridgeCommand, adapter: HarnessAdapter): Promise<void> {
     const command = parseCommand(value);
+    // Serialize the complete attempt, including its native receipt, so a
+    // duplicate observes the prior attempt's persisted result before deciding.
+    const previous =
+      this.executions.get(command.commandId) ?? Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => this.executeCommand(command, adapter));
+    this.executions.set(command.commandId, current);
+    try {
+      await current;
+    } finally {
+      if (this.executions.get(command.commandId) === current)
+        this.executions.delete(command.commandId);
+    }
+  }
+  private async executeCommand(
+    command: BridgeCommand,
+    adapter: HarnessAdapter,
+  ): Promise<void> {
     const { expiresAt, ...identity } = command;
     const digest = hash(identity);
     const existing = this.row(command.commandId);
@@ -172,7 +192,7 @@ export class Journal {
     )
       throw new Error("lease expired; verified renewal required");
     const b = command.body;
-    this.tx(() => {
+    const claimed = this.tx(() => {
       const owner = this.owner(command);
       if (b.kind === "start") {
         if (owner) throw new Error("workspace quarantined");
@@ -194,9 +214,16 @@ export class Journal {
           throw new Error("approval blocked during recovery");
       }
       if (existing) {
-        this.db
-          .prepare("UPDATE commands SET state='intent' WHERE id=?")
-          .run(command.commandId);
+        // Another journal/process can have recorded success since our read.
+        // Both this claim and failure recovery preserve that durable receipt.
+        if (
+          this.db
+            .prepare(
+              "UPDATE commands SET state='intent' WHERE id=? AND state IN ('intent','recovering')",
+            )
+            .run(command.commandId).changes !== 1
+        )
+          return false;
       } else {
         this.db
           .prepare(
@@ -208,7 +235,9 @@ export class Journal {
         this.db
           .prepare("INSERT INTO locks(workspace,command) VALUES(?,?)")
           .run(command.workspaceId, command.commandId);
+      return true;
     });
+    if (!claimed) return;
     try {
       if (b.kind === "start") {
         const options = this.optionsFor(command.workspaceId);
