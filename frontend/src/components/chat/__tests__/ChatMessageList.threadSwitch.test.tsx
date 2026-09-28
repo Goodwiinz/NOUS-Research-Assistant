@@ -54,7 +54,7 @@ describe('ChatMessageList thread-switch remount', () => {
     // Same content in both threads so any DOM reuse would be from RECONCILIATION,
     // not a content diff. A thread-keyed subtree must instead UNMOUNT the old
     // node and mount a fresh one — this is what prevents React from reconciling
-    // index-addressed MessageByIndex fibers across threads (the crash path).
+    // the previous thread's message-row fibers across threads (the crash path).
     const messages = msgs('CARRYOVER');
     const { rerender } = render(tree('thread-A', messages));
 
