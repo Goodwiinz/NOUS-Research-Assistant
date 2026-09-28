@@ -26,6 +26,8 @@ export type ProtocolRegistrationCreate =
   components['schemas']['ProtocolRegistrationCreate'];
 export type ProtocolRegistrationResponse =
   components['schemas']['ProtocolRegistrationResponse'];
+export type ProtocolDeviationCreate =
+  components['schemas']['ProtocolDeviationCreate'];
 export type ProtocolDeviationResponse =
   components['schemas']['ProtocolDeviationResponse'];
 
@@ -76,4 +78,9 @@ export const researchProtocolService = {
     api.post(`${BASE}/protocols/${protocolId}/registrations`, body),
   listDeviations: (protocolId: string): Promise<ProtocolDeviationResponse[]> =>
     api.get(`${BASE}/protocols/${protocolId}/deviations`),
+  recordDeviation: (
+    protocolId: string,
+    body: ProtocolDeviationCreate
+  ): Promise<ProtocolDeviationResponse> =>
+    api.post(`${BASE}/protocols/${protocolId}/deviations`, body),
 };

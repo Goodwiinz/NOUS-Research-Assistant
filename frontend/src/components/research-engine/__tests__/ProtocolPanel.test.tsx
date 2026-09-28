@@ -31,6 +31,7 @@ interface ActionStubs {
   createVersion: MutationStub;
   approve: MutationStub;
   register: MutationStub;
+  recordDeviation: MutationStub;
 }
 
 const mutation = (): MutationStub => ({
@@ -114,7 +115,8 @@ const draftVersion = {
 
 function arrange(
   canApprove: boolean,
-  extraProtocols: Array<Record<string, unknown>> = []
+  extraProtocols: Array<Record<string, unknown>> = [],
+  canManage = true
 ): ActionStubs {
   vi.mocked(useResearchQuestions).mockReturnValue({
     data: [{ ...question, versions: [question.current_version] }],
@@ -134,6 +136,7 @@ function arrange(
           { ...draftVersion, can_approve: canApprove },
         ],
         can_edit: true,
+        can_manage: canManage,
         can_approve: canApprove,
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-02T00:00:00Z',
@@ -150,6 +153,7 @@ function arrange(
     createVersion: mutation(),
     approve: mutation(),
     register: mutation(),
+    recordDeviation: mutation(),
   };
   vi.mocked(useProtocolActions).mockReturnValue(
     actions as ReturnType<typeof useProtocolActions>
@@ -185,6 +189,7 @@ describe('ProtocolPanel', () => {
       screen.getByText('Changed sections: eligibility')
     ).toBeInTheDocument();
     expect(screen.getByText(/Approved by supervisor-1/)).toBeInTheDocument();
+    expect(screen.getByText(/Protocol content hash:/)).toBeInTheDocument();
     expect(
       screen.getByText(/independent assigned supervisor/)
     ).toBeInTheDocument();
@@ -253,6 +258,12 @@ describe('ProtocolPanel', () => {
       }),
       { target: { value: 'osf-123' } }
     );
+    fireEvent.change(
+      screen.getByRole('textbox', {
+        name: 'External registration receipt (JSON)',
+      }),
+      { target: { value: '{"record_id":"osf-123"}' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Record receipt' }));
     expect(actions.register.mutate).toHaveBeenCalledWith(
       {
@@ -262,8 +273,115 @@ describe('ProtocolPanel', () => {
           protocol_version_hash: 'a'.repeat(64),
           provider: 'OSF',
           external_identifier: 'osf-123',
+          receipt: { record_id: 'osf-123' },
           status: 'registered',
         }),
+      },
+      expect.any(Object)
+    );
+  });
+
+  it('requires a receipt object before registering and limits registration to managers', () => {
+    const actions = arrange(false, [], false);
+    render(
+      <ProtocolPanel
+        projectId="collection-1"
+        blueprintId="blueprint-1"
+        readOnly={false}
+        onApprovedVersionChange={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Recorded registration receipts'));
+    expect(
+      screen.queryByRole('textbox', { name: 'Registry provider' })
+    ).not.toBeInTheDocument();
+    expect(actions.register.mutate).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed registration receipt JSON before calling the API', () => {
+    const actions = arrange(false);
+    render(
+      <ProtocolPanel
+        projectId="collection-1"
+        blueprintId="blueprint-1"
+        readOnly={false}
+        onApprovedVersionChange={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Recorded registration receipts'));
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Registry provider' }),
+      {
+        target: { value: 'OSF' },
+      }
+    );
+    fireEvent.change(
+      screen.getByRole('textbox', {
+        name: 'External registration identifier',
+      }),
+      { target: { value: 'osf-123' } }
+    );
+    fireEvent.change(
+      screen.getByRole('textbox', {
+        name: 'External registration receipt (JSON)',
+      }),
+      { target: { value: '{invalid' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Record receipt' }));
+
+    expect(
+      screen.getByText(
+        'Enter the external registry receipt as a non-empty JSON object.'
+      )
+    ).toBeInTheDocument();
+    expect(actions.register.mutate).not.toHaveBeenCalled();
+  });
+
+  it('records a run-bound deviation for an approved protocol version', () => {
+    const actions = arrange(false);
+    render(
+      <ProtocolPanel
+        projectId="collection-1"
+        blueprintId="blueprint-1"
+        readOnly={false}
+        onApprovedVersionChange={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Protocol deviations (0)'));
+    fireEvent.change(screen.getByLabelText('Deviation run ID'), {
+      target: { value: 'run-1' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Deviation output reference (optional)'),
+      {
+        target: { value: 'step-1' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Observed protocol difference'), {
+      target: { value: 'One additional database was searched' },
+    });
+    fireEvent.change(screen.getByLabelText('Deviation rationale'), {
+      target: { value: 'The primary index was temporarily unavailable' },
+    });
+    fireEvent.change(screen.getByLabelText('Deviation disposition'), {
+      target: { value: 'documented' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Record deviation' }));
+
+    expect(actions.recordDeviation.mutate).toHaveBeenCalledWith(
+      {
+        protocolId: 'protocol-1',
+        body: {
+          protocol_version_id: 'protocol-version-1',
+          run_id: 'run-1',
+          output_reference: 'step-1',
+          observed_difference: 'One additional database was searched',
+          rationale: 'The primary index was temporarily unavailable',
+          disposition: 'documented',
+        },
       },
       expect.any(Object)
     );

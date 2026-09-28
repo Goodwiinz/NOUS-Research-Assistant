@@ -125,6 +125,10 @@ async def _protocol_response(
         WorkspaceRole.ADMIN,
         WorkspaceRole.EDITOR,
     }
+    can_manage = active and context.workspace_role in {
+        WorkspaceRole.OWNER,
+        WorkspaceRole.ADMIN,
+    }
     return ResearchProtocolResponse(
         id=protocol.id,
         project_id=protocol.collection_id,
@@ -146,6 +150,7 @@ async def _protocol_response(
             for version in versions
         ],
         can_edit=can_edit,
+        can_manage=can_manage,
         can_approve=(
             active
             and ResearchProjectRole.SUPERVISOR in context.effective_roles
@@ -249,10 +254,12 @@ async def list_protocols(
     protocols = list(
         (
             await db.execute(
-                select(ResearchProtocol).where(
+                select(ResearchProtocol)
+                .where(
                     ResearchProtocol.collection_id == project_id,
                     ResearchProtocol.is_deleted.is_(False),
                 )
+                .order_by(ResearchProtocol.created_at.asc(), ResearchProtocol.id.asc())
             )
         )
         .scalars()
