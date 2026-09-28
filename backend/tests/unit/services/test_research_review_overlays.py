@@ -91,6 +91,7 @@ def _review(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
+        reviewer_id=uuid4(),
         step_index=index,
         review_kind=kind,
         output_hash=canonical_stage_output_hash(output),

@@ -79,6 +79,7 @@ from src.api.research_engine import (
     research_engine_blueprints_router,
     research_engine_capabilities_router,
     research_engine_projects_router,
+    research_engine_protocols_router,
     research_engine_reviews_router,
     research_engine_runs_router,
     research_engine_steps_router,
@@ -643,6 +644,9 @@ app.include_router(figures_router)  # Extracted figures endpoints
 app.include_router(
     research_engine_projects_router, prefix="/api/v1"
 )  # Research Engine projects
+app.include_router(
+    research_engine_protocols_router, prefix="/api/v1"
+)  # Research Engine protocols
 app.include_router(
     research_engine_blueprints_router, prefix="/api/v1"
 )  # Research Engine blueprints

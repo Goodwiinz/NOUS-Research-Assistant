@@ -42,7 +42,9 @@ logger = structlog.get_logger()
 
 _CITATION_PATTERN = re.compile(r"\[Doc\s+(\d+)\]")  # same as MessageCitationService
 _VERIFIER_TIMEOUT_SECONDS = 30.0
-_MAX_DOCS_VERIFIED = 10  # ponytail: cap LLM fan-out; raise if drafts grow
+_VERIFICATION_BATCH_SIZE = 10
+_CLAIM_EXCERPT_CHARS = 400
+_SUMMARY_EXCERPT_CHARS = 2000
 _FULLTEXT_CHARS = 8000
 _TITLE_MATCH_THRESHOLD = 0.6
 # Below the outright-match threshold, a shared surname only corroborates a
@@ -115,6 +117,9 @@ class CitationVerificationService:
         """
         start = time.monotonic()
         claims_by_index = self._claims_by_doc_index(draft_content)
+        requested_indices = sorted(
+            {int(value) for value in _CITATION_PATTERN.findall(draft_content)}
+        )
         # Drop indices with no matching row (same guard as
         # DraftGenerationService._extract_citations_from_content).
         ordered_indices = sorted(
@@ -123,26 +128,58 @@ class CitationVerificationService:
 
         verdicts: List[Dict[str, Any]] = []
         summary: Dict[str, int] = {"exact": 0, "minor": 0, "major": 0, "unverified": 0}
-        docs_checked = 0
-        docs_skipped = 0
+        batches = [
+            ordered_indices[offset : offset + _VERIFICATION_BATCH_SIZE]
+            for offset in range(0, len(ordered_indices), _VERIFICATION_BATCH_SIZE)
+        ]
+        for batch in batches:
+            for doc_index in batch:
+                document = documents[doc_index - 1]
+                entry = await self._verify_document(
+                    doc_index, document, claims_by_index[doc_index]
+                )
+                verdicts.append(entry)
+                summary[entry["verdict"]] += 1
 
-        for doc_index in ordered_indices:
-            if docs_checked >= _MAX_DOCS_VERIFIED:
-                docs_skipped += 1
-                continue
-            document = documents[doc_index - 1]
-            entry = await self._verify_document(
-                doc_index, document, claims_by_index[doc_index]
+        claims = self._claim_observations(draft_content, verdicts)
+        uncited_assertions = [
+            claim for claim in claims if not claim["citation_indices"]
+        ]
+        coverage_complete = len(verdicts) == len(requested_indices)
+        fully_verified = (
+            bool(verdicts)
+            and coverage_complete
+            and not uncited_assertions
+            and all(
+                entry["verdict"] == CitationVerdict.EXACT.value
+                and entry["checks"]["identity"]["status"] == "match"
+                and entry["checks"]["publication"]["status"] == "clear"
+                for entry in verdicts
             )
-            verdicts.append(entry)
-            summary[entry["verdict"]] += 1
-            docs_checked += 1
+        )
 
         return {
             "verdicts": verdicts,
+            "claims": claims,
+            "uncited_assertions": uncited_assertions,
             "summary": summary,
-            "docs_checked": docs_checked,
-            "docs_skipped": docs_skipped,
+            "docs_checked": len(verdicts),
+            "docs_skipped": 0,
+            "coverage": {
+                "complete": coverage_complete,
+                "requested_indices": requested_indices,
+                "unresolved_indices": sorted(
+                    set(requested_indices) - set(ordered_indices)
+                ),
+                "batch_size": _VERIFICATION_BATCH_SIZE,
+                "batch_count": len(batches),
+                "source_excerpt_chars": _FULLTEXT_CHARS,
+                "summary_excerpt_chars": _SUMMARY_EXCERPT_CHARS,
+                "factual_classification_complete": False,
+                "classification": "conservative_prose_heuristic",
+                "claim_excerpt_chars": _CLAIM_EXCERPT_CHARS,
+            },
+            "fully_verified": fully_verified,
             "duration_ms": int((time.monotonic() - start) * 1000),
         }
 
@@ -155,10 +192,11 @@ class CitationVerificationService:
         """Run the identity + faithfulness checks for a single cited document."""
         identity_status, resolved = await self._check_identity(document)
         identity_source = resolved.metadata_source if resolved is not None else None
+        publication_check = self._publication_observation(document)
 
         if identity_status == "mismatch":
             assert resolved is not None  # mismatch always carries a resolved citation
-            return {
+            entry = {
                 "doc_index": doc_index,
                 "document_id": str(document.id),
                 "verdict": CitationVerdict.MAJOR.value,
@@ -173,6 +211,16 @@ class CitationVerificationService:
                 "location": "resolved identifier metadata",
                 "claims_checked": len(claims),
             }
+            entry["checks"] = {
+                "identity": {
+                    "status": identity_status,
+                    "available": True,
+                    "source": identity_source,
+                },
+                "support": {"status": "not_checked", "available": False},
+                "publication": publication_check,
+            }
+            return entry
 
         doc_title = document.title or ""
         source_pass1 = document.content_summary or (
@@ -182,7 +230,7 @@ class CitationVerificationService:
             source_pass1 = select_relevant_passages(
                 document.content_text,
                 queries=claims,
-                max_chars=2000,
+                max_chars=_SUMMARY_EXCERPT_CHARS,
             )
 
         llm_verdict = (
@@ -223,7 +271,7 @@ class CitationVerificationService:
         ):
             location = "document summary"
 
-        return {
+        entry = {
             "doc_index": doc_index,
             "document_id": str(document.id),
             "verdict": verdict,
@@ -235,6 +283,22 @@ class CitationVerificationService:
             "location": location,
             "claims_checked": len(claims),
         }
+        entry["checks"] = {
+            "identity": {
+                "status": identity_status,
+                "available": identity_status in {"match", "mismatch"},
+                "source": identity_source,
+            },
+            "support": {
+                "status": verdict,
+                "available": llm_verdict is not None,
+                "evidence": evidence,
+                "location": location,
+                "page_number": page_number,
+            },
+            "publication": publication_check,
+        }
+        return entry
 
     # --- claim extraction -------------------------------------------------
     @staticmethod
@@ -261,6 +325,113 @@ class CitationVerificationService:
                 bucket.append(sentence)
 
         return claims
+
+    @staticmethod
+    def _claim_observations(
+        draft_content: str, verdicts: Sequence[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Expose cited and uncited prose assertions in document order."""
+        verdict_by_index = {int(entry["doc_index"]): entry for entry in verdicts}
+        observations: List[Dict[str, Any]] = []
+        boundary_re = re.compile(r"(?<!\d)[.!?](?!\d)|\n")
+        start = 0
+        for boundary in [*boundary_re.finditer(draft_content), None]:
+            end = boundary.end() if boundary is not None else len(draft_content)
+            assertion = draft_content[start:end].strip()
+            start = end
+            if not assertion or assertion.startswith("#"):
+                continue
+            indices = sorted(
+                {int(value) for value in _CITATION_PATTERN.findall(assertion)}
+            )
+            entries = [verdict_by_index.get(index) for index in indices]
+            statuses = [
+                entry["verdict"] if entry else "unverified" for entry in entries
+            ]
+            status = (
+                "uncited"
+                if not indices
+                else (
+                    "major"
+                    if "major" in statuses
+                    else (
+                        "unverified"
+                        if "unverified" in statuses
+                        else "minor" if "minor" in statuses else "exact"
+                    )
+                )
+            )
+            observations.append(
+                {
+                    "text": assertion,
+                    "citation_indices": indices,
+                    "support_status": status,
+                    "fully_verified": status == "exact"
+                    and all(
+                        entry
+                        and entry["checks"]["identity"]["status"] == "match"
+                        and entry["checks"]["publication"]["status"] == "clear"
+                        for entry in entries
+                    ),
+                    "classification": "conservative_prose_heuristic",
+                }
+            )
+        return observations
+
+    @staticmethod
+    def _publication_observation(document: Document) -> Dict[str, Any]:
+        """Report local correction/retraction metadata without inventing a check."""
+        metadata = document.document_metadata or {}
+        retracted = next(
+            (
+                metadata[key]
+                for key in (
+                    "retracted",
+                    "is_retracted",
+                    "retraction_status",
+                    "publication_retraction_status",
+                )
+                if key in metadata
+            ),
+            None,
+        )
+        correction = next(
+            (
+                metadata[key]
+                for key in ("correction", "corrected_by", "correction_notice")
+                if metadata.get(key)
+            ),
+            None,
+        )
+        raw_observations = [
+            {"field": key, "value": metadata[key], "source": "document_metadata"}
+            for key in (
+                "retracted",
+                "is_retracted",
+                "retraction_status",
+                "publication_retraction_status",
+                "correction",
+                "corrected_by",
+                "correction_notice",
+            )
+            if key in metadata
+        ]
+        normalized_retraction = str(retracted).strip().lower()
+        if retracted is True or normalized_retraction in {"retracted", "yes", "true"}:
+            observation_status = "retracted"
+        elif correction:
+            observation_status = "corrected"
+        else:
+            observation_status = "unknown"
+
+        return {
+            "status": "unknown",
+            "available": False,
+            "performed": False,
+            "source": None,
+            "observation_status": observation_status,
+            "observations": raw_observations,
+        }
 
     # --- identity check (identifier hijacking) ----------------------------
     async def _check_identity(
@@ -355,6 +526,8 @@ class CitationVerificationService:
         a provider outage is never treated as a MAJOR faithfulness failure).
         ``asyncio.CancelledError`` is re-raised, never swallowed.
         """
+        if any(len(claim) > _CLAIM_EXCERPT_CHARS for claim in claims):
+            return None
         claims_block = "\n".join(
             f"{i + 1}. {_sanitize_prompt_field(claim)}"
             for i, claim in enumerate(claims)

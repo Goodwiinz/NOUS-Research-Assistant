@@ -80,6 +80,12 @@ const STATUS_BADGE: Record<
 
 const SSE_MAX_ATTEMPTS = 3;
 const SSE_RECONNECT_BASE_DELAY_MS = 500;
+const CONFORMANCE_LABEL: Record<string, string> = {
+  plan_verified: 'Plan verified',
+  conformant: 'Conformant',
+  deviated: 'Deviated',
+  legacy_unbound: 'Legacy unbound',
+};
 
 function waitForReconnect(
   signal: AbortSignal,
@@ -552,7 +558,11 @@ export function RunView({ runId }: RunViewProps): ReactElement {
       <div className="mb-6 flex flex-wrap items-center gap-4 rounded-xl border border-border bg-card p-5 shadow-xs">
         <button
           type="button"
-          onClick={() => router.back()}
+          onClick={() =>
+            activeRun?.project_id
+              ? router.push(`/projects/${activeRun.project_id}?tab=workflow`)
+              : router.back()
+          }
           className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           aria-label="Go back"
         >
@@ -570,6 +580,25 @@ export function RunView({ runId }: RunViewProps): ReactElement {
             <p className="mt-0.5 text-xs text-muted-foreground">
               Started {new Date(activeRun.started_at).toLocaleString()}
             </p>
+          )}
+          {activeRun?.conformance_status && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-medium text-foreground">
+                Conformance:{' '}
+                {CONFORMANCE_LABEL[activeRun.conformance_status] ??
+                  activeRun.conformance_status}
+              </span>
+              {activeRun.protocol_version_id && (
+                <span className="text-muted-foreground">
+                  Protocol {activeRun.protocol_version_id.slice(0, 8)}
+                </span>
+              )}
+              {activeRun.effective_plan_hash && (
+                <code className="text-muted-foreground">
+                  Plan {activeRun.effective_plan_hash.slice(0, 12)}
+                </code>
+              )}
+            </div>
           )}
         </div>
 

@@ -23,11 +23,13 @@ import {
   Network,
   Upload,
   MoreHorizontal,
+  Workflow,
 } from 'lucide-react';
 import { ProjectHeader } from '@/components/research/ProjectHeader';
 import { DocumentList } from '@/components/research/DocumentList';
 import { ProjectKnowledgeTree } from '@/components/research/ProjectKnowledgeTree';
 import { ProjectSkillsTab } from '@/components/research/ProjectSkillsTab';
+import { ProjectWorkflow } from '@/components/research-engine/ProjectWorkflow';
 import { DraftGenerator } from '@/components/research/DraftGenerator';
 import { DraftViewer } from '@/components/research/DraftViewer';
 import { DraftGenerationProgress } from '@/components/research/DraftGenerationProgress';
@@ -77,8 +79,26 @@ type TabType =
   | 'chat'
   | 'matrix'
   | 'pipeline'
+  | 'workflow'
   | 'knowledge'
   | 'skills';
+
+const PROJECT_TABS: ReadonlySet<string> = new Set([
+  'documents',
+  'notes',
+  'bibliography',
+  'drafts',
+  'chat',
+  'matrix',
+  'pipeline',
+  'workflow',
+  'knowledge',
+  'skills',
+]);
+
+function isProjectTab(value: string): value is TabType {
+  return PROJECT_TABS.has(value);
+}
 
 export default function ProjectDetailPage() {
   const params = useParams();
@@ -115,7 +135,10 @@ export default function ProjectDetailPage() {
 
   const [mounted, setMounted] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<TabType>('documents');
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const requested = searchParams?.get('tab');
+    return requested && isProjectTab(requested) ? requested : 'documents';
+  });
   const linkedDraftIdRef = useRef<string | null>(null);
   const appliedDraftLinkRef = useRef<string | null>(null);
   const [bibFormat, setBibFormat] = useState<'bibtex' | 'ieee' | 'apa' | 'mla'>(
@@ -698,6 +721,7 @@ export default function ProjectDetailPage() {
     { id: 'bibliography', label: 'Bibliography', icon: BookOpen },
     { id: 'matrix', label: 'Matrix', icon: Grid3X3 },
     { id: 'pipeline', label: 'Pipeline', icon: GitBranch },
+    { id: 'workflow', label: 'Workflow', icon: Workflow },
     { id: 'knowledge', label: 'Knowledge', icon: Network },
   ];
 
@@ -1315,6 +1339,11 @@ export default function ProjectDetailPage() {
 
         {/* Pipeline Tab */}
         {activeTab === 'pipeline' && <ResearchPipeline projectId={projectId} />}
+
+        {/* Research engine workflow uses the same canonical Collection ID. */}
+        {activeTab === 'workflow' && currentProject && (
+          <ProjectWorkflow key={currentProject.id} project={currentProject} />
+        )}
 
         {/* Knowledge Tab */}
         {activeTab === 'knowledge' && (

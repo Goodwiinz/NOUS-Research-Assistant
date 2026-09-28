@@ -21,13 +21,16 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from src.models.collection import Collection
 from src.models.project_note import ProjectNote
-from src.models.workspace import Workspace
+from src.models.research_project import ResearchProject
+from src.models.research_project_role import ResearchProjectRoleAssignment
+from src.models.user import User
+from src.models.workspace import Workspace, WorkspaceMember
 from src.services.research.project_service import ProjectService
 
 pytestmark = pytest.mark.unit
@@ -47,9 +50,13 @@ async def session_factory():
         connect_args={"check_same_thread": False},
     )
     async with engine.begin() as conn:
+        await conn.run_sync(User.__table__.create)
         await conn.run_sync(Workspace.__table__.create)
+        await conn.run_sync(WorkspaceMember.__table__.create)
         await conn.run_sync(Collection.__table__.create)
         await conn.run_sync(ProjectNote.__table__.create)
+        await conn.run_sync(ResearchProject.__table__.create)
+        await conn.run_sync(ResearchProjectRoleAssignment.__table__.create)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     yield factory
     await engine.dispose()
@@ -59,6 +66,14 @@ async def _seed_project(factory) -> tuple[uuid.UUID, uuid.UUID]:
     """Insert an owned workspace + collection; return (user_id, project_id)."""
     user_id = uuid.uuid4()
     async with factory() as db:
+        await db.execute(
+            text(
+                """INSERT INTO users
+            (id,email,password_hash,first_name,last_name,role,is_active,login_count,created_at,updated_at,is_deleted)
+            VALUES (:id,:email,'test','Test','Owner','USER',true,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,false)"""
+            ),
+            {"id": str(user_id), "email": f"{user_id}@example.test"},
+        )
         ws = Workspace(id=uuid.uuid4(), name="ws", owner_id=user_id)
         db.add(ws)
         await db.commit()

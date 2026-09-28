@@ -12,7 +12,14 @@ from structlog import get_logger
 from src.core.config import settings
 from src.models import Collection, Workspace
 from src.models.project_note import ProjectNote
+from src.models.research_project import ResearchProject
 from src.services.agent.tool_helpers import _escape_like
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    accessible_research_workspace_ids,
+    require_research_workspace,
+    resolve_project,
+)
 from src.shared.research_schemas import ProjectCreate, ProjectUpdate
 
 logger = get_logger(__name__)
@@ -42,7 +49,7 @@ class ProjectService:
         skip: int = 0,
         limit: int = 50,
     ) -> Dict[str, Any]:
-        """List projects owned by the user with filtering."""
+        """List projects in the caller's authorized research workspaces."""
         workspace_ids = await self._get_workspace_ids_for_user(user_id)
         if not workspace_ids:
             return {
@@ -86,13 +93,34 @@ class ProjectService:
         query = (
             select(Collection)
             .where(and_(*filters))
-            .options(selectinload(Collection.documents))
+            .options(
+                selectinload(Collection.documents),
+                selectinload(Collection.workspace).selectinload(Workspace.members),
+            )
             .order_by(Collection.updated_at.desc())
             .offset(skip)
             .limit(limit)
         )
         result = await self.db.execute(query)
         projects = list(result.scalars().all())
+        if projects:
+            mappings = dict(
+                (
+                    await self.db.execute(
+                        select(ResearchProject.collection_id, ResearchProject.id).where(
+                            ResearchProject.collection_id.in_(
+                                [project.id for project in projects]
+                            ),
+                            ResearchProject.is_deleted.is_(False),
+                        )
+                    )
+                ).all()
+            )
+            for project in projects:
+                project.__dict__["research_engine_project_id"] = mappings.get(
+                    project.id
+                )
+                self._set_capabilities(project, project.workspace, user_id)
 
         return {
             "projects": projects,
@@ -111,7 +139,9 @@ class ProjectService:
         commit: bool = True,
     ) -> Collection:
         """Create a project after ownership validation."""
-        await self._ensure_workspace_owned(project_data.workspace_id, user_id)
+        workspace = await require_research_workspace(
+            self.db, project_data.workspace_id, user_id, ResearchAction.EDIT
+        )
 
         # R5-L11: collections are user-created durable rows just like
         # workspaces. Cap active projects per workspace so a caller cannot mint
@@ -152,6 +182,7 @@ class ProjectService:
         else:
             await self.db.flush()
         await self.db.refresh(project)
+        self._set_capabilities(project, workspace, user_id)
         return project
 
     async def create_note(
@@ -166,21 +197,8 @@ class ProjectService:
         is_pinned: bool = False,
         commit: bool = True,
     ) -> ProjectNote:
-        """Persist a project note and return it (refreshed).
-
-        Single home for ``ProjectNote`` construction shared by the REST route
-        (``POST /projects/{id}/notes``) and the agent ``create_project_note``
-        tool — the two callers that previously each built the model
-        independently (audit finding B2).
-
-        Ownership of *project_id* MUST be verified by the caller first (the
-        route via ``_get_project_with_auth``; the tool via
-        ``_verify_project_ownership``). Those two guards differ deliberately —
-        the tool resolves a project *name* and excludes soft-deleted projects,
-        while the route takes an already-validated path UUID — so this method
-        stays persistence-only to preserve each caller's exact authorization
-        semantics rather than imposing a third policy.
-        """
+        """Persist a note after checking ordinary project edit authority."""
+        await resolve_project(self.db, project_id, user_id, ResearchAction.EDIT)
         note = ProjectNote(
             project_id=project_id,
             user_id=user_id,
@@ -198,27 +216,20 @@ class ProjectService:
         await self.db.refresh(note)
         return note
 
-    async def get_project_for_user(self, project_id: UUID, user_id: UUID) -> Collection:
-        """Fetch one project owned by the user."""
-        query = (
-            select(Collection)
-            .options(selectinload(Collection.documents))
-            .join(Workspace, Collection.workspace_id == Workspace.id)
-            .where(
-                and_(
-                    Collection.id == project_id,
-                    Workspace.owner_id == user_id,
-                    Collection.is_deleted.is_(False),
-                )
-            )
+    async def get_project_for_user(
+        self,
+        project_id: UUID,
+        user_id: UUID,
+        action: ResearchAction = ResearchAction.VIEW,
+    ) -> Collection:
+        """Fetch one canonical project through the shared boundary."""
+        context = await resolve_project(self.db, project_id, user_id, action)
+        project = context.collection
+        await self.db.refresh(project, attribute_names=["documents"])
+        project.__dict__["research_engine_project_id"] = (
+            context.engine.id if context.engine else None
         )
-        result = await self.db.execute(query)
-        project = result.scalar_one_or_none()
-        if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found or access denied",
-            )
+        self._set_capabilities(project, context.workspace, user_id)
         return project
 
     async def update_project(
@@ -229,7 +240,7 @@ class ProjectService:
     ) -> Collection:
         """Update project fields with state-transition validation."""
         project = await self.get_project_for_user(
-            project_id=project_id, user_id=user_id
+            project_id=project_id, user_id=user_id, action=ResearchAction.EDIT
         )
 
         if project_data.research_status is not None:
@@ -258,6 +269,9 @@ class ProjectService:
             project.icon = project_data.icon
 
         project.is_private = True  # Enforce US4 privacy rule
+        if project.research_status == "archived":
+            project.__dict__["can_edit"] = False
+            project.__dict__["can_manage"] = False
 
         await self.db.commit()
         await self.db.refresh(project)
@@ -274,29 +288,31 @@ class ProjectService:
         (see ``get_project_for_user`` / ``list_projects``).
         """
         project = await self.get_project_for_user(
-            project_id=project_id, user_id=user_id
+            project_id=project_id, user_id=user_id, action=ResearchAction.MANAGE
         )
         project.soft_delete()
         await self.db.commit()
 
+    @staticmethod
+    def _set_capabilities(
+        project: Collection, workspace: Workspace, user_id: UUID
+    ) -> None:
+        writable = not workspace.is_archived and project.research_status != "archived"
+        project.__dict__["can_edit"] = writable and workspace.can_user_edit(
+            str(user_id)
+        )
+        project.__dict__["can_manage"] = writable and workspace.can_user_admin(
+            str(user_id)
+        )
+        project.__dict__["workspace_archived"] = bool(workspace.is_archived)
+
     async def _get_workspace_ids_for_user(self, user_id: UUID) -> List[UUID]:
-        query = select(Workspace.id).where(Workspace.owner_id == user_id)
-        result = await self.db.execute(query)
-        return [row[0] for row in result.all()]
+        return await accessible_research_workspace_ids(self.db, user_id)
 
     async def _ensure_workspace_owned(self, workspace_id: UUID, user_id: UUID) -> None:
-        query = select(Workspace.id).where(
-            and_(
-                Workspace.id == workspace_id,
-                Workspace.owner_id == user_id,
-            )
+        await require_research_workspace(
+            self.db, workspace_id, user_id, ResearchAction.EDIT
         )
-        result = await self.db.execute(query)
-        if not result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Workspace not found or access denied",
-            )
 
     def _validate_status_transition(
         self, current_status: str, target_status: str

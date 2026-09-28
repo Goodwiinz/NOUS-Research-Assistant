@@ -15,6 +15,7 @@ from src.core.database import AsyncSessionLocal
 from src.models.collection import CollectionDocument
 from src.models.document import Document
 from src.models.extraction_matrix import ExtractionCell, ExtractionMatrix
+from src.services.research_engine.project_access import lock_active_project
 
 logger = structlog.get_logger()
 
@@ -25,14 +26,9 @@ def _scoped_document_query(doc_id: UUID, project_id: Optional[UUID]) -> Select:
     Returns the document only when it is a member of ``project_id``'s
     collection_documents, so a document id outside the matrix's project is
     never read (tenant/project isolation)."""
-    return (
-        select(Document)
-        .join(CollectionDocument, Document.id == CollectionDocument.document_id)
-        .where(
-            Document.id == doc_id,
-            CollectionDocument.collection_id == project_id,
-        )
-    )
+    from src.services.research_engine.project_access import project_documents_query
+
+    return project_documents_query(project_id).where(Document.id == doc_id)
 
 
 # In-memory store is an L1 fallback; Redis is the shared status authority when
@@ -185,7 +181,8 @@ class ExtractionMatrixService:
             project_id = (
                 await db.execute(
                     select(ExtractionMatrix.project_id).where(
-                        ExtractionMatrix.id == matrix_id
+                        ExtractionMatrix.id == matrix_id,
+                        ExtractionMatrix.is_deleted.is_(False),
                     )
                 )
             ).scalar_one_or_none()
@@ -218,6 +215,9 @@ class ExtractionMatrixService:
                     raw_json = response.choices[0].message.content or ""
                     parsed = self._parse_extraction_result(raw_json, columns)
 
+                    if project_id is None:
+                        raise ValueError("Matrix project not found")
+                    await lock_active_project(db, project_id)
                     # Upsert cells
                     for col_name, cell_data in parsed.items():
                         existing = await db.execute(
@@ -252,6 +252,7 @@ class ExtractionMatrixService:
                     await self.set_extraction_status(task_id, {"completed": completed})
 
                 except Exception as e:
+                    await db.rollback()
                     logger.error(
                         "bg_extraction_doc_failed",
                         task_id=task_id,

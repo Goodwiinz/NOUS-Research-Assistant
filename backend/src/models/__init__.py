@@ -56,6 +56,7 @@ from .document_processing import (
 # isort to move imports across those boundaries.
 # isort: off
 from .draft_citation import DraftCitation
+from .draft_review import DraftReview
 
 # Encrypted user models
 from .encrypted_user import (
@@ -112,7 +113,17 @@ from .evaluation import (
 
 # Research Engine models
 from .research_blueprint import ResearchBlueprint
+from .research_decision import ResearchDecisionEvent, ResearchDecisionStream
+from .research_protocol import (
+    ProtocolDeviation,
+    ProtocolRegistrationOperation,
+    ResearchProtocol,
+    ResearchProtocolVersion,
+    ResearchQuestion,
+    ResearchQuestionVersion,
+)
 from .research_project import ResearchProject
+from .research_project_role import ResearchProjectRole, ResearchProjectRoleAssignment
 from .research_run import ResearchRun, RunStatus
 from .research_source import ResearchSource
 from .research_stage_review import ResearchStageReview
@@ -199,8 +210,11 @@ __all__ = [
     "ProjectSkillVersionScan",
     "GeneratedDraft",
     "DraftCitation",
+    "DraftReview",
     "ProjectThread",
     "ProjectThreadLinkType",
+    "ResearchProjectRole",
+    "ResearchProjectRoleAssignment",
     # Permission and role models
     "Permission",
     "Role",
@@ -251,6 +265,14 @@ __all__ = [
     "IntegrityScore",
     # Research Engine models
     "ResearchProject",
+    "ResearchDecisionEvent",
+    "ResearchDecisionStream",
+    "ResearchQuestion",
+    "ResearchQuestionVersion",
+    "ResearchProtocol",
+    "ResearchProtocolVersion",
+    "ProtocolDeviation",
+    "ProtocolRegistrationOperation",
     "ResearchBlueprint",
     "ResearchRun",
     "RunStatus",

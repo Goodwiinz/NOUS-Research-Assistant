@@ -15,7 +15,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute("""
-        CREATE TABLE agent_tool_operations (
+        CREATE TABLE IF NOT EXISTS agent_tool_operations (
             operation_id varchar(64) PRIMARY KEY,
             organization_id uuid,
             user_id uuid NOT NULL,
@@ -33,7 +33,7 @@ def upgrade() -> None:
         )
         """)
     op.execute("""
-        CREATE INDEX ix_agent_tool_operations_thread_turn
+        CREATE INDEX IF NOT EXISTS ix_agent_tool_operations_thread_turn
         ON agent_tool_operations (thread_id, turn_id)
         """)
     # These records are backend orchestration state. Browser roles receive no

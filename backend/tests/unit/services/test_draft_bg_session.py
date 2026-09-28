@@ -21,6 +21,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from src.models.draft_citation import DraftCitation
+from src.models.draft_review import DraftReview
 from src.models.generated_draft import GeneratedDraft
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
@@ -92,8 +93,10 @@ def _make_bg_session(documents):
 
     docs_result = MagicMock()
     docs_result.scalars.return_value.all.return_value = documents
-    lock_result = MagicMock()
-    lock_result.scalar_one_or_none.return_value = uuid4()
+    review_lock_result = MagicMock()
+    review_lock_result.scalar_one_or_none.return_value = uuid4()
+    draft_lock_result = MagicMock()
+    draft_lock_result.scalar_one_or_none.return_value = uuid4()
     version_result = MagicMock()
     version_result.scalar.return_value = 0
     update_result = MagicMock()
@@ -102,15 +105,42 @@ def _make_bg_session(documents):
         side_effect=[
             docs_result,
             docs_result,
-            lock_result,
+            review_lock_result,
+            draft_lock_result,
             docs_result,
             version_result,
             update_result,
         ]
     )
     session.flush = AsyncMock()
-    session.commit = AsyncMock()
+    session.attach_mock(AsyncMock(), "commit")
     return session
+
+
+def _assert_review_committed_before_draft(session: MagicMock) -> None:
+    """The audit row must survive even if later draft persistence fails."""
+    review_add = next(
+        index
+        for index, call in enumerate(session.mock_calls)
+        if call[0] == "add" and isinstance(call.args[0], DraftReview)
+    )
+    draft_add = next(
+        index
+        for index, call in enumerate(session.mock_calls)
+        if call[0] == "add" and isinstance(call.args[0], GeneratedDraft)
+    )
+    citation_add = next(
+        index
+        for index, call in enumerate(session.mock_calls)
+        if call[0] == "add" and isinstance(call.args[0], DraftCitation)
+    )
+    commits = [
+        index for index, call in enumerate(session.mock_calls) if call[0] == "commit"
+    ]
+
+    assert len(commits) == 2
+    assert session.commit.await_count == 2
+    assert review_add < commits[0] < draft_add < citation_add < commits[1]
 
 
 def _patch_session_factory(bg_session):
@@ -162,7 +192,7 @@ async def test_background_task_never_touches_ctor_session():
 
     ctor_session.execute.assert_not_called()
     bg_session.execute.assert_awaited()
-    bg_session.commit.assert_awaited_once()
+    _assert_review_committed_before_draft(bg_session)
 
 
 @pytest.mark.asyncio
@@ -183,7 +213,7 @@ async def test_happy_path_completes_through_patched_session():
 
     status = DraftGenerationService.get_status("task-happy")
     assert status["status"] == DraftGenerationStatus.COMPLETED
-    bg_session.commit.assert_awaited_once()
+    _assert_review_committed_before_draft(bg_session)
 
 
 @pytest.mark.asyncio
@@ -228,15 +258,23 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
 
     version_result = MagicMock()
     version_result.scalar.return_value = 0
-    lock_result = MagicMock()
-    lock_result.scalar_one_or_none.return_value = uuid4()
+    review_lock_result = MagicMock()
+    review_lock_result.scalar_one_or_none.return_value = uuid4()
+    draft_lock_result = MagicMock()
+    draft_lock_result.scalar_one_or_none.return_value = uuid4()
     update_result = MagicMock()
     window2_session = MagicMock()
     window2_session.execute = AsyncMock(
-        side_effect=[lock_result, docs_result, version_result, update_result]
+        side_effect=[
+            review_lock_result,
+            draft_lock_result,
+            docs_result,
+            version_result,
+            update_result,
+        ]
     )
     window2_session.flush = AsyncMock()
-    window2_session.commit = AsyncMock()
+    window2_session.attach_mock(AsyncMock(), "commit")
 
     class _RecordingSessionCtx:
         def __init__(self, session: MagicMock, label: str) -> None:
@@ -282,7 +320,7 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
         "enter:w2",
         "exit:w2",
     ]
-    window2_session.commit.assert_awaited_once()
+    _assert_review_committed_before_draft(window2_session)
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.document import Document
 from src.models.draft_citation import DraftCitation
+from src.models.draft_review import DraftReview
 from src.models.generated_draft import GeneratedDraft
 from src.services.agent.tools_impl import _tool_revise_draft
 from src.services.research.draft_generation_service import DraftGenerationService
@@ -190,7 +191,11 @@ async def test_revision_review_failure_blocks_persistence(verdict: str) -> None:
         await service.revise_draft(project_id=uuid4(), instructions="Add claim")
 
     assert not any(isinstance(value, GeneratedDraft) for value in session.added)
-    assert session.commits == 1
+    reviews = [value for value in session.added if isinstance(value, DraftReview)]
+    assert len(reviews) == 1
+    assert reviews[0].outcome == "blocked"
+    assert base.is_current is True
+    assert session.commits == 2
 
 
 async def test_minor_revision_persists_review_evidence_and_location() -> None:
@@ -291,7 +296,7 @@ async def test_explicit_base_version_is_used_even_when_later_version_is_current(
     assert result["version"] == 4
     assert revision_mock.await_args is not None
     assert revision_mock.await_args.kwargs["base_content"] == base_v2.content
-    assert session.commits == 2  # release read transaction, then persist
+    assert session.commits == 3  # release read, durable review, then draft
 
 
 async def test_revision_inherits_full_source_scope_and_excludes_new_documents() -> None:
@@ -514,7 +519,10 @@ async def test_default_revision_rejects_stale_current_after_model_call() -> None
     ):
         await service.revise_draft(project_id=uuid4(), instructions="Clarify")
 
-    assert session.added == []
+    assert [type(value) for value in session.added] == [DraftReview]
+    assert session.added[0].outcome == "passed"
+    assert base.is_current is True
+    assert session.commits == 2
     session.rollback.assert_awaited_once()
 
 
@@ -591,7 +599,8 @@ async def test_persistence_failure_rolls_back_without_changing_base() -> None:
 
     session.rollback.assert_awaited_once()
     assert base.is_current is True
-    assert session.commits == 1
+    assert any(isinstance(value, DraftReview) for value in session.added)
+    assert session.commits == 2
 
 
 async def test_document_context_includes_evidence_beyond_500_and_is_bounded() -> None:

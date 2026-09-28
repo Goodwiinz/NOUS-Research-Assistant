@@ -3,10 +3,27 @@ import type { components } from '@/types/generated/api';
 
 const BASE = '/api/v1/research-engine';
 
-export type ProjectCreate =
+type GeneratedProjectCreate =
   components['schemas']['src__schemas__research_engine__ProjectCreate'];
-export type ProjectResponse =
+export type ProjectCreate = Omit<GeneratedProjectCreate, 'collection_id'> & {
+  collection_id: string;
+};
+
+type GeneratedProjectResponse =
   components['schemas']['src__schemas__research_engine__ProjectResponse'];
+export type ProjectResponse = GeneratedProjectResponse & {
+  research_engine_project_id: string;
+};
+
+export type LegacyProjectResponse =
+  components['schemas']['LegacyProjectResponse'];
+export type ResearchProjectRole = components['schemas']['ResearchProjectRole'];
+export type ProjectRoleAssignment = Omit<
+  components['schemas']['ResearchProjectRoleResponse'],
+  'role'
+> & {
+  role: ResearchProjectRole;
+};
 export type BlueprintStepDef = components['schemas']['BlueprintStepDefinition'];
 export type BlueprintCreate = components['schemas']['BlueprintCreate'];
 export type BlueprintResponse = components['schemas']['BlueprintResponse'];
@@ -46,8 +63,43 @@ export const listProjects = (): Promise<ProjectResponse[]> =>
 export const createProject = (data: ProjectCreate): Promise<ProjectResponse> =>
   api.post<ProjectResponse>(`${BASE}/projects`, data);
 
-export const getProject = (id: string): Promise<ProjectResponse> =>
-  api.get<ProjectResponse>(`${BASE}/projects/${id}`);
+export const getProject = (collectionId: string): Promise<ProjectResponse> =>
+  api.get<ProjectResponse>(`${BASE}/projects/${collectionId}`);
+
+export const getLegacyProject = (
+  engineProjectId: string
+): Promise<LegacyProjectResponse> =>
+  api.get<LegacyProjectResponse>(`${BASE}/legacy-projects/${engineProjectId}`);
+
+export const linkProject = (
+  id: string,
+  collectionId: string
+): Promise<ProjectResponse> =>
+  api.patch<ProjectResponse>(`${BASE}/projects/${id}/collection`, {
+    collection_id: collectionId,
+  });
+
+export const listProjectRoles = (
+  collectionId: string
+): Promise<ProjectRoleAssignment[]> =>
+  api.get<ProjectRoleAssignment[]>(`${BASE}/projects/${collectionId}/roles`);
+
+export const assignProjectRole = (
+  collectionId: string,
+  userId: string,
+  role: ResearchProjectRole
+): Promise<ProjectRoleAssignment> =>
+  api.put<ProjectRoleAssignment>(`${BASE}/projects/${collectionId}/roles`, {
+    user_id: userId,
+    role,
+  });
+
+export const removeProjectRole = (
+  collectionId: string,
+  userId: string,
+  role: ResearchProjectRole
+): Promise<void> =>
+  api.delete(`${BASE}/projects/${collectionId}/roles/${userId}/${role}`);
 
 export const listTemplates = async (): Promise<BlueprintTemplateSummary[]> => {
   const templates = await api.get<BlueprintTemplateWireSummary[]>(
@@ -78,9 +130,14 @@ export const getBlueprint = (id: string): Promise<BlueprintResponse> =>
 
 export const startRun = (
   blueprintId: string,
-  request: RunCreate
+  request: RunCreate | string
 ): Promise<RunResponse> =>
-  api.post<RunResponse>(`${BASE}/blueprints/${blueprintId}/runs`, request);
+  api.post<RunResponse>(
+    `${BASE}/blueprints/${blueprintId}/runs`,
+    typeof request === 'string'
+      ? { protocol_version_id: request, parameters_override: {} }
+      : request
+  );
 
 export const getRun = (runId: string): Promise<RunResponse> =>
   api.get<RunResponse>(`${BASE}/runs/${runId}`);

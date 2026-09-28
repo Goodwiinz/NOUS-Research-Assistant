@@ -1262,6 +1262,11 @@
             "title": "Project Id",
             "type": "string"
           },
+          "research_engine_project_id": {
+            "format": "uuid",
+            "title": "Research Engine Project Id",
+            "type": "string"
+          },
           "steps": {
             "items": {
               "$ref": "#/components/schemas/BlueprintStepDefinition"
@@ -1293,6 +1298,7 @@
         "required": [
           "id",
           "project_id",
+          "research_engine_project_id",
           "name",
           "version",
           "steps",
@@ -4776,6 +4782,150 @@
         "title": "DocumentType",
         "type": "string"
       },
+      "DraftReviewListResponse": {
+        "properties": {
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/DraftReviewResponse"
+            },
+            "title": "Reviews",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reviews"
+        ],
+        "title": "DraftReviewListResponse",
+        "type": "object"
+      },
+      "DraftReviewPayload": {
+        "properties": {
+          "claims": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "title": "Coverage",
+            "type": "object"
+          },
+          "docs_checked": {
+            "default": 0,
+            "title": "Docs Checked",
+            "type": "integer"
+          },
+          "docs_skipped": {
+            "default": 0,
+            "title": "Docs Skipped",
+            "type": "integer"
+          },
+          "duration_ms": {
+            "default": 0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "fully_verified": {
+            "default": false,
+            "title": "Fully Verified",
+            "type": "boolean"
+          },
+          "summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Summary",
+            "type": "object"
+          },
+          "uncited_assertions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Uncited Assertions",
+            "type": "array"
+          },
+          "verdicts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Verdicts",
+            "type": "array"
+          }
+        },
+        "title": "DraftReviewPayload",
+        "type": "object"
+      },
+      "DraftReviewResponse": {
+        "properties": {
+          "base_draft_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Draft Id"
+          },
+          "candidate_content": {
+            "title": "Candidate Content",
+            "type": "string"
+          },
+          "candidate_content_hash": {
+            "title": "Candidate Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "review": {
+            "$ref": "#/components/schemas/DraftReviewPayload"
+          },
+          "source_document_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Source Document Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "candidate_content_hash",
+          "candidate_content",
+          "source_document_ids",
+          "review",
+          "outcome",
+          "created_at"
+        ],
+        "title": "DraftReviewResponse",
+        "type": "object"
+      },
       "DuplicateCheckRequest": {
         "properties": {
           "sha256": {
@@ -6689,6 +6839,65 @@
         "title": "LLMBulkIngestionStatus",
         "type": "object"
       },
+      "LegacyProjectResponse": {
+        "properties": {
+          "collection_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Id"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "research_engine_project_id": {
+            "format": "uuid",
+            "title": "Research Engine Project Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "research_engine_project_id",
+          "name",
+          "status"
+        ],
+        "title": "LegacyProjectResponse",
+        "type": "object"
+      },
       "LinkThreadRequest": {
         "description": "Request to link an existing thread to a project",
         "properties": {
@@ -8293,6 +8502,16 @@
       "ProjectDetailResponse": {
         "description": "Detailed project response with additional context.",
         "properties": {
+          "can_edit": {
+            "default": false,
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "title": "Can Manage",
+            "type": "boolean"
+          },
           "color": {
             "anyOf": [
               {
@@ -8412,6 +8631,18 @@
             "title": "Recent Notes",
             "type": "array"
           },
+          "research_engine_project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Engine Project Id"
+          },
           "research_goals": {
             "anyOf": [
               {
@@ -8438,6 +8669,11 @@
             "title": "Updated At",
             "type": "string"
           },
+          "workspace_archived": {
+            "default": false,
+            "title": "Workspace Archived",
+            "type": "boolean"
+          },
           "workspace_id": {
             "format": "uuid",
             "title": "Workspace Id",
@@ -8456,6 +8692,21 @@
           "updated_at"
         ],
         "title": "ProjectDetailResponse",
+        "type": "object"
+      },
+      "ProjectLink": {
+        "description": "One-time explicit link to an existing canonical Collection.",
+        "properties": {
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection_id"
+        ],
+        "title": "ProjectLink",
         "type": "object"
       },
       "ProjectListResponse": {
@@ -9088,6 +9339,511 @@
         "title": "ProjectUpdate",
         "type": "object"
       },
+      "ProtocolApprovalRequest": {
+        "properties": {
+          "expected_content_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Expected Content Hash",
+            "type": "string"
+          },
+          "expected_current_approved_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Current Approved Version Id"
+          },
+          "expected_protocol_version": {
+            "minimum": 1.0,
+            "title": "Expected Protocol Version",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_protocol_version",
+          "expected_content_hash",
+          "reason",
+          "idempotency_key"
+        ],
+        "title": "ProtocolApprovalRequest",
+        "type": "object"
+      },
+      "ProtocolApprovalResponse": {
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "actor_user_id": {
+            "format": "uuid",
+            "title": "Actor User Id",
+            "type": "string"
+          },
+          "approved_at": {
+            "format": "date-time",
+            "title": "Approved At",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "protocol_id": {
+            "format": "uuid",
+            "title": "Protocol Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "decision_id",
+          "protocol_id",
+          "protocol_version_id",
+          "content_hash",
+          "actor_user_id",
+          "actor_role",
+          "approved_at"
+        ],
+        "title": "ProtocolApprovalResponse",
+        "type": "object"
+      },
+      "ProtocolDeviationCreate": {
+        "properties": {
+          "disposition": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Disposition",
+            "type": "string"
+          },
+          "observed_difference": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Observed Difference",
+            "type": "string"
+          },
+          "output_reference": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Reference"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "observed_difference",
+          "rationale",
+          "disposition"
+        ],
+        "title": "ProtocolDeviationCreate",
+        "type": "object"
+      },
+      "ProtocolDeviationResponse": {
+        "properties": {
+          "actor_user_id": {
+            "format": "uuid",
+            "title": "Actor User Id",
+            "type": "string"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "disposition": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Disposition",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "observed_difference": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Observed Difference",
+            "type": "string"
+          },
+          "output_reference": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Reference"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "observed_difference",
+          "rationale",
+          "disposition",
+          "id",
+          "collection_id",
+          "actor_user_id",
+          "created_at"
+        ],
+        "title": "ProtocolDeviationResponse",
+        "type": "object"
+      },
+      "ProtocolRegistrationCreate": {
+        "properties": {
+          "external_identifier": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Identifier"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "protocol_version_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Protocol Version Hash",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Provider",
+            "type": "string"
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "protocol_version_hash",
+          "provider",
+          "status",
+          "idempotency_key"
+        ],
+        "title": "ProtocolRegistrationCreate",
+        "type": "object"
+      },
+      "ProtocolRegistrationResponse": {
+        "properties": {
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "external_identifier": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Identifier"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "protocol_version_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Protocol Version Hash",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Provider",
+            "type": "string"
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt"
+          },
+          "recorded_by_user_id": {
+            "format": "uuid",
+            "title": "Recorded By User Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "protocol_version_hash",
+          "provider",
+          "status",
+          "idempotency_key",
+          "id",
+          "collection_id",
+          "recorded_by_user_id",
+          "created_at"
+        ],
+        "title": "ProtocolRegistrationResponse",
+        "type": "object"
+      },
+      "ProtocolSnapshot": {
+        "properties": {
+          "appraisal_synthesis": {
+            "additionalProperties": true,
+            "minProperties": 1,
+            "title": "Appraisal Synthesis",
+            "type": "object"
+          },
+          "eligibility": {
+            "additionalProperties": true,
+            "minProperties": 1,
+            "title": "Eligibility",
+            "type": "object"
+          },
+          "extraction": {
+            "additionalProperties": true,
+            "minProperties": 1,
+            "title": "Extraction",
+            "type": "object"
+          },
+          "outcomes": {
+            "additionalProperties": true,
+            "minProperties": 1,
+            "title": "Outcomes",
+            "type": "object"
+          },
+          "reviewer_mode": {
+            "additionalProperties": true,
+            "minProperties": 1,
+            "title": "Reviewer Mode",
+            "type": "object"
+          },
+          "selection": {
+            "additionalProperties": true,
+            "minProperties": 1,
+            "title": "Selection",
+            "type": "object"
+          },
+          "sources_search": {
+            "additionalProperties": true,
+            "minProperties": 1,
+            "title": "Sources Search",
+            "type": "object"
+          }
+        },
+        "required": [
+          "eligibility",
+          "sources_search",
+          "selection",
+          "extraction",
+          "appraisal_synthesis",
+          "outcomes",
+          "reviewer_mode"
+        ],
+        "title": "ProtocolSnapshot",
+        "type": "object"
+      },
       "PublicationRetractionCheck": {
         "description": "Publication-level retraction check state.",
         "enum": [
@@ -9598,6 +10354,603 @@
         ],
         "title": "RelationshipType",
         "type": "string"
+      },
+      "ResearchProjectRole": {
+        "enum": [
+          "reviewer",
+          "adjudicator",
+          "supervisor"
+        ],
+        "title": "ResearchProjectRole",
+        "type": "string"
+      },
+      "ResearchProjectRoleCreate": {
+        "properties": {
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "title": "ResearchProjectRoleCreate",
+        "type": "object"
+      },
+      "ResearchProjectRoleResponse": {
+        "properties": {
+          "assigned_by_id": {
+            "format": "uuid",
+            "title": "Assigned By Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "user_id",
+          "role",
+          "assigned_by_id",
+          "created_at"
+        ],
+        "title": "ResearchProjectRoleResponse",
+        "type": "object"
+      },
+      "ResearchProtocolCreate": {
+        "properties": {
+          "blueprint_id": {
+            "format": "uuid",
+            "title": "Blueprint Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "question_version_id": {
+            "format": "uuid",
+            "title": "Question Version Id",
+            "type": "string"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/ProtocolSnapshot"
+          }
+        },
+        "required": [
+          "name",
+          "question_version_id",
+          "blueprint_id",
+          "snapshot"
+        ],
+        "title": "ResearchProtocolCreate",
+        "type": "object"
+      },
+      "ResearchProtocolResponse": {
+        "properties": {
+          "can_approve": {
+            "default": false,
+            "title": "Can Approve",
+            "type": "boolean"
+          },
+          "can_edit": {
+            "default": false,
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_approved_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Approved Version Id"
+          },
+          "current_draft_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Draft Version Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchProtocolVersionResponse"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ResearchProtocolResponse",
+        "type": "object"
+      },
+      "ResearchProtocolVersionCreate": {
+        "properties": {
+          "amendment_reason": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Amendment Reason",
+            "type": "string"
+          },
+          "blueprint_id": {
+            "format": "uuid",
+            "title": "Blueprint Id",
+            "type": "string"
+          },
+          "parent_version_id": {
+            "format": "uuid",
+            "title": "Parent Version Id",
+            "type": "string"
+          },
+          "question_version_id": {
+            "format": "uuid",
+            "title": "Question Version Id",
+            "type": "string"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/ProtocolSnapshot"
+          }
+        },
+        "required": [
+          "question_version_id",
+          "blueprint_id",
+          "snapshot",
+          "parent_version_id",
+          "amendment_reason"
+        ],
+        "title": "ResearchProtocolVersionCreate",
+        "type": "object"
+      },
+      "ResearchProtocolVersionResponse": {
+        "properties": {
+          "amendment_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amendment Reason"
+          },
+          "approved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved At"
+          },
+          "approved_by_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By User Id"
+          },
+          "author_user_id": {
+            "format": "uuid",
+            "title": "Author User Id",
+            "type": "string"
+          },
+          "blueprint_id": {
+            "format": "uuid",
+            "title": "Blueprint Id",
+            "type": "string"
+          },
+          "can_approve": {
+            "default": false,
+            "title": "Can Approve",
+            "type": "boolean"
+          },
+          "change_kind": {
+            "title": "Change Kind",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "execution_plan": {
+            "additionalProperties": true,
+            "title": "Execution Plan",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "parent_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Version Id"
+          },
+          "protocol_id": {
+            "format": "uuid",
+            "title": "Protocol Id",
+            "type": "string"
+          },
+          "question_version_id": {
+            "format": "uuid",
+            "title": "Question Version Id",
+            "type": "string"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/ProtocolSnapshot"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "superseded_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded At"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "protocol_id",
+          "version",
+          "question_version_id",
+          "blueprint_id",
+          "execution_plan",
+          "snapshot",
+          "content_hash",
+          "status",
+          "change_kind",
+          "author_user_id",
+          "created_at"
+        ],
+        "title": "ResearchProtocolVersionResponse",
+        "type": "object"
+      },
+      "ResearchQuestionCreate": {
+        "properties": {
+          "framework": {
+            "additionalProperties": true,
+            "title": "Framework",
+            "type": "object"
+          },
+          "hypothesis": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hypothesis"
+          },
+          "parent_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Version Id"
+          },
+          "question": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "ResearchQuestionCreate",
+        "type": "object"
+      },
+      "ResearchQuestionResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_version": {
+            "$ref": "#/components/schemas/ResearchQuestionVersionResponse"
+          },
+          "current_version_id": {
+            "format": "uuid",
+            "title": "Current Version Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchQuestionVersionResponse"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "current_version_id",
+          "current_version",
+          "created_at"
+        ],
+        "title": "ResearchQuestionResponse",
+        "type": "object"
+      },
+      "ResearchQuestionVersionCreate": {
+        "properties": {
+          "framework": {
+            "additionalProperties": true,
+            "title": "Framework",
+            "type": "object"
+          },
+          "hypothesis": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hypothesis"
+          },
+          "parent_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Version Id"
+          },
+          "question": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "ResearchQuestionVersionCreate",
+        "type": "object"
+      },
+      "ResearchQuestionVersionResponse": {
+        "properties": {
+          "author_user_id": {
+            "format": "uuid",
+            "title": "Author User Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "framework": {
+            "additionalProperties": true,
+            "title": "Framework",
+            "type": "object"
+          },
+          "hypothesis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hypothesis"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "parent_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Version Id"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "question_id": {
+            "format": "uuid",
+            "title": "Question Id",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "question_id",
+          "version",
+          "question",
+          "framework",
+          "content_hash",
+          "author_user_id",
+          "created_at"
+        ],
+        "title": "ResearchQuestionVersionResponse",
+        "type": "object"
       },
       "ResearchStatus": {
         "description": "Research project status",
@@ -10138,6 +11491,18 @@
             "title": "Parameters Override",
             "type": "object"
           },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
           "scope_confirmation": {
             "anyOf": [
               {
@@ -10176,10 +11541,26 @@
             ],
             "title": "Completed At"
           },
+          "conformance_status": {
+            "default": "legacy_unbound",
+            "title": "Conformance Status",
+            "type": "string"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "effective_plan_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Plan Hash"
           },
           "id": {
             "format": "uuid",
@@ -10213,6 +11594,28 @@
               }
             ],
             "title": "Pause Reason"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "research_engine_project_id": {
+            "format": "uuid",
+            "title": "Research Engine Project Id",
+            "type": "string"
           },
           "review_kind": {
             "anyOf": [
@@ -10264,6 +11667,8 @@
         "required": [
           "id",
           "blueprint_id",
+          "project_id",
+          "research_engine_project_id",
           "blueprint_version",
           "status",
           "created_at",
@@ -15281,6 +16686,18 @@
       "src__schemas__research_engine__ProjectCreate": {
         "description": "Schema for creating a research project.",
         "properties": {
+          "collection_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Id"
+          },
           "description": {
             "anyOf": [
               {
@@ -15313,6 +16730,30 @@
       "src__schemas__research_engine__ProjectResponse": {
         "description": "Schema for project API responses.",
         "properties": {
+          "blueprint_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blueprint Id"
+          },
+          "collection_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Id"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -15338,6 +16779,23 @@
             "title": "Name",
             "type": "string"
           },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "research_engine_project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Engine Project Id"
+          },
           "settings": {
             "additionalProperties": true,
             "title": "Settings",
@@ -15355,6 +16813,7 @@
         },
         "required": [
           "id",
+          "project_id",
           "name",
           "status",
           "settings",
@@ -15962,8 +17421,18 @@
         "type": "object"
       },
       "src__shared__research_schemas__ProjectResponse": {
-        "description": "Research project response",
+        "description": "Research project response; id is the canonical Collection identifier.",
         "properties": {
+          "can_edit": {
+            "default": false,
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "title": "Can Manage",
+            "type": "boolean"
+          },
           "color": {
             "anyOf": [
               {
@@ -16048,6 +17517,18 @@
           "project_type": {
             "$ref": "#/components/schemas/ProjectType"
           },
+          "research_engine_project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Engine Project Id"
+          },
           "research_goals": {
             "anyOf": [
               {
@@ -16073,6 +17554,11 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "workspace_archived": {
+            "default": false,
+            "title": "Workspace Archived",
+            "type": "boolean"
           },
           "workspace_id": {
             "format": "uuid",
@@ -29412,6 +30898,67 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/drafts/reviews": {
+      "get": {
+        "description": "List durable candidate reviews, including blocked candidates.",
+        "operationId": "list_draft_reviews_api_v1_projects__project_id__drafts_reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReviewListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Draft Reviews",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/drafts/status": {
       "get": {
         "description": "Get generation status for a task or the latest project generation.",
@@ -31885,7 +33432,15 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RunCreate"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunCreate"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
               }
             }
           }
@@ -31949,9 +33504,86 @@
         ]
       }
     },
+    "/api/v1/research-engine/legacy-projects": {
+      "get": {
+        "operationId": "list_legacy_projects_api_v1_research_engine_legacy_projects_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LegacyProjectResponse"
+                  },
+                  "title": "Response List Legacy Projects Api V1 Research Engine Legacy Projects Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Legacy Projects",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/legacy-projects/{engine_id}": {
+      "get": {
+        "operationId": "get_legacy_project_api_v1_research_engine_legacy_projects__engine_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "engine_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Engine Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Legacy Project",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects": {
       "get": {
-        "description": "List research projects for the current user.",
         "operationId": "list_projects_api_v1_research_engine_projects_get",
         "parameters": [
           {
@@ -32008,7 +33640,6 @@
         ]
       },
       "post": {
-        "description": "Create a new research project.",
         "operationId": "create_project_api_v1_research_engine_projects_post",
         "requestBody": {
           "content": {
@@ -32053,9 +33684,66 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{engine_id}/collection": {
+      "patch": {
+        "operationId": "link_project_collection_api_v1_research_engine_projects__engine_id__collection_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "engine_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Engine Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectLink"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/src__schemas__research_engine__ProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Link Project Collection",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}": {
       "get": {
-        "description": "Get a single research project.",
         "operationId": "get_project_api_v1_research_engine_projects__project_id__get",
         "parameters": [
           {
@@ -32099,6 +33787,837 @@
         "summary": "Get Project",
         "tags": [
           "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/protocols": {
+      "get": {
+        "operationId": "list_protocols_api_v1_research_engine_projects__project_id__protocols_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResearchProtocolResponse"
+                  },
+                  "title": "Response List Protocols Api V1 Research Engine Projects  Project Id  Protocols Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Protocols",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      },
+      "post": {
+        "operationId": "create_protocol_route_api_v1_research_engine_projects__project_id__protocols_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchProtocolCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProtocolResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Protocol Route",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/questions": {
+      "get": {
+        "operationId": "list_questions_api_v1_research_engine_projects__project_id__questions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResearchQuestionResponse"
+                  },
+                  "title": "Response List Questions Api V1 Research Engine Projects  Project Id  Questions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Questions",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      },
+      "post": {
+        "operationId": "create_question_route_api_v1_research_engine_projects__project_id__questions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchQuestionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchQuestionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Question Route",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/roles": {
+      "get": {
+        "operationId": "list_project_roles_api_v1_research_engine_projects__project_id__roles_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResearchProjectRoleResponse"
+                  },
+                  "title": "Response List Project Roles Api V1 Research Engine Projects  Project Id  Roles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Project Roles",
+        "tags": [
+          "research-engine"
+        ]
+      },
+      "put": {
+        "operationId": "assign_project_role_api_v1_research_engine_projects__project_id__roles_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchProjectRoleCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProjectRoleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Assign Project Role",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/roles/{user_id}/{role}": {
+      "delete": {
+        "operationId": "delete_project_role_api_v1_research_engine_projects__project_id__roles__user_id___role__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ResearchProjectRole"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Project Role",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/protocols/{protocol_id}": {
+      "get": {
+        "operationId": "get_protocol_api_v1_research_engine_protocols__protocol_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "protocol_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProtocolResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Protocol",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      }
+    },
+    "/api/v1/research-engine/protocols/{protocol_id}/deviations": {
+      "get": {
+        "operationId": "list_deviations_api_v1_research_engine_protocols__protocol_id__deviations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "protocol_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProtocolDeviationResponse"
+                  },
+                  "title": "Response List Deviations Api V1 Research Engine Protocols  Protocol Id  Deviations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Deviations",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      },
+      "post": {
+        "operationId": "create_deviation_api_v1_research_engine_protocols__protocol_id__deviations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "protocol_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProtocolDeviationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDeviationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Deviation",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      }
+    },
+    "/api/v1/research-engine/protocols/{protocol_id}/registrations": {
+      "get": {
+        "operationId": "list_registrations_api_v1_research_engine_protocols__protocol_id__registrations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "protocol_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProtocolRegistrationResponse"
+                  },
+                  "title": "Response List Registrations Api V1 Research Engine Protocols  Protocol Id  Registrations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Registrations",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      },
+      "post": {
+        "operationId": "create_registration_api_v1_research_engine_protocols__protocol_id__registrations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "protocol_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProtocolRegistrationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolRegistrationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Registration",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      }
+    },
+    "/api/v1/research-engine/protocols/{protocol_id}/versions": {
+      "post": {
+        "operationId": "create_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "protocol_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchProtocolVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProtocolResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Protocol Version Route",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      }
+    },
+    "/api/v1/research-engine/protocols/{protocol_id}/versions/{version_id}/approve": {
+      "post": {
+        "operationId": "approve_protocol_version_route_api_v1_research_engine_protocols__protocol_id__versions__version_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "protocol_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProtocolApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolApprovalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve Protocol Version Route",
+        "tags": [
+          "research-engine-protocols"
+        ]
+      }
+    },
+    "/api/v1/research-engine/questions/{question_id}/versions": {
+      "post": {
+        "operationId": "create_question_version_route_api_v1_research_engine_questions__question_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchQuestionVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchQuestionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Question Version Route",
+        "tags": [
+          "research-engine-protocols"
         ]
       }
     },
@@ -32637,7 +35156,7 @@
     },
     "/api/v1/research/extraction-tasks/{task_id}": {
       "get": {
-        "description": "Get the status of a background extraction task.",
+        "description": "Get a task only through its authorized, retained matrix.",
         "operationId": "get_extraction_task_status_api_v1_research_extraction_tasks__task_id__get",
         "parameters": [
           {

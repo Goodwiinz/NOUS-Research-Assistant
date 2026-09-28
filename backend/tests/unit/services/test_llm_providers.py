@@ -6,9 +6,10 @@ import pytest
 # (resilience-tests, performance-tests) would error on collection without this.
 pytest.importorskip("respx")
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
 import respx
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.services.research_engine.providers.base import (
     LLMProvider,
@@ -17,9 +18,8 @@ from src.services.research_engine.providers.base import (
     ProviderConfig,
 )
 from src.services.research_engine.providers.claude_provider import ClaudeProvider
-from src.services.research_engine.providers.openai_provider import OpenAIProvider
 from src.services.research_engine.providers.ollama_provider import OllamaProvider
-
+from src.services.research_engine.providers.openai_provider import OpenAIProvider
 
 # ---------------------------------------------------------------------------
 # Dataclass / defaults tests
@@ -104,6 +104,7 @@ class TestClaudeProvider:
         config = ProviderConfig(
             provider_type="claude",
             model_id="claude-3-opus-20240229",
+            model_version="2024-02-29",
             api_key="test-key",
         )
         provider = ClaudeProvider(config)
@@ -134,6 +135,10 @@ class TestClaudeProvider:
         assert response.content == "Test response"
         assert response.input_tokens == 10
         assert response.output_tokens == 5
+        assert response.model_id == "claude-3-opus-20240229"
+        assert response.model_version == "2024-02-29"
+        assert response.temperature == 0.0
+        assert response.seed is None
 
     @pytest.mark.asyncio
     async def test_complete_with_system_prompt(self):
@@ -198,6 +203,7 @@ class TestOpenAIProvider:
         config = ProviderConfig(
             provider_type="openai",
             model_id="gpt-4",
+            model_version="0613",
             api_key="sk-test",
         )
         provider = OpenAIProvider(config)
@@ -218,9 +224,7 @@ class TestOpenAIProvider:
         mock_response.model = "gpt-4"
 
         provider.client = MagicMock()
-        provider.client.chat.completions.create = AsyncMock(
-            return_value=mock_response
-        )
+        provider.client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         request = LLMRequest(prompt="Hello", temperature=0.0, seed=42)
         response = await provider.complete(request)
@@ -233,6 +237,10 @@ class TestOpenAIProvider:
         assert response.content == "OpenAI response"
         assert response.input_tokens == 15
         assert response.output_tokens == 8
+        assert response.model_id == "gpt-4"
+        assert response.model_version == "0613"
+        assert response.temperature == 0.0
+        assert response.seed == 42
 
     @pytest.mark.asyncio
     async def test_complete_with_system_prompt(self):
@@ -256,9 +264,7 @@ class TestOpenAIProvider:
         mock_response.model = "gpt-4"
 
         provider.client = MagicMock()
-        provider.client.chat.completions.create = AsyncMock(
-            return_value=mock_response
-        )
+        provider.client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         request = LLMRequest(prompt="Hello", system_prompt="You are helpful")
         await provider.complete(request)
@@ -316,6 +322,7 @@ class TestOllamaProvider:
         config = ProviderConfig(
             provider_type="ollama",
             model_id="llama3",
+            model_version="3.0",
             base_url="http://localhost:11434",
         )
         provider = OllamaProvider(config)
@@ -340,6 +347,7 @@ class TestOllamaProvider:
         # Verify the payload that was actually sent to the endpoint
         sent_payload = respx.calls.last.request.content
         import json as _json
+
         payload = _json.loads(sent_payload)
 
         assert payload["model"] == "llama3"
@@ -350,6 +358,10 @@ class TestOllamaProvider:
         assert response.content == "Ollama response"
         assert response.input_tokens == 12
         assert response.output_tokens == 6
+        assert response.model_id == "llama3"
+        assert response.model_version == "3.0"
+        assert response.temperature == 0.0
+        assert response.seed == 42
 
     @pytest.mark.asyncio
     async def test_default_base_url(self):

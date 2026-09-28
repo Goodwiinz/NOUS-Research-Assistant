@@ -4,6 +4,11 @@ import {
   listProjects,
   createProject,
   getProject,
+  getLegacyProject,
+  linkProject,
+  listProjectRoles,
+  assignProjectRole,
+  removeProjectRole,
   listTemplates,
   getTemplateDetail,
   getCapabilities,
@@ -27,6 +32,9 @@ vi.mock('../api-client', () => ({
   api: {
     get: vi.fn(),
     post: vi.fn(),
+    patch: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
     download: vi.fn(),
   },
 }));
@@ -50,7 +58,11 @@ describe('researchEngineService', () => {
 
   describe('createProject', () => {
     it('calls POST /projects with data', async () => {
-      const data = { name: 'Test Project', description: 'A test' };
+      const data = {
+        collection_id: 'collection-1',
+        name: 'Test Project',
+        description: 'A test',
+      };
       mockApi.post.mockResolvedValue({ id: '1', ...data });
       await createProject(data);
       expect(mockApi.post).toHaveBeenCalledWith(`${BASE}/projects`, data);
@@ -62,6 +74,55 @@ describe('researchEngineService', () => {
       mockApi.get.mockResolvedValue({ id: 'p1' });
       await getProject('p1');
       expect(mockApi.get).toHaveBeenCalledWith(`${BASE}/projects/p1`);
+    });
+  });
+
+  describe('canonical project compatibility', () => {
+    it('resolves historical engine ids separately', async () => {
+      mockApi.get.mockResolvedValue({
+        research_engine_project_id: 'engine-1',
+        collection_id: 'collection-1',
+      });
+
+      await getLegacyProject('engine-1');
+
+      expect(mockApi.get).toHaveBeenCalledWith(
+        `${BASE}/legacy-projects/engine-1`
+      );
+    });
+
+    it('links an engine project to the canonical collection id', async () => {
+      mockApi.patch.mockResolvedValue({ id: 'p1', collection_id: 'c1' });
+      await linkProject('p1', 'c1');
+      expect(mockApi.patch).toHaveBeenCalledWith(
+        `${BASE}/projects/p1/collection`,
+        { collection_id: 'c1' }
+      );
+    });
+
+    it('uses the canonical collection id for independent roles', async () => {
+      mockApi.get.mockResolvedValue([]);
+      mockApi.put.mockResolvedValue({
+        id: 'assignment-1',
+        project_id: 'collection-1',
+        user_id: 'user-1',
+        role: 'reviewer',
+      });
+
+      await listProjectRoles('collection-1');
+      await assignProjectRole('collection-1', 'user-1', 'reviewer');
+      await removeProjectRole('collection-1', 'user-1', 'reviewer');
+
+      expect(mockApi.get).toHaveBeenCalledWith(
+        `${BASE}/projects/collection-1/roles`
+      );
+      expect(mockApi.put).toHaveBeenCalledWith(
+        `${BASE}/projects/collection-1/roles`,
+        { user_id: 'user-1', role: 'reviewer' }
+      );
+      expect(mockApi.delete).toHaveBeenCalledWith(
+        `${BASE}/projects/collection-1/roles/user-1/reviewer`
+      );
     });
   });
 
@@ -125,10 +186,8 @@ describe('researchEngineService', () => {
   describe('startRun', () => {
     it('posts the generated RunCreate contract including confirmed scope', async () => {
       const request = {
-        parameters_override: {
-          providers: ['openalex'],
-          limit_per_provider: 10,
-        },
+        protocol_version_id: 'protocol-version-1',
+        parameters_override: {},
         scope_confirmation: {
           research_question: 'What changed?',
           inclusion_criteria: ['Peer reviewed'],
@@ -145,6 +204,15 @@ describe('researchEngineService', () => {
         `${BASE}/blueprints/b1/runs`,
         request
       );
+    });
+
+    it('supports the approved-protocol shorthand without method overrides', async () => {
+      mockApi.post.mockResolvedValue({ id: 'r1' });
+      await startRun('b1', 'protocol-version-1');
+      expect(mockApi.post).toHaveBeenCalledWith(`${BASE}/blueprints/b1/runs`, {
+        protocol_version_id: 'protocol-version-1',
+        parameters_override: {},
+      });
     });
   });
 

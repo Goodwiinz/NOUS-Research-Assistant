@@ -138,6 +138,7 @@ class TestProjectResponse:
         uid = uuid4()
         p = ProjectResponse(
             id=uid,
+            project_id=uid,
             name="Project",
             description="Desc",
             status="active",
@@ -302,6 +303,7 @@ class TestBlueprintResponse:
         b = BlueprintResponse(
             id=uid,
             project_id=pid,
+            research_engine_project_id=pid,
             name="BP",
             template_source=None,
             version=1,
@@ -488,6 +490,8 @@ class TestRunResponse:
         r = RunResponse(
             id=uuid4(),
             blueprint_id=uuid4(),
+            project_id=uuid4(),
+            research_engine_project_id=uuid4(),
             blueprint_version=1,
             status=RunStatus.PENDING,
             started_at=None,
@@ -504,6 +508,8 @@ class TestRunResponse:
         r = RunResponse(
             id=uuid4(),
             blueprint_id=uuid4(),
+            project_id=uuid4(),
+            research_engine_project_id=uuid4(),
             blueprint_version=1,
             status=RunStatus.RUNNING,
             created_at=now,

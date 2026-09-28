@@ -42,10 +42,12 @@ def _make_step(run_id, index, step_type="synthesize"):
     step.step_type = step_type
     step.mode = "deterministic"
     step.model_id = "test-model-v1"
+    step.model_version = "2026-09-01"
     step.temperature = 0.0
     step.seed = 42
     step.inputs_hash = "abc123"
     step.outputs_hash = "def456"
+    step.full_prompt = "permitted system prompt"
     step.output = {"content": "synthesised output"}
     step.quality_marks = [{"check_type": "source_grounding", "passed": True}]
     step.token_count = 150
@@ -160,6 +162,9 @@ async def test_export_json_returns_correct_structure():
     assert step_data["step_type"] == "synthesize"
     assert step_data["inputs_hash"] == "abc123"
     assert step_data["outputs_hash"] == "def456"
+    assert step_data["full_prompt"] == "permitted system prompt"
+    assert step_data["model_id"] == "test-model-v1"
+    assert step_data["model_version"] == "2026-09-01"
     assert step_data["token_count"] == 150
 
     # Evidence nested under step

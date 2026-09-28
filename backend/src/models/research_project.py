@@ -17,6 +17,12 @@ class ResearchProject(BaseModel):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     owner_id = Column(GUID(), ForeignKey("users.id"), nullable=False)
+    collection_id = Column(
+        GUID(),
+        ForeignKey("collections.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
     status = Column(String(50), nullable=False, default="active")
     settings = Column(JSONB, nullable=True)
 
@@ -27,6 +33,7 @@ class ResearchProject(BaseModel):
 
     # Relationships
     owner = relationship("User", backref="research_projects")
+    collection = relationship("Collection", backref="research_engine_project")
     blueprints = relationship(
         "ResearchBlueprint",
         back_populates="project",

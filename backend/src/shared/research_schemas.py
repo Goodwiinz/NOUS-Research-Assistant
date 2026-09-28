@@ -514,9 +514,13 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectResponse(BaseModel):
-    """Research project response"""
+    """Research project response; id is the canonical Collection identifier."""
 
     id: UUID
+    research_engine_project_id: Optional[UUID] = None
+    can_edit: bool = False
+    can_manage: bool = False
+    workspace_archived: bool = False
     workspace_id: UUID
     name: str
     description: Optional[str] = None

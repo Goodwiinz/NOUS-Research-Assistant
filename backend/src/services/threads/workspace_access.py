@@ -80,6 +80,7 @@ async def get_workspace(
     *,
     load_conversations: bool = True,
     load_collections: bool = True,
+    for_update: bool = False,
 ) -> Optional[Workspace]:
     """Fetch a workspace the caller can access, or ``None``.
 
@@ -107,6 +108,12 @@ async def get_workspace(
             Workspace.is_deleted == False,  # noqa: E712
         )
     )
+    if for_update:
+        # Membership and lifecycle writers coordinate with research approvals.
+        # Refresh the identity map and members after any lock wait.
+        stmt = stmt.with_for_update(of=Workspace).execution_options(
+            populate_existing=True
+        )
     result = await db.execute(stmt)
     workspace: Optional[Workspace] = result.scalars().first()
     if not workspace:

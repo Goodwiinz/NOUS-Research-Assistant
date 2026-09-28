@@ -86,13 +86,19 @@ const CAPABILITIES = [
   },
 ];
 
-function renderEditor(projectId = 'project-1'): ReturnType<typeof render> {
+function renderEditor(
+  projectId = 'project-1',
+  approvedProtocolVersionId: string | null = 'protocol-version-2'
+): ReturnType<typeof render> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <BlueprintEditor projectId={projectId} />
+      <BlueprintEditor
+        projectId={projectId}
+        approvedProtocolVersionId={approvedProtocolVersionId ?? undefined}
+      />
     </QueryClientProvider>
   );
 }
@@ -244,14 +250,8 @@ describe('BlueprintEditor loading', () => {
     fireEvent.click(start);
 
     expect(startRun).toHaveBeenCalledWith('blueprint-1', {
-      parameters_override: {
-        research_question: 'What changed?',
-        inclusion_criteria: ['Peer reviewed'],
-        exclusion_criteria: [],
-        providers: ['openalex', 'crossref'],
-        limit_per_provider: 25,
-        notes: '',
-      },
+      protocol_version_id: 'protocol-version-2',
+      parameters_override: {},
       scope_confirmation: {
         confirmed: true,
         research_question: 'What changed?',
@@ -330,7 +330,45 @@ describe('BlueprintEditor loading', () => {
 
     fireEvent.click(start);
     expect(startRun).toHaveBeenCalledWith('blueprint-custom', {
-      parameters_override: parameters,
+      protocol_version_id: 'protocol-version-2',
+      parameters_override: {},
+    });
+  });
+
+  it('requires an approved protocol before starting a saved blueprint', async () => {
+    vi.mocked(getBlueprint).mockResolvedValue({
+      id: 'blueprint-1',
+      name: 'Paper discovery',
+      steps: [TEMPLATE_STEPS[0]],
+      parameters: { topic: 'Saved method' },
+    });
+    vi.mocked(startRun).mockResolvedValue({ id: 'run-1' });
+
+    const rendered = renderEditor('project-1', null);
+    const start = await screen.findByRole('button', { name: 'Start run' });
+    expect(start).toBeDisabled();
+    expect(
+      screen.getByText('Approve a protocol version before starting a run.')
+    ).toBeInTheDocument();
+
+    rendered.rerender(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false } },
+          })
+        }
+      >
+        <BlueprintEditor
+          projectId="project-1"
+          approvedProtocolVersionId="protocol-version-2"
+        />
+      </QueryClientProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+    expect(startRun).toHaveBeenCalledWith('blueprint-1', {
+      protocol_version_id: 'protocol-version-2',
+      parameters_override: {},
     });
   });
 

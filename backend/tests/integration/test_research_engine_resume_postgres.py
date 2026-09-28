@@ -14,7 +14,7 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.sql.dml import Update
 
@@ -34,6 +34,11 @@ from src.services.research_engine.providers.base import (
     LLMRequest,
     LLMResponse,
     ProviderConfig,
+)
+from tests.integration.research_engine_postgres_support import (
+    create_research_engine_tables,
+    seed_approved_protocol_binding,
+    seed_canonical_project_scope,
 )
 
 pytestmark = [
@@ -68,17 +73,14 @@ async def _research_schema(
             connect_args={"server_settings": {"search_path": schema}},
         )
         async with scoped_engine.begin() as connection:
-            await connection.exec_driver_sql(
-                'CREATE TABLE "users" (id UUID PRIMARY KEY)'
-            )
-            for model in (
+            await create_research_engine_tables(
+                connection,
                 ResearchProject,
                 ResearchBlueprint,
                 ResearchRun,
                 ResearchSource,
                 ResearchStep,
-            ):
-                await connection.run_sync(cast(Any, model).__table__.create)
+            )
 
         yield async_sessionmaker(scoped_engine, expire_on_commit=False)
     finally:
@@ -134,36 +136,54 @@ async def _seed_run(
     persisted_outputs: list[dict[str, Any]] | None = None,
     status: str = "paused",
     total_tokens: int = 0,
-) -> tuple[uuid.UUID, uuid.UUID]:
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     owner_id = uuid.uuid4()
+    organization_id = uuid.uuid4()
     project_id = uuid.uuid4()
     blueprint_id = uuid.uuid4()
     run_id = uuid.uuid4()
+    parameters = {"contract_version": 1}
     async with factory() as db:
-        # The production join checks project ownership through this key.
-        await db.execute(text("INSERT INTO users (id) VALUES (:id)"), {"id": owner_id})
-        db.add(
-            ResearchProject(
-                id=project_id,
-                name="Resume fixture",
-                owner_id=owner_id,
-            )
+        canonical_scope = await seed_canonical_project_scope(
+            db,
+            owner_id=owner_id,
+            organization_id=organization_id,
         )
-        db.add(
-            ResearchBlueprint(
-                id=blueprint_id,
-                project_id=project_id,
-                name="Resume fixture blueprint",
-                version=1,
-                steps=steps,
-                parameters={"contract_version": 1},
-            )
+        db.add_all(
+            [
+                ResearchProject(
+                    id=project_id,
+                    name="Resume fixture",
+                    owner_id=owner_id,
+                    collection_id=canonical_scope.collection_id,
+                ),
+                ResearchBlueprint(
+                    id=blueprint_id,
+                    project_id=project_id,
+                    name="Resume fixture blueprint",
+                    version=1,
+                    steps=steps,
+                    parameters=parameters,
+                ),
+            ]
+        )
+        await db.flush()
+        binding = await seed_approved_protocol_binding(
+            db,
+            blueprint_id=blueprint_id,
+            collection_id=canonical_scope.collection_id,
+            author_id=owner_id,
+            steps=steps,
+            parameters=parameters,
         )
         db.add(
             ResearchRun(
                 id=run_id,
                 blueprint_id=blueprint_id,
                 blueprint_version=1,
+                protocol_version_id=binding.protocol_version_id,
+                effective_plan_hash=binding.effective_plan_hash,
+                conformance_status="plan_verified",
                 status=status,
                 total_tokens=total_tokens,
                 reproducibility_manifest={"parameters_override": {}},
@@ -185,7 +205,7 @@ async def _seed_run(
                 )
             )
         await db.commit()
-    return owner_id, run_id
+    return owner_id, organization_id, run_id
 
 
 class _RecordingWorkflowEngine:
@@ -374,13 +394,13 @@ async def test_persisted_post_resume_stream_rehydrates_failed_stages_once(
         {"type": "export", "name": "Export", "params": {"contract_version": 1}},
     ]
     async with _research_schema(dsn) as factory:
-        owner_id, run_id = await _seed_run(
+        owner_id, organization_id, run_id = await _seed_run(
             factory,
             steps=blueprint_steps,
             persisted_outputs=[_search_envelope(source_id), _verification_envelope()],
             total_tokens=23,
         )
-        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        app = _app_with_database(factory, owner_id, organization_id)
         _RecordingWorkflowEngine.calls.clear()
         monkeypatch.setattr(
             "src.api.research_engine.runs.WorkflowEngine", _RecordingWorkflowEngine
@@ -400,7 +420,9 @@ async def test_persisted_post_resume_stream_rehydrates_failed_stages_once(
         ) as client:
             resumed = await client.post(f"/research-engine/runs/{run_id}/resume")
             assert resumed.status_code == 409
-            assert resumed.json()["detail"]["code"] == "verification_override_required"
+            resume_detail = resumed.json()["detail"]
+            assert isinstance(resume_detail, dict), resumed.text
+            assert resume_detail["code"] == "verification_override_required"
 
             resumed = await client.post(
                 f"/research-engine/runs/{run_id}/resume",
@@ -468,13 +490,13 @@ async def test_direct_paused_stream_persists_continuation_and_unverified_export(
         },
     ]
     async with _research_schema(dsn) as factory:
-        owner_id, run_id = await _seed_run(
+        owner_id, organization_id, run_id = await _seed_run(
             factory,
             steps=blueprint_steps,
             persisted_outputs=[_search_envelope(source_id), _verification_envelope()],
             total_tokens=23,
         )
-        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        app = _app_with_database(factory, owner_id, organization_id)
         monkeypatch.setattr(
             "src.api.research_engine.runs._build_connectors", lambda **_: {}
         )
@@ -559,13 +581,13 @@ async def test_repeated_resume_executes_export_and_reconstructs_unverified_warni
         },
     ]
     async with _research_schema(dsn) as factory:
-        owner_id, run_id = await _seed_run(
+        owner_id, organization_id, run_id = await _seed_run(
             factory,
             steps=blueprint_steps,
             persisted_outputs=[_search_envelope(source_id), _verification_envelope()],
             total_tokens=23,
         )
-        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        app = _app_with_database(factory, owner_id, organization_id)
         monkeypatch.setattr(
             "src.api.research_engine.runs._build_connectors", lambda **_: {}
         )
@@ -710,14 +732,14 @@ async def test_paid_reduction_parse_failure_persists_usage_hashes_once(
         {"type": "export", "name": "Export", "params": {"contract_version": 1}},
     ]
     async with _research_schema(dsn) as factory:
-        owner_id, run_id = await _seed_run(
+        owner_id, organization_id, run_id = await _seed_run(
             factory,
             steps=steps,
             persisted_outputs=[search, extraction, _verification_envelope()],
             total_tokens=23,
         )
         provider = _InvalidReductionProvider()
-        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        app = _app_with_database(factory, owner_id, organization_id)
         monkeypatch.setattr(
             "src.api.research_engine.runs._build_connectors", lambda **_: {}
         )
@@ -801,14 +823,14 @@ async def test_timeout_after_paid_batch_persists_usage_and_hash_once(
         },
     ]
     async with _research_schema(dsn) as factory:
-        owner_id, run_id = await _seed_run(
+        owner_id, organization_id, run_id = await _seed_run(
             factory,
             steps=steps,
             persisted_outputs=[search, _verification_envelope()],
             total_tokens=23,
         )
         provider = _SlowSecondBatchProvider()
-        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        app = _app_with_database(factory, owner_id, organization_id)
         monkeypatch.setattr(
             "src.api.research_engine.runs._build_connectors", lambda **_: {}
         )
@@ -874,13 +896,13 @@ async def test_persisted_resume_losing_stream_returns_conflict_without_execution
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
 
     async with _research_schema(dsn) as factory:
-        owner_id, run_id = await _seed_run(
+        owner_id, organization_id, run_id = await _seed_run(
             factory,
             steps=[
                 {"type": "export", "name": "Export", "params": {"contract_version": 1}}
             ],
         )
-        app = _app_with_database(factory, owner_id, uuid.uuid4(), race_run_id=run_id)
+        app = _app_with_database(factory, owner_id, organization_id, race_run_id=run_id)
         _RecordingWorkflowEngine.calls.clear()
         monkeypatch.setattr(
             "src.api.research_engine.runs.WorkflowEngine", _RecordingWorkflowEngine
@@ -921,14 +943,14 @@ async def test_concurrent_postgres_stream_claims_execute_paid_run_once(
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
 
     async with _research_schema(dsn) as factory:
-        owner_id, run_id = await _seed_run(
+        owner_id, organization_id, run_id = await _seed_run(
             factory,
             status="pending",
             steps=[
                 {"type": "export", "name": "Export", "params": {"contract_version": 1}}
             ],
         )
-        app = _app_with_database(factory, owner_id, uuid.uuid4())
+        app = _app_with_database(factory, owner_id, organization_id)
         _RecordingWorkflowEngine.calls.clear()
         monkeypatch.setattr(
             "src.api.research_engine.runs.WorkflowEngine", _RecordingWorkflowEngine

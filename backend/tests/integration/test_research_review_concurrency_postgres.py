@@ -25,6 +25,10 @@ from src.services.research_engine.review_service import (
     ResearchReviewError,
     ResearchReviewService,
 )
+from tests.integration.research_engine_postgres_support import (
+    create_research_engine_tables,
+    seed_canonical_project_scope,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -119,20 +123,14 @@ async def _postgres_review_schema(dsn: str) -> AsyncIterator[_ReviewDatabase]:
             connect_args={"server_settings": {"search_path": schema}},
         )
         async with scoped_engine.begin() as connection:
-            await connection.exec_driver_sql(
-                'CREATE TABLE "organizations" (id UUID PRIMARY KEY)'
-            )
-            await connection.exec_driver_sql(
-                'CREATE TABLE "users" (id UUID PRIMARY KEY)'
-            )
-            for model in (
+            await create_research_engine_tables(
+                connection,
                 ResearchProject,
                 ResearchBlueprint,
                 ResearchRun,
                 ResearchStep,
                 ResearchStageReview,
-            ):
-                await connection.run_sync(cast(Any, model).__table__.create)
+            )
 
         factory = async_sessionmaker(scoped_engine, expire_on_commit=False)
         owner_id = uuid.uuid4()
@@ -144,13 +142,10 @@ async def _postgres_review_schema(dsn: str) -> AsyncIterator[_ReviewDatabase]:
         output = _screen_output()
         output_hash = canonical_stage_output_hash(output)
         async with scoped_engine.begin() as connection:
-            await connection.exec_driver_sql(
-                'INSERT INTO "organizations" (id) VALUES ($1)',
-                (organization_id,),
-            )
-            await connection.exec_driver_sql(
-                'INSERT INTO "users" (id) VALUES ($1)',
-                (owner_id,),
+            canonical_scope = await seed_canonical_project_scope(
+                connection,
+                owner_id=owner_id,
+                organization_id=organization_id,
             )
         async with factory() as session:
             session.add_all(
@@ -159,6 +154,7 @@ async def _postgres_review_schema(dsn: str) -> AsyncIterator[_ReviewDatabase]:
                         id=project_id,
                         name="Review concurrency fixture",
                         owner_id=owner_id,
+                        collection_id=canonical_scope.collection_id,
                     ),
                     ResearchBlueprint(
                         id=blueprint_id,

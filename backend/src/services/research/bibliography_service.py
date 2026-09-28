@@ -65,7 +65,7 @@ class BibliographyService:
         return f"{first_author}{year}{first_word}{index}"
 
     @staticmethod
-    def format_bibtex(citations: List[Citation]) -> str:
+    def format_bibtex(citations: List[Citation], keys: List[str] | None = None) -> str:
         """Format citations as BibTeX.
 
         Args:
@@ -81,11 +81,17 @@ class BibliographyService:
 
         if not citations:
             return ""
+        if keys is not None and len(keys) != len(citations):
+            raise ValueError("BibTeX keys must match the citation count")
 
         entries = {}
 
         for i, citation in enumerate(citations, start=1):
-            key = BibliographyService._generate_bibtex_key(citation, i)
+            key = (
+                keys[i - 1]
+                if keys
+                else BibliographyService._generate_bibtex_key(citation, i)
+            )
 
             # Determine entry type
             entry_type = "article"

@@ -63,6 +63,11 @@ from src.services.research_engine.scope import (
 )
 from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
+from tests.integration.research_engine_postgres_support import (
+    create_research_engine_tables,
+    seed_approved_protocol_binding,
+    seed_canonical_project_scope,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -141,21 +146,15 @@ async def _scenario_database(
             connect_args={"server_settings": {"search_path": schema}},
         )
         async with scoped_engine.begin() as connection:
-            await connection.exec_driver_sql(
-                'CREATE TABLE "organizations" (id UUID PRIMARY KEY)'
-            )
-            await connection.exec_driver_sql(
-                'CREATE TABLE "users" (id UUID PRIMARY KEY)'
-            )
-            for model in (
+            await create_research_engine_tables(
+                connection,
                 ResearchProject,
                 ResearchBlueprint,
                 ResearchRun,
                 ResearchSource,
                 ResearchStep,
                 ResearchStageReview,
-            ):
-                await connection.run_sync(cast(Any, model).__table__.create)
+            )
 
         factory = async_sessionmaker(scoped_engine, expire_on_commit=False)
         owner_id = uuid.uuid4()
@@ -165,12 +164,11 @@ async def _scenario_database(
         blueprint_id = uuid.uuid4()
         run_id = uuid.uuid4()
         async with scoped_engine.begin() as connection:
-            await connection.exec_driver_sql(
-                'INSERT INTO "organizations" (id) VALUES ($1)', (organization_id,)
-            )
-            await connection.exec_driver_sql(
-                'INSERT INTO "users" (id) VALUES ($1), ($2)',
-                (owner_id, other_owner_id),
+            canonical_scope = await seed_canonical_project_scope(
+                connection,
+                owner_id=owner_id,
+                organization_id=organization_id,
+                additional_user_organizations={other_owner_id: organization_id},
             )
         async with factory() as db:
             db.add_all(
@@ -179,6 +177,7 @@ async def _scenario_database(
                         id=project_id,
                         name="Daily Brief scenario",
                         owner_id=owner_id,
+                        collection_id=canonical_scope.collection_id,
                     ),
                     ResearchBlueprint(
                         id=blueprint_id,
@@ -303,8 +302,22 @@ async def _configure_daily_brief(
         assert run is not None
         blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
         assert blueprint is not None
+        project = await db.get(ResearchProject, blueprint.project_id)
+        assert project is not None and project.collection_id is not None
         blueprint.steps = template["steps"]
         blueprint.parameters = parameters
+        await db.flush()
+        binding = await seed_approved_protocol_binding(
+            db,
+            blueprint_id=blueprint.id,
+            collection_id=project.collection_id,
+            author_id=scenario.owner_id,
+            steps=template["steps"],
+            parameters=parameters,
+        )
+        run.protocol_version_id = binding.protocol_version_id
+        run.effective_plan_hash = binding.effective_plan_hash
+        run.conformance_status = "plan_verified"
         run.reproducibility_manifest = {
             "parameters_override": {},
             "scope_confirmation": scope,
@@ -502,21 +515,15 @@ async def _daily_brief_lifecycle(
             connect_args={"server_settings": {"search_path": schema}},
         )
         async with scoped_engine.begin() as connection:
-            await connection.exec_driver_sql(
-                'CREATE TABLE "organizations" (id UUID PRIMARY KEY)'
-            )
-            await connection.exec_driver_sql(
-                'CREATE TABLE "users" (id UUID PRIMARY KEY)'
-            )
-            for model in (
+            await create_research_engine_tables(
+                connection,
                 ResearchProject,
                 ResearchBlueprint,
                 ResearchRun,
                 ResearchSource,
                 ResearchStep,
                 ResearchStageReview,
-            ):
-                await connection.run_sync(cast(Any, model).__table__.create)
+            )
 
         factory = async_sessionmaker(scoped_engine, expire_on_commit=False)
         owner_id = uuid.uuid4()
@@ -526,12 +533,11 @@ async def _daily_brief_lifecycle(
         blueprint_id = uuid.uuid4()
         run_id = uuid.uuid4()
         async with scoped_engine.begin() as connection:
-            await connection.exec_driver_sql(
-                'INSERT INTO "organizations" (id) VALUES ($1)', (organization_id,)
-            )
-            await connection.exec_driver_sql(
-                'INSERT INTO "users" (id) VALUES ($1), ($2)',
-                (owner_id, other_owner_id),
+            canonical_scope = await seed_canonical_project_scope(
+                connection,
+                owner_id=owner_id,
+                organization_id=organization_id,
+                additional_user_organizations={other_owner_id: organization_id},
             )
 
         template = cast(
@@ -575,6 +581,7 @@ async def _daily_brief_lifecycle(
                         id=project_id,
                         name="Daily Brief PostgreSQL certification",
                         owner_id=owner_id,
+                        collection_id=canonical_scope.collection_id,
                     ),
                     ResearchBlueprint(
                         id=blueprint_id,
@@ -586,22 +593,36 @@ async def _daily_brief_lifecycle(
                         parameters=parameters,
                         is_immutable=True,
                     ),
-                    ResearchRun(
-                        id=run_id,
-                        blueprint_id=blueprint_id,
-                        blueprint_version=1,
-                        status="pending",
-                        reproducibility_manifest={
-                            "parameters_override": {},
-                            "scope_confirmation": scope,
-                            "provider_manifest": [
-                                item
-                                for item in safe_capability_projection()
-                                if item["id"] == "openalex"
-                            ],
-                        },
-                    ),
                 ]
+            )
+            await db.flush()
+            binding = await seed_approved_protocol_binding(
+                db,
+                blueprint_id=blueprint_id,
+                collection_id=canonical_scope.collection_id,
+                author_id=owner_id,
+                steps=template["steps"],
+                parameters=parameters,
+            )
+            db.add(
+                ResearchRun(
+                    id=run_id,
+                    blueprint_id=blueprint_id,
+                    blueprint_version=1,
+                    protocol_version_id=binding.protocol_version_id,
+                    effective_plan_hash=binding.effective_plan_hash,
+                    conformance_status="plan_verified",
+                    status="pending",
+                    reproducibility_manifest={
+                        "parameters_override": {},
+                        "scope_confirmation": scope,
+                        "provider_manifest": [
+                            item
+                            for item in safe_capability_projection()
+                            if item["id"] == "openalex"
+                        ],
+                    },
+                )
             )
             await db.commit()
 
@@ -639,29 +660,6 @@ async def _daily_brief_lifecycle(
             "_build_connectors",
             lambda **_kwargs: {"openalex": connector},
         )
-        race_claim_enabled = False
-        race_claim_arrivals = 0
-        race_both_at_claim = asyncio.Event()
-        race_claim_release = asyncio.Event()
-        original_claim_stream = ResearchRunLifecycleService.claim_stream
-
-        async def synchronized_claim_stream(
-            lifecycle: ResearchRunLifecycleService, *, run: Any
-        ) -> Any:
-            nonlocal race_claim_arrivals
-            if race_claim_enabled:
-                race_claim_arrivals += 1
-                if race_claim_arrivals == 2:
-                    race_both_at_claim.set()
-                await race_claim_release.wait()
-            return await original_claim_stream(lifecycle, run=run)
-
-        monkeypatch.setattr(
-            ResearchRunLifecycleService,
-            "claim_stream",
-            synchronized_claim_stream,
-        )
-
         race_admission_enabled = False
         race_admitted_count = 0
         race_first_admitted = asyncio.Event()
@@ -805,15 +803,10 @@ async def _daily_brief_lifecycle(
                                 f"/research-engine/runs/{run_id}/stream"
                             )
 
-                    # Stop both requests immediately before claim_stream so both
-                    # have observed the same paused run and one-use authorization.
-                    # Hold the winner at admission while the locked loser resolves.
-                    # Removing claim_stream's _lock_run guard makes both requests
-                    # reach admission and is proven by the committed mutation RED.
-                    race_claim_enabled = True
-                    race_claim_arrivals = 0
-                    race_both_at_claim = asyncio.Event()
-                    race_claim_release = asyncio.Event()
+                    # Hold the winning consumer after its durable claim while the
+                    # competing request resolves through the canonical project
+                    # lock. Removing claim_stream's run guard still lets both
+                    # requests reach admission and is caught by this assertion.
                     race_admission_enabled = True
                     race_admitted_count = 0
                     race_first_admitted = asyncio.Event()
@@ -824,8 +817,6 @@ async def _daily_brief_lifecycle(
                         asyncio.create_task(stream_once("first")),
                         asyncio.create_task(stream_once("second")),
                     )
-                    await asyncio.wait_for(race_both_at_claim.wait(), timeout=5)
-                    race_claim_release.set()
                     await asyncio.wait_for(race_first_admitted.wait(), timeout=5)
                     second_admission_waiter = asyncio.create_task(
                         race_second_admitted.wait()
@@ -839,7 +830,6 @@ async def _daily_brief_lifecycle(
                         assert finished, "second stream neither lost nor double-claimed"
                     finally:
                         race_admission_release.set()
-                        race_claim_enabled = False
                         race_admission_enabled = False
                     raced = await asyncio.gather(*stream_tasks)
                     if not second_admission_waiter.done():
@@ -1633,29 +1623,26 @@ def create_e2e_app() -> FastAPI:
                 connect_args={"server_settings": {"search_path": schema}},
             )
             async with scoped_engine.begin() as connection:
-                await connection.exec_driver_sql(
-                    'CREATE TABLE "organizations" (id UUID PRIMARY KEY)'
-                )
-                await connection.exec_driver_sql(
-                    'CREATE TABLE "users" (id UUID PRIMARY KEY)'
-                )
-                for model in (
+                await create_research_engine_tables(
+                    connection,
                     ResearchProject,
                     ResearchBlueprint,
                     ResearchRun,
                     ResearchSource,
                     ResearchStep,
                     ResearchStageReview,
-                ):
-                    await connection.run_sync(cast(Any, model).__table__.create)
-                await connection.exec_driver_sql(
-                    'INSERT INTO "organizations" (id) VALUES ($1), ($2)',
-                    (owner_org_id, intruder_org_id),
                 )
-                await connection.exec_driver_sql(
-                    'INSERT INTO "users" (id) VALUES ($1), ($2), ($3)',
-                    (owner_id, same_org_intruder_id, intruder_id),
+                canonical_scope = await seed_canonical_project_scope(
+                    connection,
+                    owner_id=owner_id,
+                    organization_id=owner_org_id,
+                    additional_user_organizations={
+                        same_org_intruder_id: owner_org_id,
+                        intruder_id: intruder_org_id,
+                    },
+                    additional_organization_ids=(intruder_org_id,),
                 )
+                fixture_state["collection_id"] = canonical_scope.collection_id
             app.state.db_factory = async_sessionmaker(
                 scoped_engine, expire_on_commit=False
             )

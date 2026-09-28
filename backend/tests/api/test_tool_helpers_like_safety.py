@@ -12,6 +12,7 @@ a wildcard and silently resolve to the wrong project within the owner scope.
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -68,3 +69,50 @@ async def test_project_name_escapes_like_metacharacters():
     sql = _compiled(captured["stmt"])
     # Escaped form (backslash before the %) proves the input was sanitised.
     assert "Report\\%2024" in sql, sql
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_project_name_resolves_unique_collaborator_match():
+    user = MagicMock()
+    user.id = uuid4()
+    project_id = uuid4()
+    db = MagicMock()
+    workspace_result = MagicMock()
+    workspace_result.scalars.return_value.all.return_value = [uuid4()]
+    project_result = MagicMock()
+    project_result.scalars.return_value.all.return_value = [project_id]
+    db.execute = AsyncMock(side_effect=[workspace_result, project_result])
+
+    resolved = await _resolve_project_id("Shared Study", db, user)
+
+    assert resolved == project_id
+    project_stmt = db.execute.await_args_list[1].args[0]
+    assert "LIMIT 2" in _compiled(project_stmt)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_project_name_rejects_ambiguous_authorized_matches():
+    user = MagicMock()
+    user.id = uuid4()
+    db = MagicMock()
+    workspace_result = MagicMock()
+    workspace_result.scalars.return_value.all.return_value = [uuid4()]
+    project_result = MagicMock()
+    project_result.scalars.return_value.all.return_value = [uuid4(), uuid4()]
+    db.execute = AsyncMock(side_effect=[workspace_result, project_result])
+
+    assert await _resolve_project_id("Duplicate", db, user) is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_project_uuid_passthrough_does_not_query():
+    user = MagicMock()
+    db = MagicMock()
+    db.execute = AsyncMock()
+    project_id = uuid4()
+
+    assert await _resolve_project_id(str(project_id), db, user) == project_id
+    db.execute.assert_not_awaited()

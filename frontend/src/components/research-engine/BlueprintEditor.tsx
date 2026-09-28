@@ -58,13 +58,9 @@ const DEFAULT_STEP: BlueprintStepDef = {
 
 export interface BlueprintEditorProps {
   projectId: string;
-}
-
-function confirmedScopeParameters(
-  confirmation: DailyBriefScopeConfirmation
-): Record<string, unknown> {
-  const { confirmed: _confirmed, ...parameters } = confirmation;
-  return parameters;
+  readOnly?: boolean;
+  approvedProtocolVersionId?: string;
+  onBlueprintSaved?: (blueprintId: string) => void;
 }
 
 async function loadProjectBlueprint(projectId: string): Promise<{
@@ -86,6 +82,9 @@ async function loadProjectBlueprint(projectId: string): Promise<{
 
 export function BlueprintEditor({
   projectId,
+  readOnly = false,
+  approvedProtocolVersionId,
+  onBlueprintSaved,
 }: BlueprintEditorProps): ReactElement {
   const router = useRouter();
 
@@ -120,6 +119,7 @@ export function BlueprintEditor({
         setProject(proj);
         if (bp) {
           setBlueprint(bp);
+          onBlueprintSaved?.(bp.id);
           setBlueprintName(bp.name);
           setSteps(bp.steps.map(withKey));
           setGlobalParams(bp.parameters);
@@ -137,7 +137,7 @@ export function BlueprintEditor({
         setError('Failed to load project.');
       })
       .finally(() => setLoading(false));
-  }, [projectId]);
+  }, [onBlueprintSaved, projectId]);
 
   useEffect(() => {
     fetchData();
@@ -242,6 +242,7 @@ export function BlueprintEditor({
         setBlueprint(bp);
         setTemplateSource(bp.template_source ?? null);
         setTopologyDirty(false);
+        onBlueprintSaved?.(bp.id);
       }
     } catch {
       setError('Failed to save blueprint.');
@@ -251,23 +252,20 @@ export function BlueprintEditor({
   };
 
   const handleStartRun = async (): Promise<void> => {
-    if (!blueprint?.id || topologyDirty) return;
+    if (!blueprint?.id || topologyDirty || !approvedProtocolVersionId) return;
     if (
       templateSource === 'daily_research_brief' &&
       scopeConfirmation === null
     ) {
       return;
     }
-
     setStarting(true);
     setError(null);
     try {
       const run = await startRun(blueprint.id, {
-        parameters_override:
-          templateSource === 'daily_research_brief' && scopeConfirmation
-            ? confirmedScopeParameters(scopeConfirmation)
-            : globalParams,
-        ...(templateSource === 'daily_research_brief'
+        protocol_version_id: approvedProtocolVersionId,
+        parameters_override: {},
+        ...(templateSource === 'daily_research_brief' && scopeConfirmation
           ? { scope_confirmation: scopeConfirmation }
           : {}),
       });
@@ -303,6 +301,17 @@ export function BlueprintEditor({
         <span className="sr-only" role="status">
           Loading project
         </span>
+      </div>
+    );
+  }
+
+  if (readOnly && showTemplateSelector) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-5">
+        <h2 className="font-medium text-foreground">Research blueprint</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          No blueprint was saved before this project was archived.
+        </p>
       </div>
     );
   }
@@ -352,6 +361,7 @@ export function BlueprintEditor({
             id="blueprint-name"
             type="text"
             value={blueprintName}
+            disabled={readOnly}
             onChange={(e) => setBlueprintName(e.target.value)}
             className="text-xl font-semibold bg-transparent text-foreground border-none outline-hidden w-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded placeholder:text-muted-foreground/60 transition-colors"
             placeholder="Blueprint name"
@@ -367,7 +377,9 @@ export function BlueprintEditor({
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving || !blueprintName.trim() || !!globalParamsError}
+            disabled={
+              readOnly || saving || !blueprintName.trim() || !!globalParamsError
+            }
             className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-card text-sm font-medium text-foreground hover:border-primary/40 hover:bg-muted/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             {saving ? (
@@ -383,9 +395,11 @@ export function BlueprintEditor({
               type="button"
               onClick={handleStartRun}
               disabled={
+                readOnly ||
                 starting ||
                 topologyDirty ||
                 steps.length === 0 ||
+                !approvedProtocolVersionId ||
                 (templateSource === 'daily_research_brief' &&
                   scopeConfirmation === null)
               }
@@ -398,6 +412,11 @@ export function BlueprintEditor({
               )}
               {starting ? 'Starting' : 'Start run'}
             </button>
+          )}
+          {blueprint && !approvedProtocolVersionId && (
+            <p className="text-xs text-muted-foreground">
+              Approve a protocol version before starting a run.
+            </p>
           )}
         </div>
       </div>

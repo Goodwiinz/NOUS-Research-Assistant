@@ -41,6 +41,10 @@ class TestStepResult:
         assert result.inputs_hash is None
         assert result.outputs_hash is None
         assert result.full_prompt is None
+        assert result.model_id is None
+        assert result.model_version is None
+        assert result.temperature == 0.0
+        assert result.seed is None
 
     def test_quality_marks(self):
         qm = QualityMark(check_type="source_grounding", passed=True, details="ok")
@@ -127,9 +131,12 @@ class TestStepExecutor:
         mock_provider = AsyncMock(spec=LLMProvider)
         mock_provider.complete.return_value = LLMResponse(
             content="Synthesized output text",
-            model_id="test-model",
+            model_id="effective-model",
+            model_version="2026-09-01",
             input_tokens=100,
             output_tokens=50,
+            temperature=0.3,
+            seed=42,
         )
 
         executor = StepExecutor(
@@ -154,6 +161,14 @@ class TestStepExecutor:
         assert result.token_count == 150
         assert result.inputs_hash is not None
         assert result.outputs_hash is not None
+        assert json.loads(result.full_prompt or "{}") == {
+            "prompt": "{'query': 'summarize findings'}",
+            "system_prompt": "Synthesize: summarize findings",
+        }
+        assert result.model_id == "effective-model"
+        assert result.model_version == "2026-09-01"
+        assert result.temperature == 0.3
+        assert result.seed == 42
         mock_provider.complete.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -354,6 +369,13 @@ class TestWorkflowEngine:
         mock_executor.execute.return_value = StepResult(
             output={"result": "done"},
             quality_marks=[QualityMark(check_type="source_grounding", passed=True)],
+            inputs_hash="a" * 64,
+            outputs_hash="b" * 64,
+            full_prompt="permitted system prompt",
+            model_id="effective-model",
+            model_version="2026-09-01",
+            temperature=0.2,
+            seed=7,
         )
 
         engine = WorkflowEngine(step_executor=mock_executor)
@@ -375,6 +397,14 @@ class TestWorkflowEngine:
         assert "step_start" in event_types
         assert "step_complete" in event_types
         assert "run_complete" in event_types
+        completed = next(e for e in events if e["event"] == "step_complete")
+        assert completed["inputs_hash"] == "a" * 64
+        assert completed["outputs_hash"] == "b" * 64
+        assert completed["full_prompt"] == "permitted system prompt"
+        assert completed["model_id"] == "effective-model"
+        assert completed["model_version"] == "2026-09-01"
+        assert completed["temperature"] == 0.2
+        assert completed["seed"] == 7
 
     @pytest.mark.asyncio
     async def test_run_pauses_on_quality_failure(self):

@@ -248,12 +248,24 @@ class ResearchRunLifecycleService:
                         else None
                     )
 
-                model_id = step_definition.get("model_id") or params.get("model_id")
+                model_id = (
+                    event.get("model_id")
+                    or step_definition.get("model_id")
+                    or params.get("model_id")
+                )
                 mode = (
                     step_definition.get("mode") or params.get("mode") or "deterministic"
                 )
-                temperature = params.get("temperature", 0.0)
-                seed = params.get("seed")
+                temperature = event.get("temperature")
+                if temperature is None:
+                    temperature = step_definition.get(
+                        "temperature", params.get("temperature", 0.0)
+                    )
+                seed = (
+                    event["seed"]
+                    if "seed" in event
+                    else step_definition.get("seed", params.get("seed"))
+                )
                 token_count = max(0, int(event.get("token_count") or 0))
                 step = ResearchStep(
                     run_id=run.id,

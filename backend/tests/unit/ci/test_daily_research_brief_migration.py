@@ -71,7 +71,7 @@ def test_revision_chains_from_agent_operations_and_is_the_only_head() -> None:
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == [migration.revision]
+    assert heads == ["merge_research_heads_20260928"]
 
 
 def test_upgrade_creates_review_ledger_columns_foreign_keys_and_unique_gate() -> None:

@@ -790,6 +790,7 @@ class ExportService:
                     "step_type": step.step_type,
                     "mode": step.mode,
                     "model_id": step.model_id,
+                    "model_version": step.model_version,
                     "temperature": step.temperature,
                     "seed": step.seed,
                     "inputs_hash": step.inputs_hash,

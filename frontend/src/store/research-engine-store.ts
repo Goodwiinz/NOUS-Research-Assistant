@@ -1,18 +1,12 @@
 import { create } from 'zustand';
 import type {
   PendingReviewResponse,
+  ProjectResponse,
   RunResponse,
   StepResponse,
 } from '@/services/researchEngineService';
 
-export interface ResearchProject {
-  id: string;
-  name: string;
-  description?: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
+export type ResearchProject = ProjectResponse;
 
 export type ResearchRun = RunResponse;
 
