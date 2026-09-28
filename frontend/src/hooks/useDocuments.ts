@@ -304,7 +304,7 @@ export const useDocuments = (
           Object.entries(params).map(([k, v]) => [k, String(v)])
         ).toString();
         const response = (await api.get(
-          `/documents?${queryString}`
+          `/documents/?${queryString}`
         )) as DocumentsApiResponse;
 
         // Check if response has the expected structure

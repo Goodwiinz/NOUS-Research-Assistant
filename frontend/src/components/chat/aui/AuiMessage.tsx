@@ -895,15 +895,17 @@ export function AuiAssistantMessage({
 }
 
 /**
- * Backstop for the transient out-of-bounds throw a message row can hit when
- * the external-store runtime's message array desyncs from the page list on
- * thread switch. {@link AuiMessageByIndex} now addresses rows by identity
- * (Unstable_MessageById renders null instead of resolving a missing
- * message), so this boundary no longer carries the crash — it remains as
- * defense in depth for any render-phase transient throw the installed
- * @assistant-ui version still emits (including the index-addressed wording
- * below). Anything else is a real bug — rethrow it to the app's error
- * boundary rather than silently swallow.
+ * Catches the transient out-of-bounds throw a single MessageByIndex can hit
+ * when the external-store runtime's message array desyncs from the page list
+ * on thread switch. The count guard in {@link AuiMessageByIndex} handles the
+ * common post-commit lag, but under React's concurrent scheduler that guard
+ * can read a stale (non-empty) count while MessageByIndex's own
+ * useSyncExternalStore snapshot reads the freshly-emptied thread — a torn read
+ * that throws "useClientLookup: Index N out of bounds" from inside the child's
+ * store update, out of the render-time guard's reach (prod crash on thread
+ * switch). That frame is transient: render nothing for it and re-attempt once
+ * the runtime's client lookup settles. Anything else is a real bug —
+ * rethrow it to the app's error boundary rather than silently swallow.
  */
 function MessageByIndexRetry({
   resetKey,
@@ -1074,32 +1076,13 @@ export function AuiMessageByIndex({
   editDisabled?: boolean;
   onCitationClick?: OnCitationClick;
 }): ReactElement | null {
-  // The external-store runtime syncs in a useEffect (post-commit), so on the
-  // render where the page's message list changes (thread load/switch, first
-  // send, pagination) the runtime can still hold the previous — possibly
-  // empty — thread. Address the row by message identity, never by index: an
-  // index-addressed scope re-resolves inside the runtime's store
-  // notification (the passive-effect adapter swap) and throws
-  // "useClientLookup: Index N out of bounds" from a non-render path that no
-  // error boundary can catch. Unstable_MessageById renders null while its
-  // id is absent from the runtime thread, so the stale frame renders
-  // nothing and the effect-driven runtime sync re-renders this row in place.
+  // The external-store runtime syncs in a useEffect (post-commit), so on
+  // the render where the page's message list grows (thread load/switch,
+  // first send) the runtime can still hold the previous — possibly empty —
+  // thread. MessageByIndex throws on out-of-bounds, so skip the stale
+  // frame; the effect fires immediately after commit and re-renders us.
   const runtimeMessageCount = useThread((t) => t.messages.length);
   const runtimeMessageId = useThread((t) => t.messages[index]?.id);
-  // The page row's runtimeId IS the runtime message id (convertMessage).
-  // Fall back to the runtime's own id at this index only when the caller
-  // did not thread a page message through (e.g. a post-edit rerun).
-  const rowMessageId = message?.runtimeId ?? runtimeMessageId;
-  // Synchronous blanking on the legacy external-store read: when the id has
-  // left the runtime thread (empty store, thread switch, reconciliation),
-  // render nothing THIS frame. Unstable_MessageById enforces the same
-  // invariant on the tap store it reads, whose notification settles a tick
-  // later — belt and suspenders, and neither path resolves an index.
-  const runtimeHasRowId = useThread(
-    (t) =>
-      rowMessageId !== undefined &&
-      t.messages.some((m) => m.id === rowMessageId)
-  );
 
   // The components map is module-level (stable identity); only the row's DATA
   // changes, and it travels by context so a message refresh re-renders the
@@ -1116,18 +1099,22 @@ export function AuiMessageByIndex({
     [message, onRetry, retryDisabled, onEdit, editDisabled, onCitationClick]
   );
 
-  // Runtime empty and no row identity to address — render nothing for this
-  // frame. The runtime's post-commit sync re-renders the row.
-  if (!rowMessageId || !runtimeHasRowId) return null;
+  if (index >= runtimeMessageCount) return null;
+  // Reconciliation can reorder rows without changing the runtime's length.
+  // Until its post-commit sync catches up, this index may still name an
+  // approval gate rather than the answer now occupying the list row. Never
+  // render another message's tools (or actionable approval) in this slot.
+  if (message && runtimeMessageId !== message.runtimeId) return null;
 
-  // resetKey settles the boundary if a transient throw still occurs: count
-  // changes on grow/shrink, and the row id changes on thread switch even
-  // when counts match.
+  // resetKey settles the boundary when the runtime re-syncs: count changes on
+  // grow/shrink, and message id changes on thread switch even when counts match.
   return (
-    <MessageByIndexBoundary resetKey={`${runtimeMessageCount}:${rowMessageId}`}>
+    <MessageByIndexBoundary
+      resetKey={`${runtimeMessageCount}:${message?.runtimeId ?? index}`}
+    >
       <BoundMessageContext.Provider value={bindings}>
-        <ThreadPrimitive.Unstable_MessageById
-          messageId={rowMessageId}
+        <ThreadPrimitive.MessageByIndex
+          index={index}
           components={BOUND_MESSAGE_COMPONENTS}
         />
       </BoundMessageContext.Provider>
