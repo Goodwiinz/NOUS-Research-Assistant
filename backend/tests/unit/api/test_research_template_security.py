@@ -22,12 +22,7 @@ TemplateAPI = tuple[TestClient, Any, list[Any]]
 
 
 @pytest.fixture
-def daily_brief_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", True)
-
-
-@pytest.fixture
-def template_api(test_app: FastAPI, daily_brief_enabled: None) -> Iterator[TemplateAPI]:
+def template_api(test_app: FastAPI) -> Iterator[TemplateAPI]:
     user = Mock(
         id=uuid.uuid4(),
         email="researcher@example.com",

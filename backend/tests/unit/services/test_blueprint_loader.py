@@ -35,24 +35,9 @@ class TestListTemplates:
             assert isinstance(t["step_count"], int)
             assert t["step_count"] > 0
 
-    def test_daily_brief_is_hidden_by_default_and_available_only_when_enabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The server-owned release switch defaults closed at the loader boundary."""
-        monkeypatch.setattr(
-            "src.services.research_engine.blueprints.loader.settings.DAILY_RESEARCH_BRIEF_ENABLED",
-            False,
-            raising=False,
-        )
-
-        disabled = BlueprintLoader()
-        assert "daily_research_brief" not in {
-            item["slug"] for item in disabled.list_templates()
-        }
-        with pytest.raises(FileNotFoundError):
-            disabled.load_template("daily_research_brief")
-
-        enabled = BlueprintLoader(daily_research_brief_enabled=True)
+    def test_daily_brief_is_visible_by_default_and_hidden_when_disabled(self) -> None:
+        """The bundled template is on by default but retains its kill switch."""
+        enabled = BlueprintLoader()
         assert "daily_research_brief" in {
             item["slug"] for item in enabled.list_templates()
         }
@@ -61,8 +46,20 @@ class TestListTemplates:
             == "daily_research_brief"
         )
 
-    def test_daily_brief_release_setting_defaults_false(self) -> None:
-        assert Settings.model_fields["DAILY_RESEARCH_BRIEF_ENABLED"].default is False
+        disabled = BlueprintLoader(daily_research_brief_enabled=False)
+        assert "daily_research_brief" not in {
+            item["slug"] for item in disabled.list_templates()
+        }
+        with pytest.raises(FileNotFoundError):
+            disabled.load_template("daily_research_brief")
+
+    def test_daily_brief_release_setting_defaults_true_and_env_can_disable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert Settings.model_fields["DAILY_RESEARCH_BRIEF_ENABLED"].default is True
+
+        monkeypatch.setenv("DAILY_RESEARCH_BRIEF_ENABLED", "false")
+        assert Settings(_env_file=None).DAILY_RESEARCH_BRIEF_ENABLED is False
 
     def test_list_templates_rejects_invalid_bundled_template(self, tmp_path) -> None:
         """Invalid bundled YAML must fail before metadata reaches callers."""

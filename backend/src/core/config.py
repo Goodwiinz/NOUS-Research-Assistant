@@ -514,11 +514,11 @@ class Settings(BaseSettings):
     # deployment so rollout/rollback never changes tool-calling behavior.
     AGENT_FAST_PATH_ENABLED: bool = False
 
-    # Release gate for the server-owned Daily Research Brief template. Keep
-    # false until the candidate has passed its release checks. Existing runs
-    # remain readable/exportable when disabled; only discovery and new work
-    # are gated.
-    DAILY_RESEARCH_BRIEF_ENABLED: bool = False
+    # Runtime gate for the server-owned Daily Research Brief template. The
+    # repository default exposes new work; operators can set this false as a
+    # disable-first rollback. Existing runs remain readable/exportable while
+    # disabled; only discovery and new work are gated.
+    DAILY_RESEARCH_BRIEF_ENABLED: bool = True
     AGENT_FAST_PATH_DEPLOYMENT: str = "gpt-5.6-luna"
     AGENT_FAST_PATH_MAX_INPUT_CHARS: int = 8_000
     AGENT_FAST_PATH_MAX_OUTPUT_TOKENS: int = 768

@@ -99,11 +99,6 @@ def mock_db():
 
 
 @pytest.fixture
-def daily_brief_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", True)
-
-
-@pytest.fixture
 def client(test_app, mock_current_user, mock_db):
     """Create a test client with auth and db overrides."""
     from contextlib import asynccontextmanager
@@ -288,8 +283,11 @@ class TestStartRun:
 
     @patch("src.api.research_engine.runs.select")
     def test_disabled_daily_brief_cannot_start_from_existing_blueprint(
-        self, mock_select, client, mock_db, mock_current_user
+        self, mock_select, client, mock_db, mock_current_user, monkeypatch
     ):
+        monkeypatch.setattr(
+            "src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", False
+        )
         blueprint_id = uuid.uuid4()
         blueprint = _make_mock_blueprint(
             id=blueprint_id,
@@ -318,7 +316,6 @@ class TestStartRun:
         client,
         mock_db,
         mock_current_user,
-        daily_brief_enabled,
     ):
         blueprint_id = uuid.uuid4()
         blueprint = _make_mock_blueprint(
@@ -360,7 +357,6 @@ class TestStartRun:
         client,
         mock_db,
         mock_current_user,
-        daily_brief_enabled,
     ):
         blueprint_id = uuid.uuid4()
         blueprint = _make_mock_blueprint(
@@ -429,7 +425,6 @@ class TestStartRun:
         client,
         mock_db,
         mock_current_user,
-        daily_brief_enabled,
     ):
         blueprint_id = uuid.uuid4()
         blueprint = _make_mock_blueprint(
