@@ -82,7 +82,7 @@ async def _authorize(
         or original.request_id is None
     ):
         raise IntegrationAccessDenied()
-    return grant
+    return cast(IntegrationGrant, grant)
 
 
 async def _locked(db: AsyncSession, run_id: str) -> tuple[Any, HarnessSession]:
@@ -322,6 +322,8 @@ async def ingest_bridge_event(
             )
             seq = int(row.seq)
         else:
+            if not isinstance(body, Observation):
+                raise IntegrationAccessDenied()
             if (
                 session.provider_session_id not in (None, body.sessionId)
                 or (

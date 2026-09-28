@@ -1,10 +1,11 @@
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
 from src.api.agent import harness_streaming
+from src.schemas.integration_context import IntegrationContext
 from src.services.agent.run_event_types import RunEventType
 
 
@@ -40,7 +41,10 @@ async def test_external_stream_replays_persisted_events_and_stops_on_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_id = uuid4()
-    context = SimpleNamespace(organization_id=uuid4(), user_id=uuid4())
+    context = cast(
+        IntegrationContext,
+        SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),
+    )
     rows = [
         SimpleNamespace(
             seq=4,
@@ -66,7 +70,7 @@ async def test_external_stream_replays_persisted_events_and_stops_on_terminal(
     frames = [
         frame
         async for frame in harness_streaming.stream_harness_run(
-            request, run_id, context, after_seq=3
+            cast(Any, request), run_id, context, after_seq=3
         )
     ]
 
@@ -82,7 +86,10 @@ async def test_external_stream_replays_persisted_events_and_stops_on_terminal(
 async def test_external_stream_disconnect_only_ends_observation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = SimpleNamespace(organization_id=uuid4(), user_id=uuid4())
+    context = cast(
+        IntegrationContext,
+        SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),
+    )
     request = _Request()
     calls = 0
 
@@ -94,7 +101,7 @@ async def test_external_stream_disconnect_only_ends_observation(
     async def disconnect_after_first_read() -> bool:
         return request.disconnect_checks >= 3
 
-    request.is_disconnected = disconnect_after_first_read
+    setattr(request, "is_disconnected", disconnect_after_first_read)
     monkeypatch.setattr(harness_streaming, "AsyncSessionLocal", _Session)
     monkeypatch.setattr(harness_streaming, "read_events", read_events)
     monkeypatch.setattr(harness_streaming.asyncio, "sleep", lambda _seconds: _never())
@@ -102,7 +109,7 @@ async def test_external_stream_disconnect_only_ends_observation(
     frames = [
         frame
         async for frame in harness_streaming.stream_harness_run(
-            request, uuid4(), context
+            cast(Any, request), uuid4(), context
         )
     ]
     assert frames == []
