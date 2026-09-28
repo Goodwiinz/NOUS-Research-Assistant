@@ -278,8 +278,9 @@
 - Source chain: original certification
   `efd76079be75fdbba9eef4215c1c831d829cacb4`; independent review
   `a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408`; final whole-feature source
-  `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`; final re-review source
-  `ac17ca15a3a91af936851647bbde89d9860709ba`.
+  `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`; bibliography re-review source
+  `ac17ca15a3a91af936851647bbde89d9860709ba`; final identifier-safety source
+  `b334ec79861b438e8646ff75325cf4f5bdd75a30`.
 - Earlier independent review closed five Important gaps: manual-resume
   authorization survives the intermediate paused GET; a fixed-corpus semantic
   scorer is independent of self-reported support labels; performance uses the
@@ -309,13 +310,22 @@
   backend `277 passed`; PostgreSQL lifecycle `5 passed`; focused frontend `61 passed`;
   Node `24.20.0` type-check PASS; OpenAPI/type generation no drift; scoped
   Ruff/format PASS; Bandit `1.9.4` and staged Gitleaks `8.30.1` PASS.
-- Final re-review closes multi-provider bibliography fallback from retained
+- The first re-review closes multi-provider bibliography fallback from retained
   `metadata.provenance[]` snapshots without overriding canonical values or
   exposing provenance to readers. Its OpenAlex-first regression was RED on the
   missing Crossref year and GREEN after the fix; reverse order, canonical
   conflicts, and a three-provider DOI/PMID bridge are covered. Final-source
   affected backend passed `161`; Node `24.21.0` type-check, OpenAPI/type drift,
   Ruff/format, Bandit `1.9.4`, and Gitleaks `8.30.1` passed.
+- The final identifier-safety re-review restricts reader identifier maps to
+  `doi`, `pmid`, `pmcid`, `arxiv`, `openalex`, `semantic_scholar`, and
+  `rag_store`; canonical/direct values are seeded before provenance fallback,
+  and the final projection filters again. Its prepare-sources/export regression
+  was RED when a retained conflicting DOI replaced the direct canonical DOI and
+  GREEN after the repair. JSON, Markdown, and CSV assert the canonical DOI and
+  absence of opaque `provider_trace`/`patient_id` keys and values. Final-source
+  affected backend passed `162`; Node `24.21.0` type-check, OpenAPI/type drift,
+  Ruff/format/mypy, Bandit `1.9.4`, and exact-source Gitleaks `8.30.1` passed.
 - Exact-source browser result: `10 passed (2.6m)`. The 200-row review page used
   11 cold reloads with p50 `519.3 ms` and p95 `745.9 ms`, below the frozen
   `999.24 ms` ceiling. The scenario set includes three reloadable gates,
@@ -326,6 +336,13 @@
   11 cold 200-row reloads measured p50 `489.2 ms` and p95 `542.1 ms`, below the
   unchanged `999.24 ms` ceiling. The prior `9ca9d6a` browser pass remains part
   of the historical evidence rather than being overwritten.
+- The complete browser suite was rerun again after identifier filtering against
+  exact final source `b334ec798`: `10 passed (2.9m)`; 11 cold 200-row reloads
+  measured p50 `523.3 ms` and p95 `604.3 ms`, below the same `999.24 ms`
+  ceiling. Two preceding attempts stopped before the feature lifecycle because
+  stale local Next route manifests omitted `/login` and then the dynamic
+  project/blueprint route (`1 failed, 9 not run` each). They are committed as
+  excluded setup evidence; regenerating the route cache changed no source bytes.
 - Prior browser failures are retained: one consumed-response assertion produced
   one failure with nine tests not run; one unstable reconnect fixture produced
   five passes, one failure, and four tests not run; three focused attempts
