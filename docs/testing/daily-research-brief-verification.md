@@ -20,6 +20,28 @@ Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
 
 Disposition: **CERTIFICATION COMPLETE — NOT READY TO ENABLE**
 
+## 2026-09-28 user-authorized source-default enablement amendment
+
+After the certification above, the user explicitly authorized repository
+source enablement. Source
+`2d7c52cff01be1fc03daef1bd9a88728045b0e67` changes
+`DAILY_RESEARCH_BRIEF_ENABLED` to default `true`. The server now exposes the
+bundled template and accepts new Daily work when the environment does not
+override the setting. An explicit `false` override retains the disable-first
+rollback: list/detail hide the template, create/start refuse new Daily work,
+and existing persisted runs remain readable/exportable.
+
+This additive amendment supersedes only later statements in this historical
+record that describe the repository default as false or the source feature as
+disabled. It does not rewrite the certification evidence or clear its negative
+release decision. Dependency audits, anonymous Safety, full frontend
+validation, and full local CI remain `FAILED`; current-model evaluation and
+authenticated Safety remain `BLOCKED`; remote candidate-SHA checks, production
+configuration/rollback inspection, and deployment or production flag changes
+remain `NOT RUN`. Production configuration was not inspected or changed. The
+bounded source evidence is recorded in
+[the enablement evidence record](evidence/daily-research-brief-enablement-20260928/README.md).
+
 ## 2026-09-28 publication-date alias amendment
 
 This amendment supersedes the prior final-source designation. Source

@@ -20,6 +20,25 @@ Prior whole-feature source: `9ca9d6a2995ba8dd52328efd0e5cd93856138b4a`
 
 Disposition: **local follow-up complete; negative ship decision remains**
 
+## 2026-09-28 user-authorized source-default enablement amendment
+
+The user subsequently authorized a repository source-default change. Source
+`2d7c52cff01be1fc03daef1bd9a88728045b0e67` makes
+`DAILY_RESEARCH_BRIEF_ENABLED=true` the default while retaining an explicit
+`false` environment override as the disable-first rollback. Focused tests prove
+the default path lists, loads, creates, and starts Daily work through the
+existing validation boundaries; the false path continues to hide list/detail
+and refuse create/start, including from an existing Daily blueprint. Existing
+persisted-run read/export access and custom workflows remain available.
+
+This is an additive post-certification record. The historical default-false
+statements and evidence below remain accurate for their source revisions.
+Production configuration was not inspected or changed; no deployment or
+production flag change occurred. The negative release decision and every prior
+`FAILED`, `BLOCKED`, and release-critical `NOT RUN` classification remain. See
+[the bounded enablement record](../../../docs/testing/evidence/daily-research-brief-enablement-20260928/README.md)
+for exact-source commands, results, and raw-capture digests.
+
 ## 2026-09-28 publication-date alias amendment
 
 This amendment records the publication-date alias repair after the

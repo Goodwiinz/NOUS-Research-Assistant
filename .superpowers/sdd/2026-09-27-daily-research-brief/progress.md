@@ -398,3 +398,26 @@
 - No push, pull request, deployment, production inspection, or enablement was
   performed. Task 8 is complete locally with a negative ship decision; the
   feature stays disabled.
+
+## 2026-09-28 post-certification source-default enablement amendment
+
+- The user explicitly authorized changing the repository source default and
+  opening a pull request. Source
+  `2d7c52cff01be1fc03daef1bd9a88728045b0e67` now defaults
+  `DAILY_RESEARCH_BRIEF_ENABLED` to true. The earlier “feature stays disabled”
+  entry remains the historical Task 8 certification result for its source; it
+  is superseded only for the repository default by this amendment.
+- The explicit false environment override remains enforceable: it hides Daily
+  list/detail, refuses blueprint create and new runs from existing Daily
+  blueprints, leaves custom workflows available, and preserves existing-run
+  read/export access.
+- TDD recorded the old-default RED (`14 failed, 21 passed`) and post-change
+  GREEN (`35 passed`). Exact-source checks passed for the focused loader/API
+  matrix, Ruff/format, loader MyPy, OpenAPI drift, baseline-aware Bandit, and
+  Gitleaks. Direct `config.py` MyPy remains baseline-identical at 16 existing
+  untyped-function diagnostics on both parent and enablement source.
+- Production configuration was not inspected or changed. Deployment and
+  production flag changes remain `NOT RUN`; no push or pull request was made in
+  this task. Every earlier release `FAILED`, `BLOCKED`, and release-critical
+  `NOT RUN` classification remains unchanged. Evidence:
+  [source-default enablement record](../../../docs/testing/evidence/daily-research-brief-enablement-20260928/README.md).
