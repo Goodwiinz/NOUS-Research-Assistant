@@ -109,7 +109,7 @@ async def owned_device(
     )
     if device is None:
         raise IntegrationAccessDenied()
-    return device
+    return cast(BridgeDevice, device)
 
 
 async def validate_binding(
@@ -377,7 +377,7 @@ async def owned_request(
         project_id=request.project_id,
         device_id=request.device_id,
     )
-    return request
+    return cast(IntegrationGrantRequest, request)
 
 
 async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantRequestDTO:
@@ -470,7 +470,7 @@ async def owned_grant(db: AsyncSession, user: Any, grant_id: UUID) -> Integratio
     )
     if grant is None:
         raise IntegrationAccessDenied()
-    return grant
+    return cast(IntegrationGrant, grant)
 
 
 async def renew_grant(db: AsyncSession, user: Any, grant_id: UUID) -> IssuedGrant:
@@ -554,11 +554,11 @@ async def bind_workspace(
             or binding.is_deleted
         ):
             raise IntegrationConflict()
-        return binding
+        return cast(WorkspaceBinding, binding)
     binding = WorkspaceBinding(device_id=device_id, **data.model_dump())
     db.add(binding)
     await db.commit()
-    return binding
+    return cast(WorkspaceBinding, binding)
 
 
 async def list_workspaces(

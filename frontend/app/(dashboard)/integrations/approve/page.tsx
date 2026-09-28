@@ -35,9 +35,10 @@ function ApprovalContent(): React.JSX.Element {
     onSuccess: (data) => queryClient.setQueryData(queryKey, data),
   });
   const consent = request.data;
-  const expired = consent
-    ? Date.parse(consent.expires_at) <= Date.now()
-    : false;
+  // The API derives the expiry state from the authoritative server clock.
+  // Avoid a client clock comparison during render, which can drift and is
+  // rejected by React's render-purity lint rule.
+  const expired = consent?.status === 'expired';
   const canDecide =
     consent?.status === 'pending' && !expired && !decision.isPending;
 

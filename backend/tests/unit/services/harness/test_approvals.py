@@ -38,7 +38,8 @@ pytestmark = pytest.mark.unit
 @pytest.fixture(autouse=True)
 async def approval_table(db: AsyncSession) -> None:
     connection = await db.connection()
-    for model in (HarnessCommand, HarnessReceipt, HarnessNativeRequest):
+    models: tuple[Any, ...] = (HarnessCommand, HarnessReceipt, HarnessNativeRequest)
+    for model in models:
         await connection.run_sync(model.__table__.create)
     await db.commit()
 

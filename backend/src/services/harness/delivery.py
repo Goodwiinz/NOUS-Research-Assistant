@@ -73,6 +73,7 @@ async def _authorize(
     )
     grant = await db.get(IntegrationGrant, context.grant_id, populate_existing=True)
     assert grant is not None
+    grant = cast(IntegrationGrant, grant)
     original = await db.get(IntegrationGrant, session.grant_id, populate_existing=True)
     # Renewal is allowed only along the original browser-consent lineage.
     if (
@@ -295,6 +296,7 @@ async def ingest_bridge_event(
                 raise ValueError("conflicting source replay")
             if receipt.canonical_seq is not None:
                 await db.commit()
+                assert isinstance(receipt.canonical_seq, int)
                 return receipt.canonical_seq
             await db.commit()
             return await project_terminal(db, run_id)

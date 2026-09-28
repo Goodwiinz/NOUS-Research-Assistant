@@ -295,6 +295,7 @@ async def ingest_native_request(
             if receipt.digest != event._wire_digest or duplicate is None:
                 raise ValueError("conflicting native request replay")
             await db.commit()
+            assert isinstance(duplicate.id, UUID)
             return duplicate.id
         if (
             session.source_id not in (None, event.sourceId)
@@ -384,6 +385,7 @@ async def ingest_native_request(
             )
         )
         await db.commit()
+        assert isinstance(request.id, UUID)
         return request.id
     except Exception:
         await db.rollback()

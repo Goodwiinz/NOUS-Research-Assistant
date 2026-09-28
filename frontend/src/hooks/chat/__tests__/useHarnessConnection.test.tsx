@@ -6,8 +6,10 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
+import type { RenderHookResult } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactElement, ReactNode } from 'react';
 
 const listDevices = vi.fn();
 const listWorkspaces = vi.fn();
@@ -36,13 +38,25 @@ vi.mock('@/stores/authStore', () => ({
 }));
 
 import { useHarnessConnection } from '@/hooks/chat/useHarnessConnection';
+import type { HarnessConnectionController } from '@/hooks/chat/useHarnessConnection';
 import { HarnessSelector } from '@/components/chat/HarnessSelector';
 
-function renderConnectedHarness(threadId = 'thread-a') {
+type ConnectedHarness = RenderHookResult<
+  HarnessConnectionController,
+  unknown
+> & {
+  client: QueryClient;
+  status: () => string;
+  canSend: () => boolean;
+  stop: () => Promise<void>;
+  receive: (event: { type: string; runId?: string }) => void;
+};
+
+function renderConnectedHarness(threadId = 'thread-a'): ConnectedHarness {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const wrapper = ({ children }: { children: React.ReactNode }) => (
+  const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
   const hook = renderHook(() => useHarnessConnection(threadId), { wrapper });

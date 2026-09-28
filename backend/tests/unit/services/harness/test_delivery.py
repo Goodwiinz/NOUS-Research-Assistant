@@ -1,7 +1,7 @@
 """Bridge delivery replay and authority regressions."""
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -104,7 +104,7 @@ def event(command: Any, seq: int = 1, body: Any = None, **changes: Any) -> Bridg
         },
     )
     values.update(changes)
-    return BridgeEvent.model_validate(values)
+    return cast(BridgeEvent, BridgeEvent.model_validate(values))
 
 
 async def test_duplicate_is_same_canonical_sequence_after_restart(
@@ -544,7 +544,7 @@ async def test_websocket_reauthenticates_every_frame_and_ack_follows_commit(
                 raise WebSocketDisconnect()
             if self.frames == 1:
                 return json.dumps({"poll": True, "deviceId": str(DEVICE)})
-            return event(command).model_dump_json()
+            return str(event(command).model_dump_json())
 
         async def send_json(self, value: Any) -> None:
             if "lease" in value:
