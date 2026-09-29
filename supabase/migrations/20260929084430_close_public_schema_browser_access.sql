@@ -2,7 +2,7 @@
 --
 -- The browser uses Supabase Auth only: no frontend code reads public tables
 -- through PostgREST, Realtime or RPC, and the backend connects as the table
--- owner (postgres) or service_role. 20260917000000 revoked a fixed table
+-- owner (postgres) or service_role. 20260929084412 revoked a fixed table
 -- list, but the postgres role's default privileges re-grant ALL on every new
 -- public table and sequence to anon and authenticated. Alembic creates tables
 -- as postgres without RLS, so tables added after that list (for example
