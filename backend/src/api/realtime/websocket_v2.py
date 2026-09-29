@@ -115,6 +115,29 @@ async def _resolve_ws_role(
     return UserRole.USER.value
 
 
+async def _get_user_organization_id(
+    user_id: str,
+    session_factory=AsyncSessionLocal,
+) -> Optional[str]:
+    """Fetch a user's organization_id from the DB (I6 tenant scoping).
+
+    Scopes ADMIN cross-user access on the HTTP inspection endpoints:
+    ``role==ADMIN`` is a per-org role, not a platform superuser, so an admin
+    may only act on users inside their own organization. Returns None when
+    the user does not exist (caller maps that to 404) or on any DB error
+    (fail closed).
+    """
+    stmt = select(User.organization_id).where(User.id == user_id)
+    try:
+        async with session_factory() as db:
+            org_id = (await db.execute(stmt)).scalars().first()
+            if org_id is not None:
+                return str(org_id)
+    except Exception as e:  # DB failure must NOT silently grant cross-tenant access
+        logger.error("User organization lookup failed for %s: %s", user_id, e)
+    return None
+
+
 router = APIRouter(prefix="/api/v2/ws", tags=["websocket-v2"])
 
 
@@ -434,6 +457,14 @@ async def get_websocket_status(current_user: User = Depends(get_current_user)):
     Returns comprehensive statistics about WebSocket connections,
     including active connections, channel subscriptions, and system health.
     """
+    # I6: these are platform-wide ops metrics (total connections, per-channel
+    # subscribers, org/user counts, job throughput) — any authenticated user
+    # could read other tenants' activity volume. Admin-only now.
+    if not current_user.has_permission(UserRole.ADMIN):
+        raise HTTPException(
+            status_code=403,
+            detail="Only administrators can view WebSocket status",
+        )
     try:
         # Get connection manager statistics
         conn_stats = connection_manager.get_connection_stats()
@@ -509,13 +540,26 @@ async def get_user_connections(
     Only the user themselves or admin users can access this information.
     """
     try:
-        # Verify authorization (user can only see their own connections unless admin)
-        if str(current_user.id) != user_id and not current_user.has_permission(
-            UserRole.ADMIN
-        ):
-            raise HTTPException(
-                status_code=403, detail="Not authorized to view these connections"
-            )
+        # Verify authorization (user can only see their own connections unless
+        # a same-org admin — role==ADMIN is a per-org role, not a platform
+        # superuser, so an admin cannot inspect users of another tenant; I6).
+        if str(current_user.id) != user_id:
+            if not current_user.has_permission(UserRole.ADMIN):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to view these connections",
+                )
+            target_org_id = await _get_user_organization_id(user_id)
+            if target_org_id is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            if (
+                current_user.organization_id is None
+                or str(current_user.organization_id) != target_org_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to view these connections",
+                )
 
         # Get user's connections
         connection_ids = connection_manager.get_user_connections(user_id)
@@ -636,12 +680,26 @@ async def test_websocket_connection(
             raise HTTPException(status_code=404, detail="Connection not found")
 
         conn_info = connection_manager.active_connections[connection_id]
-        if str(conn_info.user_id) != str(
-            current_user.id
-        ) and not current_user.has_permission(UserRole.ADMIN):
-            raise HTTPException(
-                status_code=403, detail="Not authorized to access this connection"
-            )
+        # Same-org admin rule as /connections/{user_id} (I6): role==ADMIN is a
+        # per-org role, so an admin may only message connections owned by
+        # users of their own tenant.
+        if str(conn_info.user_id) != str(current_user.id):
+            if not current_user.has_permission(UserRole.ADMIN):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to access this connection",
+                )
+            target_org_id = await _get_user_organization_id(str(conn_info.user_id))
+            if target_org_id is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            if (
+                current_user.organization_id is None
+                or str(current_user.organization_id) != target_org_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to access this connection",
+                )
 
         # Send test message
         test_message = WebSocketMessage(
