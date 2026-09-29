@@ -425,6 +425,9 @@ async def test_completion_on_a_cancelled_row_rolls_the_draft_back(
     assert await _draft_count(factory) == 0, "a cancelled task landed a draft"
     assert (await _db_state(factory, "pre-cancelled")).state == "cancelled"
     assert _generation_status["pre-cancelled"]["status"] == "cancelled"
+    assert _generation_status["pre-cancelled"]["current_step"] == (
+        "Draft task already finished; the draft was not saved"
+    ), "superseded completion leaked a raw exception message"
 
 
 async def test_cancel_after_the_draft_commit_is_refused(

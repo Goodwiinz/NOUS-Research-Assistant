@@ -835,17 +835,21 @@ class DraftGenerationService:
             )
 
         except Exception as e:
+            superseded = isinstance(e, DraftTaskNotRunning)
             await self._fail_task(
                 task_id,
                 DraftGenerationStatus.FAILED,
-                f"Error: {str(e)}",
                 (
-                    "superseded"
-                    if isinstance(e, DraftTaskNotRunning)
-                    else "generation_error"
+                    "Draft task already finished; the draft was not saved"
+                    if superseded
+                    else f"Error: {str(e)}"
                 ),
+                "superseded" if superseded else "generation_error",
             )
-            logger.error("draft_generation_failed", task_id=task_id, error=str(e))
+            if superseded:
+                logger.warning("draft_generation_superseded", task_id=task_id)
+            else:
+                logger.error("draft_generation_failed", task_id=task_id, error=str(e))
             self._record_generation_metrics(
                 status=DraftGenerationStatus.FAILED,
                 duration=time.time() - start_time,
