@@ -1,0 +1,27 @@
+{
+  "step": "B2-01-owner-approve-no-role",
+  "as": "owner",
+  "at": "2026-09-29T10:19:24.169701+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/protocols/4a88e789-e605-400f-ac8c-7437f8f59072/versions/d38ab741-2deb-4c29-aae2-679754b74177/approve",
+    "body": {
+      "expected_protocol_version": 1,
+      "expected_content_hash": "71cf73b64b0b7a2acc464bd428a7f34b645dd856eaee8bf700d6acc774f01252",
+      "reason": "eval-2026-09-29 self-approval attempt",
+      "idempotency_key": "<redacted-idempotency-key>",
+      "expected_current_approved_version_id": null
+    }
+  },
+  "status": 403,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "supervisor role required",
+      "status_code": 403,
+      "type": "http_error"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "step": "00-auth-me-supervisor-example",
+  "as": "sup2",
+  "at": "2026-09-29T10:15:50.689095+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/auth/me",
+    "body": null
+  },
+  "status": 500,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "code": "DATABASE_ERROR",
+      "message": "A database error occurred. Please try again later.",
+      "details": {
+        "error_type": "DatabaseError"
+      },
+      "timestamp": null,
+      "path": "/api/v1/auth/me",
+      "method": "GET"
+    }
+  }
+}
