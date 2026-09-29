@@ -426,7 +426,7 @@ async def test_reads_recheck_org_project_and_ancestors(
 
 
 async def test_unknown_mime_is_stored_as_octet_stream_and_dto_hides_keys(
-    db, context
+    db: AsyncSession, context: IntegrationContext
 ) -> None:
     reserve = _reserve(mime_type="application/x-msdownload")
     upload = await reserve_upload(db, context, reserve)
