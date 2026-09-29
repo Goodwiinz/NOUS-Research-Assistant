@@ -23,12 +23,22 @@ jobs:
     name: Apply Supabase migrations
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The production environment holds SUPABASE_DB_URL and only deploys from
+    # develop, so a workflow_dispatch from another branch cannot reach it.
+    environment: production
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
-        with:
-          version: 2.118.0
+      # Pinned release tarball with a verified sha256 (from the release's
+      # checksums.txt), not an npm install resolved at run time.
+      - name: Install Supabase CLI
+        env:
+          CLI_VERSION: 2.118.0
+          CLI_SHA256: f6089a86fb9d9221c958193a277338daddd6822f706929943812fa32e106c86d
+        run: |
+          curl -fsSLo cli.tgz "https://github.com/supabase/cli/releases/download/v${CLI_VERSION}/supabase_${CLI_VERSION}_linux_amd64.tar.gz"
+          echo "${CLI_SHA256}  cli.tgz" | sha256sum -c -
+          sudo tar -xzf cli.tgz -C /usr/local/bin supabase supabase-go
 
       # ponytail: runs at merge, before Argo CD deploys the image and Alembic
       # migrates. A Supabase migration that needs a table Alembic creates in

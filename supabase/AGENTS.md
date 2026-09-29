@@ -66,6 +66,10 @@ is email presentation, not an authorization policy.
   A hand apply records its own timestamp as the version, the hosted history
   stops matching the repo, and the workflow refuses to push. If an incident
   forces one, rename the unmerged repo file to the recorded version.
+- `db push` runs each file as one batch and records it only when the whole
+  file succeeds. Don't add `BEGIN`/`COMMIT` (an explicit `COMMIT` splits the
+  batch, so a later failure leaves committed statements with no history row),
+  and put `CREATE INDEX CONCURRENTLY` in a file of its own.
 
 ## Verification
 
