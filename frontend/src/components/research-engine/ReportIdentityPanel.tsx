@@ -91,7 +91,12 @@ export function ReportIdentityPanel({
 
   const rows = reports.data ?? [];
   const live = rows.filter((report) => !report.merged_into_report_id);
-  const error = link.error ?? merge.error ?? reports.error;
+  const error = link.error ?? merge.error ?? reports.error ?? history.error;
+  // A new attempt clears the previous one's error so it can't outlive a success.
+  const clearErrors = (): void => {
+    link.reset();
+    merge.reset();
+  };
   const busy = link.isPending || merge.isPending;
 
   return (
@@ -186,7 +191,7 @@ export function ReportIdentityPanel({
                         {!merged && (
                           <div className="flex min-w-64 flex-col gap-2">
                             <input
-                              aria-label="Rationale"
+                              aria-label={`Rationale for ${report.title_snapshot}`}
                               value={rationale[report.id] ?? ''}
                               onChange={(event) =>
                                 setRationale((current) => ({
@@ -203,10 +208,12 @@ export function ReportIdentityPanel({
                                   <button
                                     key={status}
                                     type="button"
+                                    aria-label={`${status === 'confirmed' ? 'Confirm' : 'Dispute'} ${report.title_snapshot}`}
                                     disabled={!reason || busy}
-                                    onClick={() =>
-                                      link.mutate({ report, status })
-                                    }
+                                    onClick={() => {
+                                      clearErrors();
+                                      link.mutate({ report, status });
+                                    }}
                                     className="rounded-md border border-border px-2 py-1 text-xs disabled:opacity-50"
                                   >
                                     {status === 'confirmed'
@@ -218,7 +225,7 @@ export function ReportIdentityPanel({
                             </div>
                             <div className="flex gap-2">
                               <select
-                                aria-label="Merge into"
+                                aria-label={`Merge ${report.title_snapshot} into`}
                                 value={mergeTarget[report.id] ?? ''}
                                 onChange={(event) =>
                                   setMergeTarget((current) => ({
@@ -242,7 +249,11 @@ export function ReportIdentityPanel({
                                 disabled={
                                   !reason || !mergeTarget[report.id] || busy
                                 }
-                                onClick={() => merge.mutate(report)}
+                                aria-label={`Merge ${report.title_snapshot}`}
+                                onClick={() => {
+                                  clearErrors();
+                                  merge.mutate(report);
+                                }}
                                 className="rounded-md border border-border px-2 py-1 text-xs disabled:opacity-50"
                               >
                                 Merge

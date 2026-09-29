@@ -41,13 +41,13 @@ const report = (
   ...overrides,
 });
 
-function renderPanel(): QueryClient {
+function renderPanel(readOnly = false): QueryClient {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
-      <ReportIdentityPanel projectId="collection-1" />
+      <ReportIdentityPanel projectId="collection-1" readOnly={readOnly} />
     </QueryClientProvider>
   );
   return client;
@@ -111,10 +111,16 @@ describe('ReportIdentityPanel', () => {
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     await screen.findByText('Deep residual learning');
 
-    fireEvent.change(screen.getAllByLabelText('Rationale')[0], {
-      target: { value: 'registry matches' },
+    const confirm = screen.getByRole('button', {
+      name: 'Confirm Deep residual learning',
     });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Confirm' })[0]);
+    expect(confirm).toBeDisabled();
+    fireEvent.change(
+      screen.getByLabelText('Rationale for Deep residual learning'),
+      { target: { value: 'registry matches' } }
+    );
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
 
     await waitFor(() =>
       expect(linkStudy).toHaveBeenCalledWith(
@@ -141,13 +147,14 @@ describe('ReportIdentityPanel', () => {
     renderPanel();
     await screen.findByText('Deep residual learning');
 
-    fireEvent.change(screen.getAllByLabelText('Rationale')[1], {
+    const preprint = 'Deep residual learning (preprint)';
+    fireEvent.change(screen.getByLabelText(`Rationale for ${preprint}`), {
       target: { value: 'duplicate' },
     });
-    fireEvent.change(screen.getAllByLabelText('Merge into')[1], {
+    fireEvent.change(screen.getByLabelText(`Merge ${preprint} into`), {
       target: { value: 'r1' },
     });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Merge' })[1]);
+    fireEvent.click(screen.getByRole('button', { name: `Merge ${preprint}` }));
 
     await waitFor(() =>
       expect(mergeReports).toHaveBeenCalledWith(
@@ -162,5 +169,26 @@ describe('ReportIdentityPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'adjudicator role required'
     );
+  });
+});
+
+describe('ReportIdentityPanel read-only', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(listReports).mockResolvedValue([report('r1', 'Archived paper')]);
+    vi.mocked(listReportHistory).mockResolvedValue([]);
+  });
+
+  it('hides the Decision column and every action', async () => {
+    renderPanel(true);
+
+    expect(await screen.findByText('Archived paper')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('columnheader', { name: 'Decision' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Rationale for Archived paper')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });
