@@ -1,3 +1,4 @@
+import pytest
 from pybtex.database import BibliographyData, parse_string
 
 from src.models.citation import Citation
@@ -55,3 +56,77 @@ def test_draft_bibtex_uses_document_metadata_without_inventing_fields() -> None:
     entry = parsed.entries["doc1"]
     assert entry.fields == {"title": "Canonical Document Title"}
     assert [str(person) for person in entry.persons["author"]] == ["Lamport, Leslie"]
+
+
+def test_bibliography_normalizes_legacy_object_shaped_authors() -> None:
+    citation = Citation(
+        document_title="Object-shaped authors",
+        authors=[
+            {"name": "Ada Lovelace"},
+            {"first": "Grace", "last": "Hopper"},
+            {"given": "Katherine", "family": "Johnson"},
+        ],
+    )
+    _, parsed = _parse_export(DraftCitation(citation_index=5, citation=citation))
+
+    assert [str(person) for person in parsed.entries["doc5"].persons["author"]] == [
+        "Lovelace, Ada",
+        "Hopper, Grace",
+        "Johnson, Katherine",
+    ]
+
+
+@pytest.mark.parametrize("bib_format", ["apa", "ieee", "mla"])
+def test_markdown_references_keep_sparse_doc_marker_and_canonical_metadata(
+    bib_format: str,
+) -> None:
+    citation = Citation(
+        document_title="Canonical Résumé Study",
+        authors=["Ada Lovelace"],
+        year=2026,
+        venue="Journal of R&D",
+        doi="10.1000/example",
+    )
+    references = DraftGenerationService(None)._generate_markdown_references(
+        [
+            DraftCitation(
+                citation_index=7,
+                citation=citation,
+                snippet="Evidence passage that must not become a reference record.",
+            )
+        ],
+        bib_format,
+    )
+
+    assert references.startswith("[Doc 7]")
+    assert "Canonical Résumé Study" in references
+    assert "Lovelace" in references
+    assert "2026" in references
+    assert "Evidence passage" not in references
+
+
+@pytest.mark.parametrize("bib_format", ["bibtex", "biblatex"])
+def test_markdown_bibtex_uses_stable_doc_key_and_preserves_missing_metadata(
+    bib_format: str,
+) -> None:
+    references = DraftGenerationService(None)._generate_markdown_references(
+        [
+            DraftCitation(
+                citation_index=4,
+                document=Document(title="Sparse canonical title", document_metadata={}),
+                snippet="Never a title",
+            )
+        ],
+        bib_format,
+    )
+
+    parsed = parse_string(
+        references.removeprefix("```bibtex\n").removesuffix("\n```"), "bibtex"
+    )
+    assert parsed.entries["doc4"].fields == {"title": "Sparse canonical title"}
+    assert "Never a title" not in references
+
+
+def test_markdown_reference_rejects_unknown_format() -> None:
+    with pytest.raises(ValueError, match="Unsupported bibliography format"):
+        DraftGenerationService(None)._generate_markdown_references([], "csl-json")
