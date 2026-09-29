@@ -16,6 +16,9 @@ LOCKDOWN = (
     ROOT
     / "supabase/migrations/20260917000000_revoke_product_tables_data_api_access.sql"
 )
+SCHEMA_LOCKDOWN = (
+    ROOT / "supabase/migrations/20260929090000_close_public_schema_browser_access.sql"
+)
 
 
 def _authenticated_read_only_tables(sql: str) -> set[str]:
@@ -46,3 +49,25 @@ def test_every_authenticated_read_only_product_table_is_revoked() -> None:
     assert "REVOKE ALL ON TABLE public.%I FROM anon, authenticated" in lockdown_sql
     assert "ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY" in lockdown_sql
     assert "to_regclass" in lockdown_sql
+
+
+def test_public_schema_lockdown_covers_future_tables() -> None:
+    """GOO-285: a fixed table list missed tables Alembic added later.
+
+    Browser roles must lose access schema-wide, and the postgres role's
+    default privileges must stop re-granting new tables and sequences.
+    """
+    sql = SCHEMA_LOCKDOWN.read_text()
+
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated" in sql
+    assert (
+        "REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated" in sql
+    )
+    for kind in ("TABLES", "SEQUENCES"):
+        assert re.search(
+            r"ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public\s+"
+            rf"REVOKE ALL ON {kind} FROM anon, authenticated",
+            sql,
+        ), kind
+    assert "ENABLE ROW LEVEL SECURITY" in sql
+    assert 'DROP POLICY IF EXISTS "authenticated_read_only"' in sql
