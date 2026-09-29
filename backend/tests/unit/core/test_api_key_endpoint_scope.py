@@ -23,13 +23,16 @@ from fastapi import HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.auth.api_keys import create_api_key
 from src.core.api_key_auth import (
     APIKey,
+    APIKeyCreate,
     _endpoint_allowed,
     _parse_allowed_endpoints,
     generate_api_key,
     get_api_key_data,
 )
+from src.models.user import User
 
 pytestmark = pytest.mark.unit
 
@@ -52,10 +55,11 @@ def _make_key(allowed_endpoints=None) -> tuple[APIKey, str]:
     return record, raw_key
 
 
-def _make_env(allowed_endpoints=None):
+def _make_env(allowed_endpoints=None, record=None, raw_key=None):
     """Return (record, raw_key, request, credentials, db, result) wired so
     the DB lookup resolves the key record."""
-    record, raw_key = _make_key(allowed_endpoints)
+    if record is None or raw_key is None:
+        record, raw_key = _make_key(allowed_endpoints)
 
     request = MagicMock(spec=Request)
     request.client.host = "127.0.0.1"
@@ -100,7 +104,10 @@ def test_endpoint_allowed_exact_match():
 
 
 def test_endpoint_allowed_prefix_entry_permits_subpaths():
-    assert _endpoint_allowed(["/api/v1/search"], "/api/v1/search/authenticated/hybrid") is True
+    assert (
+        _endpoint_allowed(["/api/v1/search"], "/api/v1/search/authenticated/hybrid")
+        is True
+    )
 
 
 def test_endpoint_allowed_prefix_entry_does_not_match_similar_prefix():
@@ -116,14 +123,27 @@ def test_endpoint_allowed_trailing_slash_entry_allows_exact_path():
     assert _endpoint_allowed(["/api/v1/search/"], "/api/v1/search") is True
 
 
+def test_endpoint_allowed_degenerate_root_entry_denies_everything():
+    """A ``/`` entry normalizes to an empty prefix — it must never become
+    an allow-all wildcard."""
+    assert _endpoint_allowed(["/"], "/") is False
+    assert _endpoint_allowed(["/"], "/api/v1/search") is False
+
+
+def test_endpoint_allowed_blank_entry_denies_everything():
+    assert _endpoint_allowed([""], "/api/v1/search") is False
+
+
 # --- _parse_allowed_endpoints blank-entry handling ----------------------
 
 
 @pytest.mark.parametrize("raw", [json.dumps([""]), json.dumps(["  "])])
 async def test_blank_entries_deny_all_and_log_error(raw, caplog):
-    assert _parse_allowed_endpoints(raw) == []
+    assert _parse_allowed_endpoints(raw, key_prefix="ragabcd12") == []
     assert any(
-        rec.levelname == "ERROR" and "allowed_endpoints" in rec.message
+        rec.levelname == "ERROR"
+        and "allowed_endpoints" in rec.message
+        and "ragabcd12***" in rec.message
         for rec in caplog.records
     )
 
@@ -171,11 +191,14 @@ async def test_empty_list_denies_all():
 
 async def test_malformed_json_denies_all_and_logs_error(caplog):
     env = _make_env("not-json{{")
+    record, raw_key, _, _, _ = env
     with pytest.raises(HTTPException) as excinfo:
         await _validate(env)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
     assert any(
-        rec.levelname == "ERROR" and "allowed_endpoints" in rec.message
+        rec.levelname == "ERROR"
+        and "allowed_endpoints" in rec.message
+        and f"{record.key_prefix}***" in rec.message
         for rec in caplog.records
     )
 
@@ -191,17 +214,90 @@ async def test_denied_request_does_not_consume_rate_limit_quota(caplog):
     """Enforcement sits before the rate-limit check: denied requests must
     not touch the limiter (no quota burn, no usage tracking, no DB write)."""
     env = _make_env(json.dumps(["/api/v1/search"]))
-    record, raw_key, _, _, _ = env
-    with caplog.at_level("WARNING"):
-        with pytest.raises(HTTPException):
-            await _validate(env, path="/api/v1/other")
+    record, raw_key, request, credentials, db = env
+    request.url.path = "/api/v1/other"
+
+    with patch("src.core.api_key_auth.api_key_auth") as mock_auth:
+        mock_auth.check_rate_limit = AsyncMock(return_value=True)
+        mock_auth.track_usage = AsyncMock()
+        mock_auth.get_current_usage = AsyncMock(return_value=0)
+        with caplog.at_level("WARNING"):
+            with pytest.raises(HTTPException):
+                await get_api_key_data(request, credentials, db)
+
+        # 403-before-429 ordering is pinned: the limiter and usage tracking
+        # must never be reached on a scope denial.
+        mock_auth.check_rate_limit.assert_not_called()
+        mock_auth.track_usage.assert_not_called()
+        mock_auth.get_current_usage.assert_not_called()
 
     # The denial warning must reference the redacted prefix, never the raw key.
     denial_logs = [
-        rec.message
-        for rec in caplog.records
-        if "not permitted" in rec.message
+        rec.message for rec in caplog.records if "not permitted" in rec.message
     ]
     assert denial_logs, "expected a denial warning log"
     assert all(raw_key not in msg for msg in denial_logs)
     assert any(record.key_prefix in msg for msg in denial_logs)
+
+
+# --- end-to-end: router-created scoped key is usable ---------------------
+
+
+async def test_router_created_scoped_key_enforced_end_to_end():
+    """Create a key through the admin router with scope
+    ``["/api/v1/search"]``, read the persisted column back, parse it, and
+    verify the enforcement path: allowed path permitted, other path 403.
+
+    Regression guard: the scope must be stored as real JSON
+    (``json.dumps``), not the Python ``str()`` repr, which the parser
+    rejects as malformed (deny-all)."""
+    admin = MagicMock(spec=User)
+    admin.email = "admin@example.com"
+    admin.id = "admin-1"
+    admin.organization_id = "org-1"
+
+    db = AsyncMock(spec=AsyncSession)
+    added: dict = {}
+
+    def _capture_add(obj):
+        added["record"] = obj
+
+    db.add.side_effect = _capture_add
+
+    async def _fake_refresh(obj):
+        # Stand in for the DB-side defaults (PK, activity flag, counters).
+        if obj.id is None:
+            obj.id = "generated-key-id"
+        if obj.is_active is None:
+            obj.is_active = True
+        if obj.usage_count is None:
+            obj.usage_count = 0
+
+    db.refresh.side_effect = _fake_refresh
+
+    payload = APIKeyCreate(name="Scoped Key", allowed_endpoints=["/api/v1/search"])
+    response = await create_api_key(payload, current_user=admin, db=db)
+    stored_record = added["record"]
+
+    # 1. Read back from DB: stored column is valid JSON with the scope.
+    assert stored_record.allowed_endpoints == json.dumps(["/api/v1/search"])
+
+    # 2. Parse the persisted value exactly as the auth path does.
+    parsed = _parse_allowed_endpoints(
+        stored_record.allowed_endpoints, key_prefix=stored_record.key_prefix
+    )
+    assert parsed == ["/api/v1/search"]
+
+    # 3. Requests with the issued raw key honor the scope end-to-end.
+    raw_key = response.api_key
+    allowed_env = _make_env(record=stored_record, raw_key=raw_key)
+    _, endpoint, mock_auth = await _validate(
+        allowed_env, path="/api/v1/search/authenticated/hybrid"
+    )
+    assert endpoint == "/api/v1/search/authenticated/hybrid"
+    mock_auth.track_usage.assert_called_once_with(stored_record.id, endpoint)
+
+    denied_env = _make_env(record=stored_record, raw_key=raw_key)
+    with pytest.raises(HTTPException) as excinfo:
+        await _validate(denied_env, path="/api/v1/other")
+    assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN

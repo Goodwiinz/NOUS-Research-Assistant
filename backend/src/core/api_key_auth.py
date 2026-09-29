@@ -89,23 +89,33 @@ def _endpoint_allowed(allowed: Optional[list[str]], path: str) -> bool:
     - ``[]``    -> explicit empty allowlist; every endpoint is denied.
     - entries   -> each entry is an exact path or a directory prefix
       (a bare ``/x`` entry permits ``/x`` itself and ``/x/...`` but not
-      ``/xy``). A trailing slash on an entry is normalized away.
+      ``/xy``). A trailing slash on an entry is normalized away. A
+      degenerate entry (``/`` or blank) normalizes to empty and never
+      matches anything (deny) — an entry must name at least one segment.
     """
     if allowed is None:
         return True
-    return any(
-        path == entry.rstrip("/") or path.startswith(entry.rstrip("/") + "/")
-        for entry in allowed
-    )
+    for entry in allowed:
+        norm = entry.rstrip("/")
+        if not norm:
+            continue
+        if path == norm or path.startswith(norm + "/"):
+            return True
+    return False
 
 
-def _parse_allowed_endpoints(raw: Optional[str]) -> Optional[list[str]]:
+def _parse_allowed_endpoints(
+    raw: Optional[str], key_prefix: str = "unknown"
+) -> Optional[list[str]]:
     """Parse the ``api_keys.allowed_endpoints`` Text column (JSON array).
 
     Returns ``None`` for an unscoped key (``NULL`` column). Fail CLOSED:
     malformed JSON, a non-list value, non-string entries, or blank
     entries are treated as an empty allowlist (deny all) and logged — a
     misconfigured key must never silently widen its own scope.
+
+    ``key_prefix`` (redacted as ``<prefix>***``) identifies the affected
+    key in parse-failure logs.
     """
     if raw is None:
         return None
@@ -113,25 +123,24 @@ def _parse_allowed_endpoints(raw: Optional[str]) -> Optional[list[str]]:
         parsed = json.loads(raw)
     except (TypeError, ValueError) as e:
         logger.error(
-            f"Malformed allowed_endpoints JSON on API key (deny all): {e}"
+            f"Malformed allowed_endpoints JSON on API key {key_prefix}*** (deny all): {e}"
         )
         return []
     if not isinstance(parsed, list) or not all(
         isinstance(entry, str) for entry in parsed
     ):
         logger.error(
-            "Malformed allowed_endpoints on API key (not a string array, deny all)"
+            f"Malformed allowed_endpoints on API key {key_prefix}*** "
+            "(not a string array, deny all)"
         )
         return []
     if any(not entry.strip() for entry in parsed):
         logger.error(
-            "Malformed allowed_endpoints on API key (blank entry, deny all)"
+            f"Malformed allowed_endpoints on API key {key_prefix}*** "
+            "(blank entry, deny all)"
         )
         return []
     return parsed
-
-
-
 
 
 # Rate limiter for API key endpoints
@@ -308,7 +317,8 @@ async def get_api_key_data(
         # quota, and 403 (scope denial) takes precedence over 429 for
         # keys used outside their allowlist.
         allowed_endpoints = _parse_allowed_endpoints(
-            api_key_record.allowed_endpoints
+            api_key_record.allowed_endpoints,
+            key_prefix=api_key_record.key_prefix,
         )
         if not _endpoint_allowed(allowed_endpoints, request.url.path):
             logger.warning(
