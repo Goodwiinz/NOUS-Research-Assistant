@@ -416,6 +416,15 @@ async def test_kill_before_artifact_commit_becomes_interrupted(
 ) -> None:
     ids = await _seed(decision_engine)
     await _accept(factory, ids, "killed-early")
+    flushed: list[Any] = []
+
+    async def die_at_completion(db: AsyncSession, **kwargs: Any) -> bool:
+        # The draft is inserted and flushed in this transaction; the process
+        # dies right before the commit that would have made it durable.
+        if kwargs["state"] == "completed":
+            flushed.append(kwargs["artifact"].id)
+            raise SystemExit("killed after the draft flush, before commit")
+        return await finish_task(db, **kwargs)
 
     with (
         patch.object(
@@ -423,16 +432,13 @@ async def test_kill_before_artifact_commit_becomes_interrupted(
             "_build_draft_content",
             new=AsyncMock(return_value=_content("killed-early")),
         ),
-        patch.object(
-            DraftGenerationService,
-            "_lock_project_for_draft_version",
-            new=AsyncMock(side_effect=SystemExit("killed before the draft commit")),
-        ),
+        patch(f"{_MODULE}.finish_task", new=die_at_completion),
         pytest.raises(SystemExit),
     ):
         await _generate(ids, "killed-early")
 
-    assert await _drafts(factory) == []
+    assert flushed and flushed[0] is not None, "the kill came before the flush"
+    assert await _drafts(factory) == [], "an uncommitted draft survived the kill"
     assert (await _fresh_row(factory, "killed-early")).state == "running"
 
     async with factory() as db:  # what a dead process leaves behind
