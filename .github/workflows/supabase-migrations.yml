@@ -1,0 +1,46 @@
+name: Supabase Migrations
+
+# Nothing else applies supabase/migrations/: Argo CD deploys images, the deploy
+# init container runs Alembic, and release-dev.yml never touches Supabase.
+# #1661 merged on 2026-09-23 and production stayed exposed until a hand apply
+# on 2026-09-29. Merging a migration to develop now applies it.
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "supabase/migrations/**"
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-migrations
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    name: Apply Supabase migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: 2.118.0
+
+      # ponytail: runs at merge, before Argo CD deploys the image and Alembic
+      # migrates. A Supabase migration that needs a table Alembic creates in
+      # the same change fails here; re-run via workflow_dispatch after deploy.
+      - name: Push pending migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::error::SUPABASE_DB_URL is not set; merged Supabase migrations are NOT applied."
+            exit 1
+          fi
+          # db push applies nothing and exits non-zero when the repo and the
+          # hosted history disagree, e.g. a hand apply recorded another version.
+          supabase db push --db-url "$SUPABASE_DB_URL" --yes
