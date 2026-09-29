@@ -120,6 +120,8 @@ async def _authorize_context(
         .join(Collection, Collection.workspace_id == Workspace.id)
         .where(
             Collection.id == context.project_id,
+            Collection.is_deleted.is_(False),
+            Workspace.is_deleted.is_(False),
             or_(Workspace.owner_id == context.user_id, editor),
         )
     )
