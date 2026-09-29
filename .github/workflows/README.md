@@ -41,7 +41,7 @@ not make its old image eligible again.
 | `deploy.yml` | Manual dispatch only | Retained legacy staging/production Helm path; it has no dev role and requires an explicit image tag. |
 | `helm-validate.yml` | Push and pull request | Validate the Helm chart and environment values. |
 | `workflow-lint.yml` | Workflow changes | Run `actionlint` across all workflows. |
-| `supabase-migrations.yml` | Push to `develop` touching `supabase/migrations/`, or manual dispatch | Apply pending Supabase migrations to the hosted project with `supabase db push` (secret `SUPABASE_DB_URL`). |
+| `supabase-migrations.yml` | Push to `develop` touching `supabase/migrations/`, or manual dispatch | Apply pending Supabase migrations to the hosted project with `supabase db push` (`production` environment secret `SUPABASE_DB_URL`, deployable from `develop` only). |
 
 The frontend is deployed separately through Vercel. The backend, migration init
 container, Celery worker, Celery beat, and synthetic-traffic workloads share the
