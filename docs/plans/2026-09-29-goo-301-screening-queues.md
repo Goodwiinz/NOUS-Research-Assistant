@@ -20,6 +20,7 @@
 | Who may submit? | Only a user who holds `REVIEWER` **and** an active assignment on that queue. `resolve_project(..., REVIEW)` returns 403 `reviewer role required` (`project_access.py:287-289`). The service then returns 403 `Not assigned to this queue`. | Ticket: "a role alone grants nothing". A workspace owner or editor has neither the role nor an assignment, so they are refused at the first check. |
 | What is the "criterion version"? | `criteria_hash = canonical_hash({"eligibility": snapshot["eligibility"], "full_text_exclusion_reasons": reasons})` from the pinned protocol version (`protocol_service.py:49-71`). It is stored on the queue, and every observation inherits it through its immutable `queue_id`. | Protocol versions are immutable (`research_protocol.py:97-135`). The hash identifies the criteria even across amendments that did not change eligibility, which GOO-302 needs when it compares queues. |
 | Where do exclusion reasons live? | `snapshot["selection"]["full_text_exclusion_reasons"]`: a list of 1–50 unique, trimmed strings of at most 200 characters. `selection` is already a required free-form section (`backend/src/schemas/research_engine.py:285-305`). | No protocol schema change. A `full_text` queue on a protocol without the list gets 422 `Protocol defines no full-text exclusion reasons`. |
+| Reviewer mode (amended for GOO-302) | `snapshot["reviewer_mode"]["mode"] ∈ {"single","dual_independent"}` on the pinned version. `reviewer_mode` is already a required free-form section (`backend/src/schemas/research_engine.py:292`). Queue creation rejects a missing or other value with 422 `Protocol declares no screening reviewer mode`, and `screening.queue_created` carries it at schema 1. | GOO-302 derives the required observation count and reveal from it. Replay needs it in event 1. |
 | Protocol binding | The create request names `protocol_version_id`. It must be the **current approved** version of a protocol in this Collection. Otherwise the response is 404 for a foreign or missing version and 409 `Protocol version is not current` for a stale one. | `identity_service._protocol_version_id` guesses "latest updated protocol" (`identity_service.py:99-112`), which is ambiguous when a project has several protocols. A queue must be exact. |
 | Corpus | `report_ids` JSONB (ordered, 1–10,000). If `title_abstract` omits the list, the queue takes every live report (`merged_into_report_id IS NULL`), ordered by `created_at, id`. `full_text` requires an explicit list (GOO-302 will supply the included set). Ids are validated with `identity_service._live_reports` (`:156-193`): foreign ids give 404 and merged ids give 409. | `# ponytail: JSONB array, one row per queue; add screening_queue_items if a queue exceeds ~10k reports or per-report assignment is needed.` |
 | Assignment granularity | One assignment covers the whole queue. | Dual independent screening means every assigned reviewer screens every report. `# ponytail: per-report split when a queue is too big for one reviewer.` |
@@ -45,6 +46,9 @@
 
 ```python
 STAGES = ("title_abstract", "full_text"); DECISIONS = ("include", "exclude", "uncertain")
+MODES = ("single", "dual_independent")                                   # (amended for GOO-302)
+
+def reviewer_mode(snapshot: Mapping[str, Any]) -> str                   # ValueError unless reviewer_mode.mode ∈ MODES (amended for GOO-302)
 
 def exclusion_reasons(snapshot: Mapping[str, Any]) -> list[str]         # [] if absent; ValueError if malformed
 def criteria_hash(snapshot: Mapping[str, Any]) -> str                   # canonical_hash, see Decisions
@@ -62,6 +66,7 @@ def suggestion_rows(step_output: Mapping[str, Any]) -> list[tuple[str, str, str]
 - `test_duplicate_or_blank_reasons_are_malformed`
 - `test_criteria_hash_ignores_non_eligibility_sections` (it changes when `eligibility` or the reasons change and not when `sources_search` changes)
 - `test_suggestion_rows_any_part_included`
+- `test_reviewer_mode_missing_or_unknown_is_malformed` (amended for GOO-302)
 
 **Step 2: run them.** `pytest -q backend/tests/unit/services/test_screening_rules.py` should fail with `ModuleNotFoundError`.
 
@@ -146,7 +151,7 @@ Migration: create the four tables in dependency order, then call `_deny_data_api
 
 | event_type (schema 1) | payload keys | actor_role |
 |---|---|---|
-| `screening.queue_created` | `collection_id, queue_id, stage, protocol_version_id, criteria_hash, report_ids, exclusion_reasons, supersedes_queue_id` | supervisor |
+| `screening.queue_created` | `collection_id, queue_id, stage, protocol_version_id, criteria_hash, report_ids, exclusion_reasons, supersedes_queue_id, reviewer_mode` (`reviewer_mode` amended for GOO-302) | supervisor |
 | `screening.assigned` / `screening.unassigned` | `collection_id, queue_id, assignment_id, reviewer_id` | supervisor |
 | `screening.observed` | `collection_id, queue_id, observation_id, assignment_id, reviewer_id, report_id, decision, exclusion_reason` | reviewer |
 | `screening.superseded` | the `observed` keys plus `superseded_observation_id` | reviewer |
@@ -156,7 +161,7 @@ The note goes in the event's `reason` column. Event `reason` already holds free 
 `_validate_screening_payload` checks the following:
 - All ids are UUID strings.
 - `queue_id == aggregate_id == subject_id`.
-- `stage` and `decision` are in the `screening_rules` vocabularies.
+- `stage` and `decision` are in the `screening_rules` vocabularies, and so is `reviewer_mode` (amended for GOO-302).
 - `report_ids` is a non-empty list of unique UUIDs.
 - `exclusion_reasons` is a list of strings.
 
@@ -218,6 +223,7 @@ Every mutation follows the same order:
 `create_queue` locks a stream keyed by the new `uuid4()` it generates. It then performs these checks:
 - The protocol version is current-approved and in this Collection.
 - The stage fits the protocol reasons.
+- `reviewer_mode(snapshot)` is valid. Otherwise it returns 422 `Protocol declares no screening reviewer mode` (amended for GOO-302).
 - The corpus is validated with `_live_reports`.
 - `supersedes_queue_id`, if given, is the same Collection and stage and has not been superseded already. Otherwise it returns 409 `Screening queue already reconciled`.
 
@@ -237,6 +243,7 @@ Otherwise it returns 404 or 422. Each `source_id` maps to a report through `rese
 2. 409 `Assignment revoked` if that assignment has been revoked.
 3. The stale checks from the Decisions table, in the order queue → protocol → criteria → report.
 4. `validate_observation` → 422 on failure.
+4a. (amended for GOO-302) 409 `Report resolved; reopen to change` when the report has a current resolution. The order and detail string are fixed here. GOO-302 implements the check together with `screening_resolutions`, because GOO-301 has no resolved state.
 5. The current observation is the row for `(queue, report, reviewer)` that no other row supersedes (`NOT EXISTS`). If one exists, `supersedes_observation_id` must equal its id. Otherwise the response is 409 `Observation exists; supersede the current observation`.
 6. Insert the observation and append `screening.observed` or `screening.superseded`.
 
@@ -263,6 +270,7 @@ Response schemas: `ScreeningQueueResponse`, `ScreeningAssignmentResponse`, `Scre
 - `test_full_text_reason_validated_against_protocol_list`: a reason outside the list gets 422.
 - `test_changed_decision_supersedes_and_keeps_history`: two rows, the first unchanged, the second pointing at the first. `history()` replays both.
 - `test_stale_criteria_hash_is_409`.
+- `test_queue_without_reviewer_mode_is_422` (amended for GOO-302).
 
 **Gates:** `ruff check backend/src`, plus `mypy --ignore-missing-imports --follow-imports=silent` on the three added files (the added-file gate in `docs/engineering/backend.md` Ratchets).
 
@@ -409,12 +417,12 @@ Tests:
 
 ## Authenticated journey list for Linear closure
 
-These steps run against `rag-dev` after deploy. They are blocked until a backend origin is reachable (see the hard blocker in `docs/plans/2026-09-29-academic-r0-r1-closure.md`). Log in as `allocs16@gmail.com` on a project where that user holds SUPERVISOR, a second account holds REVIEWER, and the protocol is approved with `full_text_exclusion_reasons`.
+These steps run against `rag-dev` after deploy. They are blocked until a backend origin is reachable (see the hard blocker in `docs/plans/2026-09-29-academic-r0-r1-closure.md`). Log in as `allocs16@gmail.com` on a project where that user holds SUPERVISOR, a second account holds REVIEWER, and the protocol is approved with `full_text_exclusion_reasons` and `reviewer_mode={"mode":"dual_independent"}` (amended for GOO-302).
 
 1. **Migration:** `kubectl -n rag-dev exec deploy/backend -- alembic current` shows `e1f3a5c7d9b2 (head)`.
 2. **Queue creation:** as the supervisor, in the Workflow tab, create a title/abstract queue. The response is 201, the queue lists N reports, and `GET .../history` shows `screening.queue_created` with `protocol_version_id` and `criteria_hash`.
 3. **Assignment:** assign the reviewer (200). Assigning an account that has no reviewer role returns 422.
-4. **Reviewer journey:** as the reviewer, open "My queue". Capture a screenshot showing title, abstract, identifiers and `0 / N`. Include one report, exclude another, and mark a third uncertain with a note. Reload the browser and confirm the counts read `3 / N`. Change one decision, then check that `history` shows `screening.superseded` pointing at the original, and that both rows are present.
+4. **Reviewer journey:** as the reviewer, open "My queue". Capture a screenshot showing title, abstract, identifiers and `0 / N`. Include one report, exclude another, and mark a third uncertain with a note. Reload the browser and confirm the counts read `3 / N`. Change one decision, then check that `history` shows `screening.superseded` pointing at the original, and that both rows are present. (amended for GOO-302) Change works only before the report is resolved. Once GOO-302 is deployed, a resolved report gets 409 `Report resolved; reopen to change`, and changing it requires an adjudicator reopen. So on the dual protocol, make the change before the second reviewer submits that report.
 5. **Full text:** use `POST` to create a full-text queue on two report ids.
    - `exclude` without a reason returns 422.
    - `exclude` with a reason outside the protocol list returns 422.
