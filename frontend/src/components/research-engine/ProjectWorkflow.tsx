@@ -4,6 +4,7 @@ import { useCallback, useState, type ReactElement } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Trash2, Workflow } from 'lucide-react';
 import type { Project } from '@/services/projectService';
+import { useProjectStore } from '@/store/projectStore';
 import {
   assignProjectRole,
   createProject,
@@ -74,6 +75,9 @@ export function ProjectWorkflow({
         engineProjectId: extension.research_engine_project_id,
       });
       void queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      // The page renders the project from the project store; refresh it so a
+      // remount keeps research_engine_project_id instead of local state.
+      void useProjectStore.getState().fetchProject(project.id);
     },
   });
 

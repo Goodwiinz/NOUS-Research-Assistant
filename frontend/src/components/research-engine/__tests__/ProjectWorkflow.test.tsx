@@ -31,6 +31,10 @@ vi.mock('@/services/researchEngineService', () => ({
   assignProjectRole: vi.fn(),
   removeProjectRole: vi.fn(),
 }));
+const { fetchProject } = vi.hoisted(() => ({ fetchProject: vi.fn() }));
+vi.mock('@/store/projectStore', () => ({
+  useProjectStore: { getState: () => ({ fetchProject }) },
+}));
 describe('ProjectWorkflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -158,6 +162,49 @@ describe('ProjectWorkflow', () => {
       screen.getByText(
         'A project owner or administrator must enable this workflow.'
       )
+    ).toBeInTheDocument();
+  });
+
+  it('refreshes the canonical project store after enabling so a remount keeps the workflow', async () => {
+    vi.mocked(createProject).mockResolvedValue({
+      id: 'collection-1',
+      project_id: 'collection-1',
+      collection_id: 'collection-1',
+      research_engine_project_id: 'engine-1',
+      name: 'First',
+      status: 'active',
+    });
+    const project = {
+      id: 'collection-1',
+      workspace_id: 'workspace-1',
+      name: 'First',
+      can_edit: true,
+      can_manage: true,
+      workspace_archived: false,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    const queryClient = new QueryClient();
+    const { unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <ProjectWorkflow project={project} />
+      </QueryClientProvider>
+    );
+
+    screen.getByRole('button', { name: 'Enable workflow' }).click();
+    await waitFor(() => expect(fetchProject).toHaveBeenCalledWith('collection-1'));
+
+    // Remount with the project the refreshed store now supplies.
+    unmount();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProjectWorkflow
+          project={{ ...project, research_engine_project_id: 'engine-1' }}
+        />
+      </QueryClientProvider>
+    );
+    expect(
+      screen.getByText('Blueprint for collection-1 (editable)')
     ).toBeInTheDocument();
   });
 });
