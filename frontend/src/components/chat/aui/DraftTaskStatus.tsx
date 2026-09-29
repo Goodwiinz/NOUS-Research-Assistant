@@ -13,7 +13,12 @@ interface DraftTask {
   taskId: string;
 }
 
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_STATUSES = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+]);
 const TASK_ID = /^[A-Za-z0-9_-]{6,64}$/;
 const PROJECT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -81,6 +86,8 @@ function statusLabel(status: string, currentStep?: string): string {
       return 'Draft failed';
     case 'cancelled':
       return 'Draft cancelled';
+    case 'interrupted':
+      return 'Draft interrupted';
     default:
       return 'Checking draft status';
   }
@@ -114,6 +121,8 @@ export function DraftTaskStatus({
     : statusLabel(status, query.data?.current_step);
   const completedDraftId =
     !unavailable && status === 'completed' ? query.data?.draft_id : undefined;
+  const artifactVersion = query.data?.artifact_version;
+  const artifactHash = query.data?.artifact_hash;
 
   return (
     <section
@@ -131,7 +140,9 @@ export function DraftTaskStatus({
             className="h-4 w-4 shrink-0 text-(--nous-terra)"
             aria-hidden
           />
-        ) : status === 'failed' || status === 'cancelled' ? (
+        ) : status === 'failed' ||
+          status === 'cancelled' ||
+          status === 'interrupted' ? (
           <XCircle
             className="h-4 w-4 shrink-0 text-(--nous-fg-3)"
             aria-hidden
@@ -185,13 +196,18 @@ export function DraftTaskStatus({
           href={`/projects/${projectId}?tab=drafts&draftId=${completedDraftId}`}
           className="mt-2 inline-flex pl-6.5 text-[12px] font-medium text-(--nous-sol) underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-(--nous-sol)"
         >
-          View draft
+          View draft{artifactVersion ? ` v${artifactVersion}` : ''}
         </Link>
       )}
 
       <details className="mt-2 pl-6.5 text-[10px] text-(--nous-fg-3)">
         <summary className="w-fit cursor-pointer">Task details</summary>
         <span className="font-nous-mono break-all">Task ID: {taskId}</span>
+        {artifactHash && (
+          <span className="font-nous-mono block break-all">
+            Hash: {artifactHash.slice(0, 12)}
+          </span>
+        )}
       </details>
     </section>
   );
