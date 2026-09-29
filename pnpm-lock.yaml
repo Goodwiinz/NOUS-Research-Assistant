@@ -432,7 +432,7 @@ importers:
   packages/harness-bridge:
     dependencies:
       '@modelcontextprotocol/sdk':
-        specifier: 1.30.0
+        specifier: ^1.26.0
         version: 1.30.0(zod@3.25.76)
       ajv:
         specifier: 8.20.0
