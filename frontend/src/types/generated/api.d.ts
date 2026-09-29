@@ -3883,6 +3883,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Tools */
+        get: operations["list_tools_api_v1_integrations_tools_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/tools/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read Tool */
+        post: operations["read_tool_api_v1_integrations_tools_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/knowledge-graph/analytics": {
         parameters: {
             query?: never;
@@ -15623,6 +15657,44 @@ export interface components {
          * @enum {string}
          */
         ToneOption: "academic" | "simplified" | "concise" | "expanded";
+        /** ToolDescriptorDTO */
+        ToolDescriptorDTO: {
+            /** Description */
+            description: string;
+            /** Input Schema */
+            input_schema: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+        };
+        /** ToolInvocation */
+        ToolInvocation: {
+            /** Arguments */
+            arguments?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Invocation Id
+             * Format: uuid
+             */
+            invocation_id: string;
+            /** Tool Name */
+            tool_name: string;
+        };
+        /** ToolResult */
+        ToolResult: {
+            /** Content */
+            content: {
+                [key: string]: unknown;
+            }[];
+            /** Is Error */
+            is_error: boolean;
+            /** Source Refs */
+            source_refs: {
+                [key: string]: unknown;
+            }[];
+        };
         /**
          * TriggerExtractionRequest
          * @description Request to trigger extraction on selected documents.
@@ -23074,6 +23146,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IssuedGrant"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tools_api_v1_integrations_tools_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolDescriptorDTO"][];
+                };
+            };
+        };
+    };
+    read_tool_api_v1_integrations_tools_read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolInvocation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolResult"];
                 };
             };
             /** @description Validation Error */
