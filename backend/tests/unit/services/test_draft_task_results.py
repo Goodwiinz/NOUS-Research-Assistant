@@ -525,6 +525,9 @@ async def test_cancel_route_falls_back_to_the_retained_row(
         with pytest.raises(HTTPException) as foreign:
             await cancel("remote-task", uuid4())
         assert foreign.value.status_code == 404
+        with pytest.raises(HTTPException) as other_project:
+            await cancel("remote-task", ACTOR, project_id=uuid4())
+        assert other_project.value.status_code == 404
         assert (await _db_state(factory, "remote-task")).state == "running"
 
         assert (await cancel("remote-task", ACTOR))["cancelled"] is True
