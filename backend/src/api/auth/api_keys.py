@@ -68,7 +68,7 @@ async def create_api_key(
             expires_at=expires_at,
             allowed_endpoints=(
                 json.dumps(api_key_create.allowed_endpoints)
-                if api_key_create.allowed_endpoints
+                if api_key_create.allowed_endpoints is not None
                 else None
             ),
             organization_id=str(current_user.organization_id),
