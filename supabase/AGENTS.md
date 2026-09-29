@@ -56,15 +56,16 @@ is email presentation, not an authorization policy.
   local or hosted service. Record service-dependent results as such and never
   paste credentials or service output containing sensitive values into the
   repository.
-- Merging does not apply a Supabase migration. Nothing in the deploy path
-  (ArgoCD, Alembic, `release-dev.yml`) runs `supabase/migrations/`, so a merged
-  file stays unapplied until someone applies it by hand: #1661's grant revoke
-  merged on 2026-09-23 and production stayed exposed until 2026-09-29. With
-  explicit authorization, apply the migration to the hosted project, confirm it
-  with `supabase migration list` or the MCP `list_migrations`, and name the
-  file with the version the apply recorded (MCP `apply_migration` stamps the
-  apply time, not the filename's timestamp). Until then, report the change as
-  `NOT APPLIED`, not done.
+- Merging to `develop` applies a Supabase migration:
+  `.github/workflows/supabase-migrations.yml` runs `supabase db push` against
+  the hosted project. Nothing else does (not Argo CD, Alembic or
+  `release-dev.yml`); before that workflow, #1661 merged on 2026-09-23 and
+  production stayed exposed until a hand apply on 2026-09-29. Check the run
+  after merging: a red run means the migration is `NOT APPLIED`.
+- Don't apply a repo migration by hand (MCP `apply_migration`, SQL editor).
+  A hand apply records its own timestamp as the version, the hosted history
+  stops matching the repo, and the workflow refuses to push. If an incident
+  forces one, rename the unmerged repo file to the recorded version.
 
 ## Verification
 

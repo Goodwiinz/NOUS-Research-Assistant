@@ -14,7 +14,7 @@ ROOT = Path(__file__).parents[3]
 HARDEN_RLS = ROOT / "supabase/migrations/20260305001600_harden_rls_policies.sql"
 LOCKDOWN = (
     ROOT
-    / "supabase/migrations/20260917000000_revoke_product_tables_data_api_access.sql"
+    / "supabase/migrations/20260929084412_revoke_product_tables_data_api_access.sql"
 )
 SCHEMA_LOCKDOWN = (
     ROOT / "supabase/migrations/20260929084430_close_public_schema_browser_access.sql"
