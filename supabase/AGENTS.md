@@ -56,6 +56,15 @@ is email presentation, not an authorization policy.
   local or hosted service. Record service-dependent results as such and never
   paste credentials or service output containing sensitive values into the
   repository.
+- Merging does not apply a Supabase migration. Nothing in the deploy path
+  (ArgoCD, Alembic, `release-dev.yml`) runs `supabase/migrations/`, so a merged
+  file stays unapplied until someone applies it by hand: #1661's grant revoke
+  merged on 2026-09-23 and production stayed exposed until 2026-09-29. With
+  explicit authorization, apply the migration to the hosted project, confirm it
+  with `supabase migration list` or the MCP `list_migrations`, and name the
+  file with the version the apply recorded (MCP `apply_migration` stamps the
+  apply time, not the filename's timestamp). Until then, report the change as
+  `NOT APPLIED`, not done.
 
 ## Verification
 

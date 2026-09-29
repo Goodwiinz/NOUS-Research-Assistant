@@ -17,7 +17,7 @@ LOCKDOWN = (
     / "supabase/migrations/20260917000000_revoke_product_tables_data_api_access.sql"
 )
 SCHEMA_LOCKDOWN = (
-    ROOT / "supabase/migrations/20260929090000_close_public_schema_browser_access.sql"
+    ROOT / "supabase/migrations/20260929084430_close_public_schema_browser_access.sql"
 )
 
 
