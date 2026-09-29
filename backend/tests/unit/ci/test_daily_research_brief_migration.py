@@ -72,12 +72,18 @@ def test_revision_chains_from_agent_operations_and_is_the_only_head() -> None:
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     scripts = ScriptDirectory.from_config(config)
     heads = scripts.get_heads()
-    assert heads == ["merge_daily_harness_20260928"]
+    # Later revisions (e.g. GOO-299 c9d2e4f6a8b1) may extend the chain; the
+    # contract is a single head that still descends from the daily-brief merge.
+    assert len(heads) == 1
     revisions = {
         revision.revision
         for revision in scripts.walk_revisions(base="base", head=heads[0])
     }
-    assert {"merge_research_heads_20260928", "merge_harness_heads"} <= revisions
+    assert {
+        "merge_daily_harness_20260928",
+        "merge_research_heads_20260928",
+        "merge_harness_heads",
+    } <= revisions
 
 
 def test_upgrade_creates_review_ledger_columns_foreign_keys_and_unique_gate() -> None:
