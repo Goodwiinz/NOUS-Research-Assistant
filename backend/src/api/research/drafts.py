@@ -25,6 +25,7 @@ from src.models.user import User
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
     DraftGenerationStatus,
+    get_task_result,
     reconcile_task,
 )
 from src.services.research_engine.project_access import ResearchAction, resolve_project
@@ -491,9 +492,15 @@ async def get_generation_status(
     row = None
     if task_id:
         generation_status = await DraftGenerationService.get_status_shared(task_id)
-        # The retained row is the record; the service commits a stale
-        # running row's interrupt flip.
-        row = await reconcile_task(db, task_id)
+        # The retained row is the record. Scope-check it before reconciling:
+        # only the owner's read may commit a stale row's interrupt flip.
+        row = await get_task_result(db, task_id)
+        if (
+            row is not None
+            and row.collection_id == project_id
+            and row.actor_user_id == current_user.id
+        ):
+            row = await reconcile_task(db, task_id)
     else:
         generation_status = DraftGenerationService.get_latest_status(
             project_id=project_id,

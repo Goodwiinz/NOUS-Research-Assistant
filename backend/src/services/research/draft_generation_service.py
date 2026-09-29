@@ -196,6 +196,11 @@ async def touch_task(db: AsyncSession, task_id: str) -> None:
     )
 
 
+async def get_task_result(db: AsyncSession, task_id: str) -> Optional[DraftTaskResult]:
+    """Read the retained row without side effects (scope-check before reconcile)."""
+    return await db.get(DraftTaskResult, task_id)
+
+
 async def reconcile_task(db: AsyncSession, task_id: str) -> Optional[DraftTaskResult]:
     """Return the task's row, first marking it ``interrupted`` if its process
     stopped heartbeating (same staleness rule as the Redis cache)."""

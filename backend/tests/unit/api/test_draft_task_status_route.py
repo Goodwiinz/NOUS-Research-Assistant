@@ -44,11 +44,16 @@ def _completed_row() -> DraftTaskResult:
     )
 
 
+RECONCILE = AsyncMock()
+
+
 def _client(user_id: UUID) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(drafts_api.router)
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=user_id)
     app.dependency_overrides[get_db] = lambda: MagicMock()
+    RECONCILE.reset_mock()
+    RECONCILE.return_value = _completed_row()
     with (
         patch.object(drafts_api, "_validate_project_ownership", new=AsyncMock()),
         patch.object(
@@ -57,8 +62,9 @@ def _client(user_id: UUID) -> Iterator[TestClient]:
             new=AsyncMock(return_value=None),
         ),
         patch.object(
-            drafts_api, "reconcile_task", new=AsyncMock(return_value=_completed_row())
+            drafts_api, "get_task_result", new=AsyncMock(return_value=_completed_row())
         ),
+        patch.object(drafts_api, "reconcile_task", new=RECONCILE),
     ):
         yield TestClient(app)
 
@@ -91,3 +97,6 @@ def test_status_hides_another_actors_task(foreign_client: TestClient) -> None:
     response = foreign_client.get(f"/api/v1/projects/{PROJECT}/drafts/status/task-1")
 
     assert response.status_code == 404
+    # A foreign reader must not be able to commit another tenant's
+    # interrupt flip: scope is checked before reconcile.
+    RECONCILE.assert_not_awaited()
