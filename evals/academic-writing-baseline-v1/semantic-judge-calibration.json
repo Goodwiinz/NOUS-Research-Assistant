@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "id": "academic-writing-semantic-judge-v1",
+  "fixtures": [
+    {
+      "id": "known-correct",
+      "expected": "accept",
+      "input": {
+        "instruction": "Report only the supported result and retain its citation.",
+        "sources": [
+          {
+            "id": "doc2",
+            "title": "Registered Result",
+            "content": "The registered endpoint was unchanged."
+          }
+        ],
+        "draft": "The registered endpoint was unchanged [Doc 2]."
+      }
+    },
+    {
+      "id": "known-wrong",
+      "expected": "reject",
+      "input": {
+        "instruction": "Report only the supported result and retain its citation.",
+        "sources": [
+          {
+            "id": "doc2",
+            "title": "Registered Result",
+            "content": "The registered endpoint was unchanged."
+          }
+        ],
+        "draft": "The intervention doubled the registered endpoint [Doc 2]."
+      }
+    }
+  ]
+}
