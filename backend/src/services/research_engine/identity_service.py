@@ -103,8 +103,9 @@ async def _protocol_version_id(db: AsyncSession, collection_id: UUID) -> str | N
             .where(
                 ResearchProtocol.collection_id == collection_id,
                 ResearchProtocol.is_deleted.is_(False),
+                ResearchProtocol.current_approved_version_id.is_not(None),
             )
-            .order_by(ResearchProtocol.created_at, ResearchProtocol.id)
+            .order_by(ResearchProtocol.updated_at.desc(), ResearchProtocol.id)
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -458,6 +459,9 @@ async def link_study(
     report = (await _live_reports(db, collection_id, [report_id], merged_status=404))[
         report_id
     ]
+    if proposing and report.study_link_status in {"confirmed", "disputed"}:
+        # A reviewer proposal must not downgrade or re-point an adjudicated link.
+        raise HTTPException(status_code=409, detail="Study link is already adjudicated")
     study_id = data.study_id or cast(UUID | None, report.study_id)
     if study_id is None:
         study_id = uuid4()
