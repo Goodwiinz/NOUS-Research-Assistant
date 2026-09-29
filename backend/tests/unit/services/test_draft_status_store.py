@@ -104,7 +104,7 @@ async def test_draft_status_survives_process_local_state_loss(
                 project_id=project_id,
                 task_id=task_id,
                 current_user=SimpleNamespace(id=user_id),
-                db=MagicMock(),
+                db=AsyncMock(),
             )
             draft_module._generation_status.pop(task_id)
             cancelled = await service.get_status_shared(task_id)

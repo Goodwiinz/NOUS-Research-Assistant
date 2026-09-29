@@ -16,7 +16,7 @@ from uuid import UUID
 from weakref import WeakValueDictionary
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -27,6 +27,7 @@ from src.models.collection import Collection
 from src.models.document import Document
 from src.models.draft_citation import DraftCitation
 from src.models.draft_review import DraftReview
+from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
 from src.services.agent.job_store import get_redis
 from src.services.research.bibliography_service import BibliographyService
@@ -103,6 +104,117 @@ def _ensure_draft_metrics() -> None:
     except Exception as exc:  # pragma: no cover - defensive observability guard
         _draft_metrics_disabled = True
         logger.warning("draft_metrics_init_failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Retained task terminal results (GOO-297). Redis is the progress cache; the
+# ``draft_task_results`` row is the record. None of these commit except
+# ``reconcile_task``: the caller owns the transaction.
+# ---------------------------------------------------------------------------
+
+
+class DraftTaskNotRunning(RuntimeError):
+    """The task's retained row is already terminal; its draft must not land."""
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+async def start_task(
+    db: AsyncSession,
+    *,
+    task_id: str,
+    collection_id: UUID,
+    actor_user_id: UUID,
+    request_fingerprint: str,
+) -> None:
+    """Insert the ``running`` row; commit it with the task's acceptance."""
+    now = _utcnow()
+    db.add(
+        DraftTaskResult(
+            task_id=task_id,
+            collection_id=collection_id,
+            actor_user_id=actor_user_id,
+            state="running",
+            request_fingerprint=request_fingerprint,
+            started_at=now,
+            heartbeat_at=now,
+        )
+    )
+    await db.flush()
+
+
+async def finish_task(
+    db: AsyncSession,
+    *,
+    task_id: str,
+    state: str,
+    artifact: Optional[GeneratedDraft] = None,
+    error_code: Optional[str] = None,
+) -> bool:
+    """Move a running task to ``state`` exactly once. Never commits.
+
+    ``artifact`` is the draft *this* task just flushed; its id, version and
+    content hash are bound as-is, never re-read as "the current draft".
+    Returns False when the row is missing or already terminal.
+    """
+    values: Dict[str, Any] = {
+        "state": state,
+        "error_code": error_code,
+        "terminal_at": _utcnow(),
+    }
+    if artifact is not None:
+        values.update(
+            artifact_id=artifact.id,
+            artifact_version=artifact.version,
+            artifact_hash=hashlib.sha256(artifact.content.encode()).hexdigest(),
+        )
+    result = await db.execute(
+        update(DraftTaskResult)
+        .where(
+            DraftTaskResult.task_id == task_id,
+            DraftTaskResult.state == "running",
+        )
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    return bool(result.rowcount == 1)  # type: ignore[attr-defined]
+
+
+async def touch_task(db: AsyncSession, task_id: str) -> None:
+    """Refresh the liveness heartbeat of a running task. Never commits."""
+    await db.execute(
+        update(DraftTaskResult)
+        .where(
+            DraftTaskResult.task_id == task_id,
+            DraftTaskResult.state == "running",
+        )
+        .values(heartbeat_at=_utcnow())
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def reconcile_task(db: AsyncSession, task_id: str) -> Optional[DraftTaskResult]:
+    """Return the task's row, first marking it ``interrupted`` if its process
+    stopped heartbeating (same staleness rule as the Redis cache)."""
+    row = await db.get(DraftTaskResult, task_id)
+    if row is None or row.state != "running":
+        return row
+    threshold = _utcnow() - timedelta(seconds=_DRAFT_ACTIVE_STALE_SECONDS)
+    result = await db.execute(
+        update(DraftTaskResult)
+        .where(
+            DraftTaskResult.task_id == task_id,
+            DraftTaskResult.state == "running",
+            DraftTaskResult.heartbeat_at < threshold,
+        )
+        .values(state="interrupted", error_code="process_lost", terminal_at=_utcnow())
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount:  # type: ignore[attr-defined]
+        await db.commit()
+    return await db.get(DraftTaskResult, task_id, populate_existing=True)
 
 
 class DraftGenerationService:
@@ -212,7 +324,6 @@ class DraftGenerationService:
             selection_mode = "project_snapshot"
         else:
             selection_mode = "explicit"
-        await self.db.commit()
 
         request_hash = self._request_hash(
             project_id=project_id,
@@ -262,6 +373,19 @@ class DraftGenerationService:
                 "selection_mode": selection_mode,
                 "document_ids": list(normalized_ids),
             }
+        # GOO-297: the task is never fired without its retained row.
+        try:
+            await start_task(
+                self.db,
+                task_id=task_id,
+                collection_id=project_id,
+                actor_user_id=user_id,
+                request_fingerprint=request_hash,
+            )
+            await self.db.commit()
+        except Exception:
+            _generation_status.pop(task_id, None)
+            raise
         await self.publish_status(task_id)
 
         # Start generation in background
@@ -436,11 +560,11 @@ class DraftGenerationService:
                     and sorted(str(document.id) for document in documents)
                     != sorted(str(document_id) for document_id in document_ids)
                 ):
-                    await self._set_status(
+                    await self._fail_task(
                         task_id,
                         DraftGenerationStatus.FAILED,
-                        0,
                         "Selected project documents are unavailable",
+                        "sources_unavailable",
                     )
                     self._record_generation_metrics(
                         status=DraftGenerationStatus.FAILED,
@@ -481,11 +605,11 @@ class DraftGenerationService:
                 if sorted(str(document.id) for document in latest_sources) != sorted(
                     str(document_id) for document_id in document_ids or []
                 ):
-                    await self._set_status(
+                    await self._fail_task(
                         task_id,
                         DraftGenerationStatus.FAILED,
-                        0,
                         "Selected project documents are unavailable",
+                        "sources_unavailable",
                     )
                     self._record_generation_metrics(
                         status=DraftGenerationStatus.FAILED,
@@ -635,6 +759,13 @@ class DraftGenerationService:
                     )
                     db.add(draft_citation)
 
+                # GOO-297: bind this task's own draft in the same transaction.
+                # Rowcount 0 = already cancelled/interrupted; raising rolls
+                # the draft back so nothing is orphaned.
+                if not await finish_task(
+                    db, task_id=task_id, state="completed", artifact=draft
+                ):
+                    raise DraftTaskNotRunning(task_id)
                 await db.commit()
 
                 # Mark complete
@@ -664,8 +795,11 @@ class DraftGenerationService:
                 )
 
         except asyncio.CancelledError:
-            await self._set_status(
-                task_id, DraftGenerationStatus.CANCELLED, 0, "Generation cancelled"
+            await self._fail_task(
+                task_id,
+                DraftGenerationStatus.CANCELLED,
+                "Generation cancelled",
+                "cancelled_by_user",
             )
             logger.info("draft_generation_cancelled", task_id=task_id)
             self._record_generation_metrics(
@@ -677,12 +811,12 @@ class DraftGenerationService:
         except IntegrityError as e:
             # Lost the uq_draft_version race to a concurrent generation —
             # surface a readable status instead of the raw psycopg error.
-            await self._set_status(
+            await self._fail_task(
                 task_id,
                 DraftGenerationStatus.FAILED,
-                0,
                 "Another draft generation for this project finished first. "
                 "Retry to generate a new version.",
+                "version_conflict",
             )
             logger.warning(
                 "draft_generation_version_conflict", task_id=task_id, error=str(e)
@@ -694,8 +828,15 @@ class DraftGenerationService:
             )
 
         except Exception as e:
-            await self._set_status(
-                task_id, DraftGenerationStatus.FAILED, 0, f"Error: {str(e)}"
+            await self._fail_task(
+                task_id,
+                DraftGenerationStatus.FAILED,
+                f"Error: {str(e)}",
+                (
+                    "superseded"
+                    if isinstance(e, DraftTaskNotRunning)
+                    else "generation_error"
+                ),
             )
             logger.error("draft_generation_failed", task_id=task_id, error=str(e))
             self._record_generation_metrics(
@@ -1635,6 +1776,12 @@ Key takeaways include the importance of continued investigation and the potentia
                 return
             status["updated_at"] = datetime.utcnow().isoformat()
             await cls.publish_status(task_id)
+            try:
+                async with AsyncSessionLocal() as db:
+                    await touch_task(db, task_id)
+                    await db.commit()
+            except Exception:
+                logger.exception("draft_task_heartbeat_failed", task_id=task_id)
 
     async def _set_status(
         self,
@@ -1646,6 +1793,29 @@ Key takeaways include the importance of continued investigation and the potentia
     ) -> None:
         self._update_status(task_id, status, progress, step, **extra)
         await self.publish_status(task_id)
+
+    async def _fail_task(
+        self, task_id: str, state: str, step: str, error_code: str
+    ) -> None:
+        """Record a non-completed terminal state: retained row, then cache.
+
+        If the row is already terminal (e.g. cancelled elsewhere), the cache
+        mirrors the row instead of claiming ``state``.
+        """
+        recorded = state
+        try:
+            async with AsyncSessionLocal() as db:
+                if await finish_task(
+                    db, task_id=task_id, state=state, error_code=error_code
+                ):
+                    await db.commit()
+                else:
+                    row = await db.get(DraftTaskResult, task_id)
+                    if row is not None and row.state != "running":
+                        recorded = row.state
+        except Exception:
+            logger.exception("draft_task_result_write_failed", task_id=task_id)
+        await self._set_status(task_id, recorded, 0, step)
 
     @staticmethod
     def get_status(task_id: str) -> Optional[Dict[str, Any]]:
@@ -1788,6 +1958,21 @@ Key takeaways include the importance of continued investigation and the potentia
                 ] = datetime.utcnow().isoformat()
                 return True
         return False
+
+    @classmethod
+    async def cancel_task(cls, db: AsyncSession, task_id: str) -> bool:
+        """Cancel in memory (the coroutine polls it) and in the retained row.
+
+        The DB write lands even when the task runs on another replica; that
+        replica's completion then finds the row terminal and rolls back.
+        """
+        if not cls.cancel_generation(task_id):
+            return False
+        await finish_task(
+            db, task_id=task_id, state="cancelled", error_code="cancelled_by_user"
+        )
+        await db.commit()
+        return True
 
     @classmethod
     def cancel_latest_generation(

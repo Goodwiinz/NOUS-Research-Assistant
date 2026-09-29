@@ -530,7 +530,7 @@ async def cancel_generation(
             raise HTTPException(status_code=404, detail="Task not found")
         if generation_status.get("user_id") != str(current_user.id):
             raise HTTPException(status_code=404, detail="Task not found")
-        success = DraftGenerationService.cancel_generation(task_id)
+        success = await DraftGenerationService.cancel_task(db, task_id)
     else:
         cancelled_task_id = DraftGenerationService.cancel_latest_generation(
             project_id=project_id,
