@@ -1,0 +1,21 @@
+{
+  "step": "C2-04-draft-current",
+  "as": "owner",
+  "at": "2026-09-29T10:27:05.995851+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/drafts/current",
+    "body": null
+  },
+  "status": 404,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "No current draft found",
+      "status_code": 404,
+      "type": "http_error"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "step": "A2-03-get-project-by-engine-id",
+  "as": "owner",
+  "at": "2026-09-29T10:17:07.077672+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2dff0f55-c5c0-4fa2-9b22-0922d7eb3bad",
+    "body": null
+  },
+  "status": 307,
+  "headers": {
+    "location": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652"
+  },
+  "response": ""
+}

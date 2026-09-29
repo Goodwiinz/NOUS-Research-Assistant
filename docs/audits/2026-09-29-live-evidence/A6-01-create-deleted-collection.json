@@ -1,0 +1,28 @@
+{
+  "step": "A6-01-create-deleted-collection",
+  "as": "owner",
+  "at": "2026-09-29T10:17:38.335305+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v2/workspaces/f7538b4a-d043-4a10-b763-e45ce369d69e/collections",
+    "body": {
+      "name": "eval-2026-09-29-deleted",
+      "workspace_id": "f7538b4a-d043-4a10-b763-e45ce369d69e"
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "created_at": "2026-09-29T10:17:38.317717",
+    "updated_at": "2026-09-29T10:17:38.317719",
+    "name": "eval-2026-09-29-deleted",
+    "description": null,
+    "color": null,
+    "icon": null,
+    "id": "e5160575-a1d7-43e0-a833-cf33efff2b7e",
+    "workspace_id": "f7538b4a-d043-4a10-b763-e45ce369d69e",
+    "document_count": 0
+  }
+}

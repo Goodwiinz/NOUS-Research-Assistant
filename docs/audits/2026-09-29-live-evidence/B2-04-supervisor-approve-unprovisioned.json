@@ -1,0 +1,32 @@
+{
+  "step": "B2-04-supervisor-approve-unprovisioned",
+  "as": "sup2",
+  "at": "2026-09-29T10:19:25.741011+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/protocols/4a88e789-e605-400f-ac8c-7437f8f59072/versions/d38ab741-2deb-4c29-aae2-679754b74177/approve",
+    "body": {
+      "expected_protocol_version": 1,
+      "expected_content_hash": "71cf73b64b0b7a2acc464bd428a7f34b645dd856eaee8bf700d6acc774f01252",
+      "reason": "eval-2026-09-29 supervisor approval",
+      "idempotency_key": "eval-2026-09-29-supapprove-1",
+      "expected_current_approved_version_id": null
+    }
+  },
+  "status": 500,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "code": "DATABASE_ERROR",
+      "message": "A database error occurred. Please try again later.",
+      "details": {
+        "error_type": "DatabaseError"
+      },
+      "timestamp": null,
+      "path": "/api/v1/research-engine/protocols/4a88e789-e605-400f-ac8c-7437f8f59072/versions/d38ab741-2deb-4c29-aae2-679754b74177/approve",
+      "method": "POST"
+    }
+  }
+}
