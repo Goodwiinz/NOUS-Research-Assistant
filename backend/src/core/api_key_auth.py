@@ -4,6 +4,7 @@ API Key Authentication for Public Endpoints
 
 import asyncio
 import hashlib
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta
@@ -78,6 +79,54 @@ def generate_api_key() -> tuple[str, str]:
 def verify_api_key(raw_key: str, key_hash: str) -> bool:
     """Verify API key against hash using constant-time comparison"""
     return secrets.compare_digest(hash_api_key(raw_key), key_hash)
+
+
+def _endpoint_allowed(allowed: Optional[list[str]], path: str) -> bool:
+    """Check ``path`` against a key's ``allowed_endpoints`` config.
+
+    Semantics (I5):
+    - ``None``  -> key was never scoped; every endpoint is allowed.
+    - ``[]``    -> explicit empty allowlist; every endpoint is denied.
+    - entries   -> each entry is an exact path or a directory prefix
+      (a bare ``/x`` entry permits ``/x`` itself and ``/x/...`` but not
+      ``/xy``). A trailing slash on an entry is normalized away.
+    """
+    if allowed is None:
+        return True
+    return any(
+        path == entry or path.startswith(entry.rstrip("/") + "/")
+        for entry in allowed
+    )
+
+
+def _parse_allowed_endpoints(raw: Optional[str]) -> Optional[list[str]]:
+    """Parse the ``api_keys.allowed_endpoints`` Text column (JSON array).
+
+    Returns ``None`` for an unscoped key (``NULL`` column). Fail CLOSED:
+    malformed JSON, a non-list value, or non-string entries are treated
+    as an empty allowlist (deny all) and logged — a misconfigured key
+    must never silently widen its own scope.
+    """
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError) as e:
+        logger.error(
+            f"Malformed allowed_endpoints JSON on API key (deny all): {e}"
+        )
+        return []
+    if not isinstance(parsed, list) or not all(
+        isinstance(entry, str) for entry in parsed
+    ):
+        logger.error(
+            "Malformed allowed_endpoints on API key (not a string array, deny all)"
+        )
+        return []
+    return parsed
+
+
+
 
 
 # Rate limiter for API key endpoints
@@ -247,6 +296,22 @@ async def get_api_key_data(
             logger.warning(f"Expired API key used: {api_key_record.key_prefix}***")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="API key has expired"
+            )
+
+        # Enforce the key's allowed_endpoints scope (I5). Placed BEFORE the
+        # rate-limit check so a denied request never consumes rate-limit
+        # quota, and 403 (scope denial) takes precedence over 429 for
+        # keys used outside their allowlist.
+        allowed_endpoints = _parse_allowed_endpoints(
+            api_key_record.allowed_endpoints
+        )
+        if not _endpoint_allowed(allowed_endpoints, request.url.path):
+            logger.warning(
+                f"API key {api_key_record.key_prefix}*** not permitted for endpoint {request.url.path}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="API key not permitted for this endpoint",
             )
 
         # Check rate limit
