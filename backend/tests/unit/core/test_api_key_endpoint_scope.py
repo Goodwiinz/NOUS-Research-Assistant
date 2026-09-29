@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.api_key_auth import (
     APIKey,
     _endpoint_allowed,
+    _parse_allowed_endpoints,
     generate_api_key,
     get_api_key_data,
 )
@@ -109,6 +110,29 @@ def test_endpoint_allowed_prefix_entry_does_not_match_similar_prefix():
 
 def test_endpoint_allowed_trailing_slash_entry_normalized():
     assert _endpoint_allowed(["/api/v1/search/"], "/api/v1/search/hybrid") is True
+
+
+def test_endpoint_allowed_trailing_slash_entry_allows_exact_path():
+    assert _endpoint_allowed(["/api/v1/search/"], "/api/v1/search") is True
+
+
+# --- _parse_allowed_endpoints blank-entry handling ----------------------
+
+
+@pytest.mark.parametrize("raw", [json.dumps([""]), json.dumps(["  "])])
+async def test_blank_entries_deny_all_and_log_error(raw, caplog):
+    assert _parse_allowed_endpoints(raw) == []
+    assert any(
+        rec.levelname == "ERROR" and "allowed_endpoints" in rec.message
+        for rec in caplog.records
+    )
+
+
+async def test_blank_entry_config_denies_request():
+    env = _make_env(json.dumps(["  "]))
+    with pytest.raises(HTTPException) as excinfo:
+        await _validate(env)
+    assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
 
 
 # --- enforcement inside get_api_key_data --------------------------------

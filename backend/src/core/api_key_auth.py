@@ -94,7 +94,7 @@ def _endpoint_allowed(allowed: Optional[list[str]], path: str) -> bool:
     if allowed is None:
         return True
     return any(
-        path == entry or path.startswith(entry.rstrip("/") + "/")
+        path == entry.rstrip("/") or path.startswith(entry.rstrip("/") + "/")
         for entry in allowed
     )
 
@@ -103,9 +103,9 @@ def _parse_allowed_endpoints(raw: Optional[str]) -> Optional[list[str]]:
     """Parse the ``api_keys.allowed_endpoints`` Text column (JSON array).
 
     Returns ``None`` for an unscoped key (``NULL`` column). Fail CLOSED:
-    malformed JSON, a non-list value, or non-string entries are treated
-    as an empty allowlist (deny all) and logged — a misconfigured key
-    must never silently widen its own scope.
+    malformed JSON, a non-list value, non-string entries, or blank
+    entries are treated as an empty allowlist (deny all) and logged — a
+    misconfigured key must never silently widen its own scope.
     """
     if raw is None:
         return None
@@ -121,6 +121,11 @@ def _parse_allowed_endpoints(raw: Optional[str]) -> Optional[list[str]]:
     ):
         logger.error(
             "Malformed allowed_endpoints on API key (not a string array, deny all)"
+        )
+        return []
+    if any(not entry.strip() for entry in parsed):
+        logger.error(
+            "Malformed allowed_endpoints on API key (blank entry, deny all)"
         )
         return []
     return parsed
