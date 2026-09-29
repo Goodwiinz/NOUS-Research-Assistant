@@ -9,7 +9,7 @@
       "expected_protocol_version": 1,
       "expected_content_hash": "71cf73b64b0b7a2acc464bd428a7f34b645dd856eaee8bf700d6acc774f01252",
       "reason": "eval-2026-09-29 supervisor approval",
-      "idempotency_key": "eval-2026-09-29-supapprove-1",
+      "idempotency_key": "<redacted-idempotency-key>",
       "expected_current_approved_version_id": null
     }
   },
