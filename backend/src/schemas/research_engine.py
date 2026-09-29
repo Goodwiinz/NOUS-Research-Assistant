@@ -386,6 +386,15 @@ class ReportObservationResponse(BaseModel):
     evidence: Dict[str, Any]
 
 
+class ImportedRecordObservation(BaseModel):
+    """An externally imported record (GOO-300) attached to this report."""
+
+    import_record_id: UUID
+    receipt_id: UUID
+    match_method: str
+    evidence: Dict[str, Any]
+
+
 class ReportResponse(BaseModel):
     id: UUID
     title_snapshot: str
@@ -395,6 +404,7 @@ class ReportResponse(BaseModel):
     study_link_rationale: Optional[str] = None
     merged_into_report_id: Optional[UUID] = None
     observations: List[ReportObservationResponse]
+    imported_records: List[ImportedRecordObservation] = []
 
 
 class ReportSuggestion(BaseModel):
@@ -425,9 +435,16 @@ class ReportMergeRequest(BaseModel):
 
 
 class ReportSplitRequest(BaseModel):
-    source_ids: List[UUID] = Field(..., min_length=1)
+    source_ids: List[UUID] = []
+    import_record_ids: List[UUID] = []
     rationale: str = Field(..., min_length=1, max_length=10_000)
     idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def _moves_something(self) -> "ReportSplitRequest":
+        if not self.source_ids and not self.import_record_ids:
+            raise ValueError("name at least one source_id or import_record_id")
+        return self
 
 
 class IdentityEventResponse(BaseModel):
