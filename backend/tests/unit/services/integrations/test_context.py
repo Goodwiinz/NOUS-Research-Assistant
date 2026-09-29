@@ -219,6 +219,42 @@ async def test_consent_exchange_is_one_time_and_renewal_preserves_ceiling(
         )
 
 
+async def test_device_grant_requires_one_unambiguous_active_consent(
+    db: AsyncSession, owner: Any
+) -> None:
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import (
+        create_request,
+        decide_request,
+        exchange_request,
+        register_device,
+    )
+
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    for _ in range(2):
+        request = await create_request(
+            db,
+            owner,
+            GrantRequestCreate(
+                project_id=PROJECT,
+                device_id=device.id,
+                scopes={"harness:execute"},
+            ),
+        )
+        await decide_request(db, owner, request.id, True)
+        await exchange_request(db, owner, request.id)
+
+    with pytest.raises(IntegrationAccessDenied):
+        await mint_integration_grant(
+            db,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=PROJECT,
+            scopes=frozenset({"harness:execute"}),
+            device_id=device.id,
+        )
+
+
 async def test_owner_binding_and_expired_request(
     db: AsyncSession, owner: Any, pending: Any
 ) -> None:

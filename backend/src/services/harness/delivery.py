@@ -25,7 +25,7 @@ from src.services.agent.run_event_store import append_event, read_events
 from src.services.agent.run_event_types import RunEventType
 from src.services.harness.runs import authorize_external_submission
 from src.services.integrations.context import IntegrationAccessDenied, _validate_grant
-from src.shared.enums import JobStatus
+from src.shared.enums import AgentOutboxStatus, JobStatus
 
 TERMINAL = {
     "completed": JobStatus.COMPLETED,
@@ -106,6 +106,35 @@ async def dispatch_pending(db: AsyncSession) -> int:
     """Lease accepted outbox intents into durable device commands (no network)."""
     if not settings.HARNESS_BRIDGE_ENABLED:
         return 0
+
+    async def terminalize(outbox: Any, run: Any, *, cancelled: bool) -> None:
+        """Close an accepted run that cannot be handed to the local process."""
+        outbox.status = AgentOutboxStatus.FAILED.value
+        outbox.updated_at = now()
+        if cancelled:
+            await finalize_submission(
+                db,
+                run_id=run.job_id,
+                status=JobStatus.CANCELLED,
+                organization_id=run.organization_id,
+                event_type=RunEventType.RUN_CANCELLED,
+                payload={"reason": "Cancelled before local execution started."},
+                provider="codex",
+            )
+            return
+        message = "Local Codex could not be started."
+        await finalize_submission(
+            db,
+            run_id=run.job_id,
+            status=JobStatus.FAILED,
+            organization_id=run.organization_id,
+            event_type=RunEventType.RUN_FAILED,
+            payload={"code": "harness_dispatch_failed", "message": message},
+            error_code="harness_dispatch_failed",
+            error=message,
+            provider="codex",
+        )
+
     try:
         rows = (
             await db.scalars(
@@ -123,7 +152,16 @@ async def dispatch_pending(db: AsyncSession) -> int:
         for raw_outbox in rows:
             outbox: Any = raw_outbox
             run, session = await _locked(db, str(outbox.run_id))
-            if JobStatus(run.status).is_terminal or run.cancel_requested_at is not None:
+            if JobStatus(run.status).is_terminal:
+                outbox.status = AgentOutboxStatus.FAILED.value
+                outbox.updated_at = now()
+                session.workspace_locked = False
+                continue
+            if (
+                run.cancel_requested_at is not None
+                or JobStatus(run.status) is JobStatus.STOPPING
+            ):
+                await terminalize(outbox, run, cancelled=True)
                 continue
             grant = await db.get(
                 IntegrationGrant, session.grant_id, populate_existing=True
@@ -132,9 +170,19 @@ async def dispatch_pending(db: AsyncSession) -> int:
                 grant = await _validate_grant(db, grant)
                 await _authorize(db, grant_context(grant), run, session)
             except IntegrationAccessDenied:
+                await terminalize(outbox, run, cancelled=False)
                 continue
-            message: Any = await db.get(ChatMessage, run.user_message_id)
-            if message is None or not message.content:
+            message: Any = (
+                await db.get(ChatMessage, run.user_message_id)
+                if run.user_message_id is not None
+                else None
+            )
+            if (
+                message is None
+                or not isinstance(message.content, str)
+                or not message.content.strip()
+            ):
+                await terminalize(outbox, run, cancelled=False)
                 continue
             db.add(
                 HarnessCommand(

@@ -1219,7 +1219,10 @@ export function useChatStreaming(
             },
             onStatus: (phase, detail) => {
               if (harnessConnection.executionProvider === 'codex') {
-                harnessConnection.receive({ type: 'status', detail });
+                harnessConnection.receive(
+                  { type: 'status', detail },
+                  currentThreadId
+                );
               }
               turnProgress = appendProgressStep(turnProgress, phase, detail);
               useChatStore.setState({
@@ -1239,7 +1242,7 @@ export function useChatStreaming(
                 harnessConnection.receive({
                   type: stopPending ? 'stopping' : 'accepted',
                   runId,
-                });
+                }, currentThreadId);
               }
               // Stop can race the accepted frame while the server is still
               // opening the response. Once the producer gives us its exact
@@ -1256,7 +1259,7 @@ export function useChatStreaming(
             onApprovalRequired: (requestId) => {
               if (harnessConnection.executionProvider === 'codex') {
                 void harnessConnection
-                  .loadApproval(requestId)
+                  .loadApproval(requestId, currentThreadId)
                   .catch((error) => {
                     console.error('[Chat] Could not load native request:', error);
                   });
@@ -1264,7 +1267,7 @@ export function useChatStreaming(
             },
             onConnectionLost: () => {
               transportLost = true;
-              harnessConnection.markConnectionLost();
+              harnessConnection.markConnectionLost(currentThreadId);
             },
             onSeq: (seq) => {
               if (!currentThreadId) return;
@@ -1461,7 +1464,7 @@ export function useChatStreaming(
               }
               if (currentThreadId) {
                 if (harnessConnection.executionProvider === 'codex') {
-                  harnessConnection.receive({ type: 'done' });
+                  harnessConnection.receive({ type: 'done' }, currentThreadId);
                 }
                 useAgentActivityStore
                   .getState()
@@ -1483,7 +1486,7 @@ export function useChatStreaming(
                 runCancelled = true;
                 // The persisted RUN_CANCELLED event is terminal evidence that
                 // Codex stopped; it is not a failed assistant response.
-                harnessConnection.receive({ type: 'error' });
+                harnessConnection.receive({ type: 'error' }, currentThreadId);
                 if (currentThreadId) {
                   useAgentActivityStore
                     .getState()
@@ -1496,7 +1499,7 @@ export function useChatStreaming(
                 !transportLost &&
                 harnessConnection.executionProvider === 'codex'
               ) {
-                harnessConnection.receive({ type: 'error' });
+                harnessConnection.receive({ type: 'error' }, currentThreadId);
               }
               if (currentThreadId && !transportLost) {
                 useAgentActivityStore
@@ -2263,7 +2266,7 @@ export function useChatStreaming(
       normalRunStop &&
       runThread
     ) {
-      harnessConnection.receive({ type: 'stopping' });
+      harnessConnection.receive({ type: 'stopping' }, runThread);
       if (expectedRunId) {
         void requestDurableStop(runThread, expectedRunId);
       } else {
@@ -2408,7 +2411,7 @@ export function useChatStreaming(
               ? pendingSeqRef.current.seq
               : 0;
           if (harnessConnection.executionProvider === 'codex') {
-            harnessConnection.receive({ type: 'reconciling' });
+            harnessConnection.receive({ type: 'reconciling' }, threadId);
           }
           const res = await agentChatService.resumeStream(
             threadId,
@@ -2424,7 +2427,7 @@ export function useChatStreaming(
               // A missing active pointer is not proof that the external run
               // completed. Keep the visible outcome unknown until replay has
               // delivered a persisted terminal event.
-              harnessConnection.markConnectionLost();
+              harnessConnection.markConnectionLost(threadId);
               return;
             }
             // Nothing active server-side — clear the stale run record.

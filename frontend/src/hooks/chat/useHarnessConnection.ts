@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { agentChatService } from '@/services/agentChatService';
 import { harnessService } from '@/services/harnessService';
 import type {
@@ -60,6 +60,15 @@ function readSelection(key: string): HarnessSelection {
   }
 }
 
+function hasStoredSelection(key: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(key) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function isTerminal(type: string): boolean {
   return type === 'done' || type === 'error' || type === 'confirmation';
 }
@@ -76,9 +85,15 @@ export interface HarnessConnectionController extends HarnessSelection {
   selectProvider(provider: HarnessProvider): void;
   selectDevice(deviceId: string | null): void;
   selectWorkspace(workspaceId: string | null): void;
-  receive(event: { type: string; runId?: string; detail?: string }): void;
-  markConnectionLost(): void;
-  loadApproval(requestId: string): Promise<NativeRequestView>;
+  receive(
+    event: { type: string; runId?: string; detail?: string },
+    targetThreadId?: string | null
+  ): void;
+  markConnectionLost(targetThreadId?: string | null): void;
+  loadApproval(
+    requestId: string,
+    targetThreadId?: string | null
+  ): Promise<NativeRequestView>;
   decideRequest(requestId: string, decision: NativeDecision): Promise<void>;
   stop(): Promise<void>;
 }
@@ -93,6 +108,8 @@ export function useHarnessConnection(
   const userId = useAuthStore((state) => state.user?.id ?? null);
   const queryClient = useQueryClient();
   const key = selectionKey(userId, threadId);
+  const draftKey = selectionKey(userId, null);
+  const previousThreadId = useRef(threadId);
   const [selections, setSelections] = useState<
     Record<string, HarnessSelection>
   >(() => ({ [key]: readSelection(key) }));
@@ -104,18 +121,48 @@ export function useHarnessConnection(
   const { connectionState, runId, pendingRequests } = runtime;
 
   useEffect(() => {
+    if (
+      previousThreadId.current === null &&
+      threadId !== null &&
+      !hasStoredSelection(key)
+    ) {
+      const draftSelection = selections[draftKey] ?? readSelection(draftKey);
+      setSelections((current) =>
+        current[key]
+          ? current
+          : { ...current, [key]: draftSelection }
+      );
+    }
+    previousThreadId.current = threadId;
+  }, [draftKey, key, selections, threadId]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(key, JSON.stringify(selection));
   }, [key, selection]);
 
   const patchRuntime = useCallback(
-    (patch: Partial<HarnessRuntimeState>) => {
+    (
+      patch:
+        | Partial<HarnessRuntimeState>
+        | ((current: HarnessRuntimeState) => Partial<HarnessRuntimeState>),
+      targetThreadId?: string | null
+    ) => {
+      const targetKey = selectionKey(
+        userId,
+        targetThreadId === undefined ? threadId : targetThreadId
+      );
       setRuntimeByKey((current) => ({
         ...current,
-        [key]: { ...(current[key] ?? EMPTY_RUNTIME_STATE), ...patch },
+        [targetKey]: {
+          ...(current[targetKey] ?? EMPTY_RUNTIME_STATE),
+          ...(typeof patch === 'function'
+            ? patch(current[targetKey] ?? EMPTY_RUNTIME_STATE)
+            : patch),
+        },
       }));
     },
-    [key]
+    [threadId, userId]
   );
 
   const devicesQuery = useQuery({
@@ -160,10 +207,13 @@ export function useHarnessConnection(
         ...current,
         [key]: { ...(current[key] ?? selection), ...next },
       })),
-    [key, selection]
+    [key, selection, setSelections]
   );
   const receive = useCallback(
-    (event: { type: string; runId?: string; detail?: string }) => {
+    (
+      event: { type: string; runId?: string; detail?: string },
+      targetThreadId?: string | null
+    ) => {
       const patch: Partial<HarnessRuntimeState> = {};
       if (event.runId) patch.runId = event.runId;
       if (
@@ -183,27 +233,35 @@ export function useHarnessConnection(
         patch.connectionState = 'idle';
         patch.runId = null;
       }
-      patchRuntime(patch);
+      patchRuntime(patch, targetThreadId);
     },
     [patchRuntime]
   );
-  const markConnectionLost = useCallback(() => {
-    patchRuntime({ connectionState: 'lost' });
-  }, [patchRuntime]);
+  const markConnectionLost = useCallback(
+    (targetThreadId?: string | null) => {
+      patchRuntime({ connectionState: 'lost' }, targetThreadId);
+    },
+    [patchRuntime]
+  );
   const loadApproval = useCallback(
-    async (requestId: string) => {
+    async (requestId: string, targetThreadId?: string | null) => {
       const request = await harnessService.readRequest(requestId);
       if (!request.consumed && !request.expired) {
-        patchRuntime({
-          pendingRequests: [
-            ...runtime.pendingRequests.filter((item) => item.id !== request.id),
-            request,
-          ],
-        });
+        patchRuntime(
+          (current) => ({
+            pendingRequests: [
+              ...current.pendingRequests.filter(
+                (item) => item.id !== request.id
+              ),
+              request,
+            ],
+          }),
+          targetThreadId
+        );
       }
       return request;
     },
-    [patchRuntime, runtime.pendingRequests]
+    [patchRuntime]
   );
   const decideRequest = useCallback(
     async (requestId: string, decision: NativeDecision) => {
@@ -217,13 +275,13 @@ export function useHarnessConnection(
         requestId,
         decision: { ...decision, targetHash: current.targetHash },
       });
-      patchRuntime({
-        pendingRequests: runtime.pendingRequests.filter(
+      patchRuntime((current) => ({
+        pendingRequests: current.pendingRequests.filter(
           (request) => request.id !== requestId
         ),
-      });
+      }));
     },
-    [decisionMutation, patchRuntime, runtime.pendingRequests]
+    [decisionMutation, patchRuntime]
   );
   const stop = useCallback(async () => {
     if (!threadId || !runId) return;

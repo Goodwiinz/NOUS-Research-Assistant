@@ -229,7 +229,7 @@ async def stream_harness_run(
             frame = _frame_for_event(event, run_id=run_id)
             if frame is not None:
                 yield frame
-            if RunEventType(event.event_type) in TERMINAL_RUN_EVENTS:
+            if RunEventType(str(event.event_type)) in TERMINAL_RUN_EVENTS:
                 return
         if await request.is_disconnected():
             return

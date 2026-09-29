@@ -237,8 +237,8 @@ def _validate_native_request(
 
 async def ingest_native_request(
     db: AsyncSession, context: IntegrationContext, event: BridgeEvent
-) -> UUID:
-    """Persist exact request and canonical display event in one transaction."""
+) -> tuple[UUID, int]:
+    """Persist exact request and return its committed canonical event cursor."""
     body = event.body
     if not isinstance(body, NativeRequest):
         raise ValueError("native request event required")
@@ -266,7 +266,7 @@ async def ingest_native_request(
             or command.kind != "start"
             or session.provider_session_id != body.sessionId
             or session.provider_turn_id != body.turnId
-            or JobStatus(run.status).is_terminal
+            or JobStatus(str(run.status)).is_terminal
             or session.observation in TERMINAL
         ):
             raise NativeRequestConflict("Native callback is no longer live")
@@ -294,9 +294,11 @@ async def ingest_native_request(
         if receipt is not None:
             if receipt.digest != event._wire_digest or duplicate is None:
                 raise ValueError("conflicting native request replay")
+            if receipt.canonical_seq is None:
+                raise ValueError("native request receipt has no canonical cursor")
             await db.commit()
             assert isinstance(duplicate.id, UUID)
-            return duplicate.id
+            return duplicate.id, int(receipt.canonical_seq)
         if (
             session.source_id not in (None, event.sourceId)
             or event.sourceSeq != session.source_seq + 1
@@ -362,7 +364,7 @@ async def ingest_native_request(
             )
             await append_event(
                 db,
-                run_id=run.job_id,
+                run_id=str(run.job_id),
                 event_type=RunEventType.APPROVAL_REQUIRED,
                 payload={
                     "approval_id": str(request.id),
@@ -384,9 +386,10 @@ async def ingest_native_request(
                 canonical_seq=int(run.last_event_seq),
             )
         )
+        canonical_seq = int(run.last_event_seq)
         await db.commit()
         assert isinstance(request.id, UUID)
-        return request.id
+        return request.id, canonical_seq
     except Exception:
         await db.rollback()
         raise
@@ -454,7 +457,7 @@ async def resolve_native_request(
             or session.provider_turn_id != request.turn_id
             or session.observation != "running"
             or run.status != JobStatus.RUNNING.value
-            or JobStatus(run.status).is_terminal
+            or JobStatus(str(run.status)).is_terminal
             or session.observation in TERMINAL
         ):
             raise NativeRequestConflict("Native callback target is no longer live")
@@ -624,11 +627,19 @@ async def native_request_context(
     run = await db.scalar(select(AgentRun).where(AgentRun.job_id == request.run_id))
     if session is None or run is None or run.user_id != actor_id:
         raise IntegrationAccessDenied()
+    grant = await db.get(IntegrationGrant, session.grant_id, populate_existing=True)
+    if (
+        grant is None
+        or grant.user_id != actor_id
+        or grant.organization_id != request.organization_id
+        or grant.project_id != request.project_id
+    ):
+        raise IntegrationAccessDenied()
     return IntegrationContext(
-        user_id=request.actor_id,
-        organization_id=request.organization_id,
-        project_id=request.project_id,
-        thread_id=run.thread_id,
-        run_id=UUID(request.run_id),
-        grant_id=session.grant_id,
+        user_id=grant.user_id,
+        organization_id=grant.organization_id,
+        project_id=grant.project_id,
+        thread_id=grant.thread_id,
+        run_id=UUID(grant.run_id) if grant.run_id else None,
+        grant_id=grant.id,
     )
