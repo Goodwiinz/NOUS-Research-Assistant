@@ -22,7 +22,13 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from src.api.research_engine.runs import pause_run, resume_run, router, stream_run
+from src.api.research_engine.runs import (
+    get_manifest,
+    pause_run,
+    resume_run,
+    router,
+    stream_run,
+)
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.research_stage_review import ResearchStageReview
@@ -34,6 +40,26 @@ from src.services.research_engine.observability import ResearchObservability
 # ============================================================================
 # Helpers
 # ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_manifest_read_exposes_durable_receipts_before_run_completion():
+    run_id = uuid.uuid4()
+    run = _make_run(
+        id=run_id,
+        status="paused",
+        reproducibility_manifest={
+            "_search_receipts_v1": {"schema_version": 1, "executions": {}}
+        },
+    )
+    user = SimpleNamespace(id=uuid.uuid4())
+    with patch(
+        "src.api.research_engine.runs._get_owned_run",
+        new=AsyncMock(return_value=run),
+    ):
+        result = await get_manifest(run_id, user, AsyncMock())
+    assert result["run_status"] == "paused"
+    assert result["_search_receipts_v1"]["schema_version"] == 1
 
 
 def _make_run(**overrides):
@@ -89,6 +115,7 @@ def _mock_db_returning(
     blueprint_result=None,
     project_result=None,
     last_step_index=None,
+    last_step_quality_marks=None,
 ):
     """Build an AsyncMock DB that returns expected query results.
 
@@ -119,6 +146,7 @@ def _mock_db_returning(
             else:
                 last_step = Mock()
                 last_step.step_index = last_step_index
+                last_step.quality_marks = last_step_quality_marks
                 step_mock.scalars.return_value.first.return_value = last_step
             results.append(step_mock)
 
@@ -670,6 +698,47 @@ class TestStreamEndpointSuccess:
                 await stream_run(run_id, current_user, db)
 
         assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_pause_request_appends_flag_without_rewriting_manifest(self):
+        """Search receipts committed by the stream must survive a concurrent pause.
+
+        Mutation guard: replace the jsonb concat in pause_run with a plain
+        dict assignment and this test must fail.
+        """
+        from sqlalchemy.dialects import postgresql
+
+        run_id = uuid.uuid4()
+        run = _make_run(
+            id=run_id,
+            status="running",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        statements: list = []
+
+        async def capture(statement):
+            statements.append(statement)
+            return Mock(rowcount=1)
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=capture)
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        with patch(
+            "src.api.research_engine.runs._get_owned_run",
+            new=AsyncMock(return_value=run),
+        ):
+            await pause_run(run_id, current_user, db)
+
+        from sqlalchemy.sql.dml import Update
+
+        pause_update = next(stmt for stmt in statements if isinstance(stmt, Update))
+        sql = str(pause_update.compile(dialect=postgresql.dialect()))
+        set_clause = sql.split("SET", 1)[1].split("WHERE", 1)[0]
+        assert "research_runs.reproducibility_manifest" in set_clause
+        assert "||" in set_clause
 
     @pytest.mark.asyncio
     async def test_pause_request_losing_completion_race_preserves_final_manifest(self):

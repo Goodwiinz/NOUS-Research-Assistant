@@ -8,9 +8,24 @@ import re
 from dataclasses import dataclass, field
 from string import Template
 from types import MappingProxyType
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, cast
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    cast,
+)
+from uuid import NAMESPACE_URL, uuid5
 
-from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.research_engine.connectors.base import (
+    SourceConnector,
+    SourceDocument,
+    redact_search_values,
+)
 from src.services.research_engine.contracts import (
     CONTRACT_VERSION,
     ClaimRecord,
@@ -25,7 +40,11 @@ from src.services.research_engine.contracts import (
     validate_screening,
     validate_user_schema,
 )
-from src.services.research_engine.discovery import search_sources, source_records
+from src.services.research_engine.discovery import (
+    SEARCH_TIMEOUT_SECONDS,
+    search_sources,
+    source_records,
+)
 from src.services.research_engine.prompt_batches import (
     MAX_PROMPT_BYTES,
     build_prompt_batches,
@@ -169,9 +188,13 @@ class StepExecutor:
         self,
         connectors: Dict[str, SourceConnector],
         providers: Dict[str, LLMProvider],
+        strategy_context: Optional[Dict[str, Any]] = None,
+        on_search_page: Optional[Callable[..., Awaitable[None]]] = None,
     ) -> None:
         self.connectors = connectors
         self.providers = providers
+        self.strategy_context = strategy_context or {}
+        self.on_search_page = on_search_page
         self._last_call_accounting: tuple[int, int, List[Dict[str, Any]]] = (0, 0, [])
 
     async def execute(
@@ -264,14 +287,77 @@ class StepExecutor:
                 "semantic_scholar" if name == "web" else name for name in sources
             )
         )
+        strategy = {
+            "schema_version": "nous.academic.search-strategy.v1",
+            "project_id": self.strategy_context.get("canonical_project_id"),
+            "protocol_version_id": self.strategy_context.get("protocol_version_id"),
+            "effective_plan_hash": self.strategy_context.get("effective_plan_hash"),
+            "blueprint_id": self.strategy_context.get("blueprint_id"),
+            "blueprint_version": self.strategy_context.get("blueprint_version"),
+            "step_id": step_def.get("id"),
+            "intended": {
+                "selected_providers": canonical_sources,
+                "parameters": redact_search_values(params),
+            },
+            "route_limits": {
+                "max_providers": MAX_CONNECTOR_FANOUT,
+                "max_results_per_provider": MAX_CONNECTOR_RESULTS,
+                "requested_results_per_provider": max_results,
+                "request_timeout_seconds": SEARCH_TIMEOUT_SECONDS,
+            },
+        }
+        strategy_bytes = json.dumps(
+            strategy, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        strategy_version = f"sha256:{hashlib.sha256(strategy_bytes).hexdigest()}"
+        strategy["strategy_version"] = strategy_version
+
+        step_id = str(step_def.get("id") or "search")
+        run_id = self.strategy_context.get("run_id")
+        on_search_page = self.on_search_page
+
+        async def persist_page(
+            provider_name: str, execution_id: str, page: Dict[str, Any]
+        ) -> None:
+            assert on_search_page is not None
+            await on_search_page(
+                step_id=step_id,
+                strategy=strategy,
+                provider=provider_name,
+                execution_id=execution_id,
+                page=page,
+            )
+
+        execution_namespace = (
+            f"{run_id}:{step_id}:{strategy_version}" if run_id else None
+        )
         all_sources, coverage = await search_sources(
-            self.connectors, canonical_sources, query, max_results
+            self.connectors,
+            canonical_sources,
+            query,
+            max_results,
+            execution_namespace=execution_namespace,
+            on_page_update=persist_page if on_search_page is not None else None,
         )
         coverage["requested_sources"] = sources
         aliases = {name: "semantic_scholar" for name in sources if name == "web"}
         if aliases:
             coverage["aliases"] = aliases
-        records = source_records(all_sources)
+        id_namespace = (
+            str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"research-source:{run_id}:{step_id}:{strategy_version}",
+                )
+            )
+            if run_id
+            else None
+        )
+        records = source_records(all_sources, id_namespace=id_namespace)
+        _link_imported_source_ids(records, coverage)
+        # Nested in coverage: the contract-v1 search envelope owns no other keys.
+        coverage["strategy_version"] = strategy_version
+        coverage["search_strategy"] = strategy
 
         if contract_version == CONTRACT_VERSION:
             return StepResult(
@@ -1805,6 +1891,7 @@ class StepExecutor:
         coverage = prompt_context.get("coverage")
         if isinstance(coverage, dict):
             coverage.pop("retrieved_at", None)
+            _strip_receipt_identity(coverage)
         for record in prompt_context.get("source_records", []):
             record.pop("source_id", None)
             for snapshot in record.get("metadata", {}).get("provenance", []):
@@ -1851,6 +1938,86 @@ class StepExecutor:
             temperature=response.temperature,
             seed=response.seed,
         )
+
+
+def _link_imported_source_ids(
+    records: List[Dict[str, Any]], coverage: Dict[str, Any]
+) -> None:
+    """Point each provider page receipt at the persisted source rows it produced."""
+    source_ids_by_provider_key: Dict[tuple[str, str], List[str]] = {}
+    for record in records:
+        source_id = record["source_id"]
+        for snapshot in record.get("metadata", {}).get("provenance", []):
+            provider = snapshot.get("connector_type")
+            external_id = snapshot.get("external_id")
+            if provider and external_id:
+                source_ids_by_provider_key.setdefault(
+                    (provider, str(external_id)), []
+                ).append(source_id)
+
+    for provider_name, receipt in coverage["providers"].items():
+        provider_source_ids: set[str] = set()
+        provider_unlinked_count = 0
+        for page in receipt.get("pages", []):
+            page_source_ids: set[str] = set()
+            linked_record_count = 0
+            for key in page.get("record_keys", []):
+                matches = source_ids_by_provider_key.get(
+                    (key.get("provider", provider_name), str(key.get("external_id"))),
+                    [],
+                )
+                if matches:
+                    linked_record_count += 1
+                    page_source_ids.update(matches)
+            provider_source_ids.update(page_source_ids)
+            parsed_count = int(page.get("response", {}).get("parsed_count", 0))
+            page["imported_source_ids"] = sorted(page_source_ids)
+            page["imported_count"] = len(page_source_ids)
+            page["unlinked_record_count"] = max(parsed_count - linked_record_count, 0)
+            provider_unlinked_count += page["unlinked_record_count"]
+        receipt["imported_source_ids"] = sorted(provider_source_ids)
+        receipt["imported_count"] = len(provider_source_ids)
+        receipt["unlinked_record_count"] = provider_unlinked_count
+
+
+def _strip_receipt_identity(coverage: Dict[str, Any]) -> None:
+    """Drop per-observation receipt identity so reproducible prompts stay stable."""
+    provider_receipts = coverage.get("providers")
+    if not isinstance(provider_receipts, dict):
+        return
+    for receipt in provider_receipts.values():
+        if not isinstance(receipt, dict):
+            continue
+        for field_name in (
+            "execution_id",
+            "attempt_id",
+            "started_at",
+            "completed_at",
+            "imported_source_ids",
+        ):
+            receipt.pop(field_name, None)
+        pages = receipt.get("pages")
+        if not isinstance(pages, list):
+            continue
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            for field_name in (
+                "page_id",
+                "attempt_id",
+                "attempt_history",
+                "imported_source_ids",
+            ):
+                page.pop(field_name, None)
+            request = page.get("request")
+            if isinstance(request, dict):
+                request.pop("requested_at", None)
+            response = page.get("response")
+            if isinstance(response, dict):
+                response.pop("received_at", None)
+                for attempt in response.get("request_attempts", []):
+                    if isinstance(attempt, dict):
+                        attempt.pop("requested_at", None)
 
 
 def requested_parts_source_ids(parts: set[tuple[str, str]]) -> set[str]:

@@ -81,6 +81,7 @@ from src.services.research_engine.scope import (
     canonicalize_scope_confirmation,
     resolve_effective_daily_brief_parameters,
 )
+from src.services.research_engine.search_receipts import SearchReceiptJournal
 from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
 
@@ -523,14 +524,14 @@ async def get_manifest(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get reproducibility manifest for a completed run."""
+    """Get the current manifest, including durable in-flight search receipts."""
     run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
-    if run.status != RunStatus.COMPLETED.value:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Run is not completed",
-        )
-    return run.reproducibility_manifest or {}
+    manifest = dict(run.reproducibility_manifest or {})
+    manifest.pop(_PAUSE_REQUESTED_KEY, None)
+    return {
+        **manifest,
+        "run_status": run.status,
+    }
 
 
 @router.get("/runs/{run_id}/export")
@@ -830,7 +831,22 @@ async def stream_run(
         )
 
     try:
-        executor = StepExecutor(providers=providers, connectors=connectors)
+        receipt_journal = SearchReceiptJournal(db, run_id, current_user.id)
+        executor = StepExecutor(
+            providers=providers,
+            connectors=connectors,
+            strategy_context={
+                "run_id": str(run.id),
+                "canonical_project_id": str(canonical_project_id),
+                "protocol_version_id": (
+                    str(run.protocol_version_id) if run.protocol_version_id else None
+                ),
+                "effective_plan_hash": run.effective_plan_hash,
+                "blueprint_id": approved_plan["blueprint_id"],
+                "blueprint_version": approved_plan["blueprint_version"],
+            },
+            on_search_page=receipt_journal.persist_page,
+        )
         engine = WorkflowEngine(step_executor=executor)
         await db.refresh(run)
     except BaseException:
@@ -945,6 +961,19 @@ async def stream_run(
                     output = event.get("output")
                     if output is not None and not isinstance(output, dict):
                         output = {"value": output}
+                    coverage = output.get("coverage") if output else None
+                    if (
+                        step_def.get("type") == "search"
+                        and isinstance(coverage, dict)
+                        and isinstance(coverage.get("search_strategy"), dict)
+                    ):
+                        # Attach imported IDs and attempt history to the durable
+                        # journal; the lifecycle commit below persists both.
+                        await receipt_journal.finalize_search_step(
+                            step_id=str(event.get("step_id") or step_def.get("id")),
+                            strategy=coverage["search_strategy"],
+                            output=output,
+                        )
                     source_rows = (
                         research_source_rows(run_id, output)
                         if step_def.get("type") == "search" and output

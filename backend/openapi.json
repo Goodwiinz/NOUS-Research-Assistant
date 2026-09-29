@@ -35675,7 +35675,7 @@
     },
     "/api/v1/research-engine/runs/{run_id}/manifest": {
       "get": {
-        "description": "Get reproducibility manifest for a completed run.",
+        "description": "Get the current manifest, including durable in-flight search receipts.",
         "operationId": "get_manifest_api_v1_research_engine_runs__run_id__manifest_get",
         "parameters": [
           {

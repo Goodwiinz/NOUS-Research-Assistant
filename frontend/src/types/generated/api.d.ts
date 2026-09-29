@@ -6129,7 +6129,7 @@ export interface paths {
         };
         /**
          * Get Manifest
-         * @description Get reproducibility manifest for a completed run.
+         * @description Get the current manifest, including durable in-flight search receipts.
          */
         get: operations["get_manifest_api_v1_research_engine_runs__run_id__manifest_get"];
         put?: never;
