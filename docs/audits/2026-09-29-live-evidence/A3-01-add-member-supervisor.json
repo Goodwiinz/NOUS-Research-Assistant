@@ -1,0 +1,24 @@
+{
+  "step": "A3-01-add-member-supervisor",
+  "as": "owner",
+  "at": "2026-09-29T10:17:07.261405+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v2/workspaces/f7538b4a-d043-4a10-b763-e45ce369d69e/members",
+    "body": {
+      "user_id": "6a3cfda8-4572-4027-9e38-7c9aaba76932",
+      "role": "editor"
+    }
+  },
+  "status": 400,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Target user does not exist",
+      "status_code": 400,
+      "type": "http_error"
+    }
+  }
+}

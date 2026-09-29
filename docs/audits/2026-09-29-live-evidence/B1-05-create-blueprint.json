@@ -1,0 +1,119 @@
+{
+  "step": "B1-05-create-blueprint",
+  "as": "owner",
+  "at": "2026-09-29T10:18:45.644195+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/blueprints/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652",
+    "body": {
+      "name": "eval-2026-09-29-evidence-synthesis",
+      "template_source": "evidence_synthesis",
+      "parameters": {
+        "query": "retrieval augmented generation hallucination",
+        "sources": [
+          "arxiv"
+        ],
+        "max_results": 5
+      }
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "fab71505-9dd2-4b00-b186-9f843c2b9ccf",
+    "project_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+    "research_engine_project_id": "2dff0f55-c5c0-4fa2-9b22-0922d7eb3bad",
+    "name": "eval-2026-09-29-evidence-synthesis",
+    "template_source": "evidence_synthesis",
+    "version": 1,
+    "steps": [
+      {
+        "type": "search",
+        "name": "Multi-Source Search",
+        "description": "Search configured academic databases for documents related to the research query.",
+        "parameters": {
+          "sources": "{sources}",
+          "max_results": "{max_results}",
+          "contract_version": 1
+        },
+        "model_id": null,
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": null
+      },
+      {
+        "type": "extract",
+        "name": "Claim and Evidence Extraction",
+        "description": "Extract individual claims and their supporting evidence from each retrieved document.",
+        "parameters": {
+          "output_kind": "claims",
+          "extract_claims": true,
+          "contract_version": 1,
+          "extract_evidence": true,
+          "confidence_threshold": "{claim_threshold}"
+        },
+        "model_id": "claude-sonnet-4-6",
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": "Return exactly {\"records\":[{\"source_id\":\"<UUID>\",\"part_id\":\"p0001\",\"claims\":[{\"claim_text\":\"Treatment reduced the measured score\",\"quote\":\"The measured score decreased after treatment\",\"confidence\":0.9,\"page_reference\":null}]}]}. Include only claims supported by an exact source-substring quote. Confidence must be finite and from 0 to 1. Set page_reference to null unless trusted source metadata supplied a page locator.\n"
+      },
+      {
+        "type": "synthesize",
+        "name": "Evidence Map Construction",
+        "description": "Build an evidence map linking claims to supporting and contradicting evidence across sources.",
+        "parameters": {},
+        "model_id": "claude-sonnet-4-6",
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": "Return exactly {\"sections\":[{\"heading\":\"Findings\",\"claims\":[{\"claim_text\":\"The study reports a lower score\",\"evidence\":[{\"evidence_id\":\"e0001\",\"relation\":\"supports\"}]}]}]}. Use only supplied evidence IDs, include at least one supporting reference per factual claim, and use relation supports or contradicts. Do not infer full-paper evidence from abstracts.\n"
+      },
+      {
+        "type": "verify",
+        "name": "Grounding Verification",
+        "description": "Verify that all synthesized claims are grounded in the original source material.",
+        "parameters": {},
+        "model_id": "claude-sonnet-4-6",
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": "Return exactly {\"checks\":[{\"claim_id\":\"c0001\",\"status\":\"supported\",\"reason\":\"The cited excerpt states this result\"}]} with exactly one check per supplied claim ID. Status must be supported, unverified, or contradicted. Assess each claim only against its supplied original source quotes.\n"
+      },
+      {
+        "type": "export",
+        "name": "Synthesis Report Export",
+        "description": "Export the evidence synthesis as a structured report with evidence map visualization data.",
+        "parameters": {
+          "format": "markdown",
+          "include_evidence_map": true
+        },
+        "model_id": null,
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": null
+      }
+    ],
+    "parameters": {
+      "query": "retrieval augmented generation hallucination",
+      "sources": [
+        "arxiv"
+      ],
+      "max_results": 5,
+      "claim_threshold": 0.7,
+      "contract_version": 1
+    },
+    "is_immutable": false,
+    "created_at": "2026-09-29T10:18:45.528527Z",
+    "updated_at": "2026-09-29T10:18:45.528531Z"
+  }
+}
