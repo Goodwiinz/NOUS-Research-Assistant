@@ -1,5 +1,6 @@
 """Artifact transport; the publication service owns authorization and commits."""
 
+from typing import cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -52,6 +53,13 @@ _STATUS: dict[type[ArtifactError], tuple[int, str]] = {
 def _http(error: ArtifactError) -> HTTPException:
     status, detail = _STATUS.get(type(error), (500, "Artifact request failed"))
     return HTTPException(status, detail)
+
+
+def _identity(user: User) -> tuple[UUID, UUID]:
+    """Current principal; the legacy ORM columns are untyped."""
+    if user.organization_id is None:
+        raise HTTPException(403, "Organization membership required")
+    return cast(UUID, user.id), cast(UUID, user.organization_id)
 
 
 def _require_publishing() -> None:
@@ -111,10 +119,9 @@ async def thread_artifacts(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ThreadArtifactDTO]:
-    if user.organization_id is None:
-        raise HTTPException(403, "Organization membership required")
+    user_id, organization_id = _identity(user)
     return await list_thread_artifacts(
-        db, user_id=user.id, organization_id=user.organization_id, thread_id=thread_id
+        db, user_id=user_id, organization_id=organization_id, thread_id=thread_id
     )
 
 
@@ -124,13 +131,12 @@ async def artifact_versions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ArtifactVersionDTO]:
-    if user.organization_id is None:
-        raise HTTPException(403, "Organization membership required")
+    user_id, organization_id = _identity(user)
     try:
         return await list_versions(
             db,
-            user_id=user.id,
-            organization_id=user.organization_id,
+            user_id=user_id,
+            organization_id=organization_id,
             artifact_id=artifact_id,
         )
     except ArtifactError as error:
@@ -143,13 +149,12 @@ async def version_content(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    if user.organization_id is None:
-        raise HTTPException(403, "Organization membership required")
+    user_id, organization_id = _identity(user)
     try:
         content, mime_type, title = await read_version_content(
             db,
-            user_id=user.id,
-            organization_id=user.organization_id,
+            user_id=user_id,
+            organization_id=organization_id,
             version_id=version_id,
         )
     except ArtifactError as error:

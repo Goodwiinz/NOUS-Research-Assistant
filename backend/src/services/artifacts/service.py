@@ -10,10 +10,11 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.artifact import (
@@ -124,7 +125,7 @@ def _version_dto(version: ArtifactVersion) -> ArtifactVersionDTO:
         mime_type=version.mime_type,
         byte_size=version.byte_size,
         sha256=version.sha256,
-        created_at=_aware(version.created_at),
+        created_at=_aware(cast(datetime, version.created_at)),
         provenance=ArtifactProvenance.model_validate(version.provenance),
     )
 
@@ -148,18 +149,25 @@ async def reserve_upload(
         return ArtifactUploadDTO(
             upload_id=existing.id, expires_at=_aware(existing.expires_at)
         )
-    # Quota counts committed versions plus reservations that could still land.
+    # Quota counts live committed versions plus reservations that could still
+    # land: unexpired ones, and stored-but-unfinalized ones whose bytes exist
+    # until the Task 1b sweeper removes them.
     now = _now()
     committed = await db.scalar(
         select(func.coalesce(func.sum(ArtifactVersion.byte_size), 0))
         .join(Artifact, Artifact.id == ArtifactVersion.artifact_id)
         .where(
-            Artifact.project_id == context.project_id, Artifact.is_deleted.is_(False)
+            Artifact.organization_id == context.organization_id,
+            Artifact.project_id == context.project_id,
+            Artifact.is_deleted.is_(False),
+            ArtifactVersion.is_deleted.is_(False),
         )
     )
     reserved = await db.scalar(
         select(func.coalesce(func.sum(ArtifactUpload.byte_size), 0)).where(
+            ArtifactUpload.organization_id == context.organization_id,
             ArtifactUpload.project_id == context.project_id,
+            ArtifactUpload.is_deleted.is_(False),
             ArtifactUpload.version_id.is_(None),
             or_(ArtifactUpload.expires_at > now, ArtifactUpload.stored_at.is_not(None)),
         )
@@ -271,21 +279,41 @@ async def publish_version(
         thread_id=context.thread_id,
         grant_id=context.grant_id,
     )
-    db.add(version)
-    db.add(
-        ArtifactReference(
-            id=uuid4(),
-            artifact_id=artifact.id,
-            version_id=version.id,
-            run_id=version.run_id,
-            thread_id=context.thread_id,
-        )
+    reference = ArtifactReference(
+        id=uuid4(),
+        artifact_id=artifact.id,
+        version_id=version.id,
+        run_id=version.run_id,
+        thread_id=context.thread_id,
     )
+    db.add(version)
+    db.add(reference)
     artifact.current_version_id = version.id
     artifact.title = request.title
     upload.version_id = version.id
     upload.publish_hash = publish_hash
-    await db.commit()
+    upload_pk = upload.id  # rollback expires the row; keep the key as a plain value
+    try:
+        await db.commit()
+    except IntegrityError:
+        # A concurrent finalize won the unique(upload_id) race; the loser
+        # returns the same version or a conflict, never a second version.
+        await db.rollback()
+        # Drop the loser's rows so later autoflushes cannot replay the insert.
+        for pending in (version, reference, artifact):
+            if pending in db:
+                db.expunge(pending)
+        with db.no_autoflush:
+            winner = await db.scalar(
+                select(ArtifactVersion).where(
+                    ArtifactVersion.upload_id == upload_pk,
+                    ArtifactVersion.is_deleted.is_(False),
+                )
+            )
+            settled = await db.get(ArtifactUpload, upload_pk, populate_existing=True)
+        if winner is None or settled is None or settled.publish_hash != publish_hash:
+            raise ArtifactConflict()
+        return _version_dto(winner)
     return _version_dto(version)
 
 
@@ -319,7 +347,7 @@ async def list_thread_artifacts(
 ) -> list[ThreadArtifactDTO]:
     rows = (
         await db.execute(
-            select(ArtifactVersion, ArtifactReference)
+            select(ArtifactVersion, ArtifactReference, Artifact.project_id)
             .join(ArtifactReference, ArtifactReference.version_id == ArtifactVersion.id)
             .join(Artifact, Artifact.id == ArtifactVersion.artifact_id)
             .join(Collection, Collection.id == Artifact.project_id)
@@ -337,8 +365,7 @@ async def list_thread_artifacts(
     ).all()
     items: list[ThreadArtifactDTO] = []
     checked: dict[UUID, bool] = {}
-    for version, reference in rows:
-        project_id = (await db.get(Artifact, version.artifact_id)).project_id  # type: ignore[union-attr]
+    for version, reference, project_id in rows:
         if project_id not in checked:
             try:
                 await authorized_project(db, user_id, organization_id, project_id)

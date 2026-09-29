@@ -89,7 +89,8 @@ class SupabaseArtifactStorage:
         from src.core.supabase_client import StorageHelper
 
         self.helper = StorageHelper()
-        self.bucket = settings.SUPABASE_STORAGE_BUCKET
+        # Same private bucket the file service uses; keys stay under artifacts/.
+        self.bucket = "documents"
 
     async def put(self, key: str, content: bytes, mime_type: str) -> None:
         await asyncio.to_thread(

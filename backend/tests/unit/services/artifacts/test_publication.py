@@ -2,11 +2,12 @@
 
 import hashlib
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models.artifact import (
@@ -28,6 +29,7 @@ from src.schemas.artifact import (
     ArtifactQuotaExceeded,
     ArtifactStorageUnavailable,
     ArtifactTooLarge,
+    ArtifactVersionDTO,
     PublishVersionRequest,
     ReserveArtifactUploadRequest,
 )
@@ -62,8 +64,9 @@ def _user_sql(user_id: UUID, org: UUID, email: str) -> tuple[str, dict[str, str]
 
 
 @pytest.fixture
-async def db() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
+    # File-backed so a second session can commit a competing row.
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'artifacts.db'}")
     tables: list[Any] = [
         Organization,
         User,
@@ -172,7 +175,9 @@ def _publish(
     )
 
 
-async def _published(db: AsyncSession, context: IntegrationContext, **overrides: Any):
+async def _published(
+    db: AsyncSession, context: IntegrationContext, **overrides: Any
+) -> tuple[PublishVersionRequest, ArtifactVersionDTO]:
     reserve = _reserve()
     upload = await reserve_upload(db, context, reserve)
     await store_upload(db, context, upload.upload_id, CONTENT)
@@ -180,7 +185,9 @@ async def _published(db: AsyncSession, context: IntegrationContext, **overrides:
     return request, await publish_version(db, context, request)
 
 
-async def test_finalize_is_idempotent_after_terminal(db, context) -> None:
+async def test_finalize_is_idempotent_after_terminal(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
     request, first = await _published(db, context)
     second = await publish_version(db, context, request)
     assert first.version_id == second.version_id
@@ -194,7 +201,9 @@ async def test_finalize_is_idempotent_after_terminal(db, context) -> None:
     assert not hasattr(first, "storage_key")
 
 
-async def test_changed_replay_conflicts(db, context) -> None:
+async def test_changed_replay_conflicts(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
     request, first = await _published(db, context)
     with pytest.raises(ArtifactConflict):
         await publish_version(
@@ -207,7 +216,9 @@ async def test_changed_replay_conflicts(db, context) -> None:
     assert same.upload_id == request.upload_id
 
 
-async def test_digest_and_size_mismatch_never_store(db, context, storage) -> None:
+async def test_digest_and_size_mismatch_never_store(
+    db: AsyncSession, context: IntegrationContext, storage: MemoryArtifactStorage
+) -> None:
     upload = await reserve_upload(db, context, _reserve())
     with pytest.raises(ArtifactDigestMismatch):
         await store_upload(db, context, upload.upload_id, b"tampered\n")
@@ -229,7 +240,12 @@ async def test_digest_and_size_mismatch_never_store(db, context, storage) -> Non
         "foreign_actor",
     ],
 )
-async def test_publication_denials(db, context, storage, case: str) -> None:
+async def test_publication_denials(
+    db: AsyncSession,
+    context: IntegrationContext,
+    storage: MemoryArtifactStorage,
+    case: str,
+) -> None:
     request = _reserve()
     expected: type[Exception] = ArtifactAccessDenied
     if case == "oversize":
@@ -275,7 +291,9 @@ async def test_publication_denials(db, context, storage, case: str) -> None:
     ) is None
 
 
-async def test_expired_reservation_cannot_be_stored(db, context, storage) -> None:
+async def test_expired_reservation_cannot_be_stored(
+    db: AsyncSession, context: IntegrationContext, storage: MemoryArtifactStorage
+) -> None:
     upload = await reserve_upload(db, context, _reserve())
     await db.execute(
         update(ArtifactUpload)
@@ -288,7 +306,9 @@ async def test_expired_reservation_cannot_be_stored(db, context, storage) -> Non
     assert storage.objects == {}
 
 
-async def test_missing_blob_keeps_current_version(db, context, storage) -> None:
+async def test_missing_blob_keeps_current_version(
+    db: AsyncSession, context: IntegrationContext, storage: MemoryArtifactStorage
+) -> None:
     request, first = await _published(db, context)
     reserve = _reserve()
     upload = await reserve_upload(db, context, reserve)
@@ -310,7 +330,9 @@ async def test_missing_blob_keeps_current_version(db, context, storage) -> None:
         )
 
 
-async def test_new_version_requires_current_parent(db, context) -> None:
+async def test_new_version_requires_current_parent(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
     _, first = await _published(db, context)
     reserve = _reserve()
     upload = await reserve_upload(db, context, reserve)
@@ -347,7 +369,9 @@ async def test_new_version_requires_current_parent(db, context) -> None:
         )
 
 
-async def test_reads_recheck_org_project_and_ancestors(db, context, storage) -> None:
+async def test_reads_recheck_org_project_and_ancestors(
+    db: AsyncSession, context: IntegrationContext, storage: MemoryArtifactStorage
+) -> None:
     _, version = await _published(db, context)
     content, mime, filename = await read_version_content(
         db, user_id=USER, organization_id=ORG, version_id=version.version_id
@@ -413,3 +437,63 @@ async def test_unknown_mime_is_stored_as_octet_stream_and_dto_hides_keys(
     assert version.mime_type == "application/octet-stream"
     assert "storage_key" not in version.model_dump()
     assert version.provenance.producer == "harness"
+
+
+async def test_concurrent_finalize_returns_the_winner(
+    db: AsyncSession, context: IntegrationContext, storage: MemoryArtifactStorage
+) -> None:
+    reserve = _reserve()
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    request = _publish(reserve, upload.upload_id)
+    winner_id = uuid4()
+    real_exists = storage.exists
+
+    async def commit_competitor(key: str) -> bool:
+        # Another worker finalizes the same upload while this one checks the blob.
+        async with async_sessionmaker(db.bind, expire_on_commit=False)() as other:  # type: ignore[arg-type]
+            artifact_id = uuid4()
+            other.add(
+                Artifact(
+                    id=artifact_id,
+                    organization_id=ORG,
+                    project_id=PROJECT,
+                    owner_id=USER,
+                    title="report.md",
+                    current_version_id=winner_id,
+                )
+            )
+            other.add(
+                ArtifactVersion(
+                    id=winner_id,
+                    artifact_id=artifact_id,
+                    upload_id=upload.upload_id,
+                    title="report.md",
+                    mime_type="text/markdown",
+                    byte_size=len(CONTENT),
+                    sha256=DIGEST,
+                    storage_key=f"artifacts/{ORG}/uploads/{upload.upload_id}",
+                    producer="harness",
+                    provenance={"producer": "harness", "source_ids": []},
+                    grant_id=context.grant_id,
+                )
+            )
+            await other.execute(
+                update(ArtifactUpload)
+                .where(ArtifactUpload.id == upload.upload_id)
+                .values(
+                    version_id=winner_id,
+                    publish_hash=service._hash(request.model_dump(mode="json")),
+                )
+            )
+            await other.commit()
+        return await real_exists(key)
+
+    storage.exists = commit_competitor  # type: ignore[method-assign]
+    result = await publish_version(db, context, request)
+    assert result.version_id == winner_id
+    assert await db.scalar(select(func.count()).select_from(ArtifactVersion)) == 1
+    storage.exists = real_exists  # type: ignore[method-assign]
+    changed = request.model_copy(update={"title": "other.md"})
+    with pytest.raises(ArtifactConflict):
+        await publish_version(db, context, changed)
