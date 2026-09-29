@@ -965,3 +965,54 @@ revision case in `test_result_receipts_keep_mutation_root_labels_and_relations_f
   immediately before the real claim. The stream returns 409 and records zero
   workflow-engine invocations against the task-owned disposable PostgreSQL
   schema (2 integration cases pass; one baseline Pydantic warning).
+
+## GOO-297 draft task terminal results — 2026-09-29
+
+Recorded on branch `feat/goo-297-task-terminal-results` at source revision
+`4b13d9182`. Pre-mutation and restored SHA-256:
+`backend/src/services/research/draft_generation_service.py`
+`9c041c3554e1594ac92d9e7a463dc07737d36ae57fc08b2156cffa784874af9f`;
+`backend/src/api/research/drafts.py`
+`f718ddb32959cc889e13831f0ae54d7fc4b625b00b3edcaa08766f4b52816ed7`. For each
+mutant: copy the source, apply the mutant, run the focused suite, restore
+the copy (`cmp -s` exit 0), rerun. No mutant was committed. After every
+restore the unit command gave `11 passed` and the PostgreSQL command gave
+`8 passed`. Each run also shows the existing Pydantic v2 `schema_extra`
+warning. The PostgreSQL URL is a disposable database supplied through the
+private environment; its value is left out here.
+
+Unit command (aiosqlite, no services):
+
+```sh
+pytest -q backend/tests/unit/services/test_draft_task_results.py backend/tests/unit/api/test_draft_task_status_route.py
+```
+
+PostgreSQL command:
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${RESEARCH_DECISION_DATABASE_URL:?}" pytest -q backend/tests/integration/test_draft_task_results_postgres.py
+```
+
+Line numbers are in `draft_generation_service.py` unless marked
+`drafts.py`.
+
+| Guard | Mutation | Observed mutant failure |
+|---|---|---|
+| `finish_task` running predicate, line 178 (`DraftTaskResult.state == "running"`) | delete the line | unit 5 failed, incl. "a terminal row was overwritten by a second write", "a cancelled task was allowed to complete", "a cancelled task landed a draft"; PostgreSQL 2 failed: scenario 5 "both writers claimed the terminal", scenario 6 `[other_replica]` "a cancelled task landed a draft" |
+| window-3 refusal, line 775 (`raise DraftTaskNotRunning(task_id)`) | replace with `pass` | unit `test_completion_on_a_cancelled_row_rolls_the_draft_back` and PostgreSQL scenario 6 `[other_replica]`: "a cancelled task landed a draft" |
+| `finish_task` binds the passed draft, line 172 | A: in-transaction `select(GeneratedDraft).where(is_current)` | unit 2 failed ("task A bound another task's draft", "terminal association moved to draft_b"); PostgreSQL **8 passed, not observable**, see note |
+| same | B: same query through a fresh `AsyncSessionLocal()` | PostgreSQL scenario 4: "a draft was shared" |
+| `reconcile_task` staleness, line 216 (`heartbeat_at < threshold`) | delete the line | "a live task was marked interrupted" |
+| `cancel_latest_task` row write, lines 2031-2033 | delete the `finish_task` call | `assert ('running', None) == ('cancelled', 'cancelled_by_user')` |
+| `cancel_task` reports the row outcome, line 1997 (`return cancelled`) | `return True` | "a cancel was reported for a completed task"; route fallback test "DID NOT RAISE HTTPException" (no 409) |
+| `_fail_task` mirror bypasses the cancelled guard, line 1837 (`force=True`) | drop `force=True` | `test_cancel_after_the_draft_commit_is_refused`: `CancelledError: generation cancelled by user` escapes the handler |
+| `drafts.py:497-503` scope check before `reconcile_task` | call `reconcile_task` unconditionally first | `test_status_hides_another_actors_task`: "Expected mock to not have been awaited. Awaited 1 times." |
+| `drafts.py:578-584` cross-replica cancel through the scoped row | 404 whenever there is no in-memory status | `test_cancel_route_falls_back_to_the_retained_row`: `HTTPException: 404` |
+
+Note on mutation A: `lock_active_project` serialises version allocation.
+Inside each task's own transaction, "the current draft" is therefore that
+task's own flushed draft, and the PostgreSQL concurrency test cannot tell
+this mutant from the real code. The plan expected scenario 4 to catch it;
+it does not. The unit test
+`test_completion_binds_the_task_own_draft` catches it. Scenario 4 catches
+the out-of-transaction variant, mutation B.
