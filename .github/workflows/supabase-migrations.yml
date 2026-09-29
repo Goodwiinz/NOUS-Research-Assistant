@@ -23,9 +23,10 @@ jobs:
     name: Apply Supabase migrations
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # The production environment holds SUPABASE_DB_URL and only deploys from
-    # develop, so a workflow_dispatch from another branch cannot reach it.
-    environment: production
+    # A dispatch runs the chosen branch's migrations; only develop's are merged.
+    # ponytail: guards mistakes, not a boundary. Any branch with write access
+    # can read a repository secret; a protected environment would close that.
+    if: github.ref == 'refs/heads/develop'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
