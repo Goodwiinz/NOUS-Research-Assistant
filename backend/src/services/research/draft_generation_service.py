@@ -1996,6 +1996,24 @@ Key takeaways include the importance of continued investigation and the potentia
             return task_id
         return None
 
+    @classmethod
+    async def cancel_latest_task(
+        cls,
+        db: AsyncSession,
+        project_id: UUID,
+        user_id: Optional[UUID] = None,
+    ) -> Optional[str]:
+        """``cancel_latest_generation`` plus the retained-row write, so a
+        cancel never leaves a running row to later read as interrupted."""
+        task_id = cls.cancel_latest_generation(project_id, user_id)
+        if task_id is None:
+            return None
+        await finish_task(
+            db, task_id=task_id, state="cancelled", error_code="cancelled_by_user"
+        )
+        await db.commit()
+        return task_id
+
     def _record_generation_metrics(
         self,
         status: str,

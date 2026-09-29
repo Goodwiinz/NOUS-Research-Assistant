@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
 from src.services.research.draft_generation_service import (
+    DraftGenerationService,
+    _generation_status,
     finish_task,
     reconcile_task,
     start_task,
@@ -188,3 +190,29 @@ async def test_stale_running_becomes_interrupted(engine: AsyncEngine) -> None:
         assert await reconcile_task(db, "missing") is None
 
     assert (await _row(engine, "stale")).state == "interrupted"
+
+
+async def test_cancel_latest_marks_the_row_cancelled(engine: AsyncEngine) -> None:
+    """Cancel without a task id must not leave a running row behind (it would
+    later flip to interrupted and misattribute the user's cancel)."""
+    _generation_status["latest-1"] = {
+        "status": "generating",
+        "progress": 30,
+        "current_step": "Generating content",
+        "started_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+        "project_id": str(PROJECT),
+        "user_id": str(ACTOR),
+    }
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            await _start(db, "latest-1")
+            cancelled = await DraftGenerationService.cancel_latest_task(
+                db, project_id=PROJECT, user_id=ACTOR
+            )
+    finally:
+        _generation_status.pop("latest-1", None)
+
+    row = await _row(engine, "latest-1")
+    assert cancelled == "latest-1"
+    assert (row.state, row.error_code) == ("cancelled", "cancelled_by_user")
