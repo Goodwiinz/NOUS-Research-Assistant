@@ -1989,6 +1989,10 @@ async def stream_event_generator(
             integration_context = await context_for_accepted_run(
                 db, run_id=_uuid.UUID(acceptance.run_id), current_user=current_user
             )
+            # The accepted-run lookup is read-only. The long-lived SSE iterator
+            # polls through its own sessions, so release this request session's
+            # connection before entering the stream.
+            await db.rollback()
             async for frame in stream_harness_run(
                 request,
                 _uuid.UUID(acceptance.run_id),

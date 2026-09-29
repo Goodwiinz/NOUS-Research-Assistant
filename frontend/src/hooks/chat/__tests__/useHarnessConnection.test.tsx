@@ -74,6 +74,7 @@ function renderConnectedHarness(threadId = 'thread-a'): ConnectedHarness {
 describe('useHarnessConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     listDevices.mockResolvedValue([]);
     listWorkspaces.mockResolvedValue([]);
   });
@@ -124,6 +125,86 @@ describe('useHarnessConnection', () => {
     await waitFor(() =>
       expect(restored.result.current.workspaceId).toBe('workspace-a')
     );
+  });
+
+  it('adopts a draft selection and routes late callbacks to the created thread', async () => {
+    listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
+    listWorkspaces.mockResolvedValue([
+      { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
+    ]);
+    readRequest.mockResolvedValue({
+      id: 'request-a',
+      runId: 'run-a',
+      method: 'item/commandExecution/requestApproval',
+      target: { command: 'pnpm test' },
+      targetHash: 'a'.repeat(64),
+      expiresAt: '2026-09-29T00:00:00Z',
+      consumed: false,
+      expired: false,
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(
+      ({ threadId }: { threadId: string | null }) =>
+        useHarnessConnection(threadId),
+      { initialProps: { threadId: null }, wrapper }
+    );
+    act(() => {
+      view.result.current.selectProvider('codex');
+      view.result.current.selectDevice('device-a');
+      view.result.current.selectWorkspace('workspace-a');
+    });
+    const draftController = view.result.current;
+
+    view.rerender({ threadId: 'thread-created' });
+    await waitFor(() => {
+      expect(view.result.current.executionProvider).toBe('codex');
+      expect(view.result.current.workspaceId).toBe('workspace-a');
+    });
+    act(() =>
+      draftController.receive(
+        { type: 'accepted', runId: 'run-a' },
+        'thread-created'
+      )
+    );
+    await act(async () => {
+      await draftController.loadApproval('request-a', 'thread-created');
+    });
+    expect(view.result.current.runId).toBe('run-a');
+    expect(view.result.current.pendingRequests.map((item) => item.id)).toEqual([
+      'request-a',
+    ]);
+  });
+
+  // Mutation guard for useHarnessConnection.ts:258-267: restoring a render-captured
+  // pendingRequests snapshot drops one overlapping arrival. Verify with
+  // `pnpm --dir frontend exec vitest run src/hooks/chat/__tests__/useHarnessConnection.test.tsx -t "merges concurrent native requests"`.
+  it('merges concurrent native requests that resolve from the same render', async () => {
+    readRequest.mockImplementation(async (id: string) => ({
+      id,
+      runId: 'run-a',
+      method: 'item/commandExecution/requestApproval',
+      target: { command: `command for ${id}` },
+      targetHash: 'b'.repeat(64),
+      expiresAt: '2026-09-29T00:00:00Z',
+      consumed: false,
+      expired: false,
+    }));
+    const view = renderConnectedHarness('thread-a');
+    const first = view.result.current.loadApproval('request-one');
+    const second = view.result.current.loadApproval('request-two');
+    await act(async () => {
+      await Promise.all([first, second]);
+    });
+
+    expect(view.result.current.pendingRequests.map((item) => item.id).sort()).toEqual([
+      'request-one',
+      'request-two',
+    ]);
   });
 
   it('fetches the exact native request before submitting its target-bound decision', async () => {
@@ -189,6 +270,35 @@ describe('useHarnessConnection', () => {
       screen.queryByText('Codex needs permission to continue')
     ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Allow once' })).toBeEnabled();
+  });
+
+  it('does not offer decision cancellation for answer-only native requests', async () => {
+    readRequest.mockResolvedValue({
+      id: 'request-input',
+      runId: 'run-a',
+      method: 'item/tool/requestUserInput',
+      target: {
+        questions: [
+          { id: 'goal', header: 'Goal', question: 'What are you trying to do?' },
+        ],
+      },
+      targetHash: 'd'.repeat(64),
+      expiresAt: '2026-09-29T00:00:00Z',
+      consumed: false,
+      expired: false,
+    });
+    const view = renderConnectedHarness();
+    await act(async () => {
+      await view.result.current.loadApproval('request-input');
+    });
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+
+    expect(screen.getByRole('button', { name: 'Send answers' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Cancel request' })).toBeNull();
   });
 
   it('fails closed when a file-change request has only a reason and item reference', async () => {

@@ -22,7 +22,12 @@ from src.core.dependencies import get_current_user
 from src.core.websocket_auth import WebSocketAuthenticator, WebSocketAuthError
 from src.models.integration_grant import IntegrationGrant
 from src.models.user import User
-from src.schemas.harness import BridgeEvent, NativeRequestDTO
+from src.schemas.harness import (
+    BridgeEvent,
+    NativeRequest,
+    NativeRequestDTO,
+    NativeResponseAck,
+)
 from src.services.harness.approvals import (
     NativeDecision,
     NativeRequestConflict,
@@ -52,7 +57,7 @@ async def read_native_request(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     try:
-        request = await get_native_request(db, request_id, user.id)
+        request = await get_native_request(db, request_id, UUID(str(user.id)))
     except IntegrationAccessDenied as error:
         raise HTTPException(404, "Native request not found") from error
     return {
@@ -75,13 +80,13 @@ async def decide_native_request(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     try:
-        display = await get_native_request(db, request_id, user.id)
+        display = await get_native_request(db, request_id, UUID(str(user.id)))
         if (
             decision.target_hash is None
             or decision.target_hash != display["target_hash"]
         ):
             raise NativeRequestConflict("Displayed native target changed")
-        context = await native_request_context(db, request_id, user.id)
+        context = await native_request_context(db, request_id, UUID(str(user.id)))
         if context.organization_id != user.organization_id:
             raise IntegrationAccessDenied()
         await resolve_native_request(db, context, request_id, decision)
@@ -153,10 +158,11 @@ async def connect(websocket: WebSocket) -> None:
                         )
                 else:
                     event = BridgeEvent.model_validate(value)
-                    if getattr(event.body, "kind", None) == "request":
-                        request_id = await ingest_native_request(db, context, event)
-                        seq = 0
-                    elif getattr(event.body, "kind", None) == "command_ack":
+                    if isinstance(event.body, NativeRequest):
+                        request_id, seq = await ingest_native_request(
+                            db, context, event
+                        )
+                    elif isinstance(event.body, NativeResponseAck):
                         request_id = event.body.approvalRecordId
                         seq = await ingest_native_response_ack(db, context, event)
                     else:
