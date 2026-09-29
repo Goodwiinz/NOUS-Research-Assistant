@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { agentChatService } from '@/services/agentChatService';
 import { harnessService } from '@/services/harnessService';
 import type {
@@ -85,6 +85,8 @@ export interface HarnessConnectionController extends HarnessSelection {
   selectProvider(provider: HarnessProvider): void;
   selectDevice(deviceId: string | null): void;
   selectWorkspace(workspaceId: string | null): void;
+  /** Carry the draft selection over to a thread this draft just created. */
+  adoptDraftSelection(newThreadId: string): void;
   receive(
     event: { type: string; runId?: string; detail?: string },
     targetThreadId?: string | null
@@ -109,7 +111,6 @@ export function useHarnessConnection(
   const queryClient = useQueryClient();
   const key = selectionKey(userId, threadId);
   const draftKey = selectionKey(userId, null);
-  const previousThreadId = useRef(threadId);
   const [selections, setSelections] = useState<
     Record<string, HarnessSelection>
   >(() => ({ [key]: readSelection(key) }));
@@ -120,21 +121,23 @@ export function useHarnessConnection(
   const runtime = runtimeByKey[key] ?? EMPTY_RUNTIME_STATE;
   const { connectionState, runId, pendingRequests } = runtime;
 
-  useEffect(() => {
-    if (
-      previousThreadId.current === null &&
-      threadId !== null &&
-      !hasStoredSelection(key)
-    ) {
+  // Adoption is an explicit call from the send path that created the thread,
+  // not inferred from threadId going null -> id: that transition also happens
+  // when a draft user opens an existing thread, which must not inherit the
+  // draft's Codex selection.
+  const adoptDraftSelection = useCallback(
+    (newThreadId: string) => {
+      const newKey = selectionKey(userId, newThreadId);
       const draftSelection = selections[draftKey] ?? readSelection(draftKey);
-      setSelections((current) =>
-        current[key]
-          ? current
-          : { ...current, [key]: draftSelection }
-      );
-    }
-    previousThreadId.current = threadId;
-  }, [draftKey, key, selections, threadId]);
+      setSelections((current) => ({ ...current, [newKey]: draftSelection }));
+      try {
+        window.localStorage.setItem(newKey, JSON.stringify(draftSelection));
+      } catch {
+        // Display preference only; state above still applies this session.
+      }
+    },
+    [draftKey, selections, userId]
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -343,6 +346,7 @@ export function useHarnessConnection(
         updateSelection({ deviceId, workspaceId: null }),
       selectWorkspace: (workspaceId: string | null) =>
         updateSelection({ workspaceId }),
+      adoptDraftSelection,
       receive,
       markConnectionLost,
       loadApproval,
@@ -350,6 +354,7 @@ export function useHarnessConnection(
       stop,
     }),
     [
+      adoptDraftSelection,
       blocked,
       connectionState,
       decideRequest,

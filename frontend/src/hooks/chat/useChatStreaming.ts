@@ -2062,6 +2062,9 @@ export function useChatStreaming(
             };
 
             setConversations((prev) => [newConv, ...prev]);
+            // Before the store switches threads so the new thread's first render
+            // already reads the draft's provider/device/workspace selection.
+            harnessConnection.adoptDraftSelection(newThread.id);
             useChatStore.getState().setCurrentThread(newConv.id);
             queueMicrotask(() => {
               if (

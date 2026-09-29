@@ -160,6 +160,7 @@ describe('useHarnessConnection', () => {
     });
     const draftController = view.result.current;
 
+    act(() => draftController.adoptDraftSelection('thread-created'));
     view.rerender({ threadId: 'thread-created' });
     await waitFor(() => {
       expect(view.result.current.executionProvider).toBe('codex');
@@ -178,6 +179,38 @@ describe('useHarnessConnection', () => {
     expect(view.result.current.pendingRequests.map((item) => item.id)).toEqual([
       'request-a',
     ]);
+  });
+
+  it('does not copy the draft selection into an existing thread the user opens', async () => {
+    listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
+    listWorkspaces.mockResolvedValue([
+      { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
+    ]);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(
+      ({ threadId }: { threadId: string | null }) =>
+        useHarnessConnection(threadId),
+      { initialProps: { threadId: null }, wrapper }
+    );
+    act(() => {
+      view.result.current.selectProvider('codex');
+      view.result.current.selectDevice('device-a');
+      view.result.current.selectWorkspace('workspace-a');
+    });
+
+    // Sidebar click on a never-visited thread: null -> id with no create event.
+    view.rerender({ threadId: 'thread-existing' });
+
+    await waitFor(() => {
+      expect(view.result.current.executionProvider).toBe('nous');
+    });
+    expect(view.result.current.deviceId).toBeNull();
+    expect(view.result.current.workspaceId).toBeNull();
   });
 
   // Mutation guard for useHarnessConnection.ts:258-267: restoring a render-captured
