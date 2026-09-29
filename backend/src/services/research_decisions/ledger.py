@@ -163,6 +163,12 @@ def _validate_event(
     family.validate_payload(
         event_type, payload, aggregate_id, subject_version_id, subject_id
     )
+    if not family.requires_subject_version and (
+        subject_hash != decision_request_fingerprint(payload)
+    ):
+        # Replay re-derives this hash from the stored payload; reject a
+        # mismatch at append time instead of poisoning history forever.
+        raise DecisionValidationError("subject_hash must fingerprint the payload")
 
 
 def _validated_payload_uuid(value: Any, field: str) -> UUID:
@@ -243,10 +249,13 @@ def _validate_identity_payload(
         subject = _validated_payload_uuid(payload["report_id"], "report_id")
         _validated_payload_uuid(payload["study_id"], "study_id")
         prior = _validated_optional_uuid(payload["prior_study_id"], "prior_study_id")
-        if payload["status"] not in STUDY_LINK_STATUSES:
+        status = payload["status"]
+        if not isinstance(status, str) or status not in STUDY_LINK_STATUSES:
             raise DecisionValidationError("study link status is invalid")
         prior_status = payload["prior_status"]
-        if prior_status is not None and prior_status not in STUDY_LINK_STATUSES:
+        if prior_status is not None and (
+            not isinstance(prior_status, str) or prior_status not in STUDY_LINK_STATUSES
+        ):
             raise DecisionValidationError("prior study link status is invalid")
         if (prior is None) != (prior_status is None):
             raise DecisionValidationError("prior study link is incomplete")
@@ -254,9 +263,16 @@ def _validate_identity_payload(
             raise DecisionValidationError("match_evidence must be an object")
     else:
         _validated_uuid_list(payload["moved_source_ids"], "moved_source_ids")
-        if not isinstance(payload["moved_identifiers"], list):
+        moved_identifiers = payload["moved_identifiers"]
+        if not isinstance(moved_identifiers, list) or not all(
+            isinstance(item, Mapping)
+            and set(item) == {"kind", "value"}
+            and isinstance(item["kind"], str)
+            and isinstance(item["value"], str)
+            for item in moved_identifiers
+        ):
             raise DecisionValidationError(
-                "decision payload moved_identifiers must be a list"
+                "decision payload moved_identifiers must be kind/value pairs"
             )
         if event_type == "identity.report_merged":
             subject = _validated_payload_uuid(

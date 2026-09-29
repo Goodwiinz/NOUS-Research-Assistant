@@ -233,3 +233,94 @@ def test_identity_replay_treats_merged_reports_as_terminal() -> None:
             ],
             collection_id,
         )
+
+
+def _merge_payload(
+    collection_id: UUID, survivor: UUID, loser: UUID, moved_identifiers: object = ()
+) -> dict[str, object]:
+    return {
+        "collection_id": str(collection_id),
+        "surviving_report_id": str(survivor),
+        "merged_report_ids": [str(loser)],
+        "moved_source_ids": [],
+        "moved_identifiers": list(moved_identifiers),  # type: ignore[call-overload]
+        "protocol_version_id": None,
+    }
+
+
+def test_identity_replay_carries_loser_link_onto_survivor() -> None:
+    """Deleting the merge link-copy in replay makes the confirm contradictory."""
+    collection_id, survivor, loser, study_id = uuid4(), uuid4(), uuid4(), uuid4()
+    _validate_identity_transitions(
+        [
+            _stored(
+                "identity.study_linked", _link_payload(collection_id, loser, study_id)
+            ),
+            _stored(
+                "identity.report_merged",
+                _merge_payload(collection_id, survivor, loser),
+            ),
+            _stored(
+                "identity.study_linked",
+                _link_payload(
+                    collection_id, survivor, study_id, "confirmed", study_id, "proposed"
+                ),
+            ),
+        ],
+        collection_id,
+    )
+
+
+def test_identity_event_rejects_a_subject_version() -> None:
+    collection_id, report_id = uuid4(), uuid4()
+    event = _identity_event(
+        "identity.study_linked",
+        _link_payload(collection_id, report_id, uuid4()),
+        report_id,
+    )
+    event["subject_version_id"] = uuid4()
+    with pytest.raises(DecisionValidationError, match="must not carry a subject"):
+        _validate_event(**event)  # type: ignore[arg-type]
+
+
+def test_identity_subject_hash_must_fingerprint_its_payload() -> None:
+    """Otherwise one bad append would make history() unreplayable forever."""
+    collection_id, report_id = uuid4(), uuid4()
+    event = _identity_event(
+        "identity.study_linked",
+        _link_payload(collection_id, report_id, uuid4()),
+        report_id,
+    )
+    event["subject_hash"] = "a" * 64
+    with pytest.raises(DecisionValidationError, match="fingerprint"):
+        _validate_event(**event)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field", ["status", "prior_status"])
+def test_identity_link_status_must_be_a_string(field: str) -> None:
+    collection_id, report_id = uuid4(), uuid4()
+    payload = _link_payload(collection_id, report_id, uuid4(), prior_study_id=uuid4())
+    payload["prior_status"] = "proposed"
+    payload[field] = ["proposed"]
+    with pytest.raises(DecisionValidationError, match="status is invalid"):
+        _validate_event(
+            **_identity_event("identity.study_linked", payload, report_id)  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "moved",
+    [
+        ["doi"],
+        [{"kind": "doi"}],
+        [{"kind": "doi", "value": 7}],
+        [{"kind": "doi", "value": "x", "extra": 1}],
+    ],
+)
+def test_identity_moved_identifiers_are_kind_value_pairs(moved: list[object]) -> None:
+    collection_id, survivor = uuid4(), uuid4()
+    payload = _merge_payload(collection_id, survivor, uuid4(), moved)
+    with pytest.raises(DecisionValidationError, match="moved_identifiers"):
+        _validate_event(
+            **_identity_event("identity.report_merged", payload, survivor)  # type: ignore[arg-type]
+        )
