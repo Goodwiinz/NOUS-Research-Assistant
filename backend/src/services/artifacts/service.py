@@ -10,10 +10,11 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -239,12 +240,15 @@ async def reserve_upload(
 async def _existing_reservation(
     db: AsyncSession, context: IntegrationContext, publication_id: UUID
 ) -> ArtifactUpload | None:
-    return await db.scalar(
-        select(ArtifactUpload).where(
-            ArtifactUpload.grant_id == context.grant_id,
-            ArtifactUpload.publication_id == publication_id,
-            ArtifactUpload.is_deleted.is_(False),
-        )
+    return cast(
+        ArtifactUpload | None,
+        await db.scalar(
+            select(ArtifactUpload).where(
+                ArtifactUpload.grant_id == context.grant_id,
+                ArtifactUpload.publication_id == publication_id,
+                ArtifactUpload.is_deleted.is_(False),
+            )
+        ),
     )
 
 
@@ -368,7 +372,7 @@ async def publish_version(
             )
             .values(current_version_id=version.id, title=request.title)
         )
-        if moved.rowcount != 1:
+        if cast(CursorResult[Any], moved).rowcount != 1:
             await db.rollback()
             for pending in (version, reference, artifact):
                 if pending in db:

@@ -261,9 +261,9 @@ def test_download_is_attachment_no_store_with_safe_filename(client: TestClient) 
     assert download.content == b"report\n"
     assert download.headers["content-type"].startswith("text/markdown")
     assert download.headers["cache-control"] == "private, no-store"
-    assert (
-        download.headers["content-disposition"]
-        == 'attachment; filename="weird__name_.md"'
+    assert download.headers["content-disposition"] == (
+        'attachment; filename="weird__name____.md"; '
+        "filename*=UTF-8''weird%20%22name%22%20%E6%8A%A5%E5%91%8A.md"
     )
     assert CALLS[-1] == ("content", (USER, ORG, VERSION))
     missing = client.get(
