@@ -102,7 +102,7 @@ async def _draft(
 async def _row(engine: AsyncEngine, task_id: str) -> DraftTaskResult:
     async with AsyncSession(engine) as db:
         row = await db.get(DraftTaskResult, task_id)
-        assert row is not None
+        assert isinstance(row, DraftTaskResult)
         return row
 
 
@@ -400,7 +400,7 @@ async def _db_state(
 ) -> DraftTaskResult:
     async with factory() as db:
         row = await db.get(DraftTaskResult, task_id)
-        assert row is not None
+        assert isinstance(row, DraftTaskResult)
         return row
 
 
