@@ -652,3 +652,34 @@ async def test_source_rows_are_observed_in_the_step_transaction(
     else:
         assert calls == []
     assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_observation_failure_rolls_back_the_whole_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GOO-299: a failed identity write must not leave a committed step/sources."""
+    from src.services.research_engine import run_lifecycle
+
+    async def failing_observe(*_args: object, **_kwargs: object) -> list[object]:
+        raise RuntimeError("identity write failed")
+
+    monkeypatch.setattr(run_lifecycle, "observe_sources", failing_observe)
+    run = _run()
+    session = _Session(run)
+    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+
+    with pytest.raises(RuntimeError, match="identity write failed"):
+        await service.persist_step_completion(
+            run=run,
+            event=_event(),
+            step_definition=_step_definition(),
+            source_rows=[SimpleNamespace(run_id=run.id, external_id="source-1")],
+            collection_id=uuid4(),
+        )
+
+    assert session.commits == 0
+    assert session.rollbacks == 1
+    assert session.persisted_steps == []
+    assert session.persisted_sources == []
+    assert run.total_tokens == 5

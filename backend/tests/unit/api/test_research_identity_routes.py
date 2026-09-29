@@ -195,3 +195,27 @@ def test_reads_use_view_and_never_commit(
     assert (listed.status_code, replayed.status_code) == (200, 200)
     assert harness.actions == [ResearchAction.VIEW, ResearchAction.VIEW]
     harness.db.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("status", [404, 409])
+def test_foreign_or_archived_project_blocks_a_mutation(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """resolve_project's 404 (foreign project) / 409 (archived) reach the client."""
+    harness.denied[ResearchAction.ADJUDICATE] = status
+    merge = AsyncMock()
+    monkeypatch.setattr(_routes(), "merge_reports", merge)
+
+    response = harness.client.post(
+        f"{BASE}/{uuid4()}/reports/merge",
+        json={
+            "surviving_report_id": str(uuid4()),
+            "merged_report_ids": [str(uuid4())],
+            "rationale": "dup",
+            "idempotency_key": "m1",
+        },
+    )
+
+    assert response.status_code == status
+    merge.assert_not_awaited()
+    harness.db.commit.assert_not_awaited()
