@@ -1,0 +1,415 @@
+"""Scoped artifact publication, using a local SQLite database and memory storage."""
+
+import hashlib
+from datetime import datetime, timedelta, timezone
+from typing import Any, AsyncIterator
+from uuid import UUID, uuid4
+
+import pytest
+from sqlalchemy import insert, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from src.models.artifact import (
+    Artifact,
+    ArtifactReference,
+    ArtifactUpload,
+    ArtifactVersion,
+)
+from src.models.collection import Collection
+from src.models.organization import Organization
+from src.models.user import User
+from src.models.workspace import Workspace, WorkspaceMember
+from src.schemas.artifact import (
+    ArtifactAccessDenied,
+    ArtifactConflict,
+    ArtifactDigestMismatch,
+    ArtifactNotFound,
+    ArtifactProvenance,
+    ArtifactQuotaExceeded,
+    ArtifactStorageUnavailable,
+    ArtifactTooLarge,
+    PublishVersionRequest,
+    ReserveArtifactUploadRequest,
+)
+from src.schemas.integration_context import IntegrationContext
+from src.services.artifacts import service
+from src.services.artifacts.service import (
+    MAX_ARTIFACT_BYTES,
+    PROJECT_QUOTA_BYTES,
+    authorize_artifact,
+    list_thread_artifacts,
+    publish_version,
+    read_version_content,
+    reserve_upload,
+    store_upload,
+)
+from src.services.artifacts.storage import MemoryArtifactStorage
+
+pytestmark = pytest.mark.unit
+USER, OTHER_USER, ORG, OTHER_ORG, PROJECT, OTHER_PROJECT, WORKSPACE, OTHER_WORKSPACE = (
+    uuid4() for _ in range(8)
+)
+THREAD = uuid4()
+CONTENT = b"report\n"
+DIGEST = hashlib.sha256(CONTENT).hexdigest()
+
+
+def _user_sql(user_id: UUID, org: UUID, email: str) -> tuple[str, dict[str, str]]:
+    return (
+        "INSERT INTO users (id, organization_id, email, password_hash, first_name, last_name, role, is_active, login_count, created_at, updated_at, is_deleted) VALUES (:id, :org, :email, 'unused', 'Test', 'User', 'USER', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)",
+        {"id": str(user_id), "org": str(org), "email": email},
+    )
+
+
+@pytest.fixture
+async def db() -> AsyncIterator[AsyncSession]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    tables: list[Any] = [
+        Organization,
+        User,
+        Workspace,
+        WorkspaceMember,
+        Collection,
+        Artifact,
+        ArtifactVersion,
+        ArtifactUpload,
+        ArtifactReference,
+    ]
+    async with engine.begin() as conn:
+        for model in tables:
+            await conn.run_sync(model.__table__.create)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        await session.execute(
+            insert(Organization).values(
+                [
+                    dict(id=ORG, name="Test", storage_limit_bytes=1000000),
+                    dict(id=OTHER_ORG, name="Other", storage_limit_bytes=1000000),
+                ]
+            )
+        )
+        for user_id, org, email in (
+            (USER, ORG, "owner@example.test"),
+            (OTHER_USER, OTHER_ORG, "foreign@example.test"),
+        ):
+            await session.execute(
+                text(_user_sql(user_id, org, email)[0]),
+                _user_sql(user_id, org, email)[1],
+            )
+        await session.execute(
+            insert(Workspace).values(
+                [
+                    dict(
+                        id=WORKSPACE,
+                        name="Workspace",
+                        owner_id=USER,
+                        organization_id=ORG,
+                    ),
+                    dict(
+                        id=OTHER_WORKSPACE,
+                        name="Foreign",
+                        owner_id=OTHER_USER,
+                        organization_id=OTHER_ORG,
+                    ),
+                ]
+            )
+        )
+        await session.execute(
+            insert(Collection).values(
+                [
+                    dict(id=PROJECT, name="Project", workspace_id=WORKSPACE),
+                    dict(id=OTHER_PROJECT, name="Other", workspace_id=OTHER_WORKSPACE),
+                ]
+            )
+        )
+        await session.commit()
+        yield session
+    await engine.dispose()
+
+
+@pytest.fixture
+def storage() -> MemoryArtifactStorage:
+    return MemoryArtifactStorage()
+
+
+@pytest.fixture(autouse=True)
+def _use_memory_storage(
+    monkeypatch: pytest.MonkeyPatch, storage: MemoryArtifactStorage
+) -> None:
+    monkeypatch.setattr(service, "get_artifact_storage", lambda: storage)
+
+
+@pytest.fixture
+def context() -> IntegrationContext:
+    return IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        thread_id=THREAD,
+        grant_id=uuid4(),
+    )
+
+
+def _reserve(
+    publication_id: UUID | None = None, **overrides: Any
+) -> ReserveArtifactUploadRequest:
+    return ReserveArtifactUploadRequest(
+        publication_id=publication_id or uuid4(),
+        byte_size=overrides.pop("byte_size", len(CONTENT)),
+        mime_type=overrides.pop("mime_type", "text/markdown"),
+        sha256=overrides.pop("sha256", DIGEST),
+    )
+
+
+def _publish(
+    reserve: ReserveArtifactUploadRequest, upload_id: UUID, **overrides: Any
+) -> PublishVersionRequest:
+    return PublishVersionRequest(
+        publication_id=reserve.publication_id,
+        upload_id=upload_id,
+        title=overrides.pop("title", "report.md"),
+        provenance=overrides.pop("provenance", ArtifactProvenance(producer="harness")),
+        **overrides,
+    )
+
+
+async def _published(db: AsyncSession, context: IntegrationContext, **overrides: Any):
+    reserve = _reserve()
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    request = _publish(reserve, upload.upload_id, **overrides)
+    return request, await publish_version(db, context, request)
+
+
+async def test_finalize_is_idempotent_after_terminal(db, context) -> None:
+    request, first = await _published(db, context)
+    second = await publish_version(db, context, request)
+    assert first.version_id == second.version_id
+    assert first.sha256 == DIGEST
+    listed = await list_thread_artifacts(
+        db, user_id=USER, organization_id=ORG, thread_id=THREAD
+    )
+    assert [item.version.version_id for item in listed] == [first.version_id]
+    assert listed[0].reference.thread_id == THREAD
+    assert (await db.scalar(select(ArtifactVersion.id))) == first.version_id
+    assert not hasattr(first, "storage_key")
+
+
+async def test_changed_replay_conflicts(db, context) -> None:
+    request, first = await _published(db, context)
+    with pytest.raises(ArtifactConflict):
+        await publish_version(
+            db, context, request.model_copy(update={"title": "other.md"})
+        )
+    reserve = _reserve(request.publication_id)
+    with pytest.raises(ArtifactConflict):
+        await reserve_upload(db, context, reserve.model_copy(update={"byte_size": 99}))
+    same = await reserve_upload(db, context, reserve)
+    assert same.upload_id == request.upload_id
+
+
+async def test_digest_and_size_mismatch_never_store(db, context, storage) -> None:
+    upload = await reserve_upload(db, context, _reserve())
+    with pytest.raises(ArtifactDigestMismatch):
+        await store_upload(db, context, upload.upload_id, b"tampered\n")
+    with pytest.raises(ArtifactDigestMismatch):
+        await store_upload(db, context, upload.upload_id, CONTENT + b"x")
+    assert storage.objects == {}
+    with pytest.raises(ArtifactNotFound):
+        await publish_version(db, context, _publish(_reserve(), upload.upload_id))
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "oversize",
+        "quota",
+        "foreign_project",
+        "deleted_project",
+        "deleted_workspace",
+        "foreign_actor",
+    ],
+)
+async def test_publication_denials(db, context, storage, case: str) -> None:
+    request = _reserve()
+    expected: type[Exception] = ArtifactAccessDenied
+    if case == "oversize":
+        request = _reserve(byte_size=MAX_ARTIFACT_BYTES + 1)
+        expected = ArtifactTooLarge
+    elif case == "quota":
+        await db.execute(
+            insert(ArtifactUpload).values(
+                id=uuid4(),
+                organization_id=ORG,
+                project_id=PROJECT,
+                grant_id=uuid4(),
+                publication_id=uuid4(),
+                byte_size=PROJECT_QUOTA_BYTES,
+                mime_type="text/plain",
+                sha256="0" * 64,
+                request_hash="0" * 64,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            )
+        )
+        await db.commit()
+        expected = ArtifactQuotaExceeded
+    elif case == "foreign_project":
+        context = context.model_copy(update={"project_id": OTHER_PROJECT})
+    elif case == "deleted_project":
+        await db.execute(
+            update(Collection).where(Collection.id == PROJECT).values(is_deleted=True)
+        )
+        await db.commit()
+    elif case == "deleted_workspace":
+        await db.execute(
+            update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
+        )
+        await db.commit()
+    elif case == "foreign_actor":
+        context = context.model_copy(update={"user_id": OTHER_USER})
+    with pytest.raises(expected):
+        await reserve_upload(db, context, request)
+    assert (
+        await db.scalar(
+            select(ArtifactUpload.id).where(ArtifactUpload.grant_id == context.grant_id)
+        )
+    ) is None
+
+
+async def test_expired_reservation_cannot_be_stored(db, context, storage) -> None:
+    upload = await reserve_upload(db, context, _reserve())
+    await db.execute(
+        update(ArtifactUpload)
+        .where(ArtifactUpload.id == upload.upload_id)
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+    )
+    await db.commit()
+    with pytest.raises(ArtifactConflict):
+        await store_upload(db, context, upload.upload_id, CONTENT)
+    assert storage.objects == {}
+
+
+async def test_missing_blob_keeps_current_version(db, context, storage) -> None:
+    request, first = await _published(db, context)
+    reserve = _reserve()
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    storage.objects.clear()
+    second = _publish(
+        reserve,
+        upload.upload_id,
+        artifact_id=first.artifact_id,
+        expected_parent_version_id=first.version_id,
+    )
+    with pytest.raises(ArtifactStorageUnavailable):
+        await publish_version(db, context, second)
+    artifact = await db.get(Artifact, first.artifact_id)
+    assert artifact is not None and artifact.current_version_id == first.version_id
+    with pytest.raises(ArtifactStorageUnavailable):
+        await read_version_content(
+            db, user_id=USER, organization_id=ORG, version_id=first.version_id
+        )
+
+
+async def test_new_version_requires_current_parent(db, context) -> None:
+    _, first = await _published(db, context)
+    reserve = _reserve()
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    stale = _publish(
+        reserve,
+        upload.upload_id,
+        artifact_id=first.artifact_id,
+        expected_parent_version_id=uuid4(),
+    )
+    with pytest.raises(ArtifactConflict):
+        await publish_version(db, context, stale)
+    fresh = _publish(
+        reserve,
+        upload.upload_id,
+        artifact_id=first.artifact_id,
+        expected_parent_version_id=first.version_id,
+    )
+    second = await publish_version(db, context, fresh)
+    assert second.parent_version_id == first.version_id
+    artifact = await db.get(Artifact, first.artifact_id)
+    assert artifact is not None and artifact.current_version_id == second.version_id
+    # A finalized upload replayed with a different payload is a conflict, not a retry.
+    with pytest.raises(ArtifactConflict):
+        await publish_version(
+            db, context, _publish(reserve, upload.upload_id, artifact_id=uuid4())
+        )
+    another = _reserve()
+    third = await reserve_upload(db, context, another)
+    await store_upload(db, context, third.upload_id, CONTENT)
+    with pytest.raises(ArtifactNotFound):
+        await publish_version(
+            db, context, _publish(another, third.upload_id, artifact_id=uuid4())
+        )
+
+
+async def test_reads_recheck_org_project_and_ancestors(db, context, storage) -> None:
+    _, version = await _published(db, context)
+    content, mime, filename = await read_version_content(
+        db, user_id=USER, organization_id=ORG, version_id=version.version_id
+    )
+    assert (content, mime, filename) == (CONTENT, "text/markdown", "report.md")
+    await authorize_artifact(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        artifact_id=version.artifact_id,
+        action="read",
+    )
+    with pytest.raises(ArtifactNotFound):
+        await authorize_artifact(
+            db,
+            user_id=OTHER_USER,
+            organization_id=OTHER_ORG,
+            artifact_id=version.artifact_id,
+            action="read",
+        )
+    with pytest.raises(ArtifactNotFound):
+        await read_version_content(
+            db,
+            user_id=OTHER_USER,
+            organization_id=OTHER_ORG,
+            version_id=version.version_id,
+        )
+    assert (
+        await list_thread_artifacts(
+            db, user_id=OTHER_USER, organization_id=OTHER_ORG, thread_id=THREAD
+        )
+        == []
+    )
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
+    )
+    await db.commit()
+    with pytest.raises(ArtifactNotFound):
+        await authorize_artifact(
+            db,
+            user_id=USER,
+            organization_id=ORG,
+            artifact_id=version.artifact_id,
+            action="read",
+        )
+    assert (
+        await list_thread_artifacts(
+            db, user_id=USER, organization_id=ORG, thread_id=THREAD
+        )
+        == []
+    )
+
+
+async def test_unknown_mime_is_stored_as_octet_stream_and_dto_hides_keys(
+    db, context
+) -> None:
+    reserve = _reserve(mime_type="application/x-msdownload")
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    version = await publish_version(
+        db, context, _publish(reserve, upload.upload_id, title="tool.exe")
+    )
+    assert version.mime_type == "application/octet-stream"
+    assert "storage_key" not in version.model_dump()
+    assert version.provenance.producer == "harness"
