@@ -315,9 +315,10 @@ async def get_evidence_meter(
         if source_ids:
             try:
                 parsed_source_ids = [UUID(s.strip()) for s in source_ids.split(",")]
-            except ValueError as e:
+            except ValueError:
+                logger.warning("Invalid source ID format", exc_info=True)
                 raise HTTPException(
-                    status_code=400, detail=f"Invalid source ID format: {e}"
+                    status_code=400, detail="Invalid source ID format"
                 )
 
         if not parsed_source_ids:
@@ -326,7 +327,10 @@ async def get_evidence_meter(
         try:
             stance_classifier.validate_batch_size(len(parsed_source_ids))
         except BatchClassificationLimitError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            logger.warning("Batch classification limit exceeded", exc_info=True)
+            raise HTTPException(
+                status_code=400, detail="Batch classification limit exceeded"
+            ) from e
 
         loaded = _load_sources_or_http_error(
             db,
@@ -371,10 +375,14 @@ async def get_evidence_meter(
                 claim_hash=claim_hash,
                 sources=classifier_sources,
             )
-        except BatchClassificationLimitError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        except BatchClassificationLimitError:
+            logger.warning("Batch classification limit exceeded", exc_info=True)
+            raise HTTPException(
+                status_code=400, detail="Batch classification limit exceeded"
+            )
         except BatchClassificationTimeoutError as e:
-            raise HTTPException(status_code=504, detail=str(e))
+            logger.warning("Batch classification timed out", exc_info=True)
+            raise HTTPException(status_code=504, detail="Batch classification timed out")
 
         # Calculate consensus
         evidence_meter = consensus_calculator.calculate_consensus(
@@ -592,7 +600,10 @@ async def classify_sources_for_claim(
         try:
             stance_classifier.validate_batch_size(len(source_ids))
         except BatchClassificationLimitError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            logger.warning("Batch classification limit exceeded", exc_info=True)
+            raise HTTPException(
+                status_code=400, detail="Batch classification limit exceeded"
+            ) from e
 
         loaded = _load_sources_or_http_error(
             db,
@@ -612,10 +623,14 @@ async def classify_sources_for_claim(
                 claim_hash=claim_hash,
                 sources=classifier_sources,
             )
-        except BatchClassificationLimitError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        except BatchClassificationLimitError:
+            logger.warning("Batch classification limit exceeded", exc_info=True)
+            raise HTTPException(
+                status_code=400, detail="Batch classification limit exceeded"
+            )
         except BatchClassificationTimeoutError as e:
-            raise HTTPException(status_code=504, detail=str(e))
+            logger.warning("Batch classification timed out", exc_info=True)
+            raise HTTPException(status_code=504, detail="Batch classification timed out")
 
         # Store results in database (upsert to avoid duplicates/races)
         saved_count = _save_stance_classifications(

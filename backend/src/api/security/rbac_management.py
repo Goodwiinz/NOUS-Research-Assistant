@@ -3,6 +3,7 @@ RBAC management API endpoints
 Provides role and permission management for fine-grained access control
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,8 @@ from src.models.permission import (
 )
 from src.models.user import User
 from src.services.security.rbac_service import RBACService, get_rbac_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rbac", tags=["RBAC Management"])
 
@@ -234,7 +237,11 @@ async def create_role(
         return RoleResponse(**role.to_dict())
 
     except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.warning("Invalid RBAC configuration request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid RBAC configuration request",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -456,7 +463,11 @@ async def assign_role_to_user(
         return RoleAssignmentResponse(**assignment.to_dict())
 
     except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.warning("Invalid RBAC configuration request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid RBAC configuration request",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

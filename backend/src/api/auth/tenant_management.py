@@ -3,6 +3,7 @@ Tenant management API endpoints
 Provides organization management, quota monitoring, and multi-tenancy operations
 """
 
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +20,8 @@ from src.exceptions.analytics_exceptions import (
 from src.middleware.multi_tenancy import check_tenant_permission, get_current_tenant_id
 from src.models.organization import StorageTier
 from src.services.security.tenant_service import TenantService, get_tenant_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tenants", tags=["Tenant Management"])
 
@@ -194,7 +197,11 @@ async def create_organization(
         return OrganizationResponse(**organization.to_dict())
 
     except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.warning("Invalid organization request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid organization request",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -257,7 +264,11 @@ async def update_organization(
             user_role=e.details.get("user_role", "unknown"),
         )
     except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.warning("Invalid organization request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid organization request",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -290,7 +301,11 @@ async def upgrade_storage_tier(
             user_role=e.details.get("user_role", "unknown"),
         )
     except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.warning("Invalid organization request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid organization request",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -320,7 +335,11 @@ async def get_storage_quota_status(
             user_role=e.details.get("user_role", "unknown"),
         )
     except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        logger.warning("Organization configuration not found", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization configuration not found",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -408,7 +427,11 @@ async def validate_organization_limits(
             user_role=e.details.get("user_role", "unknown"),
         )
     except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        logger.warning("Organization configuration not found", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization configuration not found",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

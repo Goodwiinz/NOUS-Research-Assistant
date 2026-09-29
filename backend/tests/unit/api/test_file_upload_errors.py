@@ -75,7 +75,8 @@ async def test_upload_storage_failure_uses_safe_public_detail() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_preserves_safe_validation_error() -> None:
+async def test_upload_validation_error_is_genericized() -> None:
+    """I8: FileValidation text stays server-side; client gets a stable message."""
     user = _user()
     service = SimpleNamespace(
         upload_file=AsyncMock(
@@ -99,7 +100,8 @@ async def test_upload_preserves_safe_validation_error() -> None:
         )
 
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
-    assert exc_info.value.detail == "File extension '.zip' is not allowed"
+    assert exc_info.value.detail == "File validation failed"
+    assert ".zip" not in exc_info.value.detail
 
 
 @pytest.mark.asyncio

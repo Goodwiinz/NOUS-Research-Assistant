@@ -486,7 +486,8 @@ async def execute_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid thread ID") from exc
     except AgentThreadResolutionError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        logger.warning("Agent thread resolution failed", exc_info=True)
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
     if thread is not None:
         request.thread_id = str(thread.id) if thread is not None else None
 

@@ -249,9 +249,14 @@ async def upload_file(
     except HTTPException:
         # R2-M10: intentional 4xx (validation/quota) must not be re-wrapped.
         raise
-    except FileValidationError as e:
-        # FileService validation messages are intentionally safe and actionable.
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except FileValidationError:
+        # I8: even though FileService validation messages are curated, raw
+        # exception text stays out of client responses; details go to the log.
+        logger.warning("File validation failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File validation failed",
+        )
     except FileStorageError:
         logger.error("File upload failed", exc_info=True)
         raise HTTPException(
@@ -574,9 +579,13 @@ async def update_file_metadata(
             "file": document.to_dict(),
         }
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.error("Failed to update file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to update file",
+        )
 
 
 @router.delete("/{file_id}")
@@ -612,8 +621,12 @@ async def delete_file(
                 detail="Failed to delete file",
             )
 
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        logger.error("Failed to delete file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to delete file",
+        )
 
 
 @router.get("/{file_id}/content")
@@ -903,6 +916,10 @@ async def reprocess_file(
             "job_id": str(processing_job.id),
         }
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.error("Failed to reprocess file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to reprocess file",
+        )

@@ -2,6 +2,7 @@
 Celery workers monitoring API endpoints
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel
 
 from src.core.dependencies import require_platform_operator
 from src.models.user import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 
@@ -134,10 +137,11 @@ async def get_worker_status(current_user: User = Depends(require_platform_operat
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Celery is not configured or not available",
         )
-    except Exception as e:
+    except Exception:
+        logger.error("Failed to get worker status", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get worker status: {str(e)}",
+            detail="Failed to get worker status",
         )
 
 
@@ -198,7 +202,7 @@ async def get_queue_status(current_user: User = Depends(require_platform_operato
                         )
                     )
 
-        except Exception as e:
+        except Exception:
             # Fallback: return configured queues with minimal info
             for queue_name in queues:
                 queue_stats.append(
@@ -209,10 +213,11 @@ async def get_queue_status(current_user: User = Depends(require_platform_operato
 
         return queue_stats
 
-    except Exception as e:
+    except Exception:
+        logger.error("Failed to get queue status", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get queue status: {str(e)}",
+            detail="Failed to get queue status",
         )
 
 
@@ -249,10 +254,11 @@ async def ping_workers(current_user: User = Depends(require_platform_operator)):
         else:
             return {"message": "No workers responded", "workers": [], "total": 0}
 
-    except Exception as e:
+    except Exception:
+        logger.error("Failed to ping workers", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to ping workers: {str(e)}",
+            detail="Failed to ping workers",
         )
 
 
@@ -283,10 +289,11 @@ async def get_registered_tasks(
         else:
             return {"total_tasks": 0, "tasks": [], "workers": 0}
 
-    except Exception as e:
+    except Exception:
+        logger.error("Failed to get registered tasks", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get registered tasks: {str(e)}",
+            detail="Failed to get registered tasks",
         )
 
 
@@ -310,10 +317,11 @@ async def shutdown_worker(
             "worker": worker_name,
         }
 
-    except Exception as e:
+    except Exception:
+        logger.error("Failed to shutdown worker", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to shutdown worker: {str(e)}",
+            detail="Failed to shutdown worker",
         )
 
 
@@ -362,10 +370,11 @@ async def get_workers_health(current_user: User = Depends(require_platform_opera
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-    except Exception as e:
+    except Exception:
+        logger.error("Worker health check failed", exc_info=True)
         return {
             "healthy": False,
             "workers_online": 0,
-            "issues": [f"Failed to check worker health: {str(e)}"],
+            "issues": ["Failed to check worker health"],
             "timestamp": datetime.utcnow().isoformat(),
         }
