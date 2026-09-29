@@ -984,6 +984,7 @@ async def stream_run(
                         event={**event, "output": output},
                         step_definition=step_def,
                         source_rows=source_rows,
+                        collection_id=canonical_project_id,
                     )
                     total_tokens = int(run.total_tokens or 0)
                     pause_anchor_index = int(transition.step.step_index)

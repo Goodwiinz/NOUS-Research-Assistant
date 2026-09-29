@@ -545,13 +545,22 @@ class TestStreamEndpointSuccess:
             }
             yield {"event": "run_complete"}
 
-        response = self._patch_engine_and_get(
-            stream_app, stream_client, run_id, engine_run
-        )
+        # GOO-299: identity SQL needs PostgreSQL; here only the wiring is checked.
+        with patch(
+            "src.services.research_engine.run_lifecycle.observe_sources",
+            new=AsyncMock(return_value=[]),
+        ) as observe:
+            response = self._patch_engine_and_get(
+                stream_app, stream_client, run_id, engine_run
+            )
         assert "event: run_complete" in response.text
         added = [call.args[0] for call in db.add.call_args_list]
         sources = [row for row in added if isinstance(row, ResearchSource)]
         assert len(sources) == 1
+        observe.assert_awaited_once()
+        assert observe.await_args.args == (db,)
+        assert observe.await_args.kwargs["sources"] == sources
+        assert observe.await_args.kwargs["collection_id"] is not None
         assert sources[0].run_id == run_id
         assert sources[0].id == source_id
         assert sources[0].abstract == "Actual evidence"
