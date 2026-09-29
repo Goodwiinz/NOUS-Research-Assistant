@@ -357,10 +357,14 @@ def test_review_gate_rejects_passing_verdict_without_grounded_evidence():
         DraftGenerationService._require_passing_citation_review(review, [1])
 
 
-def test_review_gate_rejects_uncited_factual_assertions():
+@pytest.mark.parametrize(
+    "coverage",
+    [{"complete": True}, {"complete": True, "factual_classification_complete": True}],
+)
+def test_review_gate_rejects_uncited_factual_assertions(coverage):
     review = {
         "docs_skipped": 0,
-        "coverage": {"complete": True},
+        "coverage": coverage,
         "uncited_assertions": [
             {
                 "text": "The trial enrolled 900 participants.",
@@ -380,6 +384,39 @@ def test_review_gate_rejects_uncited_factual_assertions():
 
     with pytest.raises(ValueError, match="uncited factual assertion"):
         DraftGenerationService._require_passing_citation_review(review, [1])
+
+
+def test_review_gate_keeps_heuristic_uncited_assertions_as_observations():
+    # GOO-328: CitationVerificationService always reports
+    # factual_classification_complete=False, so its heuristic uncited flags
+    # must not block the fallback draft from persisting.
+    uncited = [
+        {
+            "text": "Prior work has explored this area.",
+            "citation_indices": [],
+            "support_status": "uncited",
+        }
+    ]
+    review = {
+        "docs_skipped": 0,
+        "coverage": {
+            "complete": True,
+            "factual_classification_complete": False,
+            "classification": "conservative_prose_heuristic",
+        },
+        "uncited_assertions": uncited,
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "exact",
+                "evidence": "The supported result.",
+                "location": "document summary",
+            }
+        ],
+    }
+
+    DraftGenerationService._require_passing_citation_review(review, [1])
+    assert review["uncited_assertions"] == uncited
 
 
 def test_minor_evidence_is_persisted_as_not_fully_verified():
