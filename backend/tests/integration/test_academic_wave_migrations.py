@@ -465,3 +465,42 @@ def test_academic_wave_migrations_upgrade_downgrade_round_trip(
     _assert_backfill(connection, ids)
     assert "draft_reviews" in inspect(connection).get_table_names()
     assert "research_project_role_assignments" in inspect(connection).get_table_names()
+
+
+_IDENTITY_TABLES = (
+    "research_report_observations",
+    "research_report_identifiers",
+    "research_reports",
+    "research_studies",
+)
+
+
+def test_report_identity_migration_upgrade_downgrade_round_trip(
+    pre_wave_connection: Connection,
+) -> None:
+    """GOO-299 tables are created by the revision itself, with RLS enabled."""
+    connection = pre_wave_connection
+    for table in _IDENTITY_TABLES:
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    migration = _load_migration("c9d2e4f6a8b1_create_report_identities.py")
+
+    _run_migration(connection, migration, "upgrade")
+    inspector = inspect(connection)
+    for table in _IDENTITY_TABLES:
+        assert inspector.has_table(table)
+        assert connection.execute(
+            text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
+            {"t": table},
+        ).scalar_one()
+    assert "uq_research_report_identifier_value" in {
+        c["name"]
+        for c in inspector.get_unique_constraints("research_report_identifiers")
+    }
+    assert "uq_research_report_observation_source" in {
+        c["name"]
+        for c in inspector.get_unique_constraints("research_report_observations")
+    }
+
+    _run_migration(connection, migration, "downgrade")
+    inspector = inspect(connection)
+    assert not any(inspector.has_table(table) for table in _IDENTITY_TABLES)
