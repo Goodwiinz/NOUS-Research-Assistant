@@ -1,6 +1,6 @@
 # NOUS local harness bridge
 
-`@nous/harness-bridge` connects a paired local Codex CLI to a NOUS chat run. The chat remains the user-facing conversation; Codex runs on the paired computer in a project workspace, and NOUS stores the accepted run and its transcript events. This package does not add a general NOUS MCP server, synchronize other conversations, or publish side-panel artifacts.
+`@nous/harness-bridge` connects a paired local Codex CLI to a NOUS chat run. The chat remains the user-facing conversation; Codex runs on the paired computer in a project workspace, and NOUS stores the accepted run and its transcript events. It also ships an opt-in local MCP server that exposes NOUS project read tools to Codex (see [NOUS read tools](#nous-read-tools-over-mcp)). This package does not synchronize other conversations or publish side-panel artifacts.
 
 ## Requirements and pairing
 
@@ -25,6 +25,23 @@ The browser sends the chat prompt to NOUS. NOUS sends the accepted command to th
 The adapter requests Codex `workspaceWrite` with the registered root as the writable root, network access disabled, and the current temporary-directory exclusions. It verifies the effective policy returned by Codex before starting a turn. **Registering a folder is not folder-only read isolation.** It does not prove Codex cannot read other local files. Treat the computer and files accessible to its Codex process as within the local trust boundary. MCP configuration, when supplied by trusted local composition, is session-scoped; NOUS browser input cannot choose an MCP executable or pass arbitrary process configuration.
 
 Command execution prompts can be approved once or denied in the authenticated NOUS chat. File-change requests remain deny-only while the backend request schema lacks a disclosed path or concrete change summary; do not approve a file-change request on the basis of an opaque item identifier or reason alone.
+
+## NOUS read tools over MCP
+
+Connect with `--tools` to also request the `tools:read` scope; the browser approval page lists both scopes. The NOUS server must set `NOUS_MCP_ENABLED=true` (default `false`) or every tool call reports that tools are disabled.
+
+```sh
+pnpm --filter @nous/harness-bridge start connect --api https://nous.example/api/v1 --project PROJECT_UUID --label "My computer" --tools
+```
+
+- `nous-harness run` then configures each managed Codex session with a `nous` MCP server that launches `nous-harness mcp` for that session only.
+- For a standalone Codex, print the registration command and run it yourself; the bridge never edits global Codex configuration:
+
+```sh
+pnpm --filter @nous/harness-bridge start mcp install
+```
+
+Tools are the backend's read allowlist (`search_documents`, `list_project_documents`, `do_kb_retrieve`, `get_current_draft`), scoped to the granted project. Argv carries only the API origin, the state directory, and the opaque credential handle; tokens stay in the owner-only store. Diagnostics go to stderr. If NOUS rejects the grant, the tool returns `NOUS authorization rejected; reconnect this device` and does not retry.
 
 ## Disconnect, recovery, and kill switch
 

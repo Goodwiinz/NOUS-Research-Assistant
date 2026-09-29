@@ -1,6 +1,6 @@
 # Local Codex harness bridge
 
-**Status:** Implemented as a local Codex bridge feature; live acceptance requires a deliberately configured NOUS test project, paired device, and workspace. This document describes the current bridge contract. It does not cover cross-chat context synchronization, general NOUS MCP tools, tracing, or artifact publication.
+**Status:** Implemented as a local Codex bridge feature; live acceptance requires a deliberately configured NOUS test project, paired device, and workspace. This document describes the current bridge contract. It does not cover cross-chat context synchronization, tracing, or artifact publication. NOUS read tools are available to Codex through the local stdio MCP facade described in [NOUS read tools over MCP](#nous-read-tools-over-mcp); note creation, context selection, and other capabilities are not exposed.
 
 ## User workflow
 
@@ -10,7 +10,17 @@
 4. Exact, one-time Codex command approvals and required input are shown in NOUS. The browser re-reads the saved request before a decision and sends only the decision plus the displayed target hash. The local CLI grant token never enters the browser.
 5. If the browser disconnects, execution continues and NOUS can replay persisted events when the chat reconnects. Browser presence is not run ownership or terminal evidence.
 
-NOUS-native chat remains the default provider. Provider/device/workspace selection is scoped to the signed-in user and chat thread. The bridge does not search or continue other NOUS conversations, synchronize a context file, call NOUS MCP tools, or publish artifacts.
+NOUS-native chat remains the default provider. Provider/device/workspace selection is scoped to the signed-in user and chat thread. The bridge does not search or continue other NOUS conversations, synchronize a context file, or publish artifacts. Codex may call NOUS read tools only through the opt-in MCP facade below.
+
+## NOUS read tools over MCP
+
+`nous-harness mcp` is a local stdio MCP server (`packages/harness-bridge/src/mcp/`) that forwards `tools/list` and `tools/call` to the backend read gateway (`GET/POST /api/v1/integrations/tools[/read]`, gated by `NOUS_MCP_ENABLED`, default `false`). The backend owns the tool allowlist, JSON Schema catalog, argument validation, project scoping, and result bounds; the facade adds nothing a caller could use to widen them.
+
+- **Consent.** `nous-harness connect --tools` requests `harness:execute` plus `tools:read`; both scopes appear on the browser approval page. A connection made without `--tools` has no MCP access and `mcp install` refuses with a reconnect hint. The stored scopes only decide whether the local process offers the server; the backend re-checks the grant on every request.
+- **Managed sessions.** When the local connection carries `tools:read`, `nous-harness run` adds a session-scoped `mcpConfig` entry that launches `nous-harness mcp --api ORIGIN --store DIR --session HANDLE` for that Codex thread. Argv contains only the API origin, the state directory, and the opaque credential handle; the CLI JWT and grant token are read from the owner-only store inside the child.
+- **Standalone Codex.** `nous-harness mcp install` prints the `codex mcp add nous -- …` command for the user to run. The package never edits `~/.codex/config.toml` or any other global Codex configuration.
+- **Transport hygiene.** Stdout is the JSON-RPC channel; diagnostics go to stderr. The API origin must be HTTPS, except the explicit loopback development hosts. Model-supplied arguments are sent only inside the invocation body; they cannot set headers, URLs, identity, or credentials. A 401/403 from the gateway returns a stable `NOUS authorization rejected; reconnect this device` tool error with no retry.
+- **Tests.** `packages/harness-bridge/test/mcp.test.ts` spawns both the managed configuration and the standalone command against a recording HTTP server and asserts identical `source_refs`, correct grant headers, JSON-RPC-only stdout, no secrets in the config or install command, and no writes under `CODEX_HOME`. Live acceptance against a real Codex and NOUS deployment is **NOT RUN** by this suite.
 
 ## Consent, disclosure, and isolation limits
 

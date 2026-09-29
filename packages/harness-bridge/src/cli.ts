@@ -10,12 +10,20 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { CredentialStore } from "./credentials.ts";
 import { record } from "./rpc.ts";
+import { apiBase, type McpSession } from "./mcp/client.ts";
+import {
+  buildManagedMcpConfig,
+  standaloneInstallCommand,
+} from "./mcp/config.ts";
+import { runStdioMcp } from "./mcp/stdio.ts";
 
 type LocalState = {
   apiUrl: string;
   deviceId: string;
   projectId: string;
   credentialHandle: string;
+  // Absent on connections made before tools:read existed.
+  scopes?: string[];
   workspaces: { id: string; root: string; label: string; projectId: string }[];
 };
 type ClientOptions = {
@@ -27,24 +35,6 @@ type ClientOptions = {
 const uuid = (value: unknown): value is string =>
   typeof value === "string" &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-function apiBase(value: string): string {
-  const url = new URL(value);
-  if (
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    (url.protocol !== "https:" &&
-      !(
-        url.protocol === "http:" &&
-        ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-      ))
-  )
-    throw new Error(
-      "API requires HTTPS (or local loopback) without credentials",
-    );
-  return value.replace(/\/$/, "");
-}
 async function request(
   fetchFn: typeof fetch,
   base: string,
@@ -89,11 +79,20 @@ async function poll(
 }
 /** Login uses the existing CLI device flow; only the browser can approve the grant. */
 export async function connect(
-  options: ClientOptions & { apiUrl: string; projectId: string; label: string },
+  options: ClientOptions & {
+    apiUrl: string;
+    projectId: string;
+    label: string;
+    tools?: boolean;
+  },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
   if (!uuid(options.projectId) || !options.label.trim())
     throw new Error("project UUID and device label required");
+  // tools:read is opt-in and shown on the browser consent page.
+  const scopes = options.tools
+    ? ["harness:execute", "tools:read"]
+    : ["harness:execute"];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
   const login = await request(fetchFn, base, "/cli-auth/start", undefined, {});
@@ -131,7 +130,7 @@ export async function connect(
     {
       project_id: options.projectId,
       device_id: device.id,
-      scopes: ["harness:execute"],
+      scopes,
     },
   );
   if (!uuid(consent.id) || typeof consent.approval_url !== "string")
@@ -166,6 +165,7 @@ export async function connect(
     deviceId: device.id,
     projectId: options.projectId,
     credentialHandle,
+    scopes,
     workspaces: [],
   } satisfies LocalState);
   return { deviceId: device.id, credentialHandle };
@@ -228,6 +228,10 @@ export async function runBridge(
     throw new Error("connect this device first");
   const state = value as LocalState;
   const adapters = new Map<string, CodexAdapter>();
+  // Managed sessions get the NOUS MCP server only when the grant carries tools:read.
+  const mcpConfig = state.scopes?.includes("tools:read")
+    ? buildManagedMcpConfig(mcpSession(stateDir, state))
+    : undefined;
   const journal = new Journal(
     join(stateDir, "journal.sqlite"),
     (workspaceId) => {
@@ -243,6 +247,7 @@ export async function runBridge(
           networkAccess: false,
           writableRoots: [workspace.root],
         },
+        ...(mcpConfig ? { mcpConfig } : {}),
       };
     },
   );
@@ -303,6 +308,27 @@ export async function runBridge(
     journal.close();
   }
 }
+function mcpSession(stateDir: string, state: LocalState): McpSession {
+  return {
+    apiOrigin: apiBase(state.apiUrl),
+    credentialHandle: state.credentialHandle,
+    stateDir,
+  };
+}
+/** Prints the standalone Codex registration; never edits global Codex config. */
+export async function mcpInstallCommand(stateDir: string): Promise<string> {
+  const value = await new CredentialStore(stateDir).readLocal("connection");
+  if (
+    !record(value) ||
+    typeof value.apiUrl !== "string" ||
+    typeof value.credentialHandle !== "string"
+  )
+    throw new Error("connect this device first");
+  const state = value as LocalState;
+  if (!state.scopes?.includes("tools:read"))
+    throw new Error("reconnect with --tools to authorize NOUS tools");
+  return standaloneInstallCommand(mcpSession(stateDir, state));
+}
 export function recoverInterrupt(
   stateDir: string,
   commandId?: string,
@@ -323,7 +349,9 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME | workspace add --root PATH [--label NAME] | run
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools] | workspace add --root PATH [--label NAME] | run
+  nous-harness mcp install    Print the Codex command that registers NOUS read tools for a --tools connection.
+  nous-harness mcp --api URL --session HANDLE [--store PATH]    Serve NOUS read tools over stdio (Codex launches this).
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.
@@ -340,6 +368,8 @@ async function main(): Promise<void> {
       store: { type: "string" },
       root: { type: "string" },
       command: { type: "string" },
+      session: { type: "string" },
+      tools: { type: "boolean" },
       help: { type: "boolean" },
     },
   });
@@ -368,6 +398,15 @@ async function main(): Promise<void> {
       apiUrl: values.api,
       projectId: values.project,
       label: values.label,
+      tools: values.tools,
+    });
+  else if (positionals.join(" ") === "mcp install")
+    console.log(await mcpInstallCommand(stateDir));
+  else if (positionals.join(" ") === "mcp" && values.session && values.api)
+    await runStdioMcp({
+      apiOrigin: apiBase(values.api),
+      credentialHandle: values.session,
+      stateDir,
     });
   else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
