@@ -2022,17 +2022,22 @@ Key takeaways include the importance of continued investigation and the potentia
         db: AsyncSession,
         project_id: UUID,
         user_id: Optional[UUID] = None,
-    ) -> Optional[str]:
+    ) -> Tuple[Optional[str], Optional[bool]]:
         """``cancel_latest_generation`` plus the retained-row write, so a
-        cancel never leaves a running row to later read as interrupted."""
+        cancel never leaves a running row to later read as interrupted.
+
+        Returns ``(None, None)`` when nothing is active, else ``(task_id,
+        cancelled)`` where ``cancelled`` is False if the row was already
+        terminal (e.g. the draft committed first), as in ``cancel_task``.
+        """
         task_id = cls.cancel_latest_generation(project_id, user_id)
         if task_id is None:
-            return None
-        await finish_task(
+            return None, None
+        cancelled = await finish_task(
             db, task_id=task_id, state="cancelled", error_code="cancelled_by_user"
         )
         await db.commit()
-        return task_id
+        return task_id, cancelled
 
     def _record_generation_metrics(
         self,

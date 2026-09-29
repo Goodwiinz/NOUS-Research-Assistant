@@ -223,7 +223,7 @@ async def test_cancel_latest_marks_the_row_cancelled(engine: AsyncEngine) -> Non
         _generation_status.pop("latest-1", None)
 
     row = await _row(engine, "latest-1")
-    assert cancelled == "latest-1"
+    assert cancelled == ("latest-1", True)
     assert (row.state, row.error_code) == ("cancelled", "cancelled_by_user")
 
 
@@ -461,6 +461,40 @@ async def test_cancel_after_the_draft_commit_is_refused(
     assert _generation_status["late-cancel"]["status"] == "completed"
 
 
+async def test_cancel_latest_after_the_draft_commit_is_refused(
+    pipeline: tuple[async_sessionmaker[AsyncSession], UUID],
+) -> None:
+    """Same race as above through the no-task-id cancel: the row is already
+    completed, so the cancel reports it and the cache mirrors the DB."""
+    factory, document_id = pipeline
+    await _accept_running(factory, "late-latest")
+    real_set_status = DraftGenerationService._set_status
+    cancel_results: list[Any] = []
+
+    async def cancel_then_set(
+        self: DraftGenerationService, task_id: str, status: str, *args: Any, **kw: Any
+    ) -> None:
+        if status == "completed" and not cancel_results:
+            async with factory() as db:
+                cancel_results.append(
+                    await DraftGenerationService.cancel_latest_task(
+                        db, project_id=PROJECT, user_id=ACTOR
+                    )
+                )
+        await real_set_status(self, task_id, status, *args, **kw)
+
+    with patch.object(DraftGenerationService, "_set_status", new=cancel_then_set):
+        await _run("late-latest", document_id)
+
+    assert cancel_results == [
+        ("late-latest", False)
+    ], "a cancel was reported for a completed task"
+    row = await _db_state(factory, "late-latest")
+    assert row.state == "completed" and row.artifact_id is not None
+    assert await _draft_count(factory) == 1
+    assert _generation_status["late-latest"]["status"] == "completed"
+
+
 async def test_cancel_route_falls_back_to_the_retained_row(
     pipeline: tuple[async_sessionmaker[AsyncSession], UUID],
 ) -> None:
@@ -478,10 +512,10 @@ async def test_cancel_route_falls_back_to_the_retained_row(
         assert await finish_task(db, task_id="remote-done", state="failed")
         await db.commit()
 
-    async def cancel(task_id: str, user_id: UUID) -> Any:
+    async def cancel(task_id: str, user_id: UUID, project_id: UUID = PROJECT) -> Any:
         async with factory() as db:
             return await drafts_api.cancel_generation(
-                project_id=PROJECT,
+                project_id=project_id,
                 task_id=task_id,
                 current_user=cast(Any, SimpleNamespace(id=user_id)),
                 db=db,

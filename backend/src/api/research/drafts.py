@@ -587,23 +587,23 @@ async def cancel_generation(
         elif generation_status.get("user_id") != str(current_user.id):
             raise HTTPException(status_code=404, detail="Task not found")
         cancelled = await DraftGenerationService.cancel_task(db, task_id)
-        if cancelled is False:
-            raise HTTPException(status_code=409, detail="Task already finished")
-        success = bool(cancelled)
     else:
-        cancelled_task_id = await DraftGenerationService.cancel_latest_task(
+        latest_task_id, cancelled = await DraftGenerationService.cancel_latest_task(
             db,
             project_id=project_id,
             user_id=current_user.id,
         )
-        success = cancelled_task_id is not None
-        task_id = cancelled_task_id or ""
+        if latest_task_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot cancel: no draft generation is in progress",
+            )
+        task_id = latest_task_id
 
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot cancel: task not found or already completed",
-        )
+    # Already finished, per this process's status (None) or the retained
+    # row (False): nothing was cancelled.
+    if not cancelled:
+        raise HTTPException(status_code=409, detail="Task already finished")
 
     await DraftGenerationService.publish_status(task_id)
     return {"message": "Generation cancelled", "task_id": task_id, "cancelled": True}
