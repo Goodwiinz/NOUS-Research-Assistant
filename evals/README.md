@@ -30,6 +30,14 @@ records positive and negative network probes.
 | `agent-hitl-lifecycle-v1` | Preserve confirm, reject, timeout, and replay semantics | Deterministic interrupt, mutation, and idempotency checks |
 | `agent-tenant-isolation-v1` | Reject cross-tenant probes across agent read paths | Deterministic tenant-state and leakage checks |
 
+GOO-293's current-writing evaluation uses
+[`academic-writing-baseline-v1`](academic-writing-baseline-v1/README.md). That
+protocol preserves the August 8 result, freezes five canonical trials plus
+separate development and held-out near-boundary cases, and validates retained
+draft, review, citation and download artifacts. It reports objective, semantic,
+authorization, infrastructure and judge-unavailable outcomes separately; its
+collector does not execute or score a provider by itself.
+
 `agent-writing-flow-v1`, `agent-kb-retrieval-v1`, and
 `agent-knowledge-graph-flow-v1` are judge-gated: Layer B
 (`harbor_common.judge.run_semantic_judge`) only runs after every Layer A
