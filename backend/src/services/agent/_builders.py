@@ -23,8 +23,10 @@ What lives here:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.types import RetryPolicy
 
@@ -32,12 +34,17 @@ from src.services.agent._nodes_classify import preprocessing_node, route_by_inte
 from src.services.agent._nodes_llm import llm_node
 from src.services.agent._nodes_memory import memory_save_node
 from src.services.agent._nodes_tools import interrupt_node, tool_node
+from src.services.agent._sanitize import (
+    _TOOL_ERROR_DEGRADED_ANSWER,
+    normalize_terminal_messages,
+    terminal_message_additions,
+)
 from src.services.agent.compactor import make_compactor_node
 from src.services.agent.planner import make_planner_node
 from src.services.agent.reflection import make_reflection_gate
 from src.services.agent.state import AgentState
 from src.services.agent.tool_registry import ToolPolicyTag
-from src.services.agent.tools import ALL_TOOLS, TOOL_REGISTRY
+from src.services.agent.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +83,18 @@ RECURSION_LIMIT = 50
 
 def should_continue(state: AgentState) -> str:
     """Decide whether to route to tool_node, interrupt_node, force_synthesis_node, or reflection_gate."""
+    last = state["messages"][-1] if state["messages"] else None
+    has_pending_tool_calls = isinstance(last, AIMessage) and bool(last.tool_calls)
+
+    # A mixed/unsupported batch must reach the execution boundary's paired
+    # rejection before any confirmation interrupt or loop/error terminal.
+    # That node checks the same projection and never claims a durable write.
+    if has_pending_tool_calls:
+        from src.services.agent._nodes_tools import unavailable_tool_calls
+
+        if unavailable_tool_calls(last.tool_calls, state):
+            return "tool_node"
+
     # Bail out if too many errors have accumulated
     if state.get("error_count", 0) >= MAX_ERRORS:
         logger.warning(
@@ -84,9 +103,6 @@ def should_continue(state: AgentState) -> str:
             state.get("last_error", ""),
         )
         return "reflection_gate"
-
-    last = state["messages"][-1] if state["messages"] else None
-    has_pending_tool_calls = isinstance(last, AIMessage) and bool(last.tool_calls)
 
     if has_pending_tool_calls and state.get("tool_loop_count", 0) < MAX_TOOL_LOOPS:
         # Under budget — execute tools (or pause for confirmation).
@@ -125,9 +141,18 @@ def route_after_tool_node(state: AgentState) -> str:
     the main-graph tool_node.  Follow-up: apply the same optimisation to the
     research/writing/data filtered_tool_nodes (GOO-XXX).
     """
+    if state.get("capability_limitation"):
+        return "memory_save_node"
     if state.get("tools_all_deduped"):
         return "force_synthesis_node"
     return "compactor_node"
+
+
+def route_after_planner_node(state: AgentState) -> str:
+    """End a validated capability limitation before the executor model."""
+    if state.get("capability_limitation"):
+        return "memory_save_node"
+    return "llm_node"
 
 
 def after_interrupt(state: AgentState) -> str:
@@ -165,10 +190,33 @@ def build_agent_graph() -> StateGraph:
     from src.services.agent.subgraphs.writing_agent import build_writing_subgraph
 
     # General-path v2 nodes
-    tool_names = [t.name for t in ALL_TOOLS]
-    planner_node_fn = make_planner_node(tool_names)
+    from src.services.agent.tool_registry import runtime_tool_descriptors
+
+    planner_node_fn = make_planner_node(
+        lambda state: [
+            descriptor.name
+            for descriptor in runtime_tool_descriptors("main", state, TOOL_REGISTRY)
+        ]
+    )
     compactor_node_fn = make_compactor_node()
     reflection_node_fn, reflection_route_fn = make_reflection_gate()
+
+    async def terminal_reflection_node(
+        state: AgentState, config: RunnableConfig
+    ) -> dict[str, Any]:
+        """Repair abandoned calls and keep reflection scoped to this turn."""
+        messages = state.get("messages", [])
+        reason = (
+            _TOOL_ERROR_DEGRADED_ANSWER
+            if state.get("error_count", 0) >= MAX_ERRORS
+            else "I could not complete this request. Please try again or adjust your request."
+        )
+        normalized = normalize_terminal_messages(messages, reason)
+        additions = terminal_message_additions(messages, normalized)
+        updates = await reflection_node_fn({**state, "messages": normalized}, config)
+        if additions:
+            updates = {**updates, "messages": additions}
+        return updates
 
     graph = StateGraph(AgentState)
 
@@ -181,7 +229,7 @@ def build_agent_graph() -> StateGraph:
     graph.add_node("compactor_node", compactor_node_fn)
     graph.add_node("interrupt_node", interrupt_node)
     graph.add_node("force_synthesis_node", force_synthesis_node)
-    graph.add_node("reflection_gate", reflection_node_fn)
+    graph.add_node("reflection_gate", terminal_reflection_node)
     graph.add_node("memory_save_node", memory_save_node, retry=_RETRY_POLICY)
 
     # Sub-graphs compiled as nodes (they have internal planner/compactor/reflection)
@@ -208,8 +256,12 @@ def build_agent_graph() -> StateGraph:
     graph.add_edge("writing_subgraph", "memory_save_node")
     graph.add_edge("data_subgraph", "memory_save_node")
 
-    # General path: planner -> llm
-    graph.add_edge("planner_node", "llm_node")
+    # General path: planner -> llm, or directly to its deterministic terminal.
+    graph.add_conditional_edges(
+        "planner_node",
+        route_after_planner_node,
+        {"llm_node": "llm_node", "memory_save_node": "memory_save_node"},
+    )
 
     # General path: llm_node -> conditional
     graph.add_conditional_edges(
@@ -239,6 +291,7 @@ def build_agent_graph() -> StateGraph:
         {
             "compactor_node": "compactor_node",
             "force_synthesis_node": "force_synthesis_node",
+            "memory_save_node": "memory_save_node",
         },
     )
     graph.add_edge("compactor_node", "llm_node")
@@ -339,6 +392,7 @@ __all__ = [
     "should_continue",
     "after_interrupt",
     "route_after_tool_node",
+    "route_after_planner_node",
     "build_agent_graph",
     "compile_agent_graph",
     "reset_compiled_graph_cache",

@@ -88,6 +88,16 @@ def _parse_study(study: Dict[str, Any]) -> ConnectorResult:
 class ClinicalTrialsConnector(ExternalDBConnector):
     """ClinicalTrials.gov registry of clinical studies."""
 
+    supported_filter_keys = frozenset({"status", "phase", "condition"})
+
+    def validate_search_filters(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        validated = super().validate_search_filters(filters)
+        if any(not isinstance(value, str) for value in validated.values()):
+            raise ValueError("ClinicalTrials filters must be strings")
+        return validated
+
     @property
     def info(self) -> ConnectorInfo:
         return ConnectorInfo(

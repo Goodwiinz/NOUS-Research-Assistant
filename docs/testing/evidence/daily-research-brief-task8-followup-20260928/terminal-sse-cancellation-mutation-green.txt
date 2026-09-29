@@ -1,0 +1,17 @@
+CLASSIFICATION: PASS
+FINAL_SOURCE_SHA: 9ca9d6a2995ba8dd52328efd0e5cd93856138b4a
+SOURCE_STATE: restored final candidate later frozen byte-for-byte in FINAL_SOURCE_SHA
+RAW_CAPTURE_SHA256: 24db2899c24dd5956e2c41fe1fb3854e86fc7cdbae417aa22cc17828c2772854
+EXIT_STATUS: 0
+RESTORED_GUARD:
+  After locking the run in recover_stream_cancellation, return without writing
+  a pause when durable status is completed or failed.
+COMMAND:
+  PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q -vv backend/tests/unit/api/test_research_engine_stream.py::TestStreamEndpointSuccess::test_disconnect_after_terminal_commit_cannot_rewrite_run_to_paused
+
+SALIENT OUTPUT:
+  TestStreamEndpointSuccess::test_disconnect_after_terminal_commit_cannot_rewrite_run_to_paused PASSED
+  1 passed, 1 warning in 4.13s
+
+Existing manual pause and reconnect tests also pass in the affected and broader
+focused suites recorded in `final-source-checks.txt`.

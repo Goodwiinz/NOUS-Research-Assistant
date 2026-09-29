@@ -43,9 +43,9 @@ baseline update.
 
 A test that asserts a race guard or an idempotency guard must be proven to
 fail when the guard is removed — a test that can't be observed to fail
-isn't exercising the guard, whatever it claims to assert. Procedure (see
-`docs/testing/chat-mutation-checks.md` for four worked examples on the chat
-store/hooks):
+isn't exercising the guard, whatever it claims to assert. Procedure (see the
+[chat store/hooks examples](../testing/chat-mutation-checks.md) and the
+[durable operation examples](../testing/agent-orchestration-mutation-checks.md)):
 
 1. Temporarily disable the guard in source (comment out the check, or
    neutralize the condition it depends on).

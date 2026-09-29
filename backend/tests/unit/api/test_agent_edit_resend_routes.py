@@ -30,7 +30,14 @@ from uuid import UUID, uuid4
 import pytest
 from langchain_core.messages import AIMessageChunk
 
+from tests.utils.agent_job_status import stub_durable_status_projection
+
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_status_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_durable_status_projection(monkeypatch)
 
 
 def _user() -> Any:  # SimpleNamespace stand-in for models.user.User
@@ -570,7 +577,6 @@ async def _run_execute_route(
         ),
         patch("src.services.agent.graph.compile_agent_graph", new=lambda **_k: graph),
         patch.object(aes, "_set_job", new=lambda *a, **k: None),
-        patch.object(aes, "_set_job_async", new=AsyncMock(return_value=None)),
     ):
         await aes._run_agent_graph("job-1", request, user)
 

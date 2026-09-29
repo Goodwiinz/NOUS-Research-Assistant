@@ -100,15 +100,14 @@ def test_stale_research_run_sweeper_registered() -> None:
 
 # R5-M18
 def test_stream_claims_running_atomically() -> None:
-    src = _read("src/api/research_engine/runs.py")
-    stream = (
-        src[src.find("async def stream_run") :]
-        if "async def stream_run" in src
-        else src
-    )
-    assert "update(ResearchRun)" in stream
-    assert 'ResearchRun.status.in_(["pending", "paused"])' in stream
-    assert "rowcount == 0" in stream
+    route = _read("src/api/research_engine/runs.py")
+    stream = route[route.find("async def stream_run") :]
+    lifecycle = _read("src/services/research_engine/run_lifecycle.py")
+    claim = lifecycle[lifecycle.find("async def claim_stream") :]
+    assert "await lifecycle.claim_stream(run=run)" in stream
+    assert "async with self._atomic()" in claim[:500]
+    assert "await self._lock_run(run)" in claim[:500]
+    assert "run.status = RunStatus.RUNNING.value" in claim[:2500]
 
 
 # R5-M19

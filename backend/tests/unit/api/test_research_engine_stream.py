@@ -10,19 +10,26 @@ Tests cover:
 """
 
 import asyncio
+import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from src.api.research_engine.runs import pause_run, router, stream_run
+from src.api.research_engine.runs import pause_run, resume_run, router, stream_run
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
+from src.models.research_stage_review import ResearchStageReview
+from src.models.user import User
+from src.schemas.research_engine import RunResponse, RunResumeRequest
+from src.services.research_engine.contracts import canonical_stage_output_hash
+from src.services.research_engine.observability import ResearchObservability
 
 # ============================================================================
 # Helpers
@@ -35,6 +42,10 @@ def _make_run(**overrides):
     run = Mock()
     run.id = overrides.get("id", uuid.uuid4())
     run.blueprint_id = overrides.get("blueprint_id", uuid.uuid4())
+    run.project_id = overrides.get("project_id", uuid.uuid4())
+    run.research_engine_project_id = overrides.get(
+        "research_engine_project_id", uuid.uuid4()
+    )
     run.blueprint_version = overrides.get("blueprint_version", 1)
     run.status = overrides.get("status", "pending")
     run.started_at = overrides.get("started_at", None)
@@ -60,6 +71,17 @@ def _make_blueprint(**overrides):
     bp.parameters = overrides.get("parameters", {})
     bp.is_immutable = True
     return bp
+
+
+def _resume_authorization() -> dict[str, object]:
+    return {
+        "kind": "user_resume",
+        "actor_id": str(uuid.uuid4()),
+        "step_index": -1,
+        "output_hash": "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "consumed_at": None,
+    }
 
 
 def _mock_db_returning(
@@ -100,15 +122,15 @@ def _mock_db_returning(
                 step_mock.scalars.return_value.first.return_value = last_step
             results.append(step_mock)
 
+            # Prior-outputs history SELECT now happens before the atomic claim.
+            history_mock = Mock()
+            history_mock.scalars.return_value.all.return_value = []
+            results.append(history_mock)
+
             # R5-M18 claim UPDATE → rowcount=1
             claim_mock = Mock()
             claim_mock.rowcount = 1
             results.append(claim_mock)
-
-            # R5-M19 prior-outputs history SELECT
-            history_mock = Mock()
-            history_mock.scalars.return_value.all.return_value = []
-            results.append(history_mock)
 
     db.execute = AsyncMock(side_effect=results)
     # commit/refresh are no-ops in tests
@@ -318,7 +340,12 @@ class TestStreamEndpointSuccess:
     def test_stream_works_with_paused_run(self, stream_app, stream_client):
         run_id = uuid.uuid4()
         bp_id = uuid.uuid4()
-        mock_run = _make_run(id=run_id, blueprint_id=bp_id, status="paused")
+        mock_run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="paused",
+            reproducibility_manifest={"resume_authorization": _resume_authorization()},
+        )
         mock_bp = _make_blueprint(id=bp_id)
         db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
 
@@ -344,6 +371,7 @@ class TestStreamEndpointSuccess:
             blueprint_id=bp_id,
             status="paused",
             started_at=old_started_at,
+            reproducibility_manifest={"resume_authorization": _resume_authorization()},
         )
         mock_bp = _make_blueprint(id=bp_id)
         db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
@@ -722,7 +750,56 @@ class TestStreamEndpointSuccess:
 
         db.rollback.assert_awaited_once()
         assert mock_run.status == "paused"
-        assert mock_run.reproducibility_manifest is None
+        user_pause = mock_run.reproducibility_manifest["user_pause"]
+        assert user_pause["step_index"] == -1
+        assert len(user_pause["output_hash"]) == 64
+        assert "_pause_requested" not in mock_run.reproducibility_manifest
+
+    @pytest.mark.asyncio
+    async def test_disconnect_after_terminal_commit_cannot_rewrite_run_to_paused(self):
+        """Cancellation at terminal frame delivery preserves the committed outcome."""
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        mock_run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="pending",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        mock_bp = _make_blueprint(id=bp_id)
+        db = _mock_db_returning(run_result=mock_run, blueprint_result=mock_bp)
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        async def terminal_engine(*_args, **_kwargs):
+            yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
+            await asyncio.Event().wait()
+
+        with (
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+            patch("src.api.research_engine.runs.ArxivConnector"),
+            patch("src.api.research_engine.runs.SemanticScholarConnector"),
+        ):
+            engine = Mock()
+            engine.run = terminal_engine
+            engine_cls.return_value = engine
+            response = await stream_run(run_id, current_user, db)
+            iterator = response.body_iterator
+
+            terminal_frame = await anext(iterator)
+            assert "event: run_complete" in terminal_frame
+            assert mock_run.status == "completed"
+
+            with pytest.raises(asyncio.CancelledError):
+                await iterator.athrow(asyncio.CancelledError("client disconnected"))
+
+        assert mock_run.status == "completed"
+        assert "user_pause" not in mock_run.reproducibility_manifest
+        assert "resume_authorization" not in mock_run.reproducibility_manifest
 
     @pytest.mark.asyncio
     async def test_stream_commit_failure_refreshes_after_rollback(self):
@@ -751,9 +828,12 @@ class TestStreamEndpointSuccess:
             }
 
         operations: list[str] = []
+        observer = ResearchObservability()
 
         async def rollback():
             operations.append("rollback")
+            mock_run.reproducibility_manifest = {"_pause_requested": True}
+            mock_run.total_tokens = 0
 
         async def refresh(_obj):
             operations.append("refresh")
@@ -767,6 +847,7 @@ class TestStreamEndpointSuccess:
             patch("src.api.research_engine.runs.StepExecutor"),
             patch("src.api.research_engine.runs.ArxivConnector"),
             patch("src.api.research_engine.runs.SemanticScholarConnector"),
+            patch("src.api.research_engine.runs.research_observability", observer),
         ):
             engine = Mock()
             engine.run = completed_step
@@ -781,14 +862,17 @@ class TestStreamEndpointSuccess:
             async for chunk in response.body_iterator:
                 chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
 
-        rollback_index = operations.index("rollback")
+        rollback_index = len(operations) - 1 - operations[::-1].index("rollback")
         assert operations[rollback_index : rollback_index + 2] == [
             "rollback",
             "refresh",
         ]
         assert mock_run.status == "failed"
         assert mock_run.reproducibility_manifest is None
-        assert "db write failed" in "".join(chunks)
+        stream = "".join(chunks)
+        assert "db write failed" not in stream
+        assert "Research stream failed" in stream
+        assert observer.snapshot()["counters"]["sse_errors"]["stream_failure"] == 1
 
 
 # ============================================================================
@@ -822,12 +906,15 @@ class TestStreamEndpointErrors:
         assert response.status_code == 409
         stream_app.dependency_overrides.pop(get_db, None)
 
-    def test_resume_keeps_paused_status_for_step_index_recovery(
+    def test_resume_keeps_paused_status_until_stream_claims_run(
         self, stream_app, stream_client
     ):
         run_id = uuid.uuid4()
         run = _make_run(id=run_id, status="paused")
         db = AsyncMock()
+        no_step = Mock()
+        no_step.scalars.return_value.first.return_value = None
+        db.execute = AsyncMock(return_value=no_step)
         db.commit = AsyncMock()
         db.refresh = AsyncMock()
         stream_app.dependency_overrides[get_db] = lambda: db
@@ -842,8 +929,250 @@ class TestStreamEndpointErrors:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["status"] == "running"
+        assert body["status"] == "paused"
+        assert run.reproducibility_manifest["continuation_requested"] is True
         stream_app.dependency_overrides.pop(get_db, None)
+
+    @pytest.mark.asyncio
+    async def test_post_resume_then_stream_claims_paused_run(self):
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        started_at = datetime(2026, 9, 27, 11, 0, tzinfo=timezone.utc)
+        run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="paused",
+            started_at=started_at,
+            reproducibility_manifest={
+                "parameters_override": {},
+                "resume_authorization": _resume_authorization(),
+            },
+        )
+        blueprint = _make_blueprint(id=bp_id)
+        blueprint.template_source = "daily_research_brief"
+        blueprint_result = Mock()
+        blueprint_result.scalars.return_value.first.return_value = blueprint
+        last_step_result = Mock()
+        last_step_result.scalars.return_value.first.return_value = None
+        history_result = Mock()
+        history_result.scalars.return_value.all.return_value = []
+        claim_result = Mock(rowcount=1)
+        db = AsyncMock()
+        db.execute = AsyncMock(
+            side_effect=[
+                blueprint_result,
+                last_step_result,
+                history_result,
+                claim_result,
+            ]
+        )
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        db.add = Mock()
+        user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+        seen_context: dict[str, Any] = {}
+        seen_kwargs: dict[str, Any] = {}
+
+        async def engine_run(**kwargs):
+            seen_kwargs.update(kwargs)
+            seen_context.update(kwargs["initial_context"])
+            yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
+
+        with (
+            patch(
+                "src.api.research_engine.runs._get_owned_run",
+                new=AsyncMock(side_effect=[run, run]),
+            ),
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+        ):
+            engine = Mock()
+            engine.run = engine_run
+            engine_cls.return_value = engine
+            resumed = await resume_run(
+                run_id,
+                body=RunResumeRequest(),
+                current_user=user,
+                db=db,
+            )
+            assert resumed.status.value == "paused"
+            response = await stream_run(run_id, user, db)
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        assert run.status == "completed"
+        assert "event: run_complete" in "".join(chunks)
+        assert seen_kwargs["record_run_started"] is False
+        assert seen_context["artifact_provenance"]["generated_at"] == (
+            started_at.isoformat()
+        )
+
+    @pytest.mark.asyncio
+    async def test_stream_rehydration_gap_records_content_free_reconnect_error(
+        self,
+    ) -> None:
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        run = _make_run(id=run_id, blueprint_id=bp_id, status="paused")
+        blueprint = _make_blueprint(id=bp_id)
+        first = SimpleNamespace(
+            step_index=0,
+            output={
+                "contract_version": 1,
+                "stage_type": "search",
+                "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+                "source_records": [],
+                "coverage": {"exhaustive": False},
+                "selected_sources": ["openalex"],
+            },
+        )
+        third = SimpleNamespace(
+            step_index=2,
+            output={
+                "contract_version": 1,
+                "stage_type": "verify",
+                "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+                "verification": {"passed": False, "claims": []},
+                "processing_coverage": {},
+            },
+        )
+        blueprint_result = Mock()
+        blueprint_result.scalars.return_value.first.return_value = blueprint
+        last_step_result = Mock()
+        last_step_result.scalars.return_value.first.return_value = third
+        history_result = Mock()
+        history_result.scalars.return_value.all.return_value = [first, third]
+        db = AsyncMock()
+        db.execute = AsyncMock(
+            side_effect=[blueprint_result, last_step_result, history_result]
+        )
+        user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+        observer = ResearchObservability()
+
+        with (
+            patch(
+                "src.api.research_engine.runs._get_owned_run",
+                new=AsyncMock(return_value=run),
+            ),
+            patch("src.api.research_engine.runs.research_observability", observer),
+        ):
+            with pytest.raises(HTTPException) as raised:
+                await stream_run(run_id, cast(User, user), db)
+
+        assert raised.value.status_code == 409
+        assert raised.value.detail == {
+            "code": "run_reconstruction_failed",
+            "message": "Persisted run stages cannot be resumed",
+        }
+        assert (
+            observer.snapshot()["counters"]["rehydration_errors"]["invalid_history"]
+            == 1
+        )
+
+    @pytest.mark.asyncio
+    async def test_executor_exception_content_never_reaches_sse_or_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        run_id = uuid.uuid4()
+        blueprint_id = uuid.uuid4()
+        run = _make_run(id=run_id, blueprint_id=blueprint_id, status="pending")
+        blueprint = _make_blueprint(
+            id=blueprint_id,
+            steps=[{"id": "extract", "type": "extract", "parameters": {}}],
+        )
+        db = _mock_db_returning(run_result=run, blueprint_result=blueprint)
+        user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+        executor = Mock()
+        executor.execute = AsyncMock(
+            side_effect=RuntimeError("PRIVATE_RESEARCH_QUESTION")
+        )
+
+        with (
+            caplog.at_level("INFO"),
+            patch("src.api.research_engine.runs._build_connectors", return_value={}),
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("src.api.research_engine.runs.StepExecutor", return_value=executor),
+        ):
+            response = await stream_run(run_id, cast(User, user), db)
+            chunks = [
+                chunk.decode() if isinstance(chunk, bytes) else chunk
+                async for chunk in response.body_iterator
+            ]
+
+        body = "".join(chunks)
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "event: step_error" in body
+        assert "event: run_failed" in body
+        assert "PRIVATE_RESEARCH_QUESTION" not in body
+        assert "PRIVATE_RESEARCH_QUESTION" not in log_text
+        assert '"error_category": "unexpected_step_error"' in body
+        assert run.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_stream_claim_loser_does_not_start_resumed_run(self):
+        """A competing stream that loses the atomic claim cannot execute work."""
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        run = _make_run(
+            id=run_id,
+            blueprint_id=bp_id,
+            status="paused",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        blueprint = _make_blueprint(id=bp_id)
+        blueprint_result = Mock()
+        blueprint_result.scalars.return_value.first.return_value = blueprint
+        last_step_result = Mock()
+        last_step_result.scalars.return_value.first.return_value = None
+        history_result = Mock()
+        history_result.scalars.return_value.all.return_value = []
+        claim_result = Mock(rowcount=0)
+        db = AsyncMock()
+        db.execute = AsyncMock(
+            side_effect=[
+                blueprint_result,
+                last_step_result,
+                history_result,
+                claim_result,
+            ]
+        )
+        db.commit = AsyncMock()
+        db.rollback = AsyncMock()
+
+        async def refresh_after_competing_claim(target, **_kwargs):
+            target.status = "running"
+
+        db.lifecycle_lock_run = AsyncMock(side_effect=refresh_after_competing_claim)
+        user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        with (
+            patch(
+                "src.api.research_engine.runs._get_owned_run",
+                new=AsyncMock(return_value=run),
+            ),
+            patch(
+                "src.api.research_engine.runs.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ) as admit,
+            patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+            patch("src.api.research_engine.runs.StepExecutor"),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await stream_run(run_id, user, db)
+
+        assert exc_info.value.status_code == 409
+        db.rollback.assert_awaited_once()
+        db.commit.assert_not_awaited()
+        admit.assert_not_awaited()
+        engine_cls.assert_not_called()
 
     def test_stream_returns_409_for_failed_run(self, stream_app, stream_client):
         run_id = uuid.uuid4()
@@ -870,3 +1199,418 @@ class TestStreamEndpointErrors:
         response = stream_client.get(f"/api/v1/research-engine/runs/{run_id}/stream")
         assert response.status_code == 409
         stream_app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.mark.asyncio
+async def test_ordinary_resume_cannot_bypass_pending_review():
+    """POST resume must require the approved row bound to the pending hash."""
+
+    run_id = uuid.uuid4()
+    run = _make_run(
+        id=run_id,
+        status="paused",
+        reproducibility_manifest={
+            "pending_review": {
+                "run_id": str(run_id),
+                "step_index": 1,
+                "stage_type": "screen",
+                "review_kind": "screening",
+                "contract_version": 1,
+                "output_hash": "a" * 64,
+                "status": "pending",
+                "created_at": "2026-09-27T12:00:00+00:00",
+            }
+        },
+    )
+    db = AsyncMock()
+    current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+    with patch(
+        "src.api.research_engine.runs._get_owned_run",
+        new=AsyncMock(return_value=run),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await resume_run(run_id, RunResumeRequest(), current_user, db)
+
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "review_required"
+    assert error.value.detail["descriptor"] == {
+        "pause_reason": "review_required",
+        "review_kind": "screening",
+        "step_index": 1,
+        "output_hash": "a" * 64,
+    }
+    db.commit.assert_not_awaited()
+
+
+def test_run_response_reloads_content_free_pause_descriptor():
+    """Reloading GET /runs must expose the durable gate without stage content."""
+
+    run_id = uuid.uuid4()
+    run = _make_run(
+        id=run_id,
+        status="paused",
+        reproducibility_manifest={
+            "pending_review": {
+                "run_id": str(run_id),
+                "step_index": 2,
+                "stage_type": "extract",
+                "review_kind": "extraction",
+                "contract_version": 1,
+                "output_hash": "b" * 64,
+                "status": "pending",
+                "created_at": "2026-09-27T12:00:00+00:00",
+            },
+            "private_report": "must not be serialized",
+        },
+    )
+
+    response = RunResponse.model_validate(run).model_dump(mode="json")
+
+    assert response["pause_reason"] == "review_required"
+    assert response["review_kind"] == "extraction"
+    assert response["step_index"] == 2
+    assert response["output_hash"] == "b" * 64
+    assert "reproducibility_manifest" not in response
+    assert "private_report" not in str(response)
+
+
+async def _preexecution_stream_fixture(
+    *,
+    status_value: str,
+) -> tuple[uuid.UUID, Any, Any, Any]:
+    run_id = uuid.uuid4()
+    blueprint_id = uuid.uuid4()
+    manifest: dict[str, Any] = {"parameters_override": {}}
+    if status_value == "paused":
+        manifest["resume_authorization"] = {
+            "kind": "continue_unverified",
+            "actor_id": str(uuid.uuid4()),
+            "step_index": 2,
+            "output_hash": "a" * 64,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "consumed_at": None,
+        }
+    run = _make_run(
+        id=run_id,
+        blueprint_id=blueprint_id,
+        status=status_value,
+        reproducibility_manifest=manifest,
+    )
+    blueprint = _make_blueprint(id=blueprint_id)
+    blueprint_result = Mock()
+    blueprint_result.scalars.return_value.first.return_value = blueprint
+    last_step_result = Mock()
+    last_step_result.scalars.return_value.first.return_value = None
+    history_result = Mock()
+    history_result.scalars.return_value.all.return_value = []
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[blueprint_result, last_step_result, history_result]
+    )
+    db.commit = AsyncMock()
+    db.rollback = AsyncMock()
+    db.refresh = AsyncMock()
+    db.add = Mock()
+    return run_id, run, blueprint, db
+
+
+@pytest.mark.asyncio
+async def test_missing_organization_fails_before_pending_stream_claim():
+    run_id, run, _blueprint, db = await _preexecution_stream_fixture(
+        status_value="pending"
+    )
+    user = SimpleNamespace(id=uuid.uuid4(), organization_id=None)
+
+    with (
+        patch(
+            "src.api.research_engine.runs._get_owned_run",
+            new=AsyncMock(return_value=run),
+        ),
+        patch("src.api.research_engine.runs.admit_expensive_work") as admit,
+        patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+    ):
+        with pytest.raises(HTTPException) as error:
+            await stream_run(run_id, user, db)
+
+    assert error.value.status_code == 403
+    assert run.status == "pending"
+    assert run.started_at is None
+    admit.assert_not_awaited()
+    engine_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_connector_construction_fails_before_pending_stream_claim():
+    run_id, run, _blueprint, db = await _preexecution_stream_fixture(
+        status_value="pending"
+    )
+    user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+    with (
+        patch(
+            "src.api.research_engine.runs._get_owned_run",
+            new=AsyncMock(return_value=run),
+        ),
+        patch(
+            "src.api.research_engine.runs._build_connectors",
+            side_effect=RuntimeError("connector setup failed"),
+        ),
+        patch("src.api.research_engine.runs.admit_expensive_work") as admit,
+        patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+    ):
+        with pytest.raises(RuntimeError, match="connector setup failed"):
+            await stream_run(run_id, user, db)
+
+    assert run.status == "pending"
+    assert run.started_at is None
+    admit.assert_not_awaited()
+    engine_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_value", ["pending", "paused"])
+async def test_admission_exception_restores_stream_claim_for_retry(status_value: str):
+    run_id, run, _blueprint, db = await _preexecution_stream_fixture(
+        status_value=status_value
+    )
+    user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+    with (
+        patch(
+            "src.api.research_engine.runs._get_owned_run",
+            new=AsyncMock(return_value=run),
+        ),
+        patch("src.api.research_engine.runs._build_connectors", return_value={}),
+        patch(
+            "src.api.research_engine.runs.admit_expensive_work",
+            new=AsyncMock(side_effect=RuntimeError("admission backend failed")),
+        ),
+        patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+    ):
+        with pytest.raises(RuntimeError, match="admission backend failed"):
+            await stream_run(run_id, user, db)
+
+    assert run.status == status_value
+    assert run.started_at is None
+    if status_value == "paused":
+        authorization = run.reproducibility_manifest["resume_authorization"]
+        assert authorization["output_hash"] == "a" * 64
+        assert authorization["consumed_at"] is None
+    engine_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_committed_verification_gate_wins_user_pause_and_sse_has_no_context():
+    run_id = uuid.uuid4()
+    blueprint_id = uuid.uuid4()
+    run = _make_run(id=run_id, blueprint_id=blueprint_id, status="pending")
+    blueprint = _make_blueprint(
+        id=blueprint_id,
+        steps=[{"id": "verify", "type": "verify", "parameters": {}}],
+    )
+    db = _mock_db_returning(run_result=run, blueprint_result=blueprint)
+    user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+    refresh_count = 0
+
+    async def refresh_with_pause(_obj):
+        nonlocal refresh_count
+        refresh_count += 1
+        if refresh_count >= 2:
+            manifest = dict(run.reproducibility_manifest or {})
+            manifest["_pause_requested"] = True
+            run.reproducibility_manifest = manifest
+
+    db.refresh = AsyncMock(side_effect=refresh_with_pause)
+    output = {
+        "contract_version": 1,
+        "stage_type": "verify",
+        "usage": {"model_calls": 1, "total_tokens": 5, "batches": []},
+        "verification": {
+            "passed": False,
+            "deterministic_passed": True,
+            "schema_passed": True,
+            "semantic_status": "failed",
+            "coverage_complete": True,
+            "claims": [],
+        },
+        "processing_coverage": {},
+    }
+
+    async def engine_run(**_kwargs):
+        yield {
+            "event": "step_complete",
+            "step_index": 0,
+            "step_id": "verify",
+            "step_type": "verify",
+            "output": output,
+            "outputs_hash": canonical_stage_output_hash(output),
+            "quality_marks": [{"check_type": "semantic_verification", "passed": False}],
+            "token_count": 5,
+        }
+        yield {
+            "event": "run_paused",
+            "reason": "Quality check failed",
+            "context": {"private_research": "must never reach SSE"},
+        }
+
+    with (
+        patch("src.api.research_engine.runs._build_connectors", return_value={}),
+        patch(
+            "src.api.research_engine.runs.admit_expensive_work",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+        patch("src.api.research_engine.runs.StepExecutor"),
+    ):
+        engine = Mock()
+        engine.run = engine_run
+        engine_cls.return_value = engine
+        response = await stream_run(run_id, user, db)
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    body = "".join(chunks)
+    pause_payloads = [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ") and '"event": "run_paused"' in line
+    ]
+    assert pause_payloads == [
+        {
+            "event": "run_paused",
+            "run_id": str(run_id),
+            "pause_reason": "verification_failed",
+            "step_index": 0,
+            "output_hash": canonical_stage_output_hash(output),
+        }
+    ]
+    assert "private_research" not in body
+    assert run.status == "paused"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage_type", "review_gate", "terminal_reason", "output"),
+    [
+        (
+            "screen",
+            "screening",
+            "empty_screening",
+            {
+                "contract_version": 1,
+                "stage_type": "screen",
+                "usage": {"model_calls": 1, "total_tokens": 5, "batches": []},
+                "screening": [],
+                "included_source_ids": [],
+                "processing_coverage": {},
+            },
+        ),
+        (
+            "extract",
+            "extraction",
+            "empty_extraction",
+            {
+                "contract_version": 1,
+                "stage_type": "extract",
+                "usage": {"model_calls": 1, "total_tokens": 5, "batches": []},
+                "extractions": [
+                    {
+                        "source_id": "source-1",
+                        "part_id": "p0001",
+                        "data": {"finding": None},
+                        "evidence": [],
+                    }
+                ],
+                "processing_coverage": {},
+            },
+        ),
+    ],
+)
+async def test_zero_evidence_route_commits_terminal_audit_without_review(
+    stage_type: str,
+    review_gate: str,
+    terminal_reason: str,
+    output: dict[str, Any],
+):
+    run_id = uuid.uuid4()
+    blueprint_id = uuid.uuid4()
+    run = _make_run(id=run_id, blueprint_id=blueprint_id, status="pending")
+    blueprint = _make_blueprint(
+        id=blueprint_id,
+        steps=[
+            {
+                "id": stage_type,
+                "type": stage_type,
+                "parameters": {"review_gate": review_gate},
+            },
+            {"id": "must-not-run", "type": "export"},
+        ],
+    )
+    db = _mock_db_returning(run_result=run, blueprint_result=blueprint)
+    user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+    async def engine_run(**_kwargs):
+        yield {
+            "event": "step_complete",
+            "step_index": 0,
+            "step_id": stage_type,
+            "step_type": stage_type,
+            "output": output,
+            "outputs_hash": canonical_stage_output_hash(output),
+            "quality_marks": [],
+            "token_count": 5,
+        }
+        yield {"event": "step_start", "step_index": 1, "step_id": "must-not-run"}
+
+    with (
+        patch("src.api.research_engine.runs._build_connectors", return_value={}),
+        patch(
+            "src.api.research_engine.runs.admit_expensive_work",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.api.research_engine.runs.WorkflowEngine") as engine_cls,
+        patch("src.api.research_engine.runs.StepExecutor"),
+    ):
+        engine = Mock()
+        engine.run = engine_run
+        engine_cls.return_value = engine
+        response = await stream_run(run_id, user, db)
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    body = "".join(chunks)
+    assert '"final_status": "no_evidence"' in body
+    assert "must-not-run" not in body
+    assert "event: run_paused" not in body
+    assert run.status == "completed"
+    assert run.reproducibility_manifest["final_status"] == "no_evidence"
+    audit = run.reproducibility_manifest["terminal_audit"]
+    assert audit["reason"] == terminal_reason
+    assert audit["output_hash"] == canonical_stage_output_hash(output)
+    added = [call.args[0] for call in db.add.call_args_list]
+    assert not any(isinstance(item, ResearchStageReview) for item in added)
+
+
+def test_run_response_reloads_user_pause_descriptor():
+    run = _make_run(
+        status="paused",
+        reproducibility_manifest={
+            "user_pause": {
+                "step_index": -1,
+                "output_hash": "c" * 64,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+
+    response = RunResponse.model_validate(run).model_dump(mode="json")
+
+    assert response["pause_reason"] == "user_paused"
+    assert response["review_kind"] is None
+    assert response["step_index"] == -1
+    assert response["output_hash"] == "c" * 64

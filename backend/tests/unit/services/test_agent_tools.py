@@ -581,7 +581,7 @@ class TestIngestArxiv:
 
 
 class TestExecuteToolDispatch:
-    """Test that execute_tool routes to the correct tool function."""
+    """Test registered tool routing beneath the durable operation boundary."""
 
     async def test_unknown_tool_returns_error(self):
         """Unrecognised tool names should return an error, not crash."""
@@ -598,17 +598,16 @@ class TestExecuteToolDispatch:
         assert "error" in result
 
     async def test_add_document_dispatches_correctly(self):
-        """execute_tool should route add_document_to_project to its handler."""
-        from src.api.agent.execute import execute_tool
+        from src.services.agent.tools_impl import _dispatch_tool
 
         with patch(
             "src.services.agent.tools_impl._tool_add_document_to_project",
             new_callable=AsyncMock,
             return_value={"status": "success"},
         ) as mock_handler:
-            result = await execute_tool(
-                tool_name="add_document_to_project",
-                args={"document_id": "d1", "project_id": "p1"},
+            result = await _dispatch_tool(
+                "add_document_to_project",
+                {"document_id": "d1", "project_id": "p1"},
                 user_id="user-1",
                 db=AsyncMock(),
                 current_user=_mock_user(),
@@ -618,17 +617,16 @@ class TestExecuteToolDispatch:
         assert result["status"] == "success"
 
     async def test_create_project_dispatches_correctly(self):
-        """execute_tool should route create_project to its handler."""
-        from src.api.agent.execute import execute_tool
+        from src.services.agent.tools_impl import _dispatch_tool
 
         with patch(
             "src.services.agent.tools_impl._tool_create_project",
             new_callable=AsyncMock,
             return_value={"status": "success", "project_id": "p1"},
         ) as mock_handler:
-            result = await execute_tool(
-                tool_name="create_project",
-                args={"name": "Diffusion Transformers"},
+            result = await _dispatch_tool(
+                "create_project",
+                {"name": "Diffusion Transformers"},
                 user_id="user-1",
                 db=AsyncMock(),
                 current_user=_mock_user(),
@@ -638,8 +636,8 @@ class TestExecuteToolDispatch:
         assert result["status"] == "success"
 
     async def test_forget_memory_dispatches_correctly(self):
-        """execute_tool must route forget_memory to its handler (was Unknown tool)."""
-        from src.api.agent.execute import execute_tool
+        """The dispatcher passes the verified actor to forget_memory."""
+        from src.services.agent.tools_impl import _dispatch_tool
 
         acting_user = _mock_user()
         with patch(
@@ -647,12 +645,13 @@ class TestExecuteToolDispatch:
             new_callable=AsyncMock,
             return_value={"status": "completed", "deleted": 1, "matches": []},
         ) as mock_handler:
-            result = await execute_tool(
-                tool_name="forget_memory",
-                args={"query": "forget my transformer searches"},
+            result = await _dispatch_tool(
+                "forget_memory",
+                {"query": "forget my transformer searches"},
                 user_id="user-1",
                 db=AsyncMock(),
                 current_user=acting_user,
+                organization_id=str(acting_user.organization_id),
             )
 
         mock_handler.assert_awaited_once()
@@ -668,17 +667,17 @@ class TestExecuteToolDispatch:
         assert "error" not in result  # must NOT be the "Unknown tool" catch-all
 
     async def test_execute_code_threads_thread_id(self):
-        """execute_tool must forward thread_id to _tool_execute_code (was hardcoded "")."""
-        from src.api.agent.execute import execute_tool
+        """The dispatcher forwards the sandbox's thread scope."""
+        from src.services.agent.tools_impl import _dispatch_tool
 
         with patch(
             "src.services.agent.tools_impl._tool_execute_code",
             new_callable=AsyncMock,
             return_value={"status": "ok"},
         ) as mock_handler:
-            await execute_tool(
-                tool_name="execute_code",
-                args={"code": "print(1)"},
+            await _dispatch_tool(
+                "execute_code",
+                {"code": "print(1)"},
                 user_id="user-1",
                 db=AsyncMock(),
                 current_user=_mock_user(),

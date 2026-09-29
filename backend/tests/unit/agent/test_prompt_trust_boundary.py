@@ -123,6 +123,22 @@ class TestPageContextIngress:
         assert "\n## " not in line
         assert "\n## SYSTEM OVERRIDE" not in line
 
+    def test_active_paper_page_context_only_names_registered_document_tools(
+        self,
+    ) -> None:
+        line = _build_page_context_line(
+            {
+                "type": "paper",
+                "paper_id": "doc-123",
+                "paper_title": "A Named Paper",
+            }
+        )
+
+        assert "document_id=doc-123" in line
+        assert "summarize_document" in line
+        assert "extract_entities" in line
+        assert "analyze_document" not in line
+
 
 @pytest.mark.unit
 class TestWrapUntrusted:

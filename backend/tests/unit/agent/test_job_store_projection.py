@@ -8,6 +8,7 @@ The projection body itself is covered in test_agent_run_service.py.
 
 import asyncio
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -107,6 +108,17 @@ async def test_thread_terminal_projection_lands_before_job_publication():
 
     async def record(*_args, **_kwargs):
         order.append("projection")
+        return SimpleNamespace(
+            job_id="job-terminal",
+            requested_status=JobStatus.COMPLETED,
+            effective_status=JobStatus.COMPLETED,
+            user_id="u-1",
+            organization_id=None,
+            thread_id="t-1",
+            error=None,
+            cancel_requested_at=None,
+            updated_at="2026-09-26T00:00:00+00:00",
+        )
 
     async def write_redis(*_args, **_kwargs):
         order.append("redis")
@@ -142,11 +154,8 @@ async def test_thread_terminal_projection_lands_before_job_publication():
 
 
 @pytest.mark.asyncio
-async def test_thread_terminal_projection_failure_still_publishes_and_retries():
-    """H2: a failed strict projection must not cost the terminal status —
-    set_job falls through to L1/Redis instead of raising, and reschedules a
-    best-effort re-projection (the same seam non-terminal writes use) rather
-    than losing the durable row outright."""
+async def test_thread_terminal_projection_failure_does_not_publish_requested_state():
+    """A failed durable decision cannot expose the requested terminal result."""
     recorded = AsyncMock(side_effect=RuntimeError("db unavailable"))
     redis_write = AsyncMock()
     js._l1["job-terminal"] = {
@@ -160,14 +169,108 @@ async def test_thread_terminal_projection_failure_still_publishes_and_retries():
         patch.object(js, "set_job_redis_only", redis_write),
         patch("src.services.agent.agent_run_service.record_job_status", new=recorded),
     ):
-        await js.set_job("job-terminal", {"status": JobStatus.COMPLETED})
+        with pytest.raises(RuntimeError, match="db unavailable"):
+            await js.set_job(
+                "job-terminal",
+                {"status": JobStatus.COMPLETED, "result": {"message": "new"}},
+                require_durable_decision=True,
+            )
         await _drain_projection_tasks()
 
-    assert js._l1["job-terminal"]["status"] is JobStatus.COMPLETED
+    assert js._l1["job-terminal"]["status"] is JobStatus.RUNNING
+    assert "result" not in js._l1["job-terminal"]
+    redis_write.assert_not_awaited()
+    recorded.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_set_job_publishes_the_durable_winner_not_losing_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An accepted Stop stays STOPPING when the producer proposes COMPLETED."""
+    js._l1["job-stop-wins"] = {
+        "status": JobStatus.RUNNING,
+        "user_id": "u-1",
+        "organization_id": "org-1",
+        "thread_id": "t-1",
+        "created_at": time.time(),
+    }
+    monkeypatch.setattr(js, "_projection_enabled", lambda: False)
+    redis_write = AsyncMock()
+    monkeypatch.setattr(js, "set_job_redis_only", redis_write)
+    decision = SimpleNamespace(
+        job_id="job-stop-wins",
+        requested_status=JobStatus.COMPLETED,
+        effective_status=JobStatus.STOPPING,
+        requested_status_won=False,
+        user_id="u-1",
+        organization_id="org-1",
+        thread_id="t-1",
+        error=None,
+        cancel_requested_at="2026-09-26T00:00:00+00:00",
+    )
+    recorded = AsyncMock(return_value=decision)
+
+    with patch("src.services.agent.agent_run_service.record_job_status", new=recorded):
+        result = await js.set_job(
+            "job-stop-wins",
+            {
+                "status": JobStatus.COMPLETED,
+                "result": {"message": "must not leak"},
+                "user_id": "u-1",
+                "organization_id": "org-1",
+                "thread_id": "t-1",
+            },
+            require_durable_decision=True,
+        )
+
+    assert result is decision
+    assert js._l1["job-stop-wins"]["status"] is JobStatus.STOPPING
+    assert "result" not in js._l1["job-stop-wins"]
     redis_write.assert_awaited_once()
-    # First call is the strict (failed) attempt; falling through to the
-    # best-effort seam below fires a second, retried one.
-    assert recorded.await_count == 2
+    assert redis_write.await_args.args[1]["status"] is JobStatus.STOPPING
+    assert "result" not in redis_write.await_args.args[1]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_required_awaiting_confirmation_publication_requires_durable_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A producer cannot return from an interrupt before durable projection."""
+    monkeypatch.setattr(js, "_projection_enabled", lambda: False)
+    redis_write = AsyncMock()
+    monkeypatch.setattr(js, "set_job_redis_only", redis_write)
+    decision = SimpleNamespace(
+        job_id="job-park",
+        requested_status=JobStatus.AWAITING_CONFIRMATION,
+        effective_status=JobStatus.AWAITING_CONFIRMATION,
+        requested_status_won=True,
+        user_id="u-2",
+        organization_id="org-2",
+        thread_id=None,
+        error=None,
+        cancel_requested_at=None,
+    )
+    recorded = AsyncMock(return_value=decision)
+
+    with patch("src.services.agent.agent_run_service.record_job_status", new=recorded):
+        result = await js.set_job(
+            "job-park",
+            {
+                "status": JobStatus.AWAITING_CONFIRMATION,
+                "user_id": "u-2",
+                "organization_id": "org-2",
+            },
+            require_durable_decision=True,
+        )
+
+    assert result is decision
+    recorded.assert_awaited_once()
+    assert recorded.await_args.kwargs["raise_on_error"] is True
+    assert js._l1["job-park"]["status"] is JobStatus.AWAITING_CONFIRMATION
+    redis_write.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -263,5 +366,5 @@ async def test_scheduling_failure_never_breaks_the_write_path():
         patch.object(js, "_get_redis", AsyncMock(return_value=None)),
         patch.object(asyncio, "get_running_loop", side_effect=RuntimeError("no loop")),
     ):
-        await js.set_job("job-5", {"status": JobStatus.FAILED, "user_id": "u"})
-    assert js._l1["job-5"]["status"] == JobStatus.FAILED
+        await js.set_job("job-5", {"status": JobStatus.RUNNING, "user_id": "u"})
+    assert js._l1["job-5"]["status"] == JobStatus.RUNNING

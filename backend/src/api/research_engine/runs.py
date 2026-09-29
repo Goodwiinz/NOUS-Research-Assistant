@@ -10,11 +10,13 @@ from typing import Any, Awaitable, Dict, List, Optional
 from uuid import UUID
 
 from anyio import CancelScope
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, update
+from sqlalchemy import cast, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.research_blueprint import ResearchBlueprint
@@ -23,8 +25,10 @@ from src.models.research_run import ResearchRun, RunStatus
 from src.models.research_step import ResearchStep
 from src.models.user import User
 from src.schemas.research_engine import (
+    ExportFormat,
     RunCreate,
     RunResponse,
+    RunResumeRequest,
     validate_blueprint_runtime,
 )
 from src.services.expensive_work_admission import admit_expensive_work
@@ -33,8 +37,23 @@ from src.services.research_engine.connectors import (
     RagStoreConnector,
     SemanticScholarConnector,
 )
-from src.services.research_engine.connectors.registry import build_connectors
+from src.services.research_engine.connectors.registry import (
+    build_connectors,
+    safe_capability_projection,
+)
+from src.services.research_engine.contracts import (
+    canonical_stage_output_hash,
+    rehydrate_stage_outputs,
+)
 from src.services.research_engine.engine import WorkflowEngine
+from src.services.research_engine.export_service import (
+    ExportService,
+    ResearchExportError,
+)
+from src.services.research_engine.observability import (
+    research_observability,
+    safely_observe,
+)
 from src.services.research_engine.project_access import (
     ProjectContext,
     ResearchAction,
@@ -49,9 +68,18 @@ from src.services.research_engine.providers import (
     OpenAIProvider,
     ProviderConfig,
 )
+from src.services.research_engine.review_service import ResearchReviewService
 from src.services.research_engine.run_conformance import create_approved_run
 from src.services.research_engine.run_conformance import (
     require_run_conformance as _require_run_conformance,
+)
+from src.services.research_engine.run_lifecycle import (
+    ResearchRunLifecycleError,
+    ResearchRunLifecycleService,
+)
+from src.services.research_engine.scope import (
+    canonicalize_scope_confirmation,
+    resolve_effective_daily_brief_parameters,
 )
 from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
@@ -59,6 +87,9 @@ from src.services.research_engine.step_executor import StepExecutor
 logger = logging.getLogger(__name__)
 
 _PAUSE_REQUESTED_KEY = "_pause_requested"
+_CONTINUATION_REQUESTED_KEY = "continuation_requested"
+_CONTINUED_AFTER_FAILURE_KEY = "continued_after_failure"
+_EXECUTION_ERRORS_KEY = "execution_errors"
 
 
 def _pause_requested(run: ResearchRun) -> bool:
@@ -319,13 +350,60 @@ async def start_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
     """Start a new research run from a blueprint."""
+    body = body or RunCreate()
     blueprint = await require_blueprint(
         db, blueprint_id, current_user.id, ResearchAction.EDIT
     )
+    if (
+        blueprint.template_source == "daily_research_brief"
+        and not settings.DAILY_RESEARCH_BRIEF_ENABLED
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blueprint not found",
+        )
+
+    manifest_metadata: Dict[str, Any] = {}
+    if blueprint.template_source == "daily_research_brief":
+        if body.scope_confirmation is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Daily Brief scope confirmation is required",
+            )
+        try:
+            effective = resolve_effective_daily_brief_parameters(
+                blueprint.parameters or {}, {}
+            )
+            manifest_metadata["scope_confirmation"] = canonicalize_scope_confirmation(
+                effective=effective,
+                submitted=body.scope_confirmation,
+                actor_id=current_user.id,
+                confirmed_at=datetime.now(timezone.utc),
+            )
+            selected = set(manifest_metadata["scope_confirmation"]["providers"])
+            manifest_metadata["provider_manifest"] = [
+                capability
+                for capability in safe_capability_projection()
+                if capability["id"] in selected
+            ]
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "Scope confirmation does not match effective Daily Brief parameters"
+                ),
+            ) from exc
+
     context = await resolve_engine_project_context(
         db, blueprint.project_id, current_user.id, ResearchAction.EDIT
     )
-    run = await create_approved_run(db, context, blueprint, body or RunCreate())
+    run = await create_approved_run(
+        db,
+        context,
+        blueprint,
+        body,
+        manifest_metadata=manifest_metadata,
+    )
     return _run_response(run, context)
 
 
@@ -367,15 +445,23 @@ async def pause_run(
     # Keep the run claimed while the active stream reaches a safe boundary.
     # Publishing PAUSED here would let a second stream reclaim and replay the
     # in-flight paid step before the first stream can persist its result.
-    pause_manifest = dict(run.reproducibility_manifest or {})
-    pause_manifest[_PAUSE_REQUESTED_KEY] = True
+    lifecycle = ResearchRunLifecycleService(db)
+    pause_descriptor = await lifecycle.current_user_pause_descriptor(run=run)
+    pause_patch = {
+        _PAUSE_REQUESTED_KEY: True,
+        "user_pause": lifecycle.user_pause_manifest_value(pause_descriptor),
+    }
+    merged_manifest = func.coalesce(
+        ResearchRun.reproducibility_manifest,
+        cast({}, JSONB),
+    ).op("||")(cast(pause_patch, JSONB))
     pause_update = await db.execute(
         update(ResearchRun)
         .where(
             ResearchRun.id == run_id,
             ResearchRun.status == RunStatus.RUNNING.value,
         )
-        .values(reproducibility_manifest=pause_manifest)
+        .values(reproducibility_manifest=merged_manifest)
         .execution_options(synchronize_session=False)
     )
     if pause_update.rowcount == 0:
@@ -400,10 +486,13 @@ async def pause_run(
 )
 async def resume_run(
     run_id: UUID,
+    body: RunResumeRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RunResponse:
-    """Resume a paused run."""
+    """Authorize a paused run to be claimed exactly once by its stream."""
+    if body is None:
+        body = RunResumeRequest()
     run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.EDIT)
     blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
     assert blueprint is not None
@@ -411,14 +500,18 @@ async def resume_run(
         db, blueprint.project_id, current_user.id, ResearchAction.EDIT
     )
     await _require_run_conformance(db, run, blueprint, context)
-    if run.status != RunStatus.PAUSED.value:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Run is not currently paused",
+    lifecycle = ResearchRunLifecycleService(db)
+    try:
+        await lifecycle.authorize_resume(
+            run=run,
+            actor_id=current_user.id,
+            request=body,
         )
-    run.status = RunStatus.RUNNING.value
-    await db.commit()
-    await db.refresh(run)
+    except ResearchRunLifecycleError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+        ) from exc
     return _run_response(run, context)
 
 
@@ -438,6 +531,33 @@ async def get_manifest(
             detail="Run is not completed",
         )
     return run.reproducibility_manifest or {}
+
+
+@router.get("/runs/{run_id}/export")
+async def export_run(
+    run_id: UUID,
+    format: ExportFormat = ExportFormat.MARKDOWN,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download an owner-scoped artifact for a completed research run."""
+    try:
+        artifact = await ExportService().export(
+            run_id,
+            UUID(str(current_user.id)),
+            format.value,
+            db,
+        )
+    except ResearchExportError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+        ) from exc
+    return Response(
+        content=artifact.content,
+        media_type=artifact.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{artifact.filename}"'},
+    )
 
 
 @router.get(
@@ -499,6 +619,73 @@ async def stream_run(
     if last_step is not None:
         start_from = last_step.step_index + 1
 
+    history = (
+        (
+            await db.execute(
+                select(ResearchStep)
+                .where(ResearchStep.run_id == run_id)
+                .order_by(ResearchStep.step_index.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    try:
+        prior_outputs = rehydrate_stage_outputs(history)
+    except ValueError:
+        safely_observe(
+            research_observability,
+            "record_rehydration_error",
+            run_id=run_id,
+            organization_id=(
+                current_user.organization_id
+                if isinstance(getattr(current_user, "organization_id", None), UUID)
+                else None
+            ),
+            error_kind="invalid_history",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "run_reconstruction_failed",
+                "message": "Persisted run stages cannot be resumed",
+            },
+        ) from None
+
+    manifest = dict(run.reproducibility_manifest or {})
+    scope_confirmation = manifest.get("scope_confirmation")
+    provider_manifest = manifest.get("provider_manifest")
+    if isinstance(scope_confirmation, dict):
+        prior_outputs["scope_confirmation"] = scope_confirmation
+    if isinstance(provider_manifest, list):
+        prior_outputs["provider_manifest"] = provider_manifest
+    if manifest.get("review_history"):
+        try:
+            prior_outputs = await ResearchReviewService(db).apply_approved_overlays(
+                run_id=run_id,
+                owner_id=current_user.id,
+                context=prior_outputs,
+            )
+        except ValueError:
+            safely_observe(
+                research_observability,
+                "record_rehydration_error",
+                run_id=run_id,
+                organization_id=(
+                    current_user.organization_id
+                    if isinstance(getattr(current_user, "organization_id", None), UUID)
+                    else None
+                ),
+                error_kind="review_overlay",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "review_overlay_reconstruction_failed",
+                    "message": "Approved review overlays cannot be resumed",
+                },
+            ) from None
+
     required_models = sorted(
         {
             str(step.get("model_id") or _get_step_params(step).get("model_id"))
@@ -521,6 +708,61 @@ async def stream_run(
 
     effective_parameters = approved_plan["parameters"]
     parameter_overrides: Dict[str, Any] = {}
+    if blueprint.template_source == "daily_research_brief":
+        generated_at = (
+            manifest.get("generated_at")
+            or manifest.get("completed_at")
+            or (
+                run.started_at.isoformat()
+                if isinstance(run.started_at, datetime)
+                else None
+            )
+            or (
+                run.created_at.isoformat()
+                if isinstance(run.created_at, datetime)
+                else None
+            )
+        )
+        prior_outputs["artifact_provenance"] = {
+            "run_id": str(run.id),
+            "blueprint_id": str(blueprint.id),
+            "blueprint_version": blueprint.version,
+            "template_source": blueprint.template_source,
+            "template_contract_version": effective_parameters.get("contract_version"),
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": None,
+            "generated_at": generated_at,
+            "stage_hashes": {
+                str(step.step_index): step.outputs_hash
+                for step in history
+                if isinstance(step.outputs_hash, str)
+            },
+            "models": [
+                {
+                    "step_index": step_index,
+                    "model_id": str(
+                        step.get("model_id") or _get_step_params(step).get("model_id")
+                    ),
+                }
+                for step_index, step in enumerate(approved_plan["steps"])
+                if step.get("model_id") or _get_step_params(step).get("model_id")
+            ],
+            "review_history": manifest.get("review_history") or [],
+            "scope_confirmation": scope_confirmation or {},
+            "provider_manifest": provider_manifest or [],
+            "limitations": ["Bounded provider search; results are not exhaustive."],
+        }
+    if effective_parameters.get("contract_version") == 1 and any(
+        not isinstance(step.output, dict) or step.output.get("contract_version") != 1
+        for step in history
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This legacy run cannot resume under the version-1 evidence contract; "
+                "start a new run from the version-1 template."
+            ),
+        )
     try:
         validate_blueprint_runtime(
             {"steps": approved_plan["steps"], "parameters": effective_parameters}
@@ -536,100 +778,102 @@ async def stream_run(
     }
     total_tokens = run.total_tokens or 0
 
-    # R5-M18: claim the transition atomically — the old read-check-write let
-    # two concurrent SSE streams both pass the PENDING check and double-execute
-    # a paid run.
+    # Resolve all fallible, non-paid execution dependencies before changing
+    # durable claim state. A setup exception must leave the run retryable.
     organization_id = _get_verified_organization_id(current_user)
     connectors = _build_connectors(organization_id=str(organization_id))
 
-    claim = await db.execute(
-        update(ResearchRun)
-        .where(
-            ResearchRun.id == run_id,
-            ResearchRun.status.in_(["pending", "paused"]),
-        )
-        .values(status=RunStatus.RUNNING.value)
-    )
-    if claim.rowcount == 0:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Run was just claimed by another stream",
-        )
-    await db.commit()
+    lifecycle = ResearchRunLifecycleService(db)
+    try:
+        stream_claim = await lifecycle.claim_stream(run=run)
+    except ResearchRunLifecycleError as exc:
+        detail: Any = exc.detail()
+        if exc.code == "run_already_claimed":
+            detail = exc.message
+        raise HTTPException(status_code=exc.status_code, detail=detail) from exc
 
     # Admit only after this request has won the atomic claim. Otherwise every
     # concurrent loser consumes a shared paid-work slot before receiving 409.
-    if not await admit_expensive_work(
-        user_id=current_user.id,
-        organization_id=organization_id,
-    ):
-        release = await db.execute(
-            update(ResearchRun)
-            .where(
-                ResearchRun.id == run_id,
-                ResearchRun.status == RunStatus.RUNNING.value,
-            )
-            .values(
-                status=RunStatus.PAUSED.value if was_paused else RunStatus.PENDING.value
-            )
+    try:
+        if stream_claim.authorization_kind == "continue_unverified":
+            prior_outputs["continued_after_failure"] = True
+            verification = prior_outputs.get("verification")
+            if isinstance(verification, dict):
+                verification["passed"] = False
+                verification["continued_after_failure"] = True
+        blueprint_dict = {
+            "steps": approved_plan["steps"],
+            "parameters": effective_parameters,
+        }
+        total_tokens = int(run.total_tokens or 0)
+        admitted = await admit_expensive_work(
+            user_id=current_user.id,
+            organization_id=organization_id,
         )
-        await db.commit()
-        if release.rowcount == 0:
+    except BaseException:
+        await _run_interrupted_cleanup(
+            lifecycle.release_stream_claim(run=run, claim=stream_claim)
+        )
+        raise
+    if not admitted:
+        try:
+            await lifecycle.release_stream_claim(run=run, claim=stream_claim)
+        except ResearchRunLifecycleError:
             logger.warning(
                 "Research run %s could not be released after admission denial",
                 run_id,
             )
+            raise
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many expensive research runs; retry later",
         )
 
-    await db.refresh(run)
-    run.started_at = run.started_at or datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(run)
+    try:
+        executor = StepExecutor(providers=providers, connectors=connectors)
+        engine = WorkflowEngine(step_executor=executor)
+        await db.refresh(run)
+    except BaseException:
+        await _run_interrupted_cleanup(
+            lifecycle.release_stream_claim(run=run, claim=stream_claim)
+        )
+        raise
 
     async def event_generator():
         """Yield SSE-formatted events from the workflow engine."""
         nonlocal total_tokens
+
+        pause_anchor_index = (
+            int(last_step.step_index) if last_step is not None else None
+        )
+        pause_anchor_hash = (
+            canonical_stage_output_hash(last_step.output)
+            if last_step is not None and isinstance(last_step.output, dict)
+            else None
+        )
 
         async def recover_run(status_value: str, *, completed: bool = False) -> None:
             # Rollback also expires ORM state, so refresh before inspecting the
             # manifest or starting the recovery transaction.
             await db.rollback()
             await db.refresh(run)
+            if status_value == RunStatus.PAUSED.value:
+                await lifecycle.recover_stream_cancellation(
+                    run=run,
+                    step_index=pause_anchor_index,
+                    output_hash=pause_anchor_hash,
+                    total_tokens=total_tokens,
+                )
+                return
             _set_pause_requested(run, False)
+            manifest = dict(run.reproducibility_manifest or {})
+            manifest.pop("user_pause", None)
+            setattr(run, "reproducibility_manifest", manifest or None)
             run.status = status_value
             run.total_tokens = total_tokens
             if completed:
                 run.completed_at = datetime.now(timezone.utc)
             await db.commit()
-
-        executor = StepExecutor(providers=providers, connectors=connectors)
-        # R5-M19: rehydrate accumulated step outputs so resumed/synthesize
-        # steps see everything earlier steps produced instead of starting
-        # from bare blueprint parameters.
-        prior_outputs: dict = {}
-        history = (
-            (
-                await db.execute(
-                    select(ResearchStep)
-                    .where(
-                        ResearchStep.run_id == run_id,
-                        ResearchStep.is_deleted.is_(False),
-                    )
-                    .order_by(ResearchStep.step_index.asc())
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for done_step in history:
-            if isinstance(done_step.output, dict):
-                prior_outputs.update(done_step.output)
-
-        engine = WorkflowEngine(step_executor=executor)
 
         try:
             async for event in engine.run(
@@ -647,27 +891,35 @@ async def stream_run(
                         else None
                     )
                 ),
+                organization_id=organization_id,
+                record_run_started=not was_paused,
             ):
                 event_type = event.get("event")
                 await db.refresh(run)
+                committed_followup: dict[str, Any] | None = None
 
                 pause_requested = _pause_requested(run) and event_type != "run_paused"
 
                 # An unfinished event can stop immediately. A completed paid step
                 # must be persisted and charged before the pause takes effect.
-                if pause_requested and event_type != "step_complete":
-                    _set_pause_requested(run, False)
-                    run.status = RunStatus.PAUSED.value
-                    run.total_tokens = total_tokens
-                    await db.commit()
+                if pause_requested and event_type not in {
+                    "step_complete",
+                    "step_error",
+                }:
+                    descriptor = await lifecycle.persist_user_pause(
+                        run=run,
+                        step_index=pause_anchor_index,
+                        output_hash=pause_anchor_hash,
+                        total_tokens=total_tokens,
+                    )
                     paused_event = {
                         "event": "run_paused",
                         "run_id": str(run.id),
-                        "reason": "Paused by user",
+                        **descriptor.to_dict(),
                     }
                     data = json.dumps(paused_event)
                     yield f"event: run_paused\ndata: {data}\n\n"
-                    break
+                    return
 
                 if event_type == "step_complete":
                     # Paid work may finish after an administrator archives or
@@ -681,6 +933,11 @@ async def stream_run(
                         ResearchAction.EDIT,
                         require_engine=True,
                     )
+                    # ``expire_all`` above deliberately invalidates the identity
+                    # map before the authorization recheck.  Refresh the run
+                    # explicitly before handing it to lifecycle persistence so
+                    # synchronous attribute access cannot trigger async I/O.
+                    await db.refresh(run)
                     step_index = int(event.get("step_index") or 0)
                     step_def = {}
                     if 0 <= step_index < len(blueprint_dict["steps"]):
@@ -688,28 +945,88 @@ async def stream_run(
                     output = event.get("output")
                     if output is not None and not isinstance(output, dict):
                         output = {"value": output}
-
-                    if step_def.get("type") == "search" and output:
-                        for source_row in research_source_rows(run_id, output):
-                            db.add(source_row)
-
-                    db.add(_research_step_from_event(run_id, step_def, event))
-                    total_tokens += int(event.get("token_count") or 0)
-                    run.total_tokens = total_tokens
-                    if pause_requested:
-                        _set_pause_requested(run, False)
-                        run.status = RunStatus.PAUSED.value
-                    await db.commit()
+                    source_rows = (
+                        research_source_rows(run_id, output)
+                        if step_def.get("type") == "search" and output
+                        else []
+                    )
+                    transition = await lifecycle.persist_step_completion(
+                        run=run,
+                        event={**event, "output": output},
+                        step_definition=step_def,
+                        source_rows=source_rows,
+                    )
+                    total_tokens = int(run.total_tokens or 0)
+                    pause_anchor_index = int(transition.step.step_index)
+                    pause_anchor_hash = str(transition.step.outputs_hash)
+                    if transition.pause is not None:
+                        committed_followup = {
+                            "event": "run_paused",
+                            "run_id": str(run.id),
+                            **transition.pause.to_dict(),
+                        }
+                    elif transition.terminal_status == "no_evidence":
+                        committed_followup = {
+                            "event": "run_complete",
+                            "run_id": str(run.id),
+                            "final_status": "no_evidence",
+                        }
                 elif event_type == "run_paused":
-                    _set_pause_requested(run, False)
-                    run.status = RunStatus.PAUSED.value
-                    run.total_tokens = total_tokens
-                    await db.commit()
+                    supplied_index = event.get("step_index")
+                    supplied_hash = event.get("output_hash")
+                    descriptor = await lifecycle.persist_user_pause(
+                        run=run,
+                        step_index=(
+                            supplied_index
+                            if type(supplied_index) is int
+                            else pause_anchor_index
+                        ),
+                        output_hash=(
+                            str(supplied_hash)
+                            if isinstance(supplied_hash, str)
+                            else pause_anchor_hash
+                        ),
+                        total_tokens=total_tokens,
+                    )
+                    event = {
+                        "event": "run_paused",
+                        "run_id": str(run.id),
+                        **descriptor.to_dict(),
+                    }
                 elif event_type == "run_failed":
                     _set_pause_requested(run, False)
+                    manifest = dict(run.reproducibility_manifest or {})
+                    manifest.pop("user_pause", None)
+                    run.reproducibility_manifest = manifest or None
                     run.status = RunStatus.FAILED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+                elif event_type == "step_error":
+                    consumed_tokens = max(0, int(event.get("consumed_tokens") or 0))
+                    total_tokens += consumed_tokens
+                    manifest = dict(run.reproducibility_manifest or {})
+                    errors = list(manifest.get(_EXECUTION_ERRORS_KEY) or [])
+                    error_key = (event.get("step_index"), event.get("step_id"))
+                    if not any(
+                        (item.get("step_index"), item.get("step_id")) == error_key
+                        for item in errors
+                        if isinstance(item, dict)
+                    ):
+                        errors.append(
+                            {
+                                "step_index": event.get("step_index"),
+                                "step_id": event.get("step_id"),
+                                "model_calls": max(
+                                    0, int(event.get("model_calls") or 0)
+                                ),
+                                "consumed_tokens": consumed_tokens,
+                                "batch_metadata": event.get("batch_metadata") or [],
+                            }
+                        )
+                    manifest[_EXECUTION_ERRORS_KEY] = errors
+                    run.reproducibility_manifest = manifest
+                    run.total_tokens = total_tokens
                     await db.commit()
                 elif event_type == "run_complete":
                     # Serialize completion with a concurrently recorded deviation.
@@ -717,9 +1034,17 @@ async def stream_run(
                     run.status = RunStatus.COMPLETED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
+                    previous_manifest = dict(run.reproducibility_manifest or {})
+                    previous_manifest.pop(_CONTINUATION_REQUESTED_KEY, None)
+                    previous_manifest.pop("resume_authorization", None)
+                    previous_manifest.pop(_PAUSE_REQUESTED_KEY, None)
+                    previous_manifest.pop("user_pause", None)
+                    if isinstance(previous_manifest.get("verification_override"), dict):
+                        previous_manifest["final_status"] = "unverified"
                     if run.conformance_status == "plan_verified":
                         run.conformance_status = "conformant"
                     run.reproducibility_manifest = {
+                        **previous_manifest,
                         "run_id": str(run.id),
                         "protocol_version_id": str(run.protocol_version_id),
                         "effective_plan_hash": run.effective_plan_hash,
@@ -736,31 +1061,51 @@ async def stream_run(
                 data = json.dumps(event)
                 yield f"event: {event_type}\ndata: {data}\n\n"
 
-                if pause_requested:
-                    paused_event = {
+                if event_type == "step_error" and pause_requested:
+                    descriptor = await lifecycle.persist_user_pause(
+                        run=run,
+                        step_index=pause_anchor_index,
+                        output_hash=pause_anchor_hash,
+                        total_tokens=total_tokens,
+                    )
+                    committed_followup = {
                         "event": "run_paused",
                         "run_id": str(run.id),
-                        "reason": "Paused by user",
+                        **descriptor.to_dict(),
                     }
-                    data = json.dumps(paused_event)
-                    yield f"event: run_paused\ndata: {data}\n\n"
-                    break
+                if committed_followup is not None:
+                    followup_type = committed_followup["event"]
+                    data = json.dumps(committed_followup)
+                    yield f"event: {followup_type}\ndata: {data}\n\n"
+                    return
         except asyncio.CancelledError:
             # Client disconnected; persist paused state so run can resume later.
             await _run_interrupted_cleanup(recover_run(RunStatus.PAUSED.value))
             raise
-        except Exception as exc:
+        except Exception:
             # If streaming fails unexpectedly, mark run as failed
-            logger.error(f"Stream error for run {run_id}: {exc}")
+            logger.exception("Research stream failed for run %s", run_id)
+            safely_observe(
+                research_observability,
+                "record_sse_error",
+                run_id=run_id,
+                organization_id=organization_id,
+                error_kind="stream_failure",
+            )
             try:
                 await recover_run(RunStatus.FAILED.value, completed=True)
-            except Exception as recovery_exc:
+            except Exception:
                 logger.error(
-                    "Failed to persist terminal state for research run %s: %s",
+                    "Failed to persist terminal state for research run %s",
                     run_id,
-                    recovery_exc,
                 )
-            error_event = json.dumps({"event": "run_failed", "error": str(exc)})
+            error_event = json.dumps(
+                {
+                    "event": "run_failed",
+                    "error": "Research stream failed",
+                    "error_category": "stream_failure",
+                }
+            )
             yield f"event: run_failed\ndata: {error_event}\n\n"
 
     return StreamingResponse(
