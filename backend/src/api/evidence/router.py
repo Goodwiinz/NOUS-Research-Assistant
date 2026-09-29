@@ -380,7 +380,7 @@ async def get_evidence_meter(
             raise HTTPException(
                 status_code=400, detail="Batch classification limit exceeded"
             )
-        except BatchClassificationTimeoutError as e:
+        except BatchClassificationTimeoutError :
             logger.warning("Batch classification timed out", exc_info=True)
             raise HTTPException(status_code=504, detail="Batch classification timed out")
 
@@ -628,7 +628,7 @@ async def classify_sources_for_claim(
             raise HTTPException(
                 status_code=400, detail="Batch classification limit exceeded"
             )
-        except BatchClassificationTimeoutError as e:
+        except BatchClassificationTimeoutError :
             logger.warning("Batch classification timed out", exc_info=True)
             raise HTTPException(status_code=504, detail="Batch classification timed out")
 

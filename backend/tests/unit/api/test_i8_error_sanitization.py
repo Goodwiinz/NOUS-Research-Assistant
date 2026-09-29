@@ -68,8 +68,9 @@ def _scan_hits():
     for path in _iter_python_files():
         text = path.read_text(encoding="utf-8")
         for line_no, line in enumerate(text.splitlines(), start=1):
+            code = line.split("#", 1)[0]
             for pattern in LEAK_PATTERNS:
-                if pattern.search(line):
+                if pattern.search(code):
                     hits.append(f"{path.relative_to(BACKEND_ROOT)}:{line_no}: {line.strip()}")
                     break
     return hits

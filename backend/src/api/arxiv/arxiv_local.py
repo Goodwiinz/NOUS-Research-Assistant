@@ -348,9 +348,6 @@ async def extract_features_from_local_pdfs(
 
     except Exception:
         logger.error("Error in local PDF extraction", exc_info=True)
-        import traceback
-
-        logger.error(traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail="Failed to extract features from local PDFs",
