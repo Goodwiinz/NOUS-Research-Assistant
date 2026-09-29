@@ -113,7 +113,7 @@ async def _upload_for(
     )
     if upload is None:
         raise ArtifactNotFound()
-    return upload
+    return cast(ArtifactUpload, upload)
 
 
 def _version_dto(version: ArtifactVersion) -> ArtifactVersionDTO:
@@ -339,7 +339,7 @@ async def authorize_artifact(
         await authorized_project(db, user_id, organization_id, artifact.project_id)
     except IntegrationAccessDenied as error:
         raise ArtifactNotFound() from error
-    return artifact
+    return cast(Artifact, artifact)
 
 
 async def list_thread_artifacts(
