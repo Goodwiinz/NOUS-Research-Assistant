@@ -969,14 +969,14 @@ revision case in `test_result_receipts_keep_mutation_root_labels_and_relations_f
 ## GOO-297 draft task terminal results — 2026-09-29
 
 Recorded on branch `feat/goo-297-task-terminal-results` at source revision
-`4b13d9182`. Pre-mutation and restored SHA-256:
+`319a14787`. Pre-mutation and restored SHA-256:
 `backend/src/services/research/draft_generation_service.py`
-`9c041c3554e1594ac92d9e7a463dc07737d36ae57fc08b2156cffa784874af9f`;
+`382a5fa44dc8d0f6bb1678ea9120b981cef5834e7826c522d6219eae4f84eeab`;
 `backend/src/api/research/drafts.py`
-`f718ddb32959cc889e13831f0ae54d7fc4b625b00b3edcaa08766f4b52816ed7`. For each
+`7d1dd8566c681301560cc2620f4a1aafbbe808920aebfae5b07b279043787a5d`. For each
 mutant: copy the source, apply the mutant, run the focused suite, restore
 the copy (`cmp -s` exit 0), rerun. No mutant was committed. After every
-restore the unit command gave `11 passed` and the PostgreSQL command gave
+restore the unit command gave `12 passed` and the PostgreSQL command gave
 `8 passed`. Each run also shows the existing Pydantic v2 `schema_extra`
 warning. The PostgreSQL URL is a disposable database supplied through the
 private environment; its value is left out here.
@@ -998,16 +998,19 @@ Line numbers are in `draft_generation_service.py` unless marked
 
 | Guard | Mutation | Observed mutant failure |
 |---|---|---|
-| `finish_task` running predicate, line 178 (`DraftTaskResult.state == "running"`) | delete the line | unit 5 failed, incl. "a terminal row was overwritten by a second write", "a cancelled task was allowed to complete", "a cancelled task landed a draft"; PostgreSQL 2 failed: scenario 5 "both writers claimed the terminal", scenario 6 `[other_replica]` "a cancelled task landed a draft" |
+| `finish_task` running predicate, line 178 (`DraftTaskResult.state == "running"`) | delete the line | unit 6 failed, incl. "a terminal row was overwritten by a second write", "a cancelled task was allowed to complete", "a cancelled task landed a draft", "a cancel was reported for a completed task"; PostgreSQL 2 failed: scenario 5 "both writers claimed the terminal", scenario 6 `[other_replica]` "a cancelled task landed a draft" |
 | window-3 refusal, line 775 (`raise DraftTaskNotRunning(task_id)`) | replace with `pass` | unit `test_completion_on_a_cancelled_row_rolls_the_draft_back` and PostgreSQL scenario 6 `[other_replica]`: "a cancelled task landed a draft" |
+| window-3 result and draft in one commit (`finish_task` before `db.commit()`) | add `await db.commit()` before the `finish_task(completed)` call | PostgreSQL scenario 3 "an uncommitted draft survived the kill", scenario 6 `[other_replica]` "a cancelled task landed a draft" |
 | `finish_task` binds the passed draft, line 172 | A: in-transaction `select(GeneratedDraft).where(is_current)` | unit 2 failed ("task A bound another task's draft", "terminal association moved to draft_b"); PostgreSQL **8 passed, not observable**, see note |
 | same | B: same query through a fresh `AsyncSessionLocal()` | PostgreSQL scenario 4: "a draft was shared" |
 | `reconcile_task` staleness, line 216 (`heartbeat_at < threshold`) | delete the line | "a live task was marked interrupted" |
-| `cancel_latest_task` row write, lines 2031-2033 | delete the `finish_task` call | `assert ('running', None) == ('cancelled', 'cancelled_by_user')` |
+| `cancel_latest_task` row write, lines 2036-2038 | replace the `finish_task` call with `cancelled = True` | `assert ('running', None) == ('cancelled', 'cancelled_by_user')`; "a cancel was reported for a completed task" |
 | `cancel_task` reports the row outcome, line 1997 (`return cancelled`) | `return True` | "a cancel was reported for a completed task"; route fallback test "DID NOT RAISE HTTPException" (no 409) |
-| `_fail_task` mirror bypasses the cancelled guard, line 1837 (`force=True`) | drop `force=True` | `test_cancel_after_the_draft_commit_is_refused`: `CancelledError: generation cancelled by user` escapes the handler |
+| `cancel_latest_task` reports the row outcome, line 2040 (`return task_id, cancelled`) | `return task_id, True` | `test_cancel_latest_after_the_draft_commit_is_refused`: "a cancel was reported for a completed task" |
+| `_fail_task` mirror bypasses the cancelled guard, line 1837 (`force=True`) | drop `force=True` | both late-cancel race tests: `CancelledError: generation cancelled by user` escapes the handler |
 | `drafts.py:497-503` scope check before `reconcile_task` | call `reconcile_task` unconditionally first | `test_status_hides_another_actors_task`: "Expected mock to not have been awaited. Awaited 1 times." |
 | `drafts.py:578-584` cross-replica cancel through the scoped row | 404 whenever there is no in-memory status | `test_cancel_route_falls_back_to_the_retained_row`: `HTTPException: 404` |
+| `drafts.py:581` collection check in that fallback | delete the line | same test (another project's id): "DID NOT RAISE HTTPException" |
 
 Note on mutation A: `lock_active_project` serialises version allocation.
 Inside each task's own transaction, "the current draft" is therefore that
