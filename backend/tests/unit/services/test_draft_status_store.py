@@ -75,7 +75,11 @@ async def test_draft_status_survives_process_local_state_loss(
         route = importlib.util.module_from_spec(route_spec)
         route_spec.loader.exec_module(route)
 
-        with patch.object(route, "_validate_project_ownership", new=AsyncMock()):
+        # No retained row (GOO-297): this test covers the cache path.
+        with (
+            patch.object(route, "_validate_project_ownership", new=AsyncMock()),
+            patch.object(route, "reconcile_task", new=AsyncMock(return_value=None)),
+        ):
             response = await route.get_generation_status(
                 project_id=project_id,
                 task_id=task_id,

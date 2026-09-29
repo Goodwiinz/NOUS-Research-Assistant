@@ -2243,6 +2243,7 @@ async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, 
         "completed",
         "failed",
         "cancelled",
+        "interrupted",
     }
     return result
 
@@ -2269,7 +2270,7 @@ def _draft_status_result(
     project_name = str(dispatched_result.get("project_name", "the project"))
     if state == "completed":
         message = f"Draft generated for project '{project_name}'."
-    elif state in {"failed", "cancelled"}:
+    elif state in {"failed", "cancelled", "interrupted"}:
         detail = str(status.get("current_step") or "Draft generation failed")
         message = detail.removeprefix("Error: ").strip()
         result["error"] = message

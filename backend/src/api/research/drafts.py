@@ -8,12 +8,12 @@ Security: All endpoints validate project ownership before granting access.
 import io
 import zipfile
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog import get_logger
@@ -25,6 +25,7 @@ from src.models.user import User
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
     DraftGenerationStatus,
+    reconcile_task,
 )
 from src.services.research_engine.project_access import ResearchAction, resolve_project
 
@@ -58,6 +59,26 @@ class DraftReviewResponse(BaseModel):
 
 class DraftReviewListResponse(BaseModel):
     reviews: List[DraftReviewResponse]
+
+
+class DraftTaskStatusResponse(BaseModel):
+    """Draft task status: live cache, or the retained ``draft_task_results`` row."""
+
+    # The live payload also carries document_ids, selection_mode, ...
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str
+    status: str
+    progress: int = 0
+    current_step: str = ""
+    started_at: str
+    updated_at: Optional[str] = None
+    draft_id: Optional[str] = None
+    duration: Optional[float] = None
+    artifact_version: Optional[int] = None
+    artifact_hash: Optional[str] = None
+    error_code: Optional[str] = None
+    state_source: Literal["cache", "database"]
 
 
 # ============================================================================
@@ -454,7 +475,7 @@ async def export_draft(
 # ============================================================================
 
 
-@router.get("/status")
+@router.get("/status", response_model=DraftTaskStatusResponse)
 async def get_generation_status(
     project_id: UUID,
     task_id: Optional[str] = Query(
@@ -467,27 +488,48 @@ async def get_generation_status(
     # Validate project ownership
     await _validate_project_ownership(project_id, current_user, db)
 
+    row = None
     if task_id:
         generation_status = await DraftGenerationService.get_status_shared(task_id)
+        # The retained row is the record; the service commits a stale
+        # running row's interrupt flip.
+        row = await reconcile_task(db, task_id)
     else:
         generation_status = DraftGenerationService.get_latest_status(
             project_id=project_id,
             user_id=current_user.id,
         )
 
-    if not generation_status:
-        raise HTTPException(status_code=404, detail="Task not found")
+    if row is not None:
+        if row.collection_id != project_id or row.actor_user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Task not found")
+    else:
+        if not generation_status:
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    if generation_status.get("project_id") != str(project_id):
-        raise HTTPException(status_code=404, detail="Task not found")
+        if generation_status.get("project_id") != str(project_id):
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    if generation_status.get("user_id") != str(current_user.id):
-        raise HTTPException(status_code=404, detail="Task not found")
+        if generation_status.get("user_id") != str(current_user.id):
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    return generation_status
+    if row is not None and (generation_status is None or row.state != "running"):
+        return {
+            "started_at": row.started_at.isoformat(),
+            "updated_at": row.terminal_at.isoformat() if row.terminal_at else None,
+            **(generation_status or {}),
+            "task_id": row.task_id,
+            "status": row.state,
+            "draft_id": str(row.artifact_id) if row.artifact_id else None,
+            "artifact_version": row.artifact_version,
+            "artifact_hash": row.artifact_hash,
+            "error_code": row.error_code,
+            "state_source": "database",
+        }
+    return {**(generation_status or {}), "state_source": "cache"}
 
 
-@router.get("/status/{task_id}")
+@router.get("/status/{task_id}", response_model=DraftTaskStatusResponse)
 async def get_generation_status_by_task(
     project_id: UUID,
     task_id: str,

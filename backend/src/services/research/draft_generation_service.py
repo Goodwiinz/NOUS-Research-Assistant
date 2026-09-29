@@ -48,6 +48,7 @@ class DraftGenerationStatus:
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
 
 # In-memory store for generation status (would use Redis in production)
@@ -245,6 +246,7 @@ class DraftGenerationService:
         DraftGenerationStatus.COMPLETED,
         DraftGenerationStatus.FAILED,
         DraftGenerationStatus.CANCELLED,
+        DraftGenerationStatus.INTERRUPTED,
     }
 
     _STYLE_PROMPTS = {
