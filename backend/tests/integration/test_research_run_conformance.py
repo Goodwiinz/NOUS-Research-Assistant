@@ -279,16 +279,21 @@ async def test_resume_allows_superseded_plan_but_rejects_deviated_run(
     assert approved.status_code == 200, approved.text
 
     async with AsyncSession(protocol_engine, expire_on_commit=False) as db:
-        resumed = await runs.resume_run(created.id, _actor(ids), db)
-        assert resumed.status == "running"
+        resumed = await runs.resume_run(created.id, None, _actor(ids), db)
+        # Resume authorization is consumed only when the stream claims the run,
+        # so the durable state remains paused between POST /resume and the GET.
+        assert resumed.status == "paused"
         assert resumed.protocol_version_id == original_version_id
         run = await db.get(ResearchRun, created.id)
         assert run is not None
+        assert isinstance(
+            (run.reproducibility_manifest or {}).get("resume_authorization"), dict
+        )
         run.status = "paused"
         run.conformance_status = "deviated"
         await db.commit()
         with pytest.raises(HTTPException) as denied:
-            await runs.resume_run(created.id, _actor(ids), db)
+            await runs.resume_run(created.id, None, _actor(ids), db)
         assert denied.value.status_code == 409
 
 

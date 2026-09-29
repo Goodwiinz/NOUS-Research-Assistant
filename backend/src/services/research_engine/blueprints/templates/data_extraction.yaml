@@ -1,6 +1,7 @@
 name: "Data Extraction"
 description: "Extract structured data from the RAG store according to a user-defined schema, validate against the schema and source grounding, and export as a JSON dataset."
 parameters:
+  contract_version: 1
   query: ""
   sources:
     - rag_store
@@ -12,9 +13,9 @@ steps:
     name: "RAG Store Search"
     description: "Search the internal RAG document store for documents matching the query."
     parameters:
-      sources:
-        - rag_store
-      max_results: 20
+      contract_version: 1
+      sources: "{sources}"
+      max_documents: "{max_documents}"
     model_id: null
     mode: deterministic
     system_prompt_template: null
@@ -23,27 +24,32 @@ steps:
     name: "Structured Data Extraction"
     description: "Extract structured data from each document according to the user-defined extraction schema."
     parameters:
+      contract_version: 1
+      output_kind: structured_data
       schema: "{extraction_schema}"
+      max_documents: "{max_documents}"
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >
       Extract data from the document according to this schema: {extraction_schema}.
-      Return a JSON object matching the schema exactly.
-      If a field cannot be determined, use null.
+      Return exactly {"records":[{"source_id":"<UUID>","part_id":"p0001","data":{"sample_size":42},"evidence":[{"pointer":"/sample_size","quote":"sample size was 42","page_reference":null}]}]}.
+      Include exact source-substring evidence for each non-null scalar leaf. Use null only when the supplied extraction schema permits null. Set page_reference to null unless trusted source metadata supplied a page locator.
 
   - type: verify
     name: "Schema and Grounding Validation"
     description: "Validate that extracted data conforms to the schema and that values are grounded in source text."
     parameters:
+      contract_version: 1
+      output_kind: structured_data
+      schema: "{extraction_schema}"
+      verify_extracted_data: true
       validate_schema: true
       validate_grounding: true
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >
-      Validate the extracted data:
-      1. Check each field against the schema for type and format correctness.
-      2. Verify each extracted value is grounded in the source document.
-      Flag any validation failures with field name, expected, and actual values.
+      Return exactly {"checks":[{"claim_id":"c0001","status":"supported","reason":"The cited excerpt states this value"}]} with one check for each supplied claim ID.
+      Check schema conformance and exact source grounding. Status must be supported, unverified, or contradicted. Do not invent a page reference.
 
   - type: export
     name: "JSON Dataset Export"

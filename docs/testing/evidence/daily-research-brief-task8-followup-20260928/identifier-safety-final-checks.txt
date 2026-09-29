@@ -1,0 +1,103 @@
+SOURCE_SHA: b334ec79861b438e8646ff75325cf4f5bdd75a30
+EXECUTION_PROVENANCE:
+  These checks ran against the exact committed executable source. Only
+  documentation and bounded evidence are changed in the child commit.
+
+AFFECTED REPORT / DISCOVERY / EXPORT / REVIEW
+CLASSIFICATION: PASS
+COMMAND:
+  PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q \
+    backend/tests/unit/services/test_report_rendering.py \
+    backend/tests/unit/services/test_paper_discovery.py \
+    backend/tests/unit/services/test_export_service.py \
+    backend/tests/unit/services/test_research_review_service.py \
+    backend/tests/unit/services/test_research_template_contracts.py \
+    backend/tests/unit/test_audit_schema_drift.py
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 81d3f0ca16fb0ac0fdaba339bac85af207f9c182a665cdaecc882a0459d22830
+RESULT: 162 passed, 1 warning in 8.31s
+
+SCOPED RUFF / FORMAT / MYPY
+CLASSIFICATION: PASS
+COMMANDS:
+  .venv/bin/ruff check \
+    backend/src/services/research_engine/report_rendering.py \
+    backend/tests/unit/services/test_report_rendering.py \
+    backend/tests/unit/services/test_export_service.py
+  .venv/bin/ruff format --check \
+    backend/src/services/research_engine/report_rendering.py \
+    backend/tests/unit/services/test_report_rendering.py \
+    backend/tests/unit/services/test_export_service.py
+  .venv/bin/mypy --ignore-missing-imports --follow-imports=silent \
+    backend/src/services/research_engine/report_rendering.py
+EXIT_STATUS: 0
+RUFF_RAW_CAPTURE_SHA256: eee76f865de5a9f2456950f710ae5d5f9b5bd0ea02aa54f614c5eed6642a0bfd
+MYPY_RAW_CAPTURE_SHA256: 5d4b6d285b77932e3d08212c3b4974d0a803f98ec60408ac6ccf6a063fa6c19e
+RESULT: all checks passed; 3 files already formatted; mypy found no issues
+
+OPENAPI SNAPSHOT
+CLASSIFICATION: PASS
+COMMAND:
+  .venv/bin/python scripts/ci/generate_openapi.py --check
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 5726ce439e6f20e4dee04625cf209915f6f7602c1ca206c0e4d7fa2580db4fa1
+RESULT: backend/openapi.json is up to date
+
+GENERATED TYPES
+CLASSIFICATION: PASS
+NODE_VERSION: 24.21.0
+PNPM_VERSION: 10.18.2
+COMMAND:
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+    --dir frontend run generate:api-types
+  git diff --exit-code -- backend/openapi.json \
+    frontend/src/types/generated/api.d.ts
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 5c4a3bd090e1b99bc07867c8edfffbd0365b8fef5984c459a779c8989ff9ee2f
+RESULT: generated TypeScript produced no diff
+
+FRONTEND TYPE-CHECK
+CLASSIFICATION: PASS
+NODE_VERSION: 24.21.0
+PNPM_VERSION: 10.18.2
+COMMAND:
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+    --dir frontend run type-check
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: c5d2663a9e2a7d7af27e316b7c057dbaac1fa765ad140a412801ec551d6a4c79
+RESULT: tsc --noEmit passed
+
+BANDIT
+CLASSIFICATION: PASS
+VERSION: 1.9.4
+COMMAND:
+  /root/.local/bin/bandit -r \
+    backend/src/services/research_engine/report_rendering.py -ll -ii
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 5530137f4d498aa2c4199908aa41a3ca28c7daea5d5d52821dd7c6679830a424
+RESULT: no in-scope issue
+
+EXACT-SOURCE GITLEAKS
+CLASSIFICATION: PASS
+VERSION: 8.30.1
+COMMAND:
+  /tmp/t8-gitleaks-bin/gitleaks git . --redact \
+    --config .gitleaks.toml --verbose --log-opts=-1
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 030a0d3c8af0d06ddcb4f5bc2eff120a9d2fb534928d61c667502fa4c0115eef
+RESULT: 1 commit scanned; no leaks found
+
+SCOPE NOTES
+  No schema or lifecycle code changed, so dedicated PostgreSQL and migration
+  suites were not rerun. The exact-source browser run exercised real
+  PostgreSQL. No frontend source changed, so type-check plus the complete
+  browser suite were the applicable frontend gates. Performance was not rerun:
+  report construction retains the same source/report cardinality and the change
+  only filters and prioritizes an existing small identifier map. Earlier exact
+  performance remains bound to source 9ca9d6a and is not relabeled.
+
+RELEASE LEDGER
+  Dependency audits, anonymous Safety, full frontend validation, and full local
+  CI remain FAILED. The configured-model and authenticated Safety gates remain
+  BLOCKED. Remote candidate checks, production configuration/rollback, deploy,
+  and flag enablement remain NOT RUN. The feature remains default off.

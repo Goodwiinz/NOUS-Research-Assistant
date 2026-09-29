@@ -1,0 +1,107 @@
+SOURCE_SHA: ac17ca15a3a91af936851647bbde89d9860709ba
+EXECUTION_PROVENANCE:
+  These checks ran against the exact committed executable source. Only
+  documentation and bounded evidence are changed in the child commit.
+
+AFFECTED REPORT / DISCOVERY / EXPORT / REVIEW
+CLASSIFICATION: PASS
+COMMAND:
+  PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q \
+    backend/tests/unit/services/test_report_rendering.py \
+    backend/tests/unit/services/test_paper_discovery.py \
+    backend/tests/unit/services/test_export_service.py \
+    backend/tests/unit/services/test_research_review_service.py \
+    backend/tests/unit/services/test_research_template_contracts.py \
+    backend/tests/unit/test_audit_schema_drift.py
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: f32365770f4bacdf255f5e7a3a9408ae68d3014005412bdf59dd74e6ba071436
+RESULT: 161 passed, 1 warning in 7.45s
+NOTABLE COVERAGE:
+  - OpenAlex-first and Crossref-first same-DOI bibliography enrichment
+  - canonical conflict precedence and three-provider DOI/PMID bridge
+  - JSON/Markdown/CSV reader projection without provenance leakage
+  - separate canonical JSON report hash and Markdown prefix SHA-256
+  - export output_hash changes when persisted Markdown content changes
+
+SCOPED RUFF AND FORMAT
+CLASSIFICATION: PASS
+COMMANDS:
+  .venv/bin/ruff check \
+    backend/src/services/research_engine/report_rendering.py \
+    backend/tests/unit/services/test_report_rendering.py \
+    backend/tests/unit/services/test_export_service.py
+  .venv/bin/ruff format --check \
+    backend/src/services/research_engine/report_rendering.py \
+    backend/tests/unit/services/test_report_rendering.py \
+    backend/tests/unit/services/test_export_service.py
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: c6486b51f483249343d4a4bdb91c41be31f0bdc28887b2f4cd4800e174f8bd6b
+RESULT: all checks passed; 3 files already formatted
+
+OPENAPI SNAPSHOT
+CLASSIFICATION: PASS
+COMMAND:
+  .venv/bin/python scripts/ci/generate_openapi.py --check
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 8c5f5f8743dd7d869f02ef1f95ff8ad4ed9919c35cc86e2f389ec49c2b592476
+RESULT: backend/openapi.json is up to date
+
+GENERATED TYPES
+CLASSIFICATION: PASS
+NODE_VERSION: 24.21.0
+PNPM_VERSION: 10.18.2
+COMMAND:
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+    --dir frontend run generate:api-types
+  git diff --exit-code -- backend/openapi.json \
+    frontend/src/types/generated/api.d.ts
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: d24f0981e0f30c7d4b5892727e19316d6626f80f38bdcfa04c478abc0a810146
+RESULT: generated TypeScript produced no diff
+
+FRONTEND TYPE-CHECK
+CLASSIFICATION: PASS
+NODE_VERSION: 24.21.0
+PNPM_VERSION: 10.18.2
+COMMAND:
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 \
+    --dir frontend run type-check
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: f0e02356a61d835fccb36949d9211a6caffbd6335fb7575627001b6eda635b3a
+RESULT: tsc --noEmit passed
+
+BANDIT
+CLASSIFICATION: PASS
+VERSION: 1.9.4
+COMMAND:
+  /root/.local/bin/bandit -r backend/src -ll -ii -x tests \
+    -b backend/.bandit-baseline.json
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 8fae530da8cd1a587c18180556d32950c0a8c554188948669aca09d9bf346b27
+RESULT: no in-scope issues under the committed baseline and filters
+
+EXACT-SOURCE GITLEAKS
+CLASSIFICATION: PASS
+VERSION: 8.30.1
+COMMAND:
+  /tmp/t8-gitleaks-bin/gitleaks git . --redact \
+    --config .gitleaks.toml --verbose --log-opts=-1
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 7b9f7125b8e7493ccc21291604f6870cffe5f9e3c37ecc919bc9893578790f1c
+RESULT: 1 commit scanned; no leaks found
+
+SCOPE NOTES
+  No schema or lifecycle code changed, so the dedicated PostgreSQL and migration
+  suites were not rerun. The exact-source browser run exercised real PostgreSQL.
+  No frontend source changed, so type-check plus the complete exact-source
+  browser suite were the applicable frontend gates. Performance was not rerun:
+  this change projects already-retained metadata during report construction and
+  does not alter the frozen lifecycle or performance harness. Earlier exact-run
+  performance evidence remains bound to source 9ca9d6a and is not relabeled as
+  an ac17ca15 result.
+
+RELEASE LEDGER
+  Dependency audits, anonymous Safety, full frontend validation, and full local
+  CI remain FAILED. The configured-model and authenticated Safety gates remain
+  BLOCKED. Remote candidate checks, production configuration/rollback, deploy,
+  and flag enablement remain NOT RUN. The feature remains default off.

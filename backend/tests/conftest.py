@@ -12,20 +12,23 @@ Usage:
     All fixtures are automatically available to tests via pytest's fixture discovery.
 """
 
-import pytest
 import asyncio
-import sys
 import os
+import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncGenerator, Generator, List, Optional
-from unittest.mock import Mock, AsyncMock, MagicMock
-from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
 
 # Add backend to path for imports
 backend_dir = Path(__file__).parent.parent
 tests_dir = Path(__file__).parent
 sys.path.insert(0, str(backend_dir))
-sys.path.insert(0, str(tests_dir.parent))  # Add parent of tests for 'tests.mocks' imports
+sys.path.insert(
+    0, str(tests_dir.parent)
+)  # Add parent of tests for 'tests.mocks' imports
 
 # Set test environment variables before importing application code
 os.environ.setdefault("ENVIRONMENT", "testing")
@@ -41,6 +44,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-key-32-characters")
 # ============================================================================
 # Test Auth Helper — Supabase-compatible JWT generation
 # ============================================================================
+
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create a Supabase-compatible HS256 JWT for testing.
@@ -67,7 +71,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         "app_metadata": {"role": role},
     }
 
-    secret = os.environ.get("SUPABASE_JWT_SECRET", "super-secret-jwt-token-with-at-least-32-characters-long")
+    secret = os.environ.get(
+        "SUPABASE_JWT_SECRET", "super-secret-jwt-token-with-at-least-32-characters-long"
+    )
     return jose_jwt.encode(payload, secret, algorithm="HS256")
 
 
@@ -75,20 +81,34 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 # Pytest Configuration
 # ============================================================================
 
+
 def pytest_configure(config):
     """Configure custom pytest markers."""
     # Test type markers
     config.addinivalue_line("markers", "unit: Unit tests (fast, no external deps)")
-    config.addinivalue_line("markers", "integration: Integration tests (may use containers)")
+    config.addinivalue_line(
+        "markers", "integration: Integration tests (may use containers)"
+    )
     config.addinivalue_line("markers", "e2e: End-to-end tests")
     config.addinivalue_line("markers", "performance: Performance tests")
-    config.addinivalue_line("markers", "resilience: Resilience pattern tests (retry, circuit breaker, bulkhead)")
-    config.addinivalue_line("markers", "scalability: Scalability tests (caching, pooling)")
-    config.addinivalue_line("markers", "regression: Regression tests for previously fixed bugs")
+    config.addinivalue_line(
+        "markers",
+        "resilience: Resilience pattern tests (retry, circuit breaker, bulkhead)",
+    )
+    config.addinivalue_line(
+        "markers", "scalability: Scalability tests (caching, pooling)"
+    )
+    config.addinivalue_line(
+        "markers", "regression: Regression tests for previously fixed bugs"
+    )
     config.addinivalue_line("markers", "smoke: Quick smoke tests for basic validation")
     config.addinivalue_line("markers", "deepeval: DeepEval LLM-judge evaluation tests")
-    config.addinivalue_line("markers", "langsmith: LangSmith evaluation tests - require LANGCHAIN_API_KEY")
-    config.addinivalue_line("markers", "eval: Slow evaluation benchmarks that run agent against dataset")
+    config.addinivalue_line(
+        "markers", "langsmith: LangSmith evaluation tests - require LANGCHAIN_API_KEY"
+    )
+    config.addinivalue_line(
+        "markers", "eval: Slow evaluation benchmarks that run agent against dataset"
+    )
 
     # Feature/domain markers
     config.addinivalue_line("markers", "ai: AI-specific tests (mocked or real)")
@@ -100,15 +120,13 @@ def pytest_configure(config):
     # External dependency markers (for testcontainers)
     config.addinivalue_line(
         "markers",
-        "requires_postgres: Tests requiring real PostgreSQL (via testcontainers)"
+        "requires_postgres: Tests requiring real PostgreSQL (via testcontainers)",
     )
     config.addinivalue_line(
-        "markers",
-        "requires_redis: Tests requiring real Redis (via testcontainers)"
+        "markers", "requires_redis: Tests requiring real Redis (via testcontainers)"
     )
     config.addinivalue_line(
-        "markers",
-        "requires_neo4j: Tests requiring real Neo4j (via testcontainers)"
+        "markers", "requires_neo4j: Tests requiring real Neo4j (via testcontainers)"
     )
 
 
@@ -118,19 +136,26 @@ def pytest_addoption(parser):
         "--run-scaffolding",
         action="store_true",
         default=False,
-        help="Run scaffolding tests (normally skipped)"
+        help="Run scaffolding tests (normally skipped)",
     )
 
 
 def pytest_collection_modifyitems(config, items):
     """Automatically add markers based on file/class names."""
     skip_template = pytest.mark.skip(reason="Template test - not meant to be run")
-    skip_standalone = pytest.mark.skip(reason="Standalone test - requires external services")
-    skip_performance = pytest.mark.skip(reason="Performance test - run separately with proper infra")
-    skip_scaffolding = pytest.mark.skip(reason="Scaffolding test - needs implementation fixes")
+    skip_standalone = pytest.mark.skip(
+        reason="Standalone test - requires external services"
+    )
+    skip_performance = pytest.mark.skip(
+        reason="Performance test - run separately with proper infra"
+    )
+    skip_scaffolding = pytest.mark.skip(
+        reason="Scaffolding test - needs implementation fixes"
+    )
 
     # Check if user wants to run scaffolding tests
     run_scaffolding = config.getoption("--run-scaffolding", default=False)
+    run_performance = os.getenv("DAILY_BRIEF_PERF_CAPTURE") == "1"
 
     for item in items:
         # Add markers based on test file names
@@ -138,9 +163,8 @@ def pytest_collection_modifyitems(config, items):
 
         # Search security suites exercise full endpoint behavior and externalized
         # security controls; treat them as integration tests so unit jobs stay stable.
-        if (
-            "/tests/security/search_security/" in test_path
-            or test_path.endswith("/tests/security/test_search_security.py")
+        if "/tests/security/search_security/" in test_path or test_path.endswith(
+            "/tests/security/test_search_security.py"
         ):
             item.add_marker(pytest.mark.integration)
 
@@ -152,7 +176,9 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_standalone)
             continue
         if "/performance/" in test_path:
-            item.add_marker(skip_performance)
+            item.add_marker(pytest.mark.performance)
+            if not run_performance:
+                item.add_marker(skip_performance)
             continue
         if "/scaffolding/" in test_path and not run_scaffolding:
             item.add_marker(skip_scaffolding)
@@ -186,6 +212,7 @@ def pytest_collection_modifyitems(config, items):
 # Event Loop Fixtures
 # ============================================================================
 
+
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     """Create an instance of the default event loop for the test session."""
@@ -198,6 +225,7 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 # Database Fixtures
 # ============================================================================
 
+
 @pytest.fixture(scope="function")
 def mock_db_engine():
     """Create an in-memory SQLite engine for testing."""
@@ -208,7 +236,7 @@ def mock_db_engine():
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
-        echo=False
+        echo=False,
     )
 
     yield engine
@@ -233,6 +261,7 @@ def mock_db_session(mock_db_engine):
 # ============================================================================
 # External Service Mocks
 # ============================================================================
+
 
 @pytest.fixture
 def mock_qdrant_client():
@@ -295,6 +324,7 @@ def mock_celery_app():
 # Embedding Service Mocks
 # ============================================================================
 
+
 @pytest.fixture
 def mock_embeddings_service():
     """Mock embedding service for testing."""
@@ -321,6 +351,7 @@ def mock_embeddings_service():
 # ============================================================================
 # Authentication Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def mock_user():
@@ -366,7 +397,7 @@ def mock_auth_headers(mock_user):
         "email": mock_user.email,
         "role": mock_user.role.value,
         "exp": datetime.utcnow() + timedelta(hours=1),
-        "iat": datetime.utcnow()
+        "iat": datetime.utcnow(),
     }
 
     token = jwt.encode(payload, "test-secret-key-for-testing", algorithm="HS256")
@@ -376,6 +407,7 @@ def mock_auth_headers(mock_user):
 # ============================================================================
 # Sample Data Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def sample_documents_data():
@@ -388,7 +420,7 @@ def sample_documents_data():
             "document_type": "pdf",
             "tags": ["machine learning", "AI", "algorithms"],
             "metadata": {"pages": 50, "author": "Test Author"},
-            "created_at": "2024-01-01T00:00:00Z"
+            "created_at": "2024-01-01T00:00:00Z",
         },
         {
             "id": "doc-2",
@@ -397,7 +429,7 @@ def sample_documents_data():
             "document_type": "pdf",
             "tags": ["NLP", "linguistics", "text processing"],
             "metadata": {"pages": 75, "author": "Test Author 2"},
-            "created_at": "2024-01-02T00:00:00Z"
+            "created_at": "2024-01-02T00:00:00Z",
         },
         {
             "id": "doc-3",
@@ -406,8 +438,8 @@ def sample_documents_data():
             "document_type": "video",
             "tags": ["computer vision", "image processing", "deep learning"],
             "metadata": {"duration": 3600, "author": "Test Author 3"},
-            "created_at": "2024-01-03T00:00:00Z"
-        }
+            "created_at": "2024-01-03T00:00:00Z",
+        },
     ]
 
 
@@ -422,7 +454,7 @@ def sample_search_queries():
         "artificial intelligence ethics",
         "data preprocessing techniques",
         "model evaluation metrics",
-        "feature engineering methods"
+        "feature engineering methods",
     ]
 
 
@@ -436,7 +468,7 @@ def sample_search_results():
             "title": "Introduction to Machine Learning",
             "content_snippet": "Machine learning is a subset of artificial intelligence...",
             "score": 0.95,
-            "metadata": {"source": "vector", "model": "embedding-model-v1"}
+            "metadata": {"source": "vector", "model": "embedding-model-v1"},
         },
         {
             "id": "result-2",
@@ -444,14 +476,15 @@ def sample_search_results():
             "title": "Natural Language Processing Fundamentals",
             "content_snippet": "NLP is a branch of artificial intelligence...",
             "score": 0.87,
-            "metadata": {"source": "fulltext", "index": "documents_index"}
-        }
+            "metadata": {"source": "fulltext", "index": "documents_index"},
+        },
     ]
 
 
 # ============================================================================
 # Performance Tracking
 # ============================================================================
+
 
 @pytest.fixture
 def performance_tracker():
@@ -485,11 +518,11 @@ def performance_tracker():
             for name, times in self.metrics.items():
                 if times:
                     summary[name] = {
-                        'count': len(times),
-                        'total': sum(times),
-                        'average': sum(times) / len(times),
-                        'min': min(times),
-                        'max': max(times)
+                        "count": len(times),
+                        "total": sum(times),
+                        "average": sum(times) / len(times),
+                        "min": min(times),
+                        "max": max(times),
                     }
             return summary
 
@@ -507,6 +540,7 @@ def performance_tracker():
 # Logging Configuration
 # ============================================================================
 
+
 @pytest.fixture(autouse=True)
 def configure_test_logging():
     """Configure logging for tests to reduce noise."""
@@ -523,11 +557,13 @@ def configure_test_logging():
 # FastAPI Test Client Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def test_app():
     """Create FastAPI test application."""
     try:
         from src.main import app
+
         # Clear any existing dependency overrides
         app.dependency_overrides = {}
         return app
@@ -539,6 +575,7 @@ def test_app():
 def test_client(test_app):
     """Create synchronous test client for FastAPI application."""
     from contextlib import asynccontextmanager
+
     from fastapi.testclient import TestClient
 
     @asynccontextmanager
@@ -567,11 +604,12 @@ async def async_test_client(test_app) -> AsyncGenerator:
 # Temporary File Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def temp_upload_dir():
     """Create a temporary upload directory."""
-    import tempfile
     import shutil
+    import tempfile
 
     temp_dir = tempfile.mkdtemp()
     yield temp_dir

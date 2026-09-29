@@ -28,6 +28,7 @@ def test_exact_wire_value_set():
         "running",
         "awaiting_confirmation",
         "stopping",
+        "recovering",
         "completed",
         "failed",
         "cancelled",

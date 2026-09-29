@@ -20,6 +20,28 @@ _PMID_RE = re.compile(r"^\d{1,8}$")
 MAX_RESULTS_LIMIT = 200
 
 
+def _publication_date(article: Any) -> str | None:
+    date = article.find(".//JournalIssue/PubDate")
+    if date is None:
+        date = article.find(".//ArticleDate")
+    if date is None:
+        return None
+    year = date.findtext("Year")
+    if not year:
+        medline_date = date.findtext("MedlineDate", default="")
+        match = re.search(r"(?<!\d)(\d{4})(?!\d)", medline_date)
+        year = match.group(1) if match else None
+    if not year:
+        return None
+    numeric_parts = [year]
+    for name in ("Month", "Day"):
+        part = date.findtext(name)
+        if not part or not part.isdigit():
+            break
+        numeric_parts.append(part.zfill(2))
+    return "-".join(numeric_parts)
+
+
 class PubMedConnector(SourceConnector):
     """Connector for the PubMed/NCBI E-Utilities API."""
 
@@ -182,6 +204,8 @@ class PubMedConnector(SourceConnector):
                         "mesh_terms": mesh_terms,
                         "doi": article_el.findtext(".//ArticleId[@IdType='doi']"),
                         "pmcid": article_el.findtext(".//ArticleId[@IdType='pmc']"),
+                        "journal": article.findtext(".//Journal/Title"),
+                        "publication_date": _publication_date(article),
                         "publication_type": [
                             el.text
                             for el in article.findall(".//PublicationType")

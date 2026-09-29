@@ -121,15 +121,27 @@ async def generate_draft(
 
     service = DraftGenerationService(db)
 
-    result = await service.generate_draft(
-        project_id=project_id,
-        user_id=current_user.id,
-        themes=themes,
-        document_ids=document_ids,
-        style=style,
-        max_sections=max_sections,
-        include_abstract=include_abstract,
-    )
+    try:
+        result = await service.generate_draft(
+            project_id=project_id,
+            user_id=current_user.id,
+            themes=themes,
+            document_ids=document_ids,
+            style=style,
+            max_sections=max_sections,
+            include_abstract=include_abstract,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid draft generation request.",
+        ) from None
+
+    if result.get("error_category") == "draft_generation_conflict":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A draft generation is already active for this project.",
+        )
 
     return result
 

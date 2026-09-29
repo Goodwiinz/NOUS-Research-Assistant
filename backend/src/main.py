@@ -49,7 +49,9 @@ from src.api.documents import (
     table_extraction_router,
 )
 from src.api.evidence.router import router as evidence_router
+from src.api.harness import router as harness_router
 from src.api.infrastructure import evaluation_router, workers_router
+from src.api.integrations import router as integrations_router
 from src.api.quality import (
     performance_dashboard_router,
     quality_metrics_router,
@@ -77,8 +79,10 @@ from src.api.research import (
 )
 from src.api.research_engine import (
     research_engine_blueprints_router,
+    research_engine_capabilities_router,
     research_engine_projects_router,
     research_engine_protocols_router,
+    research_engine_reviews_router,
     research_engine_runs_router,
     research_engine_steps_router,
 )
@@ -565,6 +569,8 @@ app.add_middleware(AgentDisconnectSignalMiddleware)
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(cli_auth_router, prefix="/api/v1")
+app.include_router(integrations_router, prefix="/api/v1")
+app.include_router(harness_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
@@ -649,11 +655,17 @@ app.include_router(
     research_engine_blueprints_router, prefix="/api/v1"
 )  # Research Engine blueprints
 app.include_router(
+    research_engine_capabilities_router, prefix="/api/v1"
+)  # Research Engine connector capabilities
+app.include_router(
     research_engine_runs_router, prefix="/api/v1"
 )  # Research Engine runs
 app.include_router(
     research_engine_steps_router, prefix="/api/v1"
 )  # Research Engine steps
+app.include_router(
+    research_engine_reviews_router, prefix="/api/v1"
+)  # Research Engine stage reviews
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search
@@ -699,6 +711,64 @@ def _sanitize_log(value: Any) -> str:
     return str(value).replace("\r", "\\r").replace("\n", "\\n")
 
 
+def _safe_validation_errors(exc: RequestValidationError) -> list[dict[str, Any]]:
+    """Return useful validation metadata without reflecting request values."""
+
+    safe_locations = {
+        "body",
+        "query",
+        "path",
+        "header",
+        "cookie",
+        "run_id",
+        "step_index",
+        "review_kind",
+        "output_hash",
+        "decision",
+        "decision_payload",
+        "items",
+        "source_id",
+        "part_id",
+        "reason",
+        "note",
+    }
+    messages = {
+        "missing": "Field required",
+        "extra_forbidden": "Extra inputs are not permitted",
+        "string_too_long": "Input exceeds the allowed length",
+        "string_too_short": "Input is shorter than the allowed length",
+        "literal_error": "Input is not an allowed value",
+        "enum": "Input is not an allowed value",
+        "value_error": "Input failed validation",
+    }
+    safe_errors: list[dict[str, Any]] = []
+    for error in exc.errors():
+        error_type = str(error.get("type") or "value_error")
+        message = messages.get(error_type)
+        if message is None:
+            message = (
+                "Input has an invalid type or format"
+                if error_type.endswith(("_type", "_parsing"))
+                else "Invalid request value"
+            )
+        safe_errors.append(
+            {
+                "loc": [
+                    (
+                        component
+                        if isinstance(component, int)
+                        or (isinstance(component, str) and component in safe_locations)
+                        else "<field>"
+                    )
+                    for component in (error.get("loc") or ())
+                ],
+                "msg": message,
+                "type": error_type,
+            }
+        )
+    return safe_errors
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
@@ -707,17 +777,12 @@ async def validation_exception_handler(
     # 422 is a client error (malformed request), not a server fault — log at
     # warning so it doesn't inflate error-rate alerts (matches the HTTP 4xx
     # handling below).
+    safe_errors = _safe_validation_errors(exc)
     logger.warning(
         "Validation error on %s: %s",
         _sanitize_log(request.url.path),
-        _sanitize_log(exc.errors()),
+        _sanitize_log(safe_errors),
     )
-    safe_errors = []
-    for err in exc.errors():
-        safe = {k: v for k, v in err.items() if k != "ctx"}
-        if "ctx" in err and isinstance(err["ctx"], dict):
-            safe["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
-        safe_errors.append(safe)
     first_msg = (
         safe_errors[0].get("msg", "Validation error")
         if safe_errors

@@ -1,0 +1,18 @@
+CLASSIFICATION: EXPECTED RED
+FINAL_SOURCE_SHA: 9ca9d6a2995ba8dd52328efd0e5cd93856138b4a
+SOURCE_STATE: uncommitted final candidate later frozen byte-for-byte in FINAL_SOURCE_SHA
+RAW_CAPTURE_SHA256: dcccd312f7c53f1354eae46db6162bcea97a15a22e67312894efcac9b6afef2b
+EXIT_STATUS: 1
+MUTATION:
+  Removed only the completed/failed early return inside the locked transaction
+  in ResearchRunLifecycleService.recover_stream_cancellation.
+COMMAND:
+  PYTHONPATH=backend .venv/bin/python -m pytest -c backend/pytest.ini -q -vv backend/tests/unit/api/test_research_engine_stream.py::TestStreamEndpointSuccess::test_disconnect_after_terminal_commit_cannot_rewrite_run_to_paused
+
+SALIENT OUTPUT:
+  research_event=pause ... pause_kind=user_paused
+  AssertionError: assert 'paused' == 'completed'
+  1 failed, 1 warning in 4.42s
+
+The deliberate mutation proves the regression fails if cancellation recovery
+can rewrite a terminal commit. No mutation is present in the final source.

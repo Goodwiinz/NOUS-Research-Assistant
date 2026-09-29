@@ -23,6 +23,7 @@ export const AGENT_STREAM_EVENTS = [
   'heartbeat',
   'status',
   'confirmation',
+  'approval_required',
   'done',
   'error',
 ] as const;

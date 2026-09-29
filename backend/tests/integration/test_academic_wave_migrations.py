@@ -194,6 +194,28 @@ def _seed_pre_wave_rows(connection: Connection) -> dict[str, UUID]:
     return ids
 
 
+def test_agent_operation_migration_accepts_model_baseline_table(
+    pre_wave_connection: Connection,
+) -> None:
+    """The later raw-SQL migration must tolerate the model baseline table."""
+    connection = pre_wave_connection
+    migration = _load_migration("20260925_agent_tool_operation_results.py")
+
+    _run_migration(connection, migration, "upgrade")
+
+    assert inspect(connection).has_table("agent_tool_operations")
+    assert "ix_agent_tool_operations_thread_turn" in {
+        index["name"]
+        for index in inspect(connection).get_indexes("agent_tool_operations")
+    }
+    assert connection.execute(
+        text(
+            "SELECT relrowsecurity FROM pg_class "
+            "WHERE oid = to_regclass('agent_tool_operations')"
+        )
+    ).scalar_one()
+
+
 def _assert_backfill(connection: Connection, ids: dict[str, UUID]) -> None:
     rows = dict(
         connection.execute(

@@ -1,0 +1,10 @@
+"""Composed integration API."""
+
+from fastapi import APIRouter
+
+from src.api.integrations.devices import router as devices_router
+from src.api.integrations.grants import router as grants_router
+
+router = APIRouter(prefix="/integrations", tags=["integrations"])
+router.include_router(grants_router)
+router.include_router(devices_router)

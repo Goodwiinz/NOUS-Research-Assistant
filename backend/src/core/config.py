@@ -67,6 +67,8 @@ def _cors_origin_regex_is_overbroad(pattern: str) -> bool:
 class Settings(BaseSettings):
     """Application settings"""
 
+    HARNESS_BRIDGE_ENABLED: bool = False
+
     # Application
     APP_NAME: str = "Multimodal Enterprise RAG System"
     VERSION: str = "1.0.0"
@@ -513,6 +515,12 @@ class Settings(BaseSettings):
     # Dedicated evidence-independent chat lane. Kept separate from the main
     # deployment so rollout/rollback never changes tool-calling behavior.
     AGENT_FAST_PATH_ENABLED: bool = False
+
+    # Runtime gate for the server-owned Daily Research Brief template. The
+    # repository default exposes new work; operators can set this false as a
+    # disable-first rollback. Existing runs remain readable/exportable while
+    # disabled; only discovery and new work are gated.
+    DAILY_RESEARCH_BRIEF_ENABLED: bool = True
     AGENT_FAST_PATH_DEPLOYMENT: str = "gpt-5.6-luna"
     AGENT_FAST_PATH_MAX_INPUT_CHARS: int = 8_000
     AGENT_FAST_PATH_MAX_OUTPUT_TOKENS: int = 768

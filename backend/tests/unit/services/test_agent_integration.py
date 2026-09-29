@@ -23,9 +23,17 @@ from src.api.agent.execute import (
     ConfirmationRequest,
     _get_job,
     _set_job,
+    _set_job_async,
     router,
 )
+from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_status_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_durable_status_projection(monkeypatch)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -115,10 +123,10 @@ def client(app_with_overrides):
 class TestJobOwnershipEndpoints:
     """Integration tests for job ownership enforcement on API endpoints."""
 
-    def test_get_job_status_returns_404_for_wrong_user(self, client, mock_user_a):
+    async def test_get_job_status_returns_404_for_wrong_user(self, client, mock_user_a):
         """GET /jobs/{id} should return 404 if job belongs to different user."""
         job_id = str(uuid4())
-        _set_job(
+        await _set_job_async(
             job_id,
             {
                 "status": "completed",
@@ -385,11 +393,7 @@ class TestResumePersistence:
             ) as mock_persist_user,
             patch(
                 "src.services.agent.agent_execution_service.AsyncSessionLocal",
-                return_value=_mock_async_session(),
-            ),
-            patch(
-                "src.services.agent.agent_run_service.record_job_status",
-                new_callable=AsyncMock,
+                side_effect=_mock_async_session,
             ),
         ):
             mock_graph = MagicMock()
@@ -462,11 +466,7 @@ class TestResumePersistence:
             ),
             patch(
                 "src.services.agent.agent_execution_service.AsyncSessionLocal",
-                return_value=_mock_async_session(),
-            ),
-            patch(
-                "src.services.agent.agent_run_service.record_job_status",
-                new_callable=AsyncMock,
+                side_effect=_mock_async_session,
             ),
         ):
             mock_graph = MagicMock()
@@ -535,11 +535,7 @@ class TestResumePersistence:
             ),
             patch(
                 "src.services.agent.agent_execution_service.AsyncSessionLocal",
-                return_value=_mock_async_session(),
-            ),
-            patch(
-                "src.services.agent.agent_run_service.record_job_status",
-                new_callable=AsyncMock,
+                side_effect=_mock_async_session,
             ),
         ):
             mock_graph = MagicMock()

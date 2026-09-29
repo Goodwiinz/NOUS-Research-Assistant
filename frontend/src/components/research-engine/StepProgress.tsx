@@ -52,13 +52,15 @@ export function StepProgress({ step }: StepProgressProps) {
     typeof coverage === 'object' &&
     'partial' in coverage &&
     coverage.partial === true;
-  const allProvidersFailed =
-    coverage !== null &&
-    typeof coverage === 'object' &&
-    'all_failed' in coverage &&
-    coverage.all_failed === true;
+  const markdownOutput =
+    typeof step.output === 'object' &&
+    step.output !== null &&
+    typeof step.output.markdown === 'string'
+      ? step.output.markdown
+      : null;
   const outputPreview = (() => {
     if (!step.output) return null;
+    if (markdownOutput !== null) return markdownOutput;
     if (typeof step.output === 'string') return step.output;
     try {
       return JSON.stringify(step.output, null, 2);
@@ -236,9 +238,8 @@ export function StepProgress({ step }: StepProgressProps) {
 
       {partialCoverage && (
         <p role="alert" className="px-4 pb-3 text-sm text-muted-foreground">
-          {allProvidersFailed
-            ? 'All selected databases could not be fully searched. Results may have partial coverage.'
-            : 'Some selected databases could not be searched. These results have partial coverage.'}
+          Some selected databases could not be searched. These results have
+          partial coverage.
         </p>
       )}
 
@@ -295,7 +296,7 @@ export function StepProgress({ step }: StepProgressProps) {
               </h4>
               <div className="max-h-40 overflow-auto rounded-lg border border-border bg-muted/40 p-3">
                 <p className="whitespace-pre-wrap font-mono text-xs text-foreground">
-                  {outputPreview.length > 500
+                  {markdownOutput === null && outputPreview.length > 500
                     ? outputPreview.slice(0, 500) + '...'
                     : outputPreview}
                 </p>

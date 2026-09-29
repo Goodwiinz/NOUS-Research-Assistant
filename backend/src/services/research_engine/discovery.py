@@ -63,6 +63,7 @@ def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
     Original provider snapshots are retained so enrichment does not erase origin.
     """
     merged: list[SourceDocument] = []
+    seen_identity_pairs: set[tuple[str, str, str]] = set()
     now = datetime.now(timezone.utc).isoformat()
     for original in documents:
         if not original.title.strip():
@@ -72,6 +73,16 @@ def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
         provenance = {**asdict(source), "retrieved_at": now}
         source.metadata["identifiers"] = ids
         source.metadata["provenance"] = [provenance]
+        partition = "local" if source.connector_type == "rag_store" else "public"
+        identity_pairs = {(partition, kind, value) for kind, value in ids.items()}
+        # A merge requires at least one exact identifier match in the same
+        # local/public partition. Cluster identifiers only grow, so a source
+        # with no previously seen pair cannot match any existing candidate.
+        if seen_identity_pairs.isdisjoint(identity_pairs):
+            source.compute_hash()
+            merged.append(source)
+            seen_identity_pairs.update(identity_pairs)
+            continue
         # Local documents remain distinct from public metadata even with a DOI.
         for candidate in list(merged):
             if (candidate.connector_type == "rag_store") != (
@@ -92,13 +103,20 @@ def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
             merged.remove(candidate)
         source.compute_hash()
         merged.append(source)
+        seen_identity_pairs.update(
+            (partition, kind, value) for kind, value in ids.items()
+        )
     return merged
 
 
 def source_records(
     documents: list[SourceDocument], *, id_namespace: str | None = None
 ) -> list[dict[str, Any]]:
-    """JSON-safe evidence passed through step persistence and run resume."""
+    """JSON-safe evidence passed through step persistence and run resume.
+
+    With ``id_namespace`` the source_id is derived from the provider identity so
+    a retried search maps the same record to the same durable row.
+    """
     rows = []
     for doc in documents:
         if not doc.content_hash:
@@ -118,9 +136,13 @@ def source_records(
                 **asdict(doc),
                 "source_id": str(source_id),
                 "evidence_level": (
-                    ("excerpt" if doc.connector_type == "rag_store" else "full_text")
+                    (
+                        "workspace_document"
+                        if doc.connector_type == "rag_store"
+                        else "full_text"
+                    )
                     if doc.full_text
-                    else "abstract" if doc.abstract else "metadata"
+                    else "abstract" if doc.abstract else "metadata_only"
                 ),
             }
         )
@@ -195,16 +217,21 @@ async def search_sources(
 
     results = await asyncio.gather(*(search(name) for name in names))
     providers = {name: result[1] for name, result in zip(names, results)}
-    docs = prepare_sources([doc for result, _ in results for doc in result])
+    # Every provider's request/page receipts are already checkpointed by the
+    # traces above, so failing the run here loses no evidence.
+    if all(
+        item["status"] != "ok" and item["returned"] == 0 for item in providers.values()
+    ):
+        raise RuntimeError("All selected research providers failed")
+    raw_documents = [doc for result, _ in results for doc in result]
+    docs = prepare_sources(raw_documents)
     failed_statuses = {"failed", "partial", "timed_out"}
     return docs, {
         "partial": any(
             item["status"] in failed_statuses for item in providers.values()
         ),
-        "all_failed": all(
-            item["status"] in failed_statuses for item in providers.values()
-        ),
         "providers": providers,
         "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        "deduplication": {"before": len(raw_documents), "after": len(docs)},
         "exhaustive": False,
     }

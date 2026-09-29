@@ -64,8 +64,10 @@ def _make_bg_session(documents, add_sink: list):
     session.execute = AsyncMock(
         side_effect=[
             docs_result,
+            docs_result,
             lock_result,
             lock_result,
+            docs_result,
             version_result,
             update_result,
         ]
