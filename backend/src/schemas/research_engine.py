@@ -1,7 +1,7 @@
 """Pydantic v2 schemas for the research engine API."""
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar
 from uuid import UUID
@@ -455,6 +455,49 @@ class IdentityEventResponse(BaseModel):
     reason: Optional[str] = None
     payload: Dict[str, Any]
     occurred_at: datetime
+
+
+# --- Search import / corpus (GOO-300) --------------------------------------
+
+
+class ImportDeclaration(BaseModel):
+    """What the importer declares about the search; never inferred from the file."""
+
+    database: str = Field(..., min_length=1, max_length=200)
+    query_text: Optional[str] = Field(None, min_length=1, max_length=20_000)
+    search_date: Optional[date] = None
+    exported_at: Optional[datetime] = None
+    redistribution: Literal["restricted", "allowed"] = "restricted"
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
+class ImportReceiptResponse(BaseModel):
+    id: UUID
+    kind: Literal["file_import", "citation_chase"]
+    version: int
+    previous_receipt_id: Optional[UUID] = None
+    declared: Dict[str, Any]
+    observed: Dict[str, Any]
+    parsed_count: int
+    accepted_count: int
+    rejected_count: int
+    replayed: bool = False
+    created_at: datetime
+
+
+class ImportRecordResponse(BaseModel):
+    id: UUID
+    record_index: int
+    status: Literal["accepted", "rejected"]
+    rejection_reason: Optional[str] = None
+    parsed: Dict[str, Any]
+    report_id: Optional[UUID] = None
+    # Omitted (null) when the receipt's redistribution is "restricted".
+    raw: Optional[str] = None
+
+
+class ImportReceiptDetail(ImportReceiptResponse):
+    records: List[ImportRecordResponse]
 
 
 class ProtocolRegistrationCreate(BaseModel):

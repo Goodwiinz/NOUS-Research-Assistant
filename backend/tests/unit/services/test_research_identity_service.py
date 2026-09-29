@@ -112,10 +112,12 @@ async def test_governing_protocol_version_is_an_approved_one(
     )
     await protocol_db.flush()
 
-    assert await identity_service._protocol_version_id(
+    assert await identity_service.current_protocol_version_id(
         protocol_db, collection_id
     ) == str(approved)
-    assert await identity_service._protocol_version_id(protocol_db, uuid4()) is None
+    assert (
+        await identity_service.current_protocol_version_id(protocol_db, uuid4()) is None
+    )
 
 
 # --- GOO-300: imported records join report identity ------------------------

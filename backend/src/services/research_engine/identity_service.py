@@ -99,7 +99,9 @@ async def _replayed_event(
     return existing
 
 
-async def _protocol_version_id(db: AsyncSession, collection_id: UUID) -> str | None:
+async def current_protocol_version_id(
+    db: AsyncSession, collection_id: UUID
+) -> str | None:
     version_id = (
         await db.execute(
             select(ResearchProtocol.current_approved_version_id)
@@ -589,7 +591,7 @@ async def link_study(
             "prior_study_id": str(prior_study_id) if prior_study_id else None,
             "prior_status": prior_status,
             "match_evidence": evidence.model_dump(mode="json"),
-            "protocol_version_id": await _protocol_version_id(db, collection_id),
+            "protocol_version_id": await current_protocol_version_id(db, collection_id),
         },
         idempotency_key=data.idempotency_key,
         fingerprint=fingerprint,
@@ -700,7 +702,7 @@ async def merge_reports(
             "moved_source_ids": moved_source_ids,
             "moved_import_record_ids": moved_import_record_ids,
             "moved_identifiers": moved_identifiers,
-            "protocol_version_id": await _protocol_version_id(db, collection_id),
+            "protocol_version_id": await current_protocol_version_id(db, collection_id),
         },
         idempotency_key=data.idempotency_key,
         fingerprint=fingerprint,
@@ -830,7 +832,7 @@ async def split_report(
                 str(record_id) for record_id in wanted_imports
             ),
             "moved_identifiers": moved_identifiers,
-            "protocol_version_id": await _protocol_version_id(db, collection_id),
+            "protocol_version_id": await current_protocol_version_id(db, collection_id),
         },
         idempotency_key=data.idempotency_key,
         fingerprint=fingerprint,
