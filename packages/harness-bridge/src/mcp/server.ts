@@ -43,8 +43,11 @@ export function createNousMcpServer(client: CapabilityClient): Server {
       if (
         error instanceof ReauthenticationRequired ||
         error instanceof ToolRequestRejected
-      )
+      ) {
+        // Also record auth/disabled conditions in Codex's MCP stderr log.
+        console.error(error.message);
         return { content: [{ type: "text", text: error.message }], isError: true };
+      }
       throw error;
     }
   });

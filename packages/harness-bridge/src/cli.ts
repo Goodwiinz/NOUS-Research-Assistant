@@ -3,7 +3,7 @@ import { Journal } from "./journal.ts";
 import { connectBridge } from "./connection.ts";
 import { CodexAdapter } from "./adapters/codex.ts";
 import { homedir } from "node:os";
-import { join, basename } from "node:path";
+import { join, basename, resolve } from "node:path";
 import { realpath, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -16,8 +16,9 @@ import {
   standaloneInstallCommand,
 } from "./mcp/config.ts";
 import { runStdioMcp } from "./mcp/stdio.ts";
+import type { SessionOptions } from "./contracts.ts";
 
-type LocalState = {
+export type LocalState = {
   apiUrl: string;
   deviceId: string;
   projectId: string;
@@ -228,28 +229,12 @@ export async function runBridge(
     throw new Error("connect this device first");
   const state = value as LocalState;
   const adapters = new Map<string, CodexAdapter>();
-  // Managed sessions get the NOUS MCP server only when the grant carries tools:read.
-  const mcpConfig = state.scopes?.includes("tools:read")
-    ? buildManagedMcpConfig(mcpSession(stateDir, state))
-    : undefined;
-  const journal = new Journal(
-    join(stateDir, "journal.sqlite"),
-    (workspaceId) => {
-      const workspace = state.workspaces.find((w) => w.id === workspaceId);
-      if (!workspace) throw new Error("unregistered local workspace");
-      return {
-        cwd: workspace.root,
-        workspaceId,
-        policy: {
-          sandbox: "workspace-write",
-          approvalPolicy: "on-request",
-          reviewer: "user",
-          networkAccess: false,
-          writableRoots: [workspace.root],
-        },
-        ...(mcpConfig ? { mcpConfig } : {}),
-      };
-    },
+  if (!state.scopes?.includes("tools:read"))
+    console.error(
+      "NOUS tools are not enabled for managed sessions; reconnect with `nous-harness connect --tools` to expose them.",
+    );
+  const journal = new Journal(join(stateDir, "journal.sqlite"), (workspaceId) =>
+    sessionOptionsFor(stateDir, state, workspaceId),
   );
   const adapterFor = (_workspaceId: string, runId: string): CodexAdapter => {
     let adapter = adapters.get(runId);
@@ -312,7 +297,31 @@ function mcpSession(stateDir: string, state: LocalState): McpSession {
   return {
     apiOrigin: apiBase(state.apiUrl),
     credentialHandle: state.credentialHandle,
-    stateDir,
+    // Codex launches the MCP child from the workspace cwd, never from here.
+    stateDir: resolve(stateDir),
+  };
+}
+/** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
+export function sessionOptionsFor(
+  stateDir: string,
+  state: LocalState,
+  workspaceId: string,
+): SessionOptions {
+  const workspace = state.workspaces.find((w) => w.id === workspaceId);
+  if (!workspace) throw new Error("unregistered local workspace");
+  return {
+    cwd: workspace.root,
+    workspaceId,
+    policy: {
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      reviewer: "user",
+      networkAccess: false,
+      writableRoots: [workspace.root],
+    },
+    ...(state.scopes?.includes("tools:read")
+      ? { mcpConfig: buildManagedMcpConfig(mcpSession(stateDir, state)) }
+      : {}),
   };
 }
 /** Prints the standalone Codex registration; never edits global Codex config. */
@@ -402,13 +411,15 @@ async function main(): Promise<void> {
     });
   else if (positionals.join(" ") === "mcp install")
     console.log(await mcpInstallCommand(stateDir));
-  else if (positionals.join(" ") === "mcp" && values.session && values.api)
+  else if (positionals.join(" ") === "mcp") {
+    if (!values.session || !values.api)
+      throw new Error("mcp requires --api and --session");
     await runStdioMcp({
       apiOrigin: apiBase(values.api),
       credentialHandle: values.session,
-      stateDir,
+      stateDir: resolve(stateDir),
     });
-  else if (positionals.join(" ") === "workspace add" && values.root)
+  } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
   else if (positionals.join(" ") === "run") {
     const controller = new AbortController();

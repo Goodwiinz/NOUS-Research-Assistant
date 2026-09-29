@@ -19,12 +19,16 @@ export type McpSession = {
   stateDir: string;
 };
 export const REAUTH_MESSAGE =
-  "NOUS authorization rejected; reconnect this device (nous-harness connect)";
+  "NOUS session expired or revoked; reconnect this device (nous-harness connect --tools)";
+export const FORBIDDEN_MESSAGE =
+  "NOUS denied this tool call: the grant may lack tools:read (reconnect with nous-harness connect --tools) or the resource is outside the granted project";
+export const DISABLED_MESSAGE = "NOUS integration tools are disabled";
 export class ReauthenticationRequired extends Error {
   constructor() {
     super(REAUTH_MESSAGE);
   }
 }
+/** Stable tool-level errors (403/422/503); never retried. */
 export class ToolRequestRejected extends Error {}
 
 /** HTTPS only, except the explicit development loopback; no embedded credentials. */
@@ -45,6 +49,21 @@ export function apiBase(value: string): string {
       "API requires HTTPS (or local loopback) without credentials",
     );
   return value.replace(/\/$/, "");
+}
+/** Backend `detail` strings are safe stable messages; anything else is dropped. */
+async function detailOf(response: Response): Promise<string | undefined> {
+  try {
+    const data: unknown = await response.json();
+    const detail =
+      typeof data === "object" && data !== null
+        ? (data as { detail?: unknown }).detail
+        : undefined;
+    return typeof detail === "string" && detail.length <= 500
+      ? detail
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Scoped HTTPS facade over the backend read gateway. Reads only; never retries. */
@@ -87,24 +106,42 @@ export class CapabilityClient {
     return data as ToolResult;
   }
   private async request(path: string, body?: object): Promise<unknown> {
-    const response = await this.fetchFn(this.base + path, {
-      method: body ? "POST" : "GET",
-      redirect: "error",
-      headers: {
-        ...this.headers,
-        ...(body ? { "Content-Type": "application/json" } : {}),
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (response.status === 401 || response.status === 403)
-      throw new ReauthenticationRequired();
-    if (response.status === 422)
-      throw new ToolRequestRejected("NOUS rejected the tool arguments");
+    const url = this.base + path;
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, {
+        method: body ? "POST" : "GET",
+        redirect: "error",
+        headers: {
+          ...this.headers,
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      // undici hides ECONNREFUSED/ENOTFOUND/TLS reasons in `cause`.
+      const cause =
+        error instanceof Error && error.cause instanceof Error
+          ? error.cause.message
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      const wrapped = new Error(`NOUS request to ${url} failed: ${cause}`);
+      console.error(wrapped.message);
+      throw wrapped;
+    }
+    if (response.status === 401) throw new ReauthenticationRequired();
+    if (response.status === 403) throw new ToolRequestRejected(FORBIDDEN_MESSAGE);
+    if (response.status === 422) {
+      const detail = await detailOf(response);
+      throw new ToolRequestRejected(
+        "NOUS rejected the tool arguments" + (detail ? `: ${detail}` : ""),
+      );
+    }
     if (response.status === 503)
-      throw new ToolRequestRejected("NOUS integration tools are disabled");
-    if (!response.ok)
-      throw new Error(`NOUS request failed (${response.status})`);
+      throw new ToolRequestRejected((await detailOf(response)) ?? DISABLED_MESSAGE);
+    if (!response.ok) throw new Error(`NOUS request failed (${response.status})`);
     try {
       return await response.json();
     } catch {

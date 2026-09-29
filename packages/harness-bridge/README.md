@@ -41,7 +41,7 @@ pnpm --filter @nous/harness-bridge start connect --api https://nous.example/api/
 pnpm --filter @nous/harness-bridge start mcp install
 ```
 
-Tools are the backend's read allowlist (`search_documents`, `list_project_documents`, `do_kb_retrieve`, `get_current_draft`), scoped to the granted project. Argv carries only the API origin, the state directory, and the opaque credential handle; tokens stay in the owner-only store. Diagnostics go to stderr. If NOUS rejects the grant, the tool returns `NOUS authorization rejected; reconnect this device` and does not retry.
+Tools are the backend's read allowlist (`search_documents`, `list_project_documents`, `do_kb_retrieve`, `get_current_draft`), scoped to the granted project. Argv carries only the API origin, the state directory, and the opaque credential handle; tokens stay in the owner-only store. Diagnostics go to stderr. Gateway rejections come back as tool errors and are never retried: 401 asks you to reconnect with `--tools`, 403 names a missing `tools:read` scope or an out-of-project resource, 422 forwards the gateway's argument reason, and 503 reports that NOUS tools are disabled. `nous-harness run` prints a stderr notice when the connection lacks `tools:read` and managed sessions therefore get no NOUS tools.
 
 ## Disconnect, recovery, and kill switch
 
