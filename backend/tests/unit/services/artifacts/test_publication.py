@@ -17,9 +17,11 @@ from src.models.artifact import (
     ArtifactVersion,
 )
 from src.models.collection import Collection
+from src.models.conversation import Conversation
 from src.models.organization import Organization
+from src.models.thread import Thread
 from src.models.user import User
-from src.models.workspace import Workspace, WorkspaceMember
+from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.artifact import (
     ArtifactAccessDenied,
     ArtifactConflict,
@@ -51,7 +53,7 @@ pytestmark = pytest.mark.unit
 USER, OTHER_USER, ORG, OTHER_ORG, PROJECT, OTHER_PROJECT, WORKSPACE, OTHER_WORKSPACE = (
     uuid4() for _ in range(8)
 )
-THREAD = uuid4()
+EDITOR_USER, VIEWER_USER, CONVERSATION, THREAD = (uuid4() for _ in range(4))
 CONTENT = b"report\n"
 DIGEST = hashlib.sha256(CONTENT).hexdigest()
 
@@ -73,6 +75,8 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         Workspace,
         WorkspaceMember,
         Collection,
+        Conversation,
+        Thread,
         Artifact,
         ArtifactVersion,
         ArtifactUpload,
@@ -93,6 +97,8 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         for user_id, org, email in (
             (USER, ORG, "owner@example.test"),
             (OTHER_USER, OTHER_ORG, "foreign@example.test"),
+            (EDITOR_USER, ORG, "editor@example.test"),
+            (VIEWER_USER, ORG, "viewer@example.test"),
         ):
             await session.execute(
                 text(_user_sql(user_id, org, email)[0]),
@@ -122,6 +128,35 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
                     dict(id=PROJECT, name="Project", workspace_id=WORKSPACE),
                     dict(id=OTHER_PROJECT, name="Other", workspace_id=OTHER_WORKSPACE),
                 ]
+            )
+        )
+        await session.execute(
+            insert(WorkspaceMember).values(
+                [
+                    dict(
+                        workspace_id=WORKSPACE,
+                        user_id=EDITOR_USER,
+                        role=WorkspaceRole.EDITOR,
+                    ),
+                    dict(
+                        workspace_id=WORKSPACE,
+                        user_id=VIEWER_USER,
+                        role=WorkspaceRole.VIEWER,
+                    ),
+                ]
+            )
+        )
+        await session.execute(
+            insert(Conversation).values(
+                id=CONVERSATION,
+                workspace_id=WORKSPACE,
+                title="Conversation",
+                created_by_id=USER,
+            )
+        )
+        await session.execute(
+            insert(Thread).values(
+                id=THREAD, conversation_id=CONVERSATION, created_by_id=USER
             )
         )
         await session.commit()
@@ -497,3 +532,158 @@ async def test_concurrent_finalize_returns_the_winner(
     changed = request.model_copy(update={"title": "other.md"})
     with pytest.raises(ArtifactConflict):
         await publish_version(db, context, changed)
+
+
+@pytest.mark.parametrize(
+    ("user_id", "allowed"), [(EDITOR_USER, True), (VIEWER_USER, False)]
+)
+async def test_publication_requires_edit_role_but_reads_need_membership(
+    db: AsyncSession, context: IntegrationContext, user_id: UUID, allowed: bool
+) -> None:
+    _, version = await _published(db, context)
+    member = context.model_copy(update={"user_id": user_id, "grant_id": uuid4()})
+    if allowed:
+        await reserve_upload(db, member, _reserve())
+    else:
+        with pytest.raises(ArtifactAccessDenied):
+            await reserve_upload(db, member, _reserve())
+    # Any live member may still read.
+    await authorize_artifact(
+        db,
+        user_id=user_id,
+        organization_id=ORG,
+        artifact_id=version.artifact_id,
+        action="read",
+    )
+
+
+async def test_parent_pointer_swap_is_atomic(
+    db: AsyncSession, context: IntegrationContext, storage: MemoryArtifactStorage
+) -> None:
+    _, first = await _published(db, context)
+    reserve = _reserve()
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    request = _publish(
+        reserve,
+        upload.upload_id,
+        artifact_id=first.artifact_id,
+        expected_parent_version_id=first.version_id,
+    )
+    real_exists = storage.exists
+    moved_to = uuid4()
+
+    async def move_pointer(key: str) -> bool:
+        # A sibling finalize with the same parent commits between our read and our write.
+        async with async_sessionmaker(db.bind, expire_on_commit=False)() as other:  # type: ignore[arg-type]
+            await other.execute(
+                update(Artifact)
+                .where(Artifact.id == first.artifact_id)
+                .values(current_version_id=moved_to)
+            )
+            await other.commit()
+        return await real_exists(key)
+
+    storage.exists = move_pointer  # type: ignore[method-assign]
+    with pytest.raises(ArtifactConflict):
+        await publish_version(db, context, request)
+    storage.exists = real_exists  # type: ignore[method-assign]
+    artifact = await db.get(Artifact, first.artifact_id, populate_existing=True)
+    assert artifact is not None and artifact.current_version_id == moved_to
+    assert await db.scalar(select(func.count()).select_from(ArtifactVersion)) == 1
+
+
+async def test_deleted_thread_or_conversation_hides_references(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _published(db, context)
+    assert (
+        len(
+            await list_thread_artifacts(
+                db, user_id=USER, organization_id=ORG, thread_id=THREAD
+            )
+        )
+        == 1
+    )
+    await db.execute(
+        update(Conversation)
+        .where(Conversation.id == CONVERSATION)
+        .values(is_deleted=True)
+    )
+    await db.commit()
+    assert (
+        await list_thread_artifacts(
+            db, user_id=USER, organization_id=ORG, thread_id=THREAD
+        )
+        == []
+    )
+
+
+async def test_identical_concurrent_reservations_return_one_upload(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reserve = _reserve()
+    real_now = service._now
+    competitor: dict[str, UUID] = {}
+
+    def insert_competitor() -> datetime:
+        # Runs after the lookup and before our insert, like a racing identical retry.
+        if not competitor:
+            competitor["id"] = uuid4()
+            import sqlite3
+
+            path = str(db.bind.url.database)  # type: ignore[union-attr]
+            with sqlite3.connect(path) as raw:
+                raw.execute(
+                    "INSERT INTO artifact_uploads (id, organization_id, project_id, grant_id, publication_id, byte_size, mime_type, sha256, request_hash, expires_at, created_at, updated_at, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)",
+                    (
+                        str(competitor["id"]),
+                        str(ORG),
+                        str(PROJECT),
+                        str(context.grant_id),
+                        str(reserve.publication_id),
+                        reserve.byte_size,
+                        reserve.mime_type,
+                        reserve.sha256,
+                        service._hash(reserve.model_dump(mode="json")),
+                        (real_now() + timedelta(minutes=15)).isoformat(sep=" "),
+                    ),
+                )
+        return real_now()
+
+    monkeypatch.setattr(service, "_now", insert_competitor)
+    result = await reserve_upload(db, context, reserve)
+    assert result.upload_id == competitor["id"]
+    assert await db.scalar(select(func.count()).select_from(ArtifactUpload)) == 1
+
+
+async def test_storage_probe_failure_is_unavailable_not_500(
+    db: AsyncSession, context: IntegrationContext, storage: MemoryArtifactStorage
+) -> None:
+    reserve = _reserve()
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+
+    async def boom(key: str) -> bool:
+        raise RuntimeError("s3 auth expired")
+
+    storage.exists = boom  # type: ignore[method-assign]
+    with pytest.raises(ArtifactStorageUnavailable):
+        await publish_version(db, context, _publish(reserve, upload.upload_id))
+    assert await db.scalar(select(func.count()).select_from(ArtifactVersion)) == 0
+
+
+async def test_soft_deleted_reservation_cannot_be_used(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    reserve = _reserve()
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    await db.execute(
+        update(ArtifactUpload)
+        .where(ArtifactUpload.id == upload.upload_id)
+        .values(is_deleted=True)
+    )
+    await db.commit()
+    with pytest.raises(ArtifactNotFound):
+        await publish_version(db, context, _publish(reserve, upload.upload_id))

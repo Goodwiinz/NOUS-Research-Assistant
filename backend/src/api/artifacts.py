@@ -1,6 +1,7 @@
 """Artifact transport; the publication service owns authorization and commits."""
 
 from typing import cast
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -159,15 +160,22 @@ async def version_content(
         )
     except ArtifactError as error:
         raise _http(error) from error
-    filename = (
-        "".join(c if c.isalnum() or c in "._-" else "_" for c in title)[:120]
+    # ASCII fallback for the legacy parameter; the exact title goes in filename*.
+    ascii_name = (
+        "".join(
+            c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in title
+        )[:120]
         or "artifact"
+    )
+    disposition = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(title[:120], safe='')}"
     )
     return Response(
         content=content,
         media_type=mime_type,
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": disposition,
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },

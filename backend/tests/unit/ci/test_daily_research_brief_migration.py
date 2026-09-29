@@ -72,7 +72,7 @@ def test_revision_chains_from_agent_operations_and_is_the_only_head() -> None:
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     scripts = ScriptDirectory.from_config(config)
     heads = scripts.get_heads()
-    assert heads == ["merge_daily_harness_20260928"]
+    assert heads == ["aw01_artifact_workspace"]
     revisions = {
         revision.revision
         for revision in scripts.walk_revisions(base="base", head=heads[0])

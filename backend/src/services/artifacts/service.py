@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +24,9 @@ from src.models.artifact import (
     ArtifactVersion,
 )
 from src.models.collection import Collection
-from src.models.workspace import Workspace
+from src.models.conversation import Conversation
+from src.models.thread import Thread
+from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.artifact import (
     ArtifactAccessDenied,
     ArtifactConflict,
@@ -91,13 +93,37 @@ def _normalize_mime(mime_type: str) -> str:
     return base if base in ALLOWED_MIME_TYPES else "application/octet-stream"
 
 
-async def _authorize_context(db: AsyncSession, context: IntegrationContext) -> None:
+EDIT_ROLES = (WorkspaceRole.OWNER, WorkspaceRole.ADMIN, WorkspaceRole.EDITOR)
+
+
+async def _authorize_context(
+    db: AsyncSession, context: IntegrationContext, *, edit: bool = False
+) -> None:
+    """Membership authorizes reads; publication also needs Workspace.can_user_edit."""
     try:
         await authorized_project(
             db, context.user_id, context.organization_id, context.project_id
         )
     except IntegrationAccessDenied as error:
         raise ArtifactAccessDenied() from error
+    if not edit:
+        return
+    editor = exists().where(
+        WorkspaceMember.workspace_id == Workspace.id,
+        WorkspaceMember.user_id == context.user_id,
+        WorkspaceMember.is_deleted.is_(False),
+        WorkspaceMember.role.in_(EDIT_ROLES),
+    )
+    allowed = await db.scalar(
+        select(Workspace.id)
+        .join(Collection, Collection.workspace_id == Workspace.id)
+        .where(
+            Collection.id == context.project_id,
+            or_(Workspace.owner_id == context.user_id, editor),
+        )
+    )
+    if allowed is None:
+        raise ArtifactAccessDenied()
 
 
 async def _upload_for(
@@ -109,6 +135,7 @@ async def _upload_for(
             ArtifactUpload.grant_id == context.grant_id,
             ArtifactUpload.organization_id == context.organization_id,
             ArtifactUpload.project_id == context.project_id,
+            ArtifactUpload.is_deleted.is_(False),
         )
     )
     if upload is None:
@@ -133,22 +160,24 @@ def _version_dto(version: ArtifactVersion) -> ArtifactVersionDTO:
 async def reserve_upload(
     db: AsyncSession, context: IntegrationContext, request: ReserveArtifactUploadRequest
 ) -> ArtifactUploadDTO:
-    await _authorize_context(db, context)
+    await _authorize_context(db, context, edit=True)
     if request.byte_size > MAX_ARTIFACT_BYTES:
         raise ArtifactTooLarge()
     request_hash = _hash(request.model_dump(mode="json"))
-    existing = await db.scalar(
-        select(ArtifactUpload).where(
-            ArtifactUpload.grant_id == context.grant_id,
-            ArtifactUpload.publication_id == request.publication_id,
-        )
-    )
+    existing = await _existing_reservation(db, context, request.publication_id)
     if existing is not None:
         if existing.request_hash != request_hash:
             raise ArtifactConflict()
         return ArtifactUploadDTO(
             upload_id=existing.id, expires_at=_aware(existing.expires_at)
         )
+    # Serialize concurrent reservations for one project; SQLite ignores the
+    # lock, PostgreSQL holds it until commit so the sums below cannot race.
+    await db.execute(
+        select(Collection.id)
+        .where(Collection.id == context.project_id)
+        .with_for_update()
+    )
     # Quota counts live committed versions plus reservations that could still
     # land: unexpired ones, and stored-but-unfinalized ones whose bytes exist
     # until the Task 1b sweeper removes them.
@@ -190,14 +219,39 @@ async def reserve_upload(
         expires_at=now + UPLOAD_TTL,
     )
     db.add(upload)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # An identical retry raced us past the lookup; return its reservation.
+        await db.rollback()
+        if upload in db:
+            db.expunge(upload)
+        with db.no_autoflush:
+            winner = await _existing_reservation(db, context, request.publication_id)
+        if winner is None or winner.request_hash != request_hash:
+            raise ArtifactConflict()
+        return ArtifactUploadDTO(
+            upload_id=winner.id, expires_at=_aware(winner.expires_at)
+        )
     return ArtifactUploadDTO(upload_id=upload.id, expires_at=upload.expires_at)
+
+
+async def _existing_reservation(
+    db: AsyncSession, context: IntegrationContext, publication_id: UUID
+) -> ArtifactUpload | None:
+    return await db.scalar(
+        select(ArtifactUpload).where(
+            ArtifactUpload.grant_id == context.grant_id,
+            ArtifactUpload.publication_id == publication_id,
+            ArtifactUpload.is_deleted.is_(False),
+        )
+    )
 
 
 async def store_upload(
     db: AsyncSession, context: IntegrationContext, upload_id: UUID, content: bytes
 ) -> None:
-    await _authorize_context(db, context)
+    await _authorize_context(db, context, edit=True)
     upload = await _upload_for(db, context, upload_id)
     if (
         len(content) != upload.byte_size
@@ -222,7 +276,7 @@ async def store_upload(
 async def publish_version(
     db: AsyncSession, context: IntegrationContext, request: PublishVersionRequest
 ) -> ArtifactVersionDTO:
-    await _authorize_context(db, context)
+    await _authorize_context(db, context, edit=True)
     upload = await _upload_for(db, context, request.upload_id)
     if upload.publication_id != request.publication_id or upload.storage_key is None:
         raise ArtifactNotFound()
@@ -258,9 +312,14 @@ async def publish_version(
             title=request.title,
         )
         db.add(artifact)
-    # Verify the blob before any metadata commits; a missing object keeps the
-    # current pointer unchanged.
-    if not await get_artifact_storage().exists(upload.storage_key):
+    # Verify the blob before any metadata commits; a missing object or a
+    # failing probe keeps the current pointer unchanged.
+    try:
+        present = await get_artifact_storage().exists(upload.storage_key)
+    except Exception as error:  # noqa: BLE001 - storage backends raise arbitrary errors
+        logger.warning("artifact blob probe failed", exc_info=error)
+        present = False
+    if not present:
         await db.rollback()
         raise ArtifactStorageUnavailable()
     version = ArtifactVersion(
@@ -288,12 +347,33 @@ async def publish_version(
     )
     db.add(version)
     db.add(reference)
-    artifact.current_version_id = version.id
-    artifact.title = request.title
     upload.version_id = version.id
     upload.publish_hash = publish_hash
     upload_pk = upload.id  # rollback expires the row; keep the key as a plain value
     try:
+        await db.flush()
+        # Compare-and-swap on the parent pointer: two finalizes that both read
+        # the same parent cannot both win. SQLite and PostgreSQL both report
+        # the matched row count.
+        expected = request.expected_parent_version_id
+        moved = await db.execute(
+            update(Artifact)
+            .where(
+                Artifact.id == artifact.id,
+                (
+                    Artifact.current_version_id.is_(None)
+                    if expected is None
+                    else Artifact.current_version_id == expected
+                ),
+            )
+            .values(current_version_id=version.id, title=request.title)
+        )
+        if moved.rowcount != 1:
+            await db.rollback()
+            for pending in (version, reference, artifact):
+                if pending in db:
+                    db.expunge(pending)
+            raise ArtifactConflict()
         await db.commit()
     except IntegrityError:
         # A concurrent finalize won the unique(upload_id) race; the loser
@@ -352,13 +432,19 @@ async def list_thread_artifacts(
             .join(Artifact, Artifact.id == ArtifactVersion.artifact_id)
             .join(Collection, Collection.id == Artifact.project_id)
             .join(Workspace, Workspace.id == Collection.workspace_id)
+            .join(Thread, Thread.id == ArtifactReference.thread_id)
+            .join(Conversation, Conversation.id == Thread.conversation_id)
             .where(
                 ArtifactReference.thread_id == thread_id,
+                ArtifactReference.is_deleted.is_(False),
                 Artifact.organization_id == organization_id,
                 Artifact.is_deleted.is_(False),
                 ArtifactVersion.is_deleted.is_(False),
                 Collection.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
+                # Thread-side ancestors: soft-delete does not cascade.
+                Thread.is_deleted.is_(False),
+                Conversation.is_deleted.is_(False),
             )
             .order_by(ArtifactVersion.created_at, ArtifactVersion.id)
         )

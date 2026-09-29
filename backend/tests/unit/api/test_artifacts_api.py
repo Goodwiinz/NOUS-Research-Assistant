@@ -95,7 +95,7 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     ) -> tuple[bytes, str, str]:
         CALLS.append(("content", (user_id, organization_id, version_id)))
         if version_id == VERSION:
-            return b"report\n", "text/markdown", 'weird "name".md'
+            return b"report\n", "text/markdown", 'weird "name" 报告.md'
         raise ArtifactStorageUnavailable()
 
     monkeypatch.setattr(artifacts, "reserve_upload", reserve)
