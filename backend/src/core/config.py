@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     """Application settings"""
 
     HARNESS_BRIDGE_ENABLED: bool = False
+    # Kill switch for the scoped integration read gateway (/integrations/tools).
+    NOUS_MCP_ENABLED: bool = False
 
     # Application
     APP_NAME: str = "Multimodal Enterprise RAG System"

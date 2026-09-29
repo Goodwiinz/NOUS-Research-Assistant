@@ -15053,6 +15053,88 @@
         "title": "ToneOption",
         "type": "string"
       },
+      "ToolDescriptorDTO": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "input_schema"
+        ],
+        "title": "ToolDescriptorDTO",
+        "type": "object"
+      },
+      "ToolInvocation": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "invocation_id": {
+            "format": "uuid",
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "tool_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "invocation_id"
+        ],
+        "title": "ToolInvocation",
+        "type": "object"
+      },
+      "ToolResult": {
+        "properties": {
+          "content": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Content",
+            "type": "array"
+          },
+          "is_error": {
+            "title": "Is Error",
+            "type": "boolean"
+          },
+          "source_refs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Source Refs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "content",
+          "is_error",
+          "source_refs"
+        ],
+        "title": "ToolResult",
+        "type": "object"
+      },
       "TriggerExtractionRequest": {
         "description": "Request to trigger extraction on selected documents.",
         "properties": {
@@ -28512,6 +28594,84 @@
         ],
         "summary": "Renew Grant",
         "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/tools": {
+      "get": {
+        "operationId": "list_tools_api_v1_integrations_tools_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ToolDescriptorDTO"
+                  },
+                  "title": "Response List Tools Api V1 Integrations Tools Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tools",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/tools/read": {
+      "post": {
+        "operationId": "read_tool_api_v1_integrations_tools_read_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Tool",
+        "tags": [
+          "integrations",
           "integrations"
         ]
       }
