@@ -1415,7 +1415,14 @@ class DraftGenerationService:
         uncited = review.get("uncited_assertions", [])
         if not isinstance(uncited, list):
             raise ValueError("Citation review returned invalid uncited assertions")
-        if uncited:
+        # A reviewer that declares its factual classification incomplete (the
+        # prose heuristic) flags uncited sentences as observations kept on the
+        # review, not as a veto. Absent that declaration, stay fail-closed.
+        classification_incomplete = (
+            isinstance(coverage, dict)
+            and coverage.get("factual_classification_complete") is False
+        )
+        if uncited and not classification_incomplete:
             raise ValueError(
                 f"Citation review blocked persistence: {len(uncited)} uncited factual assertion(s)"
             )
