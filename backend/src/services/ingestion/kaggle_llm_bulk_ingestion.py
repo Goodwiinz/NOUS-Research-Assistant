@@ -21,11 +21,12 @@ COST WARNING: Processing 500k papers with LLM extraction is expensive!
 import asyncio
 import json
 import logging
-import os
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TypedDict
+
+from src.core.neo4j_auth import get_neo4j_auth
 
 logger = logging.getLogger(__name__)
 
@@ -107,13 +108,13 @@ class KaggleLLMBulkIngestionService:
         if self._neo4j_driver is None:
             from neo4j import AsyncGraphDatabase
 
-            neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-            neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-            neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+            from src.core.neo4j_auth import get_neo4j_auth
+
+            auth = get_neo4j_auth()
 
             self._neo4j_driver = AsyncGraphDatabase.driver(
-                neo4j_uri,
-                auth=(neo4j_user, neo4j_password),
+                auth.uri,
+                auth=(auth.user, auth.password),
                 max_connection_lifetime=300,
                 max_connection_pool_size=50,
                 connection_acquisition_timeout=30,

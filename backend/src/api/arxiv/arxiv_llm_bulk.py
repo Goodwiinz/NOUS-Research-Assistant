@@ -357,16 +357,16 @@ async def get_llm_ingestion_stats():
     - Relationship counts by type
     - Top categories
     """
-    import os
-
     from neo4j import AsyncGraphDatabase
 
-    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-    neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+    from src.core.neo4j_auth import get_neo4j_auth
+
+    auth = get_neo4j_auth()
 
     try:
-        driver = AsyncGraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        driver = AsyncGraphDatabase.driver(
+            auth.uri, auth=(auth.user, auth.password)
+        )
 
         async with driver.session() as session:
             # Get LLM-processed document count
