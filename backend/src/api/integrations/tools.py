@@ -7,11 +7,7 @@ from src.api.integrations.auth import require_integration_context
 from src.core.config import settings
 from src.core.database import get_db
 from src.schemas.integration_context import IntegrationContext
-from src.schemas.integration_tools import (
-    ToolDescriptorDTO,
-    ToolInvocation,
-    ToolResult,
-)
+from src.schemas.integration_tools import ToolDescriptorDTO, ToolInvocation, ToolResult
 from src.services.integrations.context import IntegrationAccessDenied
 from src.services.integrations.read_tools import (
     ToolArgumentError,

@@ -160,9 +160,13 @@ async def test_rejected_invocations_never_reach_adapters(
 async def test_search_is_project_scoped(
     db: AsyncSession, context: IntegrationContext
 ) -> None:
-    result = await invoke_read(db, context, _invocation("search_documents", query="retrieval"))
+    result = await invoke_read(
+        db, context, _invocation("search_documents", query="retrieval")
+    )
     assert result.is_error is False
-    assert [doc["id"] for doc in result.content[0]["documents"]] == [str(DOC_IN_PROJECT)]
+    assert [doc["id"] for doc in result.content[0]["documents"]] == [
+        str(DOC_IN_PROJECT)
+    ]
     assert result.source_refs == [{"document_id": str(DOC_IN_PROJECT)}]
 
 
@@ -209,15 +213,28 @@ async def test_selected_document_scope_never_broadens(
     retrieval.assert_not_awaited()
 
 
+def _real_chunk(document_id: str | None, text: str) -> dict[str, Any]:
+    # Mirrors tools_impl._tool_do_kb_retrieve's chunks_payload shape.
+    return {
+        "text": text,
+        "score": 0.5,
+        "score_source": "upstream",
+        "document_id": document_id,
+        "title": "Doc",
+        "metadata": {"item_name": "internal-storage-key.txt"},
+    }
+
+
 async def test_valid_retrieval_preserves_source_identity(
     db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     retrieval = AsyncMock(
         return_value={
             "chunks": [
-                {"document_id": str(DOC_IN_PROJECT), "chunk_id": "c1", "text": "hit"}
+                _real_chunk(str(DOC_IN_PROJECT), "hit"),
+                _real_chunk(None, "unresolved"),
             ],
-            "total": 1,
+            "total": 2,
         }
     )
     monkeypatch.setattr(read_tools, "_tool_do_kb_retrieve", retrieval)
@@ -227,10 +244,64 @@ async def test_valid_retrieval_preserves_source_identity(
         _invocation("do_kb_retrieve", query="q", document_ids=[str(DOC_IN_PROJECT)]),
     )
     assert result.is_error is False
-    assert result.source_refs == [{"document_id": str(DOC_IN_PROJECT), "chunk_id": "c1"}]
+    # Only observed identities; an unresolved chunk yields no reference.
+    assert result.source_refs == [{"document_id": str(DOC_IN_PROJECT)}]
+    # Provider metadata (storage keys) never leaves the gateway.
+    assert all("metadata" not in chunk for chunk in result.content[0]["chunks"])
+    assert retrieval.await_args is not None
     args = retrieval.await_args.args[0]
     assert args["project_id"] == str(PROJECT)
     assert args["document_ids"] == [str(DOC_IN_PROJECT)]
+
+
+async def test_scoped_limitation_from_tool_is_error(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_do_kb_retrieve",
+        AsyncMock(
+            return_value={
+                "chunks": [],
+                "total": 0,
+                "source": "do_kb",
+                "reason": "scoped_retrieval_unavailable",
+                "evidence_mode": False,
+            }
+        ),
+    )
+    result = await invoke_read(
+        db,
+        context,
+        _invocation("do_kb_retrieve", query="q", document_ids=[str(DOC_IN_PROJECT)]),
+    )
+    assert result.is_error is True
+    assert result.source_refs == []
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        _invocation("search_documents", query={"$gt": ""}),
+        _invocation("search_documents", query="x", max_results=float("inf")),
+        _invocation("get_current_draft", include_content="false"),
+        _invocation("do_kb_retrieve", query="q"),
+    ],
+    ids=["dict-query", "infinite-limit", "string-bool", "retrieve-without-ids"],
+)
+async def test_wrongly_typed_arguments_are_rejected(
+    db: AsyncSession, context: IntegrationContext, invocation: ToolInvocation
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(db, context, invocation)
+
+
+def test_catalog_bounds_match_enforced_limits() -> None:
+    by_name = {tool.name: tool.input_schema for tool in list_read_tools()}
+    assert by_name["list_project_documents"]["properties"]["limit"]["maximum"] == 50
+    assert by_name["search_documents"]["properties"]["max_results"]["maximum"] == 50
+    assert "document_ids" in by_name["do_kb_retrieve"]["required"]
+    assert by_name["do_kb_retrieve"]["properties"]["document_ids"]["maxItems"] == 20
 
 
 async def test_current_draft_reports_draft_id(
@@ -248,6 +319,28 @@ async def test_current_draft_reports_draft_id(
     assert result.content[0]["draft"]["id"] == str(draft_id)
     assert "content" not in result.content[0]["draft"]
     assert result.source_refs == [{"draft_id": str(draft_id)}]
+
+
+async def test_large_draft_content_is_truncated_not_failed(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await db.execute(
+        insert(GeneratedDraft).values(
+            id=uuid4(),
+            project_id=PROJECT,
+            version=1,
+            title="Big",
+            content="x" * 100_000,
+        )
+    )
+    await db.commit()
+    result = await invoke_read(
+        db, context, _invocation("get_current_draft", include_content=True)
+    )
+    assert result.is_error is False
+    draft = result.content[0]["draft"]
+    assert draft["content_truncated"] is True
+    assert 0 < len(draft["content"]) < 100_000
 
 
 async def test_oversized_result_is_structured_error(

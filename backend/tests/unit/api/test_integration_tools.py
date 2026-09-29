@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 from uuid import uuid4
 
 import pytest
@@ -71,7 +71,7 @@ async def _completed(value: Any) -> Any:
 
 
 @pytest.fixture
-def client(app: FastAPI) -> TestClient:
+def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -101,11 +101,17 @@ def test_jwt_actor_must_match_grant_actor(app: FastAPI, client: TestClient) -> N
     assert _read(client).status_code == 403
 
 
-def test_browser_token_or_missing_grant_is_denied(app: FastAPI, client: TestClient) -> None:
+def test_browser_token_or_missing_grant_is_denied(
+    app: FastAPI, client: TestClient
+) -> None:
     assert _read(client).headers is not None
     response = client.post(
         "/api/v1/integrations/tools/read",
-        json={"tool_name": "list_project_documents", "arguments": {}, "invocation_id": str(uuid4())},
+        json={
+            "tool_name": "list_project_documents",
+            "arguments": {},
+            "invocation_id": str(uuid4()),
+        },
         headers={"Authorization": "Bearer cli-jwt"},
     )
     assert response.status_code == 403
@@ -115,18 +121,22 @@ def test_browser_token_or_missing_grant_is_denied(app: FastAPI, client: TestClie
     assert _read(client).status_code == 403
 
 
-def test_identity_argument_is_unprocessable(app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_argument_error_maps_to_422(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from src.api.integrations import tools
     from src.services.integrations.read_tools import ToolArgumentError
 
     async def reject(*_a: Any, **_k: Any) -> Any:
-        raise ToolArgumentError("identity arguments are server-derived")
+        raise ToolArgumentError("unknown arguments")
 
     monkeypatch.setattr(tools, "invoke_read", reject)
     assert _read(client, arguments={"project_id": str(PROJECT)}).status_code == 422
 
 
-def test_disabled_flag_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_disabled_flag_returns_503(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from src.core.config import settings
 
     monkeypatch.setattr(settings, "NOUS_MCP_ENABLED", False)

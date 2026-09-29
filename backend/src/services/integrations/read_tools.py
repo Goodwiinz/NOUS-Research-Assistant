@@ -12,6 +12,7 @@ import json
 from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,11 +20,7 @@ from src.models.collection import CollectionDocument
 from src.models.document import Document
 from src.models.user import User
 from src.schemas.integration_context import IntegrationContext
-from src.schemas.integration_tools import (
-    ToolDescriptorDTO,
-    ToolInvocation,
-    ToolResult,
-)
+from src.schemas.integration_tools import ToolDescriptorDTO, ToolInvocation, ToolResult
 from src.services.agent.tool_helpers import _escape_like, _verify_project_ownership
 from src.services.agent.tools_impl import (
     _tool_do_kb_retrieve,
@@ -44,44 +41,73 @@ IDENTITY_ARGUMENTS = frozenset(
 MAX_RESULTS = 50
 MAX_DOCUMENT_IDS = 20
 MAX_RESULT_BYTES = 64 * 1024
+# Keeps a content-bearing draft under MAX_RESULT_BYTES after JSON escaping.
+MAX_DRAFT_CONTENT_CHARS = 32_000
+# The advertised schema must match what the gateway enforces; the agent-facing
+# registry descriptions promise wider limits (e.g. list limit 500).
+_SCHEMA_OVERRIDES: dict[str, dict[str, dict[str, Any]]] = {
+    "search_documents": {"max_results": {"maximum": MAX_RESULTS}},
+    "list_project_documents": {
+        "limit": {"maximum": MAX_RESULTS, "default": MAX_RESULTS}
+    },
+    "do_kb_retrieve": {
+        "top_k": {"maximum": MAX_DOCUMENT_IDS},
+        "document_ids": {
+            "type": "array",
+            "items": {"type": "string", "format": "uuid"},
+            "minItems": 1,
+            "maxItems": MAX_DOCUMENT_IDS,
+            "description": "Project document UUIDs to retrieve from (required).",
+        },
+    },
+}
+_EXTRA_REQUIRED = {"do_kb_retrieve": ["document_ids"]}
 
 
 class ToolArgumentError(ValueError):
     """Invocation shape rejected before any adapter runs (HTTP 422)."""
 
 
-def _registry_schema(name: str) -> tuple[str, dict[str, Any]]:
+def _registry_schema(name: str) -> tuple[str, dict[str, Any], type[BaseModel]]:
     from src.services.agent.tools import TOOL_REGISTRY
 
     descriptor = TOOL_REGISTRY.descriptor(name)
     assert descriptor is not None, name
-    schema = dict(descriptor.tool.tool_call_schema.model_json_schema())
+    model = descriptor.tool.tool_call_schema
+    assert isinstance(model, type) and issubclass(model, BaseModel), name
+    schema = dict(model.model_json_schema())
     properties = {
         key: value
         for key, value in schema.get("properties", {}).items()
         if key not in IDENTITY_ARGUMENTS
     }
+    for key, override in _SCHEMA_OVERRIDES.get(name, {}).items():
+        properties[key] = (
+            override if "type" in override else {**properties[key], **override}
+        )
     schema["properties"] = properties
     schema["required"] = [
         key for key in schema.get("required", []) if key in properties
-    ]
+    ] + _EXTRA_REQUIRED.get(name, [])
     schema["additionalProperties"] = False
-    return descriptor.tool.description, schema
+    return descriptor.tool.description, schema, model
 
 
 def list_read_tools() -> list[ToolDescriptorDTO]:
     return [
         ToolDescriptorDTO(name=name, description=desc_, input_schema=schema)
         for name in READ_TOOL_NAMES
-        for desc_, schema in (_registry_schema(name),)
+        for desc_, schema, _model in (_registry_schema(name),)
     ]
 
 
 def _validate_arguments(invocation: ToolInvocation) -> dict[str, Any]:
+    from pydantic import ValidationError
+
     if invocation.tool_name not in READ_TOOL_NAMES:
         raise ToolArgumentError("tool is not available to integrations")
     arguments = invocation.arguments
-    _, schema = _registry_schema(invocation.tool_name)
+    _, schema, model = _registry_schema(invocation.tool_name)
     # Identity keys were stripped from the advertised schema, so a caller
     # supplying project_id/user_id/... is rejected here as an unknown argument.
     allowed = set(schema["properties"])
@@ -89,13 +115,18 @@ def _validate_arguments(invocation: ToolInvocation) -> dict[str, Any]:
         raise ToolArgumentError("unknown arguments")
     if set(schema["required"]) - set(arguments):
         raise ToolArgumentError("missing required arguments")
+    try:
+        # strict: no "false"->bool, float->int or dict->str coercion.
+        model.model_validate(arguments, strict=True)
+    except ValidationError as error:
+        raise ToolArgumentError("invalid argument types") from error
     return arguments
 
 
 def _clamp(value: Any, lo: int, hi: int, default: int) -> int:
     try:
         return max(lo, min(int(value), hi))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -170,10 +201,10 @@ def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if doc.get("id"):
             refs.append({"document_id": str(doc["id"])})
     for chunk in payload.get("chunks") or []:
-        ref: dict[str, Any] = {"document_id": chunk.get("document_id")}
-        if chunk.get("chunk_id"):
-            ref["chunk_id"] = chunk["chunk_id"]
-        refs.append(ref)
+        # do_kb leaves document_id None when a chunk cannot be resolved to a
+        # Document row; an unresolved chunk is not an observed identity.
+        if chunk.get("document_id"):
+            refs.append({"document_id": str(chunk["document_id"])})
     draft = payload.get("draft")
     if isinstance(draft, dict) and draft.get("id"):
         refs.append({"draft_id": str(draft["id"])})
@@ -208,7 +239,9 @@ async def invoke_read(
         payload = await _tool_list_project_documents(
             {
                 "project_id": project_id,
-                "limit": _clamp(arguments.get("limit", MAX_RESULTS), 1, MAX_RESULTS, MAX_RESULTS),
+                "limit": _clamp(
+                    arguments.get("limit", MAX_RESULTS), 1, MAX_RESULTS, MAX_RESULTS
+                ),
                 "offset": _clamp(arguments.get("offset", 0), 0, 2**31 - 1, 0),
             },
             db,
@@ -242,6 +275,12 @@ async def invoke_read(
             db,
             user,
         )
+        # Provider metadata carries storage item names; only excerpts and
+        # observed identities leave the gateway.
+        payload["chunks"] = [
+            {key: chunk.get(key) for key in ("document_id", "title", "text", "score")}
+            for chunk in payload.get("chunks") or []
+        ]
     else:
         payload = await _tool_get_current_draft(
             {
@@ -251,13 +290,20 @@ async def invoke_read(
             db,
             user,
         )
+        draft = payload.get("draft")
+        if isinstance(draft, dict) and isinstance(draft.get("content"), str):
+            draft["content_truncated"] = len(draft["content"]) > MAX_DRAFT_CONTENT_CHARS
+            draft["content"] = draft["content"][:MAX_DRAFT_CONTENT_CHARS]
 
     if len(json.dumps(payload, default=str).encode()) > MAX_RESULT_BYTES:
         return ToolResult(
             content=[{"error": "result_too_large"}], is_error=True, source_refs=[]
         )
+    # do_kb reports scoped failures as a "reason" with no chunks rather than
+    # an "error" key; both are failures to the caller.
+    is_error = "error" in payload or "reason" in payload
     return ToolResult(
         content=[payload],
-        is_error="error" in payload,
-        source_refs=_source_refs(payload),
+        is_error=is_error,
+        source_refs=[] if is_error else _source_refs(payload),
     )
