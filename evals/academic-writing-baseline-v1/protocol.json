@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.0",
+  "id": "academic-writing-baseline-v1",
+  "baseline_status": {
+    "status": "not_established",
+    "required_run": "Run all 14 declared trials under this exact protocol before comparison."
+  },
+  "corpora": {
+    "development": "corpora/development.json",
+    "held_out": "corpora/held-out.json"
+  },
+  "calibration_fixture": "semantic-judge-calibration.json",
+  "supported_seeds": [
+    101,
+    103,
+    107,
+    109,
+    113
+  ],
+  "trial_plan": [
+    {
+      "kind": "canonical",
+      "task_id": "dev-canonical-comparison",
+      "seeds": [
+        101,
+        103,
+        107,
+        109,
+        113
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "dev-unsupported-number",
+      "seeds": [
+        101
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "dev-fabricated-id",
+      "seeds": [
+        103
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "dev-missing-metadata",
+      "seeds": [
+        107
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "dev-invalid-revision",
+      "seeds": [
+        109
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "held-contradictory-sources",
+      "seeds": [
+        101
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "held-late-page-evidence",
+      "seeds": [
+        103
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "held-eleven-sources",
+      "seeds": [
+        107
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "held-hijacked-id",
+      "seeds": [
+        109
+      ]
+    },
+    {
+      "kind": "near_boundary",
+      "task_id": "held-sparse-citations",
+      "seeds": [
+        113
+      ]
+    }
+  ],
+  "pass_criteria": {
+    "objective": "Every scored trial retains exact draft, review, citation and export evidence.",
+    "semantic": "At least four of five canonical trials pass independent review; every denominator is reported.",
+    "authorization": "Collaborator access succeeds and foreign-project identifiers fail closed.",
+    "invalid_revision": "A blocked revision retains its review and leaves the current valid draft identity and hash unchanged.",
+    "infrastructure": "Provider, database, harness and judge failures are reported outside product pass/fail counts."
+  }
+}
