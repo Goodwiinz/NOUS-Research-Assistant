@@ -20,11 +20,13 @@ by name in ``refresh_realtime_views()``). It is recreated ``WITH NO DATA``
 and without indexes, matching the live database (unpopulated, no indexes;
 the indexes were dropped in supabase/migrations/20260305002500), and the
 browser-role SELECT revoke from supabase/migrations/20260304234900 is
-re-applied because a recreated relation loses its grants.
+re-applied because a recreated relation loses its grants. On a fresh
+migrate-only database the view (and ``document_processing_stages``, which it
+reads) does not exist, so it is only dropped and recreated when it was present.
 """
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 # revision identifiers, used by Alembic.
 revision = "b7c4e1d9a2f6"
@@ -91,7 +93,21 @@ _REALTIME_DOCUMENT_DASHBOARD_SELECT = """
 
 
 def upgrade() -> None:
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS public.realtime_document_dashboard")
+    if context.is_offline_mode():
+        # No connection to introspect offline (--sql); render the full path.
+        had_view = True
+    else:
+        had_view = bool(
+            op.get_bind()
+            .execute(
+                sa.text(
+                    "SELECT to_regclass('public.realtime_document_dashboard') IS NOT NULL"
+                )
+            )
+            .scalar()
+        )
+    if had_view:
+        op.execute("DROP MATERIALIZED VIEW public.realtime_document_dashboard")
     for column in ("first_name", "last_name"):
         op.alter_column(
             "users",
@@ -100,6 +116,8 @@ def upgrade() -> None:
             existing_type=sa.String(length=100),
             existing_nullable=False,
         )
+    if not had_view:
+        return
     op.execute(
         "CREATE MATERIALIZED VIEW public.realtime_document_dashboard AS"
         + _REALTIME_DOCUMENT_DASHBOARD_SELECT
