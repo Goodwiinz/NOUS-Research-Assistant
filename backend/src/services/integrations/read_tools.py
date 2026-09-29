@@ -9,7 +9,7 @@ evidence that a registry tool is safe to expose outside the agent graph.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -73,8 +73,12 @@ def _registry_schema(name: str) -> tuple[str, dict[str, Any], type[BaseModel]]:
 
     descriptor = TOOL_REGISTRY.descriptor(name)
     assert descriptor is not None, name
-    model = descriptor.tool.tool_call_schema
-    assert isinstance(model, type) and issubclass(model, BaseModel), name
+    raw_schema = descriptor.tool.tool_call_schema
+    # tool_call_schema is typed as a v2/v1 model class or dict; the registry
+    # only holds decorated @tool wrappers, which always yield a v2 class.
+    if not (isinstance(raw_schema, type) and issubclass(raw_schema, BaseModel)):
+        raise TypeError(f"{name} has no pydantic v2 call schema")
+    model = cast(type[BaseModel], raw_schema)
     schema = dict(model.model_json_schema())
     properties = {
         key: value
