@@ -124,6 +124,22 @@ async def test_connections_nonexistent_target_user_404(monkeypatch):
     assert ei.value.status_code == 404
 
 
+async def test_connections_deactivated_target_user_404(monkeypatch):
+    """Admin + deactivated/soft-deleted target -> 404 (liveness filters in helper)."""
+    manager = SimpleNamespace(
+        get_user_connections=Mock(return_value=[]),
+        active_connections={},
+    )
+    monkeypatch.setattr(ws, "connection_manager", manager)
+    _patch_org_lookup(monkeypatch, None)
+
+    admin = _user(UserRole.ADMIN, org_id=ORG_A)
+    with pytest.raises(HTTPException) as ei:
+        await ws.get_user_connections(user_id=TARGET, current_user=admin)
+
+    assert ei.value.status_code == 404
+
+
 async def test_connections_null_org_admin_denied(monkeypatch):
     """A null-org admin has no tenant to match against -> fail closed 403."""
     manager = SimpleNamespace(

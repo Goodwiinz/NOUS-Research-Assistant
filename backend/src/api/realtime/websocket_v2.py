@@ -127,7 +127,11 @@ async def _get_user_organization_id(
     the user does not exist (caller maps that to 404) or on any DB error
     (fail closed).
     """
-    stmt = select(User.organization_id).where(User.id == user_id)
+    stmt = select(User.organization_id).where(
+        User.id == user_id,
+        User.is_active == True,  # noqa: E712 - mirror get_current_user liveness filters
+        User.is_deleted == False,  # noqa: E712
+    )
     try:
         async with session_factory() as db:
             org_id = (await db.execute(stmt)).scalars().first()
