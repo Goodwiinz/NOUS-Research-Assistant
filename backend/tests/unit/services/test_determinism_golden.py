@@ -239,6 +239,7 @@ async def test_prompt_keeps_evidence_but_does_not_mutate_retrieval_audit() -> No
     page["imported_source_ids"] = [str(uuid4())]
     page["request"]["requested_at"] = "2026-01-01T00:00:00+00:00"
     page["response"]["received_at"] = "2026-01-01T00:01:00+00:00"
+    page["attempt_history"] = [{"attempt_id": str(uuid4()), "page": {}}]
     record = other_retrieval["source_records"][0]
     record["source_id"] = str(uuid4())
     record["metadata"]["provenance"][0]["retrieved_at"] = "2026-01-01T00:00:00+00:00"

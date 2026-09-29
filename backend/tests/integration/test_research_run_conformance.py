@@ -314,11 +314,14 @@ async def test_search_page_receipts_survive_reopen_and_concurrent_replay(
     }
     execution_id = "5c4e80a8-22bc-4f0b-8803-7c4c8db3917f"
     page_id = "54c48b54-54a0-5275-9466-89ed31731170"
+    second_page_id = "0f3c8d1a-9b52-5f7e-8a41-2d6c3e9b7a10"
 
-    def page(attempt_id: str, status: str, query: str) -> dict[str, Any]:
+    def page(
+        attempt_id: str, status: str, query: str, *, index: int = 0
+    ) -> dict[str, Any]:
         return {
-            "page_id": page_id,
-            "page_index": 0,
+            "page_id": page_id if index == 0 else second_page_id,
+            "page_index": index,
             "attempt_id": attempt_id,
             "page_status": status,
             "request": {"method": "GET", "params": {"query": query}},
@@ -341,9 +344,12 @@ async def test_search_page_receipts_survive_reopen_and_concurrent_replay(
                 page=page_value,
             )
 
+    # Distinct concurrent pages: without the run-row lock one read-modify-write
+    # overwrites the other and a page disappears. Mutation guard: drop
+    # with_for_update in SearchReceiptJournal._locked_run and this must fail.
     await asyncio.gather(
         persist(page("attempt-1", "requested", "approved query")),
-        persist(page("attempt-1", "requested", "approved query")),
+        persist(page("attempt-1", "requested", "approved query", index=1)),
     )
     await persist(page("attempt-1", "completed", "approved query"))
     await persist(page("attempt-2", "requested", "retry query"))
@@ -352,7 +358,9 @@ async def test_search_page_receipts_survive_reopen_and_concurrent_replay(
         run = await db.get(ResearchRun, run_id)
         assert run is not None
         journal = run.reproducibility_manifest["_search_receipts_v1"]
-        stored = journal["executions"][execution_id]["pages"][page_id]
+        pages = journal["executions"][execution_id]["pages"]
+        assert set(pages) == {page_id, second_page_id}
+        stored = pages[page_id]
         assert len(stored["attempts"]) == 2
         assert stored["attempts"][0]["page"]["page_status"] == "completed"
         assert (

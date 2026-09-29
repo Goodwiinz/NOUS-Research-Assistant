@@ -457,6 +457,39 @@ class TestStreamEndpointSuccess:
         assert captured_start_from["value"] == 0
         stream_app.dependency_overrides.pop(get_db, None)
 
+    def test_stream_skips_step_with_unrelated_quality_failure(
+        self, stream_app, stream_client
+    ):
+        """Only an all-providers-failed search step is retried on resume."""
+        run_id = uuid.uuid4()
+        bp_id = uuid.uuid4()
+        mock_run = _make_run(id=run_id, blueprint_id=bp_id, status="paused")
+        mock_bp = _make_blueprint(
+            id=bp_id,
+            steps=[{"id": "check", "type": "verify"}, {"type": "export"}],
+        )
+        db = _mock_db_returning(
+            run_result=mock_run,
+            blueprint_result=mock_bp,
+            last_step_index=0,
+            last_step_quality_marks=[
+                {"check_type": "source_grounding", "passed": False}
+            ],
+        )
+        stream_app.dependency_overrides[get_db] = lambda: db
+        captured_start_from: dict[str, int | None] = {"value": None}
+
+        async def mock_engine_run(blueprint, run_id, start_from_step=0, **kwargs):
+            captured_start_from["value"] = start_from_step
+            yield {"event": "run_complete", "run_id": str(run_id), "context": {}}
+
+        response = self._patch_engine_and_get(
+            stream_app, stream_client, run_id, mock_engine_run
+        )
+        assert response.status_code == 200
+        assert captured_start_from["value"] == 1
+        stream_app.dependency_overrides.pop(get_db, None)
+
     def test_stream_persists_steps_on_step_complete(self, stream_app, stream_client):
         run_id = uuid.uuid4()
         bp_id = uuid.uuid4()
@@ -760,6 +793,44 @@ class TestStreamEndpointSuccess:
                 await stream_run(run_id, current_user, db)
 
         assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_pause_request_appends_flag_without_rewriting_manifest(self):
+        """Search receipts committed by the stream must survive a concurrent pause.
+
+        Mutation guard: replace the jsonb concat in pause_run with a plain
+        dict assignment and this test must fail.
+        """
+        from sqlalchemy.dialects import postgresql
+
+        run_id = uuid.uuid4()
+        run = _make_run(
+            id=run_id,
+            status="running",
+            reproducibility_manifest={"parameters_override": {}},
+        )
+        statements: list = []
+
+        async def capture(statement):
+            statements.append(statement)
+            return Mock(rowcount=1)
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=capture)
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        current_user = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+
+        with patch(
+            "src.api.research_engine.runs._get_owned_run",
+            new=AsyncMock(return_value=run),
+        ):
+            await pause_run(run_id, current_user, db)
+
+        sql = str(statements[0].compile(dialect=postgresql.dialect()))
+        set_clause = sql.split("SET", 1)[1].split("WHERE", 1)[0]
+        assert "research_runs.reproducibility_manifest" in set_clause
+        assert "||" in set_clause
 
     @pytest.mark.asyncio
     async def test_pause_request_losing_completion_race_preserves_final_manifest(self):

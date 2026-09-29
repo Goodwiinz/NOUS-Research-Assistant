@@ -351,6 +351,7 @@ class StepExecutor:
                             continue
                         page.pop("page_id", None)
                         page.pop("attempt_id", None)
+                        page.pop("attempt_history", None)
                         page.pop("imported_source_ids", None)
                         request = page.get("request")
                         if isinstance(request, dict):

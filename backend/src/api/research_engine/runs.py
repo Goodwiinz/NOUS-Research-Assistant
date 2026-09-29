@@ -12,7 +12,8 @@ from uuid import UUID
 from anyio import CancelScope
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, update
+from sqlalchemy import cast, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
@@ -368,15 +369,21 @@ async def pause_run(
     # Keep the run claimed while the active stream reaches a safe boundary.
     # Publishing PAUSED here would let a second stream reclaim and replay the
     # in-flight paid step before the first stream can persist its result.
-    pause_manifest = dict(run.reproducibility_manifest or {})
-    pause_manifest[_PAUSE_REQUESTED_KEY] = True
+    # Append the flag in SQL instead of rewriting the column: the active
+    # stream checkpoints search receipts into the same JSONB, and a stale
+    # read-modify-write here would erase pages it committed meanwhile.
+    pause_flag = cast({_PAUSE_REQUESTED_KEY: True}, JSONB)
     pause_update = await db.execute(
         update(ResearchRun)
         .where(
             ResearchRun.id == run_id,
             ResearchRun.status == RunStatus.RUNNING.value,
         )
-        .values(reproducibility_manifest=pause_manifest)
+        .values(
+            reproducibility_manifest=func.coalesce(
+                ResearchRun.reproducibility_manifest, cast({}, JSONB)
+            ).op("||")(pause_flag)
+        )
         .execution_options(synchronize_session=False)
     )
     if pause_update.rowcount == 0:
@@ -500,8 +507,12 @@ async def stream_run(
     last_step = step_result.scalars().first()
     if last_step is not None:
         quality_marks = getattr(last_step, "quality_marks", None)
+        # Only an all-providers-failed search step is re-executed on resume;
+        # other failed marks (e.g. verify) keep their evidence and are skipped.
         retry_step = any(
-            isinstance(mark, dict) and mark.get("passed") is False
+            isinstance(mark, dict)
+            and mark.get("check_type") == "provider_search"
+            and mark.get("passed") is False
             for mark in (quality_marks if isinstance(quality_marks, list) else [])
         )
         start_from = last_step.step_index if retry_step else last_step.step_index + 1
