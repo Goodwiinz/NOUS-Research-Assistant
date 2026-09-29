@@ -1724,9 +1724,12 @@ Key takeaways include the importance of continued investigation and the potentia
         status: str,
         progress: int,
         step: str,
+        *,
+        force: bool = False,
         **extra: Any,
     ) -> None:
-        """Update generation status"""
+        """Update generation status. ``force`` bypasses the cancelled guard;
+        only for mirroring the retained row after the work has stopped."""
         if task_id in _generation_status:
             current = _generation_status[task_id]
             # R2-M3: CANCELLED is terminal — a still-running loop must not
@@ -1734,7 +1737,7 @@ Key takeaways include the importance of continued investigation and the potentia
             # Callers pass either the enum or its .value; normalize.
             cur_status = str(current.get("status"))
             new_status = status.value if hasattr(status, "value") else str(status)
-            if cur_status == "cancelled" and new_status != "cancelled":
+            if not force and cur_status == "cancelled" and new_status != "cancelled":
                 raise asyncio.CancelledError("generation cancelled by user")
             current.update(
                 {
@@ -1796,9 +1799,11 @@ Key takeaways include the importance of continued investigation and the potentia
         status: str,
         progress: int,
         step: str,
+        *,
+        force: bool = False,
         **extra: Any,
     ) -> None:
-        self._update_status(task_id, status, progress, step, **extra)
+        self._update_status(task_id, status, progress, step, force=force, **extra)
         await self.publish_status(task_id)
 
     async def _fail_task(
@@ -1822,7 +1827,10 @@ Key takeaways include the importance of continued investigation and the potentia
                         recorded = row.state
         except Exception:
             logger.exception("draft_task_result_write_failed", task_id=task_id)
-        await self._set_status(task_id, recorded, 0, step)
+        # The row is the record; mirror it even over an in-memory cancel.
+        if recorded == DraftGenerationStatus.COMPLETED:
+            step = "Draft completed"
+        await self._set_status(task_id, recorded, 0, step, force=True)
 
     @staticmethod
     def get_status(task_id: str) -> Optional[Dict[str, Any]]:
@@ -1967,19 +1975,22 @@ Key takeaways include the importance of continued investigation and the potentia
         return False
 
     @classmethod
-    async def cancel_task(cls, db: AsyncSession, task_id: str) -> bool:
+    async def cancel_task(cls, db: AsyncSession, task_id: str) -> Optional[bool]:
         """Cancel in memory (the coroutine polls it) and in the retained row.
 
-        The DB write lands even when the task runs on another replica; that
-        replica's completion then finds the row terminal and rolls back.
+        Returns None when this process's status is already terminal, False
+        when the retained row is already terminal (e.g. the draft committed
+        first), True when the row is now ``cancelled``. With no in-memory
+        status (the task runs on another replica) only the row is written;
+        that replica's completion then finds it terminal and rolls back.
         """
-        if not cls.cancel_generation(task_id):
-            return False
-        await finish_task(
+        if task_id in _generation_status and not cls.cancel_generation(task_id):
+            return None
+        cancelled = await finish_task(
             db, task_id=task_id, state="cancelled", error_code="cancelled_by_user"
         )
         await db.commit()
-        return True
+        return cancelled
 
     @classmethod
     def cancel_latest_generation(

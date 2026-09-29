@@ -574,12 +574,22 @@ async def cancel_generation(
     if task_id:
         generation_status = DraftGenerationService.get_status(task_id)
         if not generation_status:
+            # Another replica may own the task: the retained row is the record.
+            row = await get_task_result(db, task_id)
+            if (
+                row is None
+                or row.collection_id != project_id
+                or row.actor_user_id != current_user.id
+            ):
+                raise HTTPException(status_code=404, detail="Task not found")
+        elif generation_status.get("project_id") != str(project_id):
             raise HTTPException(status_code=404, detail="Task not found")
-        if generation_status.get("project_id") != str(project_id):
+        elif generation_status.get("user_id") != str(current_user.id):
             raise HTTPException(status_code=404, detail="Task not found")
-        if generation_status.get("user_id") != str(current_user.id):
-            raise HTTPException(status_code=404, detail="Task not found")
-        success = await DraftGenerationService.cancel_task(db, task_id)
+        cancelled = await DraftGenerationService.cancel_task(db, task_id)
+        if cancelled is False:
+            raise HTTPException(status_code=409, detail="Task already finished")
+        success = bool(cancelled)
     else:
         cancelled_task_id = await DraftGenerationService.cancel_latest_task(
             db,

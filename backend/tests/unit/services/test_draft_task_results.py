@@ -425,3 +425,75 @@ async def test_completion_on_a_cancelled_row_rolls_the_draft_back(
     assert await _draft_count(factory) == 0, "a cancelled task landed a draft"
     assert (await _db_state(factory, "pre-cancelled")).state == "cancelled"
     assert _generation_status["pre-cancelled"]["status"] == "cancelled"
+
+
+async def test_cancel_after_the_draft_commit_is_refused(
+    pipeline: tuple[async_sessionmaker[AsyncSession], UUID],
+) -> None:
+    """Cancel lands between the draft commit and the COMPLETED status write:
+    the DB already says completed, so the cancel must report failure and the
+    cache must end up mirroring the DB, with no CancelledError escaping."""
+    factory, document_id = pipeline
+    await _accept_running(factory, "late-cancel")
+    real_set_status = DraftGenerationService._set_status
+    cancel_results: list[Any] = []
+
+    async def cancel_then_set(
+        self: DraftGenerationService, task_id: str, status: str, *args: Any, **kw: Any
+    ) -> None:
+        if status == "completed" and not cancel_results:
+            async with factory() as db:
+                cancel_results.append(
+                    await DraftGenerationService.cancel_task(db, task_id)
+                )
+        await real_set_status(self, task_id, status, *args, **kw)
+
+    with patch.object(DraftGenerationService, "_set_status", new=cancel_then_set):
+        await _run("late-cancel", document_id)
+
+    assert cancel_results == [False], "a cancel was reported for a completed task"
+    row = await _db_state(factory, "late-cancel")
+    assert row.state == "completed" and row.artifact_id is not None
+    assert await _draft_count(factory) == 1
+    assert _generation_status["late-cancel"]["status"] == "completed"
+
+
+async def test_cancel_route_falls_back_to_the_retained_row(
+    pipeline: tuple[async_sessionmaker[AsyncSession], UUID],
+) -> None:
+    """Another replica owns the task (no in-memory status here): the route
+    cancels through the scoped DB row; a foreign actor gets 404, and a row
+    that is already terminal gets 409."""
+    from fastapi import HTTPException
+
+    from src.api.research import drafts as drafts_api
+
+    factory, _document_id = pipeline
+    async with factory() as db:
+        await _start(db, "remote-task")
+        await _start(db, "remote-done")
+        assert await finish_task(db, task_id="remote-done", state="failed")
+        await db.commit()
+
+    async def cancel(task_id: str, user_id: UUID) -> Any:
+        async with factory() as db:
+            return await drafts_api.cancel_generation(
+                project_id=PROJECT,
+                task_id=task_id,
+                current_user=cast(Any, SimpleNamespace(id=user_id)),
+                db=db,
+            )
+
+    with patch.object(drafts_api, "_validate_project_ownership", new=AsyncMock()):
+        with pytest.raises(HTTPException) as foreign:
+            await cancel("remote-task", uuid4())
+        assert foreign.value.status_code == 404
+        assert (await _db_state(factory, "remote-task")).state == "running"
+
+        assert (await cancel("remote-task", ACTOR))["cancelled"] is True
+        row = await _db_state(factory, "remote-task")
+        assert (row.state, row.error_code) == ("cancelled", "cancelled_by_user")
+
+        with pytest.raises(HTTPException) as finished:
+            await cancel("remote-done", ACTOR)
+        assert finished.value.status_code == 409
