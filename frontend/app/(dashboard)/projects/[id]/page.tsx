@@ -1111,9 +1111,12 @@ export default function ProjectDetailPage() {
                               pollFailures = 0;
                               setGenerationStatus(status);
                               if (
-                                !['completed', 'failed', 'cancelled'].includes(
-                                  status.status
-                                )
+                                ![
+                                  'completed',
+                                  'failed',
+                                  'cancelled',
+                                  'interrupted',
+                                ].includes(status.status)
                               ) {
                                 pollTimeoutRef.current = setTimeout(
                                   pollStatus,

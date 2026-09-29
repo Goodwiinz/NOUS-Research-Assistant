@@ -2121,7 +2121,8 @@ async def _execute_external_operation(
     if (
         tool_name == "create_draft"
         and isinstance(bounded_result, dict)
-        and bounded_result.get("status") not in {"completed", "failed", "cancelled"}
+        and bounded_result.get("status")
+        not in {"completed", "failed", "cancelled", "interrupted"}
         and isinstance(bounded_result.get("task_id"), str)
         and bounded_result["task_id"]
     ):

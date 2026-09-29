@@ -56,7 +56,9 @@ export const DraftGenerationProgress: React.FC<
   useEffect(() => {
     if (
       status.started_at &&
-      !['completed', 'failed', 'cancelled'].includes(status.status)
+      !['completed', 'failed', 'cancelled', 'interrupted'].includes(
+        status.status
+      )
     ) {
       const startTime = new Date(status.started_at).getTime();
       const interval = setInterval(() => {
@@ -90,9 +92,7 @@ export const DraftGenerationProgress: React.FC<
           )}
           {isCompleted && <CheckCircle className="h-5 w-5 text-primary" />}
           {isFailed && <AlertCircle className="h-5 w-5 text-destructive" />}
-          {isCancelled && (
-            <XCircle className="h-5 w-5 text-muted-foreground" />
-          )}
+          {isCancelled && <XCircle className="h-5 w-5 text-muted-foreground" />}
           <div>
             <h3 className="font-medium text-foreground">
               {isCompleted
