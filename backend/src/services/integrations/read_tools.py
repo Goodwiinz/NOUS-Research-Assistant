@@ -16,9 +16,10 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.collection import CollectionDocument
+from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document
 from src.models.user import User
+from src.models.workspace import Workspace
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolDescriptorDTO, ToolInvocation, ToolResult
 from src.services.agent.tool_helpers import _escape_like, _verify_project_ownership
@@ -134,6 +135,29 @@ def _clamp(value: Any, lo: int, hi: int, default: int) -> int:
         return default
 
 
+def _live_project_documents(context: IntegrationContext) -> Any:
+    """Documents in the grant's project with every ancestor still live.
+
+    Joined in the same statement so a soft-delete landing between the
+    ownership check and this fetch cannot return revoked rows.
+    """
+    return (
+        select(Document)
+        .join(CollectionDocument, CollectionDocument.document_id == Document.id)
+        .join(Collection, Collection.id == CollectionDocument.collection_id)
+        .join(Workspace, Workspace.id == Collection.workspace_id)
+        .where(
+            Collection.id == context.project_id,
+            Collection.is_deleted == False,  # noqa: E712
+            Workspace.is_deleted == False,  # noqa: E712
+            Workspace.organization_id == context.organization_id,
+            CollectionDocument.is_deleted == False,  # noqa: E712
+            Document.organization_id == context.organization_id,
+            Document.is_deleted == False,  # noqa: E712
+        )
+    )
+
+
 async def _search_project_documents(
     db: AsyncSession, context: IntegrationContext, query: str, limit: int
 ) -> dict[str, Any]:
@@ -142,15 +166,8 @@ async def _search_project_documents(
 
     pattern = f"%{_escape_like(query)}%"
     rows = await db.execute(
-        select(Document)
-        .join(CollectionDocument, CollectionDocument.document_id == Document.id)
-        .where(
-            CollectionDocument.collection_id == context.project_id,
-            CollectionDocument.is_deleted == False,  # noqa: E712
-            Document.organization_id == context.organization_id,
-            Document.is_deleted == False,  # noqa: E712
-            (Document.title.ilike(pattern) | Document.filename.ilike(pattern)),
-        )
+        _live_project_documents(context)
+        .where(Document.title.ilike(pattern) | Document.filename.ilike(pattern))
         .order_by(desc(Document.created_at))
         .limit(limit)
     )
@@ -181,15 +198,9 @@ async def _project_document_ids(
     except ValueError as error:
         raise ToolArgumentError("document_ids must be UUIDs") from error
     rows = await db.execute(
-        select(CollectionDocument.document_id)
-        .join(Document, Document.id == CollectionDocument.document_id)
-        .where(
-            CollectionDocument.collection_id == context.project_id,
-            CollectionDocument.document_id.in_(requested),
-            CollectionDocument.is_deleted == False,  # noqa: E712
-            Document.organization_id == context.organization_id,
-            Document.is_deleted == False,  # noqa: E712
-        )
+        _live_project_documents(context)
+        .with_only_columns(Document.id)
+        .where(Document.id.in_(requested))
     )
     members = {UUID(str(value)) for value in rows.scalars().all()}
     if members != requested:
@@ -252,6 +263,8 @@ async def invoke_read(
             user,
         )
     elif name == "do_kb_retrieve":
+        _, kb_schema, _ = _registry_schema(name)
+        top_k_default = int(kb_schema["properties"]["top_k"].get("default", 8))
         document_ids = await _project_document_ids(
             db, context, arguments.get("document_ids")
         )
@@ -272,7 +285,13 @@ async def invoke_read(
         payload = await _tool_do_kb_retrieve(
             {
                 "query": str(arguments["query"]),
-                "top_k": _clamp(arguments.get("top_k", 5), 1, MAX_DOCUMENT_IDS, 5),
+                # Default comes from the advertised schema (registry default).
+                "top_k": _clamp(
+                    arguments.get("top_k", top_k_default),
+                    1,
+                    MAX_DOCUMENT_IDS,
+                    top_k_default,
+                ),
                 "document_ids": document_ids,
                 "project_id": project_id,
             },
@@ -299,7 +318,9 @@ async def invoke_read(
             draft["content_truncated"] = len(draft["content"]) > MAX_DRAFT_CONTENT_CHARS
             draft["content"] = draft["content"][:MAX_DRAFT_CONTENT_CHARS]
 
-    if len(json.dumps(payload, default=str).encode()) > MAX_RESULT_BYTES:
+    # Measure as FastAPI emits it (UTF-8, no ASCII escaping).
+    wire = json.dumps(payload, default=str, ensure_ascii=False).encode()
+    if len(wire) > MAX_RESULT_BYTES:
         return ToolResult(
             content=[{"error": "result_too_large"}], is_error=True, source_refs=[]
         )

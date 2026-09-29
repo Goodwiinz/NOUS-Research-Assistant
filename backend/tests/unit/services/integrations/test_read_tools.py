@@ -252,6 +252,41 @@ async def test_valid_retrieval_preserves_source_identity(
     args = retrieval.await_args.args[0]
     assert args["project_id"] == str(PROJECT)
     assert args["document_ids"] == [str(DOC_IN_PROJECT)]
+    # Omitted top_k uses the advertised (registry) default, not a private one.
+    catalog = {tool.name: tool.input_schema for tool in list_read_tools()}
+    assert args["top_k"] == catalog["do_kb_retrieve"]["properties"]["top_k"]["default"]
+
+
+async def test_size_cap_measures_wire_utf8_not_ascii_escapes(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 11k CJK chars: ~33 KiB UTF-8 on the wire, ~66 KiB when ASCII-escaped.
+    cjk = "\u6587" * 11_000
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_list_project_documents",
+        AsyncMock(
+            return_value={"documents": [{"id": str(DOC_IN_PROJECT), "title": cjk}]}
+        ),
+    )
+    result = await invoke_read(db, context, _invocation("list_project_documents"))
+    assert result.is_error is False
+
+
+@pytest.mark.parametrize("model", [Collection, Workspace])
+async def test_search_query_itself_rechecks_ancestors(
+    db: AsyncSession, context: IntegrationContext, model: Any
+) -> None:
+    # Ancestor soft-deleted between invoke_read's ownership check and the
+    # fetch: the fetch alone must return nothing.
+    await db.execute(update(model).values(is_deleted=True))
+    await db.commit()
+    payload = await read_tools._search_project_documents(db, context, "retrieval", 10)
+    assert payload["documents"] == []
+    assert (
+        await read_tools._project_document_ids(db, context, [str(DOC_IN_PROJECT)])
+        is None
+    )
 
 
 async def test_scoped_limitation_from_tool_is_error(
