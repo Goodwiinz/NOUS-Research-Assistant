@@ -12,6 +12,7 @@ import {
   type ResearchProjectRole,
 } from '@/services/researchEngineService';
 import { BlueprintEditor } from './BlueprintEditor';
+import { CorpusPanel } from './CorpusPanel';
 import { ProtocolPanel } from './ProtocolPanel';
 import { ReportIdentityPanel } from './ReportIdentityPanel';
 
@@ -147,6 +148,7 @@ export function ProjectWorkflow({
         onApprovedVersionChange={handleApprovedProtocolChange}
       />
       <ReportIdentityPanel projectId={project.id} readOnly={archived} />
+      <CorpusPanel projectId={project.id} readOnly={archived} />
       <ProjectRoles
         projectId={project.id}
         assignments={roles.data ?? []}
