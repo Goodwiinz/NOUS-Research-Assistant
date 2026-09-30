@@ -403,9 +403,10 @@ async def test_flow_recomputes_from_raw_rows_after_commit_and_reopen(
     [again] = await _sources(factory, run2_id, ("10.1000/shared", ["openalex"]))
     await _observe(factory, world.collection, [shared, s4, s5, s6, s7, s8, s9, again])
     ra, r4, r5, r6, r7, r8, r9 = [
-        await _report_of(factory, s.id) for s in (shared, s4, s5, s6, s7, s8, s9)
+        await _report_of(factory, cast(UUID, s.id))
+        for s in (shared, s4, s5, s6, s7, s8, s9)
     ]
-    assert await _report_of(factory, again.id) == ra
+    assert await _report_of(factory, cast(UUID, again.id)) == ra
 
     # GOO-300 import: one duplicate of r4 and one rejected record.
     ris = (
@@ -512,6 +513,7 @@ async def test_flow_recomputes_from_raw_rows_after_commit_and_reopen(
                 input_observation_ids=conflict.input_observation_ids,
                 criteria_hash=ta.criteria_hash,
                 decision="exclude",
+                exclusion_reason=None,
                 rationale="off topic",
                 idempotency_key="adj",
             ),
@@ -542,8 +544,8 @@ async def test_flow_recomputes_from_raw_rows_after_commit_and_reopen(
     )
     olds = {UUID(str(i)) for i in agreed.input_observation_ids}
     async with factory() as db:
-        by_reviewer = {
-            o.reviewer_id: o.id
+        by_reviewer: dict[UUID, UUID] = {
+            cast(UUID, o.reviewer_id): cast(UUID, o.id)
             for o in (
                 await db.execute(
                     select(ScreeningObservation).where(
