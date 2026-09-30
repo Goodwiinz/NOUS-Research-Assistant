@@ -76,6 +76,7 @@ class _Session:
         self.commits = 0
         self.rollbacks = 0
         self.fail_after_step = False
+        self.flushes = 0
 
     def begin(self) -> _Transaction:
         return _Transaction(self)
@@ -86,6 +87,9 @@ class _Session:
             iter(self.persisted_steps), None
         )
         return result
+
+    async def flush(self) -> None:
+        self.flushes += 1
 
     def add(self, row: object) -> None:
         if isinstance(row, ResearchStep):
@@ -609,3 +613,73 @@ async def test_user_pause_anchors_latest_step_and_reconnect_restores_retry_state
 
     assert run.status == "paused"
     assert ResearchRunLifecycleService.pause_descriptor(run) == descriptor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_collection", [False, True])
+async def test_source_rows_are_observed_in_the_step_transaction(
+    monkeypatch: pytest.MonkeyPatch, with_collection: bool
+) -> None:
+    """GOO-299: report observations join the step-completion transaction."""
+    from src.services.research_engine import run_lifecycle
+
+    calls: list[tuple[object, UUID, list[object], int]] = []
+    run = _run()
+    session = _Session(run)
+
+    async def fake_observe(
+        db: object, *, collection_id: UUID, sources: list[object]
+    ) -> list[object]:
+        calls.append((db, collection_id, list(sources), session.flushes))
+        return []
+
+    monkeypatch.setattr(run_lifecycle, "observe_sources", fake_observe)
+    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+    source = SimpleNamespace(run_id=run.id, external_id="source-1")
+    collection_id = uuid4()
+
+    await service.persist_step_completion(
+        run=run,
+        event=_event(),
+        step_definition=_step_definition(),
+        source_rows=[source],
+        collection_id=collection_id if with_collection else None,
+    )
+
+    if with_collection:
+        # Same session, same rows, flushed first so source ids are durable FKs.
+        assert calls == [(session, collection_id, [source], 1)]
+    else:
+        assert calls == []
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_observation_failure_rolls_back_the_whole_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GOO-299: a failed identity write must not leave a committed step/sources."""
+    from src.services.research_engine import run_lifecycle
+
+    async def failing_observe(*_args: object, **_kwargs: object) -> list[object]:
+        raise RuntimeError("identity write failed")
+
+    monkeypatch.setattr(run_lifecycle, "observe_sources", failing_observe)
+    run = _run()
+    session = _Session(run)
+    service = ResearchRunLifecycleService(cast(AsyncSession, session), now=lambda: NOW)
+
+    with pytest.raises(RuntimeError, match="identity write failed"):
+        await service.persist_step_completion(
+            run=run,
+            event=_event(),
+            step_definition=_step_definition(),
+            source_rows=[SimpleNamespace(run_id=run.id, external_id="source-1")],
+            collection_id=uuid4(),
+        )
+
+    assert session.commits == 0
+    assert session.rollbacks == 1
+    assert session.persisted_steps == []
+    assert session.persisted_sources == []
+    assert run.total_tokens == 5

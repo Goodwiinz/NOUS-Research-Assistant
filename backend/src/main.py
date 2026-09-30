@@ -81,6 +81,7 @@ from src.api.research import (
 from src.api.research_engine import (
     research_engine_blueprints_router,
     research_engine_capabilities_router,
+    research_engine_identities_router,
     research_engine_projects_router,
     research_engine_protocols_router,
     research_engine_reviews_router,
@@ -668,6 +669,9 @@ app.include_router(
 app.include_router(
     research_engine_reviews_router, prefix="/api/v1"
 )  # Research Engine stage reviews
+app.include_router(
+    research_engine_identities_router, prefix="/api/v1"
+)  # Research Engine report/study identities (GOO-299)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search
