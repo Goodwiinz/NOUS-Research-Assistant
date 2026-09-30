@@ -43,9 +43,7 @@ class TestKaggleBulkNeo4jAuth:
         with pytest.raises(RuntimeError, match=REQUIRED_MESSAGE):
             KaggleBulkIngestionService()
 
-    async def test_explicit_credentials_do_not_require_env(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_explicit_credentials_do_not_require_env(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
         ctor = _make_driver_ctor()
@@ -64,9 +62,7 @@ class TestKaggleBulkNeo4jAuth:
         assert ctor.call_args.args[0] == "bolt://explicit:7687"
         assert ctor.call_args.kwargs.get("auth") == ("explicit-user", "explicit-secret")
 
-    async def test_env_credentials_used_when_params_absent(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_env_credentials_used_when_params_absent(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("NEO4J_URI", "bolt://env-uri:7687")
         monkeypatch.setenv("NEO4J_USER", "env-user")

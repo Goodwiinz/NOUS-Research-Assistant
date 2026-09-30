@@ -20,8 +20,9 @@ class TestKaggleLlmBulkNeo4jAuth:
             await service._get_neo4j_driver()
 
     async def test_get_driver_receives_env_credentials(self, monkeypatch):
-        import neo4j
         from unittest.mock import MagicMock
+
+        import neo4j
 
         monkeypatch.setenv("NEO4J_URI", "bolt://env-uri:7687")
         monkeypatch.setenv("NEO4J_USER", "env-user")

@@ -176,9 +176,7 @@ async def get_ingestion_stats():
     auth = get_neo4j_auth()
 
     try:
-        driver = AsyncGraphDatabase.driver(
-            auth.uri, auth=(auth.user, auth.password)
-        )
+        driver = AsyncGraphDatabase.driver(auth.uri, auth=(auth.user, auth.password))
 
         async with driver.session() as session:
             # Get document count

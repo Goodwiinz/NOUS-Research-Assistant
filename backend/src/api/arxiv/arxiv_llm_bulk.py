@@ -364,9 +364,7 @@ async def get_llm_ingestion_stats():
     auth = get_neo4j_auth()
 
     try:
-        driver = AsyncGraphDatabase.driver(
-            auth.uri, auth=(auth.user, auth.password)
-        )
+        driver = AsyncGraphDatabase.driver(auth.uri, auth=(auth.user, auth.password))
 
         async with driver.session() as session:
             # Get LLM-processed document count
