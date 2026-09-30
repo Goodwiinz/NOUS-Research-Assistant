@@ -9,7 +9,7 @@ report, and only a ``retrieved`` attempt (pinned to a project Document's
 content hash) lets a report be screened at full text.
 """
 
-from typing import Any, Iterable, cast
+from typing import Any, Iterable, Sequence, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -124,7 +124,8 @@ async def _states(
     )
     if request_ids is not None:
         query = query.where(ResearchFulltextRequest.id.in_(list(request_ids)))
-    requests = (
+    # Any: legacy Column attributes (see identity_service.live_reports).
+    requests: Sequence[Any] = (
         (
             await db.execute(
                 query.order_by(
@@ -135,7 +136,7 @@ async def _states(
         .scalars()
         .all()
     )
-    attempts = (
+    attempts: Sequence[Any] = (
         (
             await db.execute(
                 select(ResearchFulltextAttempt).where(

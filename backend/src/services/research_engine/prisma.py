@@ -20,6 +20,7 @@ from src.services.research_engine.contracts import (
 
 SCHEMA = "nous.academic.prisma-flow.v1"
 _DECIDED = ("include", "exclude")
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,9 @@ class Outcome:
     seq: int
     supersedes: bool
     basis: str
+    # Orders colliding reports after a merge: seq is per stream, so it is only
+    # comparable inside one queue's chain.
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -171,22 +175,20 @@ def derive_prisma_flow(inputs: PrismaInputs) -> dict[str, Any]:
         for previous, row in zip(chain, chain[1:]):
             if not row.supersedes:
                 raise PrismaInconsistency("resolution chain has two roots")
-            amendments.append(
-                _amendment(
-                    "research_screening",
-                    row.event_id,
-                    row.seq,
-                    f"{stage}."
-                    + (
-                        row.basis
-                        if row.basis in ("adjudicated", "reopened")
-                        else "rederived"
-                    ),
-                    report_id,
-                    _label(previous),
-                    _label(row),
+            # Adjudications and reopens are the recorded human amendments; an
+            # automatic re-resolution after a reopen is the reopen's effect.
+            if row.basis in ("adjudicated", "reopened"):
+                amendments.append(
+                    _amendment(
+                        "research_screening",
+                        row.event_id,
+                        row.seq,
+                        f"{stage}.{row.basis}",
+                        report_id,
+                        _label(previous),
+                        _label(row),
+                    )
                 )
-            )
         current.setdefault((stage, final(report_id)), {})[report_id] = chain[-1]
 
     decided: dict[str, dict[UUID, Outcome]] = {"title_abstract": {}, "full_text": {}}
@@ -194,7 +196,9 @@ def derive_prisma_flow(inputs: PrismaInputs) -> dict[str, Any]:
         if survivor not in universe:
             warnings.append(f"{stage} outcome on report {survivor} without records")
             continue
-        winner = rows.get(survivor) or max(rows.values(), key=lambda o: o.seq)
+        winner = rows.get(survivor) or max(
+            rows.values(), key=lambda o: (o.created_at or _EPOCH, str(o.event_id))
+        )
         if len({_label(o) for o in rows.values()}) > 1:
             warnings.append(
                 f"{stage} outcomes differ across merged reports of {survivor}; "
@@ -213,7 +217,7 @@ def derive_prisma_flow(inputs: PrismaInputs) -> dict[str, Any]:
             raise PrismaInconsistency("request names several reports")
         if any(att.attempt_id is None for att in attempts):
             if len(attempts) != 1:
-                raise PrismaInconsistency("bare request att alongside attempts")
+                raise PrismaInconsistency("bare request row alongside attempts")
             heads.setdefault(final(attempts[0].report_id), []).append(attempts[0])
             continue
         by_id = {att.attempt_id: att for att in attempts}
@@ -241,6 +245,9 @@ def derive_prisma_flow(inputs: PrismaInputs) -> dict[str, Any]:
                 )
     state: dict[UUID, str] = {}
     for survivor, report_heads in heads.items():
+        if survivor not in universe:
+            warnings.append(f"full-text request on report {survivor} without records")
+            continue
         if any(h.outcome == "retrieved" for h in report_heads):
             state[survivor] = "retrieved"
         else:
@@ -307,6 +314,8 @@ def derive_prisma_flow(inputs: PrismaInputs) -> dict[str, Any]:
         "unconfirmed_study_links": unconfirmed,
     }
     checks = {
+        # Holds by construction (awaiting = unique - screened); kept as the
+        # named PRISMA identity so the export states it.
         "screened_plus_awaiting_equals_unique": counts["records_screened"]
         + counts["records_awaiting_screening"]
         == counts["unique_reports"],

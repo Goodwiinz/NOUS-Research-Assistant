@@ -14,6 +14,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -75,7 +76,8 @@ class ResearchFulltextAttempt(Base):
     created_at = _now()
     document_id = _fk("documents", nullable=True)
     document_content_hash = Column(String(64), nullable=True)
-    previous_attempt_id: Column = _fk("research_fulltext_attempts", nullable=True)
+    # Same-request only: composite FK (request_id, previous_attempt_id).
+    previous_attempt_id: Column = Column(GUID(), nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -96,6 +98,16 @@ class ResearchFulltextAttempt(Base):
         ),
         UniqueConstraint(
             "previous_attempt_id", name="uq_research_fulltext_attempt_previous"
+        ),
+        UniqueConstraint("request_id", "id", name="uq_research_fulltext_attempt_chain"),
+        ForeignKeyConstraint(
+            ["request_id", "previous_attempt_id"],
+            [
+                "research_fulltext_attempts.request_id",
+                "research_fulltext_attempts.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_research_fulltext_attempt_previous",
         ),
         Index(
             "uq_research_fulltext_attempt_head",

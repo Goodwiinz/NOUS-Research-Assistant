@@ -653,7 +653,7 @@ class FulltextAttemptCreate(BaseModel):
 
     outcome: FulltextOutcome
     attempted_on: date
-    reason: Optional[str] = Field(None, min_length=1, max_length=2000)
+    reason: Optional[str] = Field(default=None, min_length=1, max_length=2000)
     document_id: Optional[UUID] = None
     previous_attempt_id: Optional[UUID] = None
     idempotency_key: _IdempotencyKey

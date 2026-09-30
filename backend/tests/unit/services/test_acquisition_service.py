@@ -148,6 +148,28 @@ async def _attempt(
     return state
 
 
+async def _observed(db: AsyncSession, project: _Project, report: UUID) -> None:
+    """One provider record for the report, so PRISMA counts it."""
+    run_id, source_id = uuid4(), uuid4()
+    db.add(ResearchRun(id=run_id, blueprint_id=uuid4(), blueprint_version=1))
+    await db.flush()
+    db.add(
+        ResearchSource(
+            id=source_id, run_id=run_id, connector_type="openalex", title="t"
+        )
+    )
+    await db.flush()
+    db.add(
+        ResearchReportObservation(
+            collection_id=project.collection_id,
+            report_id=report,
+            source_id=source_id,
+            match_method="doi",
+        )
+    )
+    await db.flush()
+
+
 async def _count(db: AsyncSession, model: Any) -> int:
     return int((await db.execute(select(func.count()).select_from(model))).scalar_one())
 
@@ -191,6 +213,7 @@ async def test_unavailable_does_not_create_observation_or_exclusion(
 ) -> None:
     project = await _project(db)
     report = project.reports[0]
+    await _observed(db, project, report)
     request = await _request(db, project, report)
     unavailable = await _attempt(db, project, request.request_id, "a1")
     assert unavailable.state == "unavailable"

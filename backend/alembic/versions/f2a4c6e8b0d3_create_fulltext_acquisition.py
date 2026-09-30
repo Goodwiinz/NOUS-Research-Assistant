@@ -100,10 +100,19 @@ def upgrade() -> None:
         _fk("request_id", _REQUESTS),
         _fk("actor_id", "users"),
         _fk("document_id", "documents"),
-        _fk("previous_attempt_id", _ATTEMPTS),
+        # Same-request only: the previous attempt must share request_id.
+        sa.ForeignKeyConstraint(
+            ["request_id", "previous_attempt_id"],
+            [f"{_ATTEMPTS}.request_id", f"{_ATTEMPTS}.id"],
+            ondelete="RESTRICT",
+            name="fk_research_fulltext_attempt_previous",
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "previous_attempt_id", name="uq_research_fulltext_attempt_previous"
+        ),
+        sa.UniqueConstraint(
+            "request_id", "id", name="uq_research_fulltext_attempt_chain"
         ),
     )
     op.create_index(

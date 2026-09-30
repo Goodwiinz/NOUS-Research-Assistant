@@ -230,9 +230,9 @@ def test_reopened_resolution_uses_current_outcome_and_lists_amendment() -> None:
     )
     assert body["counts"]["records_screened"] == 1
     assert body["counts"]["records_excluded"] == 1
+    # The automatic re-resolution is the reopen's effect, not an amendment.
     assert [(x["kind"], x["from"], x["to"]) for x in body["amendments"]] == [
         ("title_abstract.reopened", "include", "reopened"),
-        ("title_abstract.rederived", "reopened", "exclude"),
     ]
 
 
@@ -335,3 +335,19 @@ def test_markdown_has_mermaid_and_every_count() -> None:
         assert key in markdown
         if isinstance(value, int):
             assert str(value) in markdown
+
+
+def test_request_on_report_without_records_is_skipped_with_warning() -> None:
+    a, emptied = uuid4(), uuid4()  # e.g. a report whose sources were all split off
+    body = derive_prisma_flow(
+        _inputs(
+            records=(Record("1", "provider", "openalex", a),),
+            reports=_reports(a, emptied),
+            attempts=(_attempt(uuid4(), emptied, "unavailable", 2),),
+        )
+    )
+    assert (
+        body["counts"]["reports_sought"],
+        body["counts"]["reports_not_retrieved"],
+    ) == (0, 0)
+    assert any(str(emptied) in warning for warning in body["warnings"])

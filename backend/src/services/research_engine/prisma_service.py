@@ -42,8 +42,12 @@ _RESOLVED = ("single", "agreement", "adjudicated")
 async def _begin_snapshot(db: AsyncSession) -> None:
     """Every loader SELECT reads one REPEATABLE READ snapshot (PostgreSQL).
 
-    A GET's access check has already opened a read-only transaction; ending
-    it loses nothing. A caller that has written is refused, never rolled back.
+    A GET's access check has already opened a read-only transaction, which
+    this rolls back: that discards no write, but it expires every ORM object
+    loaded so far (``context.*``, ``current_user``), so callers read what they
+    need before calling ``load_inputs``. A caller that has written (pending
+    objects, or an assigned transaction id after a flush or row lock) is
+    refused, never rolled back.
     """
     if db.get_bind().dialect.name != "postgresql":
         return  # ponytail: SQLite unit tests share one connection, no torn reads
@@ -184,7 +188,7 @@ async def load_inputs(db: AsyncSession, context: ProjectContext) -> PrismaInputs
     chosen: dict[tuple[str, str], UUID] = {}
     for queue in queues:
         if queue.id not in superseded:
-            for report in queue.report_ids:
+            for report in cast(list[str], queue.report_ids):
                 chosen[(cast(str, queue.stage), str(report))] = cast(UUID, queue.id)
     stage_of = {cast(UUID, q.id): cast(str, q.stage) for q in queues}
     outcomes = []
@@ -213,6 +217,7 @@ async def load_inputs(db: AsyncSession, context: ProjectContext) -> PrismaInputs
                 seq,
                 row.supersedes_resolution_id is not None,
                 row.basis,
+                row.created_at,
             )
         )
 
