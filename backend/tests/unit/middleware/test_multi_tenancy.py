@@ -817,3 +817,184 @@ def test_effectively_open_families_stay_behind_fail_closed_gate(method, path):
     body = response.json()
     assert body["error"]["message"] == "Not authenticated"
     assert body["error"]["type"] == "authentication_error"
+
+
+# ===========================================================================
+# PR #1722 review follow-ups (Codex): CORS preflight, Bearer scheme case,
+# infrastructure failures vs credential failures.
+# ===========================================================================
+
+
+def _i7_app_with_cors():
+    """Mirror main.py's ordering: CORSMiddleware registered BEFORE (so runs
+    INSIDE) MultiTenancyMiddleware."""
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from src.middleware.multi_tenancy import MultiTenancyMiddleware
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["https://app.example"],
+        allow_credentials=True,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+    app.add_middleware(MultiTenancyMiddleware)
+    return app
+
+
+def test_cors_preflight_reaches_cors_middleware_without_opening_db():
+    """A browser preflight (OPTIONS + Origin + Access-Control-Request-Method)
+    carries no Authorization by spec; the gate must let CORS answer it, or
+    every cross-origin authenticated call is blocked. The route never runs."""
+    from starlette.testclient import TestClient
+
+    db_factory = MagicMock(side_effect=AssertionError("preflight must not open DB"))
+    with patch("src.middleware.multi_tenancy.AsyncSessionLocal", db_factory):
+        app = _i7_app_with_cors()
+        hits = []
+
+        @app.get("/api/v1/threads")
+        async def threads_endpoint():
+            hits.append(1)
+            return {"ok": True}
+
+        response = TestClient(app).options(
+            "/api/v1/threads",
+            headers={
+                "Origin": "https://app.example",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://app.example"
+    assert hits == []
+    db_factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},  # plain OPTIONS, not a preflight
+        {"Origin": "https://app.example"},  # no Access-Control-Request-Method
+        {"Access-Control-Request-Method": "GET"},  # no Origin
+    ],
+)
+def test_non_preflight_options_without_auth_stays_401(headers):
+    """Only a real CORS preflight is exempt; any other unauthenticated OPTIONS
+    still fails closed."""
+    from starlette.testclient import TestClient
+
+    app = _i7_app_with_cors()
+    response = TestClient(app).options("/api/v1/threads", headers=headers)
+    assert response.status_code == 401
+
+
+def _resolving_session():
+    from types import SimpleNamespace
+
+    user = SimpleNamespace(id="user-1", organization_id="org-1", role="user")
+
+    class _Res:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return user
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_Res())
+    return _mock_session_cm(db)
+
+
+@pytest.mark.parametrize("scheme", ["bearer", "BEARER", "Bearer"])
+def test_bearer_scheme_is_case_insensitive(scheme):
+    """RFC 7235 auth schemes are case-insensitive and FastAPI's HTTPBearer
+    accepts ``bearer``; the gate must not reject a valid lowercase-scheme
+    token, and must pass the token (not the scheme) to verify_token."""
+    from types import SimpleNamespace
+
+    from starlette.testclient import TestClient
+
+    seen = []
+
+    def _verify(token):
+        seen.append(token)
+        return SimpleNamespace(user_id="user-1", organization_id=None, role="user")
+
+    with (
+        patch(
+            "src.middleware.multi_tenancy.AsyncSessionLocal",
+            return_value=_resolving_session(),
+        ),
+        patch("src.middleware.multi_tenancy.verify_token", side_effect=_verify),
+        patch(
+            "src.middleware.multi_tenancy.MultiTenancyMiddleware._validate_tenant_access",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        app = _i7_app()
+
+        @app.get("/api/v1/threads")
+        async def threads_endpoint():
+            return {"ok": True}
+
+        response = TestClient(app).get(
+            "/api/v1/threads", headers={"Authorization": f"{scheme} good-token"}
+        )
+
+    assert response.status_code == 200
+    assert seen == ["good-token"]
+
+
+def _failing_session():
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=RuntimeError("S3CR3T-DB-DOWN"))
+    return _mock_session_cm(db)
+
+
+@pytest.mark.parametrize("embedded_org", [None, "org-embedded"])
+def test_tenant_resolution_db_failure_is_500_not_401(embedded_org):
+    """A DB outage while resolving the user must not masquerade as a
+    credential rejection: the frontend logs the user out on 401 but keeps the
+    session on 5xx. Still fail-closed (route never runs), no internal text."""
+    from types import SimpleNamespace
+
+    from starlette.testclient import TestClient
+
+    with (
+        patch(
+            "src.middleware.multi_tenancy.AsyncSessionLocal",
+            return_value=_failing_session(),
+        ),
+        patch(
+            "src.middleware.multi_tenancy.verify_token",
+            return_value=SimpleNamespace(
+                user_id="user-1", organization_id=embedded_org, role="user"
+            ),
+        ),
+        patch(
+            "src.middleware.multi_tenancy.ensure_user_and_org",
+            new=AsyncMock(side_effect=RuntimeError("S3CR3T-DB-DOWN")),
+        ),
+    ):
+        app = _i7_app()
+        hits = []
+
+        @app.get("/api/v1/threads")
+        async def threads_endpoint():
+            hits.append(1)
+            return {"ok": True}
+
+        response = TestClient(app).get(
+            "/api/v1/threads", headers={"Authorization": "Bearer good-token"}
+        )
+
+    assert response.status_code == 500
+    assert hits == []
+    assert "S3CR3T" not in response.text

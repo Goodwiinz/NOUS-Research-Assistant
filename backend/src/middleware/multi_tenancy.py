@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 
 import sentry_sdk
 from fastapi import HTTPException, Request, Response, status
+from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -124,6 +125,32 @@ _MIDDLEWARE_EXEMPT_PATH_REGEXES = (
 )
 
 
+def _bearer_token(request: Request) -> Optional[str]:
+    """Return the Bearer credential, or None. The scheme is matched
+    case-insensitively (RFC 7235), exactly as FastAPI's ``HTTPBearer`` parses
+    it downstream, so the gate and the route dependencies agree."""
+    scheme, token = get_authorization_scheme_param(
+        request.headers.get("Authorization", "")
+    )
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token
+
+
+def _is_cors_preflight(request: Request) -> bool:
+    """A CORS preflight exactly as Starlette's ``CORSMiddleware`` defines it
+    (OPTIONS + Origin + Access-Control-Request-Method). Browsers never attach
+    credentials to a preflight, and ``CORSMiddleware`` (registered inside this
+    middleware in main.py) answers it itself without dispatching to a route —
+    so letting it through exposes no tenant data. Any other OPTIONS request is
+    still gated."""
+    return (
+        request.method == "OPTIONS"
+        and "origin" in request.headers
+        and "access-control-request-method" in request.headers
+    )
+
+
 def _role_to_str(role: Any) -> str:
     """Normalize a DB User.role (UserRole enum) to the string the tenancy
     permission checks compare against; default to 'user'."""
@@ -144,7 +171,7 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request and set tenant context"""
 
-        if self._should_skip_tenant_validation(request):
+        if self._should_skip_tenant_validation(request) or _is_cors_preflight(request):
             return await call_next(request)
 
         # Audit I7 (fail-closed): a request with no Authorization header can
@@ -156,7 +183,7 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         # Bearer credentials); any other scheme (``Basic``, a bare ``Bearer``
         # with no token, ...) could never resolve a tenant anyway, so it is
         # rejected here rather than after opening the session.
-        if not request.headers.get("Authorization", "").startswith("Bearer "):
+        if _bearer_token(request) is None:
             return error_response(
                 401,
                 "Not authenticated",
@@ -239,10 +266,9 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         self, request: Request, db: Optional[AsyncSession] = None
     ) -> Optional[dict]:
         """Extract tenant information by verifying the Bearer JWT and resolving org via DB."""
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
+        token = _bearer_token(request)
+        if token is None:
             return None
-        token = auth_header[7:]
         try:
             token_data = verify_token(token)
         except Exception:
@@ -263,20 +289,24 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
 
         # Fast path: org_id already embedded in JWT (CLI tokens). JIT-provision,
         # then validate against the DB in the same session.
+        # Infrastructure failures (the user lookup raising) propagate to
+        # dispatch() and become a 500, NOT None/401: clients treat 401 as
+        # "token rejected" and log the user out, so a DB outage must not look
+        # like a credential failure. Still fail-closed — the route never runs.
         if token_data.organization_id:
-            try:
-                async with AsyncSessionLocal() as prov_db:
+            async with AsyncSessionLocal() as prov_db:
+                try:
                     provisioned = await ensure_user_and_org(prov_db, token_data)
                     if provisioned:
                         await prov_db.commit()
-                    user = (
-                        (await prov_db.execute(select(User).where(*active_user)))
-                        .scalars()
-                        .first()
-                    )
-            except Exception as e:
-                logger.debug("Fast-path user resolve failed (non-fatal): %s", e)
-                user = None
+                except Exception as e:
+                    logger.debug("Fast-path JIT-provision skipped (non-fatal): %s", e)
+                    await prov_db.rollback()
+                user = (
+                    (await prov_db.execute(select(User).where(*active_user)))
+                    .scalars()
+                    .first()
+                )
             if not user:
                 return None  # inactive / deleted / unresolved -> no tenant context
             return {
@@ -288,30 +318,27 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
             }
 
         # Fallback: resolve org from DB (current Supabase JWTs don't embed org_id).
-        # Reuses the caller's session — no extra connection needed.
-        try:
+        # Reuses the caller's session — no extra connection needed. As above,
+        # lookup failures propagate (-> 500), never collapse into None (-> 401).
+        result = await db.execute(select(User).where(*active_user))
+        user = result.scalars().first()
+        if not user:
+            # User doesn't exist yet — JIT-provision, then re-query.
+            try:
+                async with AsyncSessionLocal() as prov_db:
+                    await ensure_user_and_org(prov_db, token_data)
+                    await prov_db.commit()
+            except Exception as e:
+                logger.debug("JIT-provision skipped (non-fatal): %s", e)
             result = await db.execute(select(User).where(*active_user))
             user = result.scalars().first()
-            if not user:
-                # User doesn't exist yet — JIT-provision, then re-query.
-                try:
-                    async with AsyncSessionLocal() as prov_db:
-                        await ensure_user_and_org(prov_db, token_data)
-                        await prov_db.commit()
-                except Exception as e:
-                    logger.debug("JIT-provision skipped (non-fatal): %s", e)
-                result = await db.execute(select(User).where(*active_user))
-                user = result.scalars().first()
-            if not user or not user.organization_id:
-                return None
-            return {
-                "organization_id": str(user.organization_id),
-                "user_id": str(token_data.user_id),
-                "role": _role_to_str(user.role),
-            }
-        except Exception as e:
-            logger.error(f"Error resolving tenant from token: {e}")
+        if not user or not user.organization_id:
             return None
+        return {
+            "organization_id": str(user.organization_id),
+            "user_id": str(token_data.user_id),
+            "role": _role_to_str(user.role),
+        }
 
     async def _validate_tenant_access(
         self,
