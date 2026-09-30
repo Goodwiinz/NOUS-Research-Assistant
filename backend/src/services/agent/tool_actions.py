@@ -26,11 +26,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
+from src.models.collection import Collection
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
 from src.schemas.integration_tools import ToolInvocation, ToolResult
-from src.schemas.tool_actions import ActionActor, ActionStatus
+from src.schemas.tool_actions import ActionActor, ActionReview, ActionStatus
 from src.services.integrations.context import live
 
 logger = logging.getLogger(__name__)
@@ -97,12 +98,23 @@ def _validate_note_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     return {"title": title, "content": content, "tags": tags}
 
 
+def approval_url(invocation_id: UUID) -> str:
+    # Same origin rule as the CLI login link (api/auth/cli_auth.py).
+    base = (settings.FRONTEND_BASE_URL or settings.cors_origins_list[0]).rstrip("/")
+    return f"{base}/integrations/actions/{invocation_id}"
+
+
 def _status(row: IntegrationToolAction) -> ActionStatus:
     return ActionStatus(
         invocation_id=row.invocation_id,
         state=cast(Any, row.state),
         tool_name=row.tool_name,
         result=ToolResult.model_validate(row.result) if row.result else None,
+        approval_url=(
+            approval_url(row.invocation_id)
+            if row.state == "awaiting_approval"
+            else None
+        ),
     )
 
 
@@ -224,6 +236,45 @@ async def get_action_status(
     if row is None:
         raise ActionNotFound()
     return _status(row)
+
+
+async def get_action_for_review(
+    db: AsyncSession, user: User, invocation_id: UUID
+) -> ActionReview:
+    """The requester's own action with its stored target, for the decision page."""
+    if user.organization_id is None:
+        raise ActionNotFound()
+    found = (
+        await db.execute(
+            select(IntegrationToolAction, Collection.name)
+            .join(Collection, Collection.id == IntegrationToolAction.project_id)
+            .where(
+                IntegrationToolAction.organization_id == user.organization_id,
+                IntegrationToolAction.user_id == user.id,
+                IntegrationToolAction.invocation_id == invocation_id,
+                IntegrationToolAction.is_deleted.is_(False),
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).first()
+    if found is None:
+        raise ActionNotFound()
+    row, project_label = found
+    arguments = row.arguments or {}
+    return ActionReview(
+        invocation_id=row.invocation_id,
+        state=cast(Any, row.state),
+        tool_name=row.tool_name,
+        project_id=row.project_id,
+        project_label=str(project_label),
+        title=str(arguments.get("title", "")),
+        content=str(arguments.get("content", "")),
+        tags=[str(t) for t in arguments.get("tags", [])],
+        requested_at=row.created_at,
+        decided_at=row.decided_at,
+        result=ToolResult.model_validate(row.result) if row.result else None,
+        last_error=row.last_error,
+    )
 
 
 async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str | None:

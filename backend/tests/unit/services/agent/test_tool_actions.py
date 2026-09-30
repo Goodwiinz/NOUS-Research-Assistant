@@ -31,6 +31,7 @@ from src.services.agent.tool_actions import (
     decide_action,
     drain_integration_actions,
     execute_action,
+    get_action_for_review,
     get_action_status,
     request_action,
     sweep_stale_actions,
@@ -378,6 +379,45 @@ async def test_decision_binds_once_and_only_to_the_requesting_user(
         await decide_action(db, await _user(db), status.invocation_id, approved=True)
     assert await execute_action(db, status.invocation_id) is None
     assert await _note_count(db) == 0
+
+
+# --- approval link and review ----------------------------------------------
+
+
+async def test_approval_link_is_absolute_and_only_offered_while_pending(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        tool_actions.settings, "FRONTEND_BASE_URL", "https://app.example.test/"
+    )
+    status = await request_action(db, _actor(), _invocation())
+    assert status.approval_url == (
+        f"https://app.example.test/integrations/actions/{status.invocation_id}"
+    )
+    await _approve(db, status.invocation_id)
+    assert (
+        await get_action_status(db, _actor(), status.invocation_id)
+    ).approval_url is None
+
+
+async def test_review_shows_the_stored_target_to_the_requester_only(
+    db: AsyncSession,
+) -> None:
+    status = await request_action(db, _actor(), _invocation(tags=["x", "y"]))
+    review = await get_action_for_review(db, await _user(db), status.invocation_id)
+    assert (review.title, review.content, review.tags) == (
+        "Findings",
+        "# Findings\n",
+        ["x", "y"],
+    )
+    assert (review.project_id, review.project_label) == (PROJECT, "Project")
+    assert review.state == "awaiting_approval" and review.decided_at is None
+    with pytest.raises(ActionNotFound):
+        await get_action_for_review(
+            db, await _user(db, OTHER_USER), status.invocation_id
+        )
+    with pytest.raises(ActionNotFound):
+        await get_action_for_review(db, await _user(db), uuid4())
 
 
 # --- status scope ----------------------------------------------------------
