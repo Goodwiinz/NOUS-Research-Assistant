@@ -85,6 +85,15 @@ def pre_wave_connection(request: pytest.FixtureRequest) -> Iterator[Connection]:
     with scoped_engine.begin() as connection:
         connection.exec_driver_sql("DROP TABLE research_project_role_assignments")
         connection.exec_driver_sql("DROP TYPE researchprojectrole")
+        # GOO-306 claim versions reference draft_reviews; this fixture predates them.
+        for table in (
+            "research_claim_assessments",
+            "research_claim_stance_observations",
+            "research_claim_evidence_links",
+            "research_claim_versions",
+            "research_claims",
+        ):
+            connection.exec_driver_sql(f'DROP TABLE "{table}"')
         connection.exec_driver_sql("DROP TABLE draft_reviews")
         connection.exec_driver_sql(
             "ALTER TABLE research_projects DROP COLUMN collection_id CASCADE"

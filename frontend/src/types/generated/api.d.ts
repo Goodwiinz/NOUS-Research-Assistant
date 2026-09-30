@@ -5004,6 +5004,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Claims
+         * @description Each claim's tip version, or its version pinned to ``draft_id``.
+         */
+        get: operations["list_claims_api_v1_projects__project_id__claims_get"];
+        put?: never;
+        /**
+         * Create Claim
+         * @description Create a claim over an exact draft passage (EDIT).
+         */
+        post: operations["create_claim_api_v1_projects__project_id__claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Claims
+         * @description Download the reconstructable claims evidence package (VIEW).
+         */
+        get: operations["export_claims_api_v1_projects__project_id__claims_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Claim
+         * @description The claim's full version, link, observation and assessment history.
+         */
+        get: operations["get_claim_api_v1_projects__project_id__claims__claim_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}/assessments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Claim Assessment
+         * @description Assess the claim's tip version (ADJUDICATOR role only).
+         */
+        post: operations["create_claim_assessment_api_v1_projects__project_id__claims__claim_id__assessments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Claim Link
+         * @description Link, re-point or withdraw evidence on the claim's tip version (EDIT).
+         */
+        post: operations["create_claim_link_api_v1_projects__project_id__claims__claim_id__links_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}/links/{link_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Stance Observation
+         * @description Snapshot the evidence meter's stance for this link's source (EDIT).
+         */
+        post: operations["create_stance_observation_api_v1_projects__project_id__claims__claim_id__links__link_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Claim Version
+         * @description Append a reworded version superseding the claim's tip (EDIT).
+         */
+        post: operations["create_claim_version_api_v1_projects__project_id__claims__claim_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/documents": {
         parameters: {
             query?: never;
@@ -10967,6 +11111,378 @@ export interface components {
             strategy: string;
             /** Title */
             title?: string | null;
+        };
+        /**
+         * ClaimAssessmentCreate
+         * @description An adjudicator's judgement of the claim's tip version.
+         */
+        ClaimAssessmentCreate: {
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Link Ids */
+            link_ids?: string[];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Stance
+             * @enum {string}
+             */
+            stance: "supporting" | "opposing" | "neutral" | "not_addressed" | "unresolved";
+            /** Stance Observation Ids */
+            stance_observation_ids?: string[];
+            /** Supersedes Assessment Id */
+            supersedes_assessment_id?: string | null;
+        };
+        /** ClaimAssessmentResponse */
+        ClaimAssessmentResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Assessed By Id
+             * Format: uuid
+             */
+            assessed_by_id: string;
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Link Ids */
+            link_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Stance
+             * @enum {string}
+             */
+            stance: "supporting" | "opposing" | "neutral" | "not_addressed" | "unresolved";
+            /** Stance Observation Ids */
+            stance_observation_ids: string[];
+            /** Supersedes Assessment Id */
+            supersedes_assessment_id?: string | null;
+        };
+        /** ClaimCounts */
+        ClaimCounts: {
+            /** Assessed */
+            assessed: number;
+            /** Claims */
+            claims: number;
+            /** Legacy Unanchored */
+            legacy_unanchored: number;
+            /** Links By Kind */
+            links_by_kind: {
+                [key: string]: number;
+            };
+            /** Unassessed */
+            unassessed: number;
+        };
+        /**
+         * ClaimCreate
+         * @description A new claim over ``draft.content[start_char:end_char]`` (exactly).
+         */
+        ClaimCreate: {
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** End Char */
+            end_char: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @default factual
+             * @enum {string}
+             */
+            kind: "factual" | "interpretation";
+            /** Start Char */
+            start_char: number;
+            /** Text */
+            text: string;
+        };
+        /**
+         * ClaimDetailResponse
+         * @description The full history, each list in ``created_at, id`` order.
+         */
+        ClaimDetailResponse: {
+            /** Assessments */
+            assessments: components["schemas"]["ClaimAssessmentResponse"][];
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Links */
+            links: components["schemas"]["ClaimLinkResponse"][];
+            /** Observations */
+            observations: components["schemas"]["StanceObservationResponse"][];
+            /** Versions */
+            versions: components["schemas"]["ClaimVersionResponse"][];
+        };
+        /**
+         * ClaimLinkCreate
+         * @description Link the claim's tip version to evidence, or withdraw/re-point a link.
+         *
+         *     ``extraction`` takes ``accepted_value_id``; ``source_span`` takes
+         *     ``document_id``, ``start_char``, ``end_char`` and ``quote``;
+         *     ``legacy_unanchored`` takes ``draft_citation_id``. The server copies the
+         *     source hashes. A ``withdrawn`` row supersedes a link and copies its target.
+         */
+        ClaimLinkCreate: {
+            /** Accepted Value Id */
+            accepted_value_id?: string | null;
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /** Document Id */
+            document_id?: string | null;
+            /** Draft Citation Id */
+            draft_citation_id?: string | null;
+            /** End Char */
+            end_char?: number | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "extraction" | "source_span" | "legacy_unanchored";
+            /** Quote */
+            quote?: string | null;
+            /** Start Char */
+            start_char?: number | null;
+            /**
+             * Status
+             * @default linked
+             * @enum {string}
+             */
+            status: "linked" | "withdrawn";
+            /** Supersedes Link Id */
+            supersedes_link_id?: string | null;
+        };
+        /** ClaimLinkResponse */
+        ClaimLinkResponse: {
+            /** Accepted Value Id */
+            accepted_value_id?: string | null;
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Document Id */
+            document_id?: string | null;
+            /** Draft Citation Id */
+            draft_citation_id?: string | null;
+            /** End Char */
+            end_char?: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "extraction" | "source_span" | "legacy_unanchored";
+            latest_observation?: components["schemas"]["StanceObservationResponse"] | null;
+            /** Quote */
+            quote?: string | null;
+            /**
+             * Source Changed
+             * @default false
+             */
+            source_changed: boolean;
+            /** Source Hash */
+            source_hash?: string | null;
+            /** Start Char */
+            start_char?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "linked" | "withdrawn";
+            /** Supersedes Link Id */
+            supersedes_link_id?: string | null;
+            /** Text Sha256 */
+            text_sha256?: string | null;
+        };
+        /** ClaimListResponse */
+        ClaimListResponse: {
+            counts: components["schemas"]["ClaimCounts"];
+            /** Items */
+            items: components["schemas"]["ClaimSummary"][];
+        };
+        /** ClaimResponse */
+        ClaimResponse: {
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            version: components["schemas"]["ClaimVersionResponse"];
+        };
+        /**
+         * ClaimSummary
+         * @description One claim: its tip version, or the version pinned to the filtered draft.
+         */
+        ClaimSummary: {
+            assessment?: components["schemas"]["ClaimAssessmentResponse"] | null;
+            /** Citation Review Status */
+            citation_review_status?: string | null;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Is Tip */
+            is_tip: boolean;
+            /** Links */
+            links: components["schemas"]["ClaimLinkResponse"][];
+            version: components["schemas"]["ClaimVersionResponse"];
+        };
+        /**
+         * ClaimVersionCreate
+         * @description A reworded passage; it must supersede the claim's current version.
+         */
+        ClaimVersionCreate: {
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** End Char */
+            end_char: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @default factual
+             * @enum {string}
+             */
+            kind: "factual" | "interpretation";
+            /** Start Char */
+            start_char: number;
+            /**
+             * Supersedes Claim Version Id
+             * Format: uuid
+             */
+            supersedes_claim_version_id: string;
+            /** Text */
+            text: string;
+        };
+        /** ClaimVersionResponse */
+        ClaimVersionResponse: {
+            /** Attributed To User Id */
+            attributed_to_user_id?: string | null;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Draft Content Hash */
+            draft_content_hash: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Draft Review Id */
+            draft_review_id?: string | null;
+            /** Draft Version */
+            draft_version: number;
+            /** End Char */
+            end_char: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "factual" | "interpretation";
+            /** Normalized Hash */
+            normalized_hash: string;
+            /** Start Char */
+            start_char: number;
+            /** Supersedes Claim Version Id */
+            supersedes_claim_version_id?: string | null;
+            /** Text */
+            text: string;
+            /** Text Sha256 */
+            text_sha256: string;
+            /** Version No */
+            version_no: number;
         };
         /**
          * CollectionCreate
@@ -17295,6 +17811,56 @@ export interface components {
             stance: components["schemas"]["Stance"];
             /** Title */
             title: string;
+        };
+        /**
+         * StanceObservationCreate
+         * @description Snapshot the evidence meter's current stance for this link's source.
+         */
+        StanceObservationCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** StanceObservationResponse */
+        StanceObservationResponse: {
+            /** Classified At */
+            classified_at?: string | null;
+            /** Classifier Confidence */
+            classifier_confidence: number;
+            /** Classifier Version */
+            classifier_version: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Inference Model Version */
+            inference_model_version?: string | null;
+            /** Justification Excerpt */
+            justification_excerpt?: string | null;
+            /**
+             * Link Id
+             * Format: uuid
+             */
+            link_id: string;
+            /**
+             * Observed By Id
+             * Format: uuid
+             */
+            observed_by_id: string;
+            /** Source Content Hash */
+            source_content_hash: string;
+            /**
+             * Stance
+             * @enum {string}
+             */
+            stance: "supporting" | "opposing" | "neutral" | "not_addressed";
+            /** Stance Classification Id */
+            stance_classification_id?: string | null;
         };
         /**
          * StartChatFromProjectRequest
@@ -27244,6 +27810,284 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_claims_api_v1_projects__project_id__claims_get: {
+        parameters: {
+            query?: {
+                draft_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_claim_api_v1_projects__project_id__claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_claims_api_v1_projects__project_id__claims_export_get: {
+        parameters: {
+            query?: {
+                draft_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_claim_api_v1_projects__project_id__claims__claim_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_claim_assessment_api_v1_projects__project_id__claims__claim_id__assessments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimAssessmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimAssessmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_claim_link_api_v1_projects__project_id__claims__claim_id__links_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimLinkCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimLinkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_stance_observation_api_v1_projects__project_id__claims__claim_id__links__link_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+                link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StanceObservationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StanceObservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_claim_version_api_v1_projects__project_id__claims__claim_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimVersionResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

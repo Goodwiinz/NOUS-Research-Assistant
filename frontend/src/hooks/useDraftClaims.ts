@@ -1,0 +1,18 @@
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { projectService } from '@/services/projectService';
+import type { ApiClaimListResponse } from '@/types/api/research-claims-contract';
+
+export const draftClaimsQueryKey = (projectId: string, draftId: string) =>
+  ['project', projectId, 'claims', draftId] as const;
+
+export function useDraftClaims(
+  projectId: string,
+  draftId: string
+): UseQueryResult<ApiClaimListResponse, Error> {
+  return useQuery({
+    queryKey: draftClaimsQueryKey(projectId, draftId),
+    queryFn: () => projectService.listClaims(projectId, draftId),
+    enabled: Boolean(projectId && draftId),
+    retry: false,
+  });
+}
