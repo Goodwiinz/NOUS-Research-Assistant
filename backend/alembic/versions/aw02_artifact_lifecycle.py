@@ -9,7 +9,9 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "aw02_artifact_lifecycle"
-down_revision = "aw01_artifact_workspace"
+# Merge point: develop carried aw01 (artifacts) and d4e6f8a0b2c3 (search
+# imports, #1754) as sibling heads off c9d1e2f3a4b5.
+down_revision = ("aw01_artifact_workspace", "d4e6f8a0b2c3")
 branch_labels = None
 depends_on = None
 
