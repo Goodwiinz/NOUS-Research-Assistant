@@ -7,10 +7,11 @@ NOUS memory, prompts or state is exposed.
 """
 
 import json
+from datetime import datetime, timezone
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,15 +33,20 @@ from src.services.integrations.context import (
 
 CONTEXT_SCOPE = "context:read"
 MAX_OPTIONS = 100
+# Wire budget for one read, measured as UTF-8 bytes of the JSON result.
 MAX_RESULT_BYTES = 64 * 1024
 
 
 class ContextNotFound(Exception):
-    """Opaque: missing, foreign, revoked, or without context:read."""
+    """Opaque: missing, foreign, revoked, expired, or without context:read."""
 
 
 class ContextSelectionInvalid(Exception):
     """A selected id is not one of the owner's memories in this project."""
+
+
+class ContextSelectionTooLarge(Exception):
+    """The selected memories would not fit in one read."""
 
 
 def _identity(user: User) -> tuple[UUID, UUID]:
@@ -49,16 +55,29 @@ def _identity(user: User) -> tuple[UUID, UUID]:
     return cast(UUID, user.id), cast(UUID, user.organization_id)
 
 
+def _wire_bytes(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+
+
 async def _owned_consent(
     db: AsyncSession, user_id: UUID, organization_id: UUID, request_id: UUID
-) -> IntegrationGrantRequest:
+) -> tuple[UUID, UUID]:
+    """(consent id, project id) for the owner's live context consent."""
     consent = await db.scalar(
         select(IntegrationGrantRequest)
         .where(
             IntegrationGrantRequest.id == request_id,
             IntegrationGrantRequest.user_id == user_id,
             IntegrationGrantRequest.organization_id == organization_id,
-            IntegrationGrantRequest.status.in_(("approved", "consumed")),
+            # Approved-but-unexchanged consents may be prepared before the
+            # device exchanges them, but only until they expire.
+            or_(
+                IntegrationGrantRequest.status == "consumed",
+                and_(
+                    IntegrationGrantRequest.status == "approved",
+                    IntegrationGrantRequest.expires_at > datetime.now(timezone.utc),
+                ),
+            ),
             IntegrationGrantRequest.consent_revoked_at.is_(None),
             IntegrationGrantRequest.is_deleted.is_(False),
         )
@@ -66,7 +85,17 @@ async def _owned_consent(
     )
     if consent is None or CONTEXT_SCOPE not in (consent.scopes or []):
         raise ContextNotFound()
-    return cast(IntegrationGrantRequest, consent)
+    return cast(UUID, consent.id), cast(UUID, consent.project_id)
+
+
+async def _authorized_label(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, project_id: UUID
+) -> str:
+    try:
+        project = await authorized_project(db, user_id, organization_id, project_id)
+    except IntegrationAccessDenied as error:
+        raise ContextNotFound() from error
+    return str(project.name)
 
 
 async def _selection(
@@ -98,29 +127,58 @@ def _owned_memories(project_id: UUID, user_id: UUID, organization_id: UUID) -> A
     )
 
 
-async def context_options(
-    db: AsyncSession, user: User, request_id: UUID
-) -> ContextOptions:
-    user_id, organization_id = _identity(user)
-    consent = await _owned_consent(db, user_id, organization_id, request_id)
-    try:
-        project = await authorized_project(
-            db, user_id, organization_id, consent.project_id
-        )
-    except IntegrationAccessDenied as error:
-        raise ContextNotFound() from error
-    memories = (
+async def _valid_selected(
+    db: AsyncSession,
+    ids: list[UUID],
+    project_id: UUID,
+    user_id: UUID,
+    organization_id: UUID,
+) -> list[ProjectMemory]:
+    """The still-owned memories among `ids`, in selection order."""
+    if not ids:
+        return []
+    rows = (
         await db.scalars(
-            _owned_memories(consent.project_id, user_id, organization_id)
+            _owned_memories(project_id, user_id, organization_id).where(
+                ProjectMemory.id.in_(ids)
+            )
+        )
+    ).all()
+    by_id = {m.id: m for m in rows}
+    return [by_id[i] for i in ids if i in by_id]
+
+
+async def _options(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, request_id: UUID
+) -> ContextOptions:
+    consent_id, project_id = await _owned_consent(
+        db, user_id, organization_id, request_id
+    )
+    label = await _authorized_label(db, user_id, organization_id, project_id)
+    selection = await _selection(db, consent_id, user_id, organization_id)
+    selected = await _valid_selected(
+        db,
+        [UUID(i) for i in (selection.memory_ids if selection else [])],
+        project_id,
+        user_id,
+        organization_id,
+    )
+    recent = (
+        await db.scalars(
+            _owned_memories(project_id, user_id, organization_id)
             .order_by(ProjectMemory.created_at.desc())
             .limit(MAX_OPTIONS)
         )
     ).all()
-    selection = await _selection(db, consent.id, user_id, organization_id)
+    # Selected memories are always listed, even past the newest 100, so a
+    # later save can never silently drop one the user cannot see.
+    listed = {m.id: m for m in recent}
+    for memory in selected:
+        listed.setdefault(memory.id, memory)
     return ContextOptions(
-        request_id=consent.id,
-        project_id=consent.project_id,
-        project_label=str(project.name),
+        request_id=consent_id,
+        project_id=project_id,
+        project_label=label,
         memories=[
             MemoryOption(
                 id=m.id,
@@ -128,12 +186,50 @@ async def context_options(
                 source=str(m.source),
                 created_at=m.created_at,
             )
-            for m in memories
+            for m in listed.values()
         ],
-        selected_memory_ids=[
-            UUID(i) for i in (selection.memory_ids if selection else [])
-        ],
+        selected_memory_ids=[m.id for m in selected],
     )
+
+
+async def context_options(
+    db: AsyncSession, user: User, request_id: UUID
+) -> ContextOptions:
+    user_id, organization_id = _identity(user)
+    return await _options(db, user_id, organization_id, request_id)
+
+
+async def _write_selection(
+    db: AsyncSession,
+    user_id: UUID,
+    organization_id: UUID,
+    request_id: UUID,
+    ordered: list[UUID],
+) -> None:
+    consent_id, project_id = await _owned_consent(
+        db, user_id, organization_id, request_id
+    )
+    await _authorized_label(db, user_id, organization_id, project_id)
+    memories = await _valid_selected(db, ordered, project_id, user_id, organization_id)
+    if len(memories) != len(ordered):
+        raise ContextSelectionInvalid()
+    if _wire_bytes([str(m.content) for m in memories]) > MAX_RESULT_BYTES:
+        raise ContextSelectionTooLarge()
+    values = [str(i) for i in ordered]
+    row = await _selection(db, consent_id, user_id, organization_id)
+    if row is not None:
+        row.memory_ids = values
+    else:
+        db.add(
+            IntegrationContextSelection(
+                organization_id=organization_id,
+                user_id=user_id,
+                project_id=project_id,
+                consent_id=consent_id,
+                memory_ids=values,
+            )
+        )
+    await db.commit()
 
 
 async def save_selection(
@@ -144,48 +240,14 @@ async def save_selection(
     ordered = list(dict.fromkeys(memory_ids))
     if len(ordered) > MAX_SELECTED_MEMORIES:
         raise ContextSelectionInvalid()
-    consent = await _owned_consent(db, user_id, organization_id, request_id)
     try:
-        await authorized_project(db, user_id, organization_id, consent.project_id)
-    except IntegrationAccessDenied as error:
-        raise ContextNotFound() from error
-    if ordered:
-        found = set(
-            (
-                await db.scalars(
-                    _owned_memories(consent.project_id, user_id, organization_id)
-                    .with_only_columns(ProjectMemory.id)
-                    .where(ProjectMemory.id.in_(ordered))
-                )
-            ).all()
-        )
-        if found != set(ordered):
-            raise ContextSelectionInvalid()
-    values = [str(i) for i in ordered]
-    row = await _selection(db, consent.id, user_id, organization_id)
-    if row is not None:
-        row.memory_ids = values
-    else:
-        db.add(
-            IntegrationContextSelection(
-                organization_id=organization_id,
-                user_id=user_id,
-                project_id=consent.project_id,
-                consent_id=consent.id,
-                memory_ids=values,
-            )
-        )
-    try:
-        await db.commit()
+        await _write_selection(db, user_id, organization_id, request_id, ordered)
     except IntegrityError:
-        # A concurrent first save won; apply this one on top of it.
+        # A concurrent first save inserted the row; rerun the whole validated
+        # write once, now as an update. Only plain ids survive the rollback.
         await db.rollback()
-        row = await _selection(db, consent.id, user_id, organization_id)
-        if row is None:
-            raise
-        row.memory_ids = values
-        await db.commit()
-    return await context_options(db, user, request_id)
+        await _write_selection(db, user_id, organization_id, request_id, ordered)
+    return await _options(db, user_id, organization_id, request_id)
 
 
 def _unavailable(code: str) -> ToolResult:
@@ -211,29 +273,25 @@ async def read_selected_context(
     )
     if selection is None or selection.project_id != context.project_id:
         return ToolResult(content=[{"memories": []}], is_error=False, source_refs=[])
-    wanted = [UUID(i) for i in selection.memory_ids]
-    rows = (
-        (
-            await db.scalars(
-                _owned_memories(
-                    context.project_id, context.user_id, context.organization_id
-                ).where(ProjectMemory.id.in_(wanted))
-            )
-        ).all()
-        if wanted
-        else []
+    selected = await _valid_selected(
+        db,
+        [UUID(i) for i in selection.memory_ids],
+        context.project_id,
+        context.user_id,
+        context.organization_id,
     )
-    by_id = {m.id: m for m in rows}
-    memories = [
-        {"memory_id": str(i), "content": str(by_id[i].content)}
-        for i in wanted
-        if i in by_id
-    ]
-    result = ToolResult(
-        content=[{"memories": memories}],
+    # Memories can grow after they were selected; share the leading ones that
+    # fit and say so, rather than nothing at all.
+    memories: list[dict[str, str]] = []
+    truncated = False
+    for memory in selected:
+        item = {"memory_id": str(memory.id), "content": str(memory.content)}
+        if _wire_bytes({"memories": [*memories, item]}) > MAX_RESULT_BYTES:
+            truncated = True
+            break
+        memories.append(item)
+    return ToolResult(
+        content=[{"memories": memories, **({"truncated": True} if truncated else {})}],
         is_error=False,
         source_refs=[{"memory_id": m["memory_id"]} for m in memories],
     )
-    if len(json.dumps(result.model_dump(mode="json")).encode()) > MAX_RESULT_BYTES:
-        return _unavailable("result_too_large")
-    return result

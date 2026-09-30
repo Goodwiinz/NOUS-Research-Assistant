@@ -25,6 +25,7 @@ from src.schemas.integration_tools import ToolResult
 from src.services.integrations.selected_context import (
     ContextNotFound,
     ContextSelectionInvalid,
+    ContextSelectionTooLarge,
     context_options,
     read_selected_context,
     save_selection,
@@ -58,6 +59,10 @@ async def put_context_selection(
     except ContextSelectionInvalid as error:
         raise HTTPException(
             422, "Selected memories must belong to this project"
+        ) from error
+    except ContextSelectionTooLarge as error:
+        raise HTTPException(
+            422, "Selected memories exceed the 64 KiB sharing limit"
         ) from error
 
 

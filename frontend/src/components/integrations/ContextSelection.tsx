@@ -19,6 +19,7 @@ export function ContextSelection({
   requestId: string;
 }): ReactElement {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const queryKey = ['integration-context', user?.id, requestId];
   const options = useQuery({
     queryKey,
@@ -26,6 +27,13 @@ export function ContextSelection({
     queryFn: () => integrationContextService.options(requestId),
     retry: false,
     staleTime: 0,
+  });
+  // Owned here, not by the form, so the result survives the form remounting
+  // on the new saved selection.
+  const save = useMutation({
+    mutationFn: (memoryIds: string[]) =>
+      integrationContextService.save(requestId, memoryIds),
+    onSuccess: (saved) => queryClient.setQueryData(queryKey, saved),
   });
 
   return (
@@ -44,10 +52,24 @@ export function ContextSelection({
       )}
       {options.data && (
         <SelectionForm
-          key={options.data.request_id}
+          // A new saved selection (here or in another tab) resets the checks.
+          key={`${options.data.request_id}:${options.data.selected_memory_ids.join(',')}`}
           data={options.data}
-          queryKey={queryKey}
+          saving={save.isPending}
+          onSave={(ids) => save.mutate(ids)}
         />
+      )}
+      {save.isError && (
+        <p role="alert">
+          The selection was not saved. It may exceed the sharing limit or be out
+          of date; reload and try again.
+        </p>
+      )}
+      {save.isSuccess && options.data && (
+        <p role="status">
+          Saved. The connected device can read{' '}
+          {options.data.selected_memory_ids.length} selected memories.
+        </p>
       )}
     </section>
   );
@@ -55,23 +77,16 @@ export function ContextSelection({
 
 function SelectionForm({
   data,
-  queryKey,
+  saving,
+  onSave,
 }: {
   data: ApiContextOptions;
-  queryKey: (string | undefined)[];
+  saving: boolean;
+  onSave: (memoryIds: string[]) => void;
 }): ReactElement {
-  const queryClient = useQueryClient();
   const [checked, setChecked] = useState<Set<string>>(
     () => new Set(data.selected_memory_ids)
   );
-  const save = useMutation({
-    mutationFn: () =>
-      integrationContextService.save(
-        data.request_id,
-        data.memories.map((m) => m.id).filter((id) => checked.has(id))
-      ),
-    onSuccess: (saved) => queryClient.setQueryData(queryKey, saved),
-  });
   const full = checked.size >= MAX_SHARED_MEMORIES;
   const toggle = (id: string): void =>
     setChecked((prev) => {
@@ -86,7 +101,8 @@ function SelectionForm({
       className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault();
-        save.mutate();
+        // Selected memories are always listed, so list order is safe here.
+        onSave(data.memories.map((m) => m.id).filter((id) => checked.has(id)));
       }}
     >
       <p>
@@ -112,18 +128,9 @@ function SelectionForm({
           ))}
         </fieldset>
       )}
-      {save.isError && (
-        <p role="alert">The selection was not saved. Try again.</p>
-      )}
-      {save.isSuccess && (
-        <p role="status">
-          Saved. The connected device can read {data.selected_memory_ids.length}{' '}
-          selected memories.
-        </p>
-      )}
       <button
         type="submit"
-        disabled={save.isPending}
+        disabled={saving}
         className="rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50"
       >
         Save selection

@@ -120,6 +120,24 @@ describe('ContextSelection', () => {
     );
   });
 
+  it('refreshes the checks when the saved selection changed elsewhere', async () => {
+    vi.mocked(integrationContextService.options)
+      .mockResolvedValueOnce(options([]))
+      .mockResolvedValue(options(['m1']));
+    const { rerender } = render(<ContextSelection requestId={REQUEST} />);
+    expect(
+      await screen.findByRole('checkbox', { name: 'Cite in APA' })
+    ).not.toBeChecked();
+    // Another tab saved m1; a refetch delivers it.
+    auth.user = { id: 'u1b' };
+    rerender(<ContextSelection requestId={REQUEST} />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole('checkbox', { name: 'Cite in APA' })
+      ).toBeChecked()
+    );
+  });
+
   it('keys the cache by account so a switch never shows the previous selection', async () => {
     vi.mocked(integrationContextService.options).mockResolvedValue(options());
     const { rerender } = render(<ContextSelection requestId={REQUEST} />);

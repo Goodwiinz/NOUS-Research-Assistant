@@ -18,9 +18,11 @@ from src.models.project_memory import ProjectMemory
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_context import IntegrationContext
+from src.services.integrations import selected_context
 from src.services.integrations.selected_context import (
     ContextNotFound,
     ContextSelectionInvalid,
+    ContextSelectionTooLarge,
     context_options,
     read_selected_context,
     save_selection,
@@ -153,7 +155,8 @@ async def test_options_list_only_the_owners_memories_in_the_consent_project(
 
 
 @pytest.mark.parametrize(
-    "case", ["other-user", "no-scope", "revoked", "pending", "unknown"]
+    "case",
+    ["other-user", "no-scope", "revoked", "pending", "approved-expired", "unknown"],
 )
 async def test_options_are_refused_outside_an_owned_context_consent(
     db: AsyncSession, case: str
@@ -172,6 +175,14 @@ async def test_options_are_refused_outside_an_owned_context_consent(
         await db.commit()
     elif case == "pending":
         await db.execute(update(IntegrationGrantRequest).values(status="pending"))
+        await db.commit()
+    elif case == "approved-expired":
+        await db.execute(
+            update(IntegrationGrantRequest).values(
+                status="approved",
+                expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
         await db.commit()
     else:
         request_id = uuid4()
@@ -268,3 +279,75 @@ async def test_a_grant_without_consent_has_no_selection(db: AsyncSession) -> Non
     result = await read_selected_context(db, _grant_context(INTERNAL))
     assert result.is_error is True
     assert result.content == [{"error": "no_context_selection"}]
+
+
+async def test_concurrent_first_save_applies_instead_of_failing(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await save_selection(db, await _user(db), CONSENT, [KEEP])
+    # The loser of a first-save race does not see the winner's row yet.
+    real = selected_context._selection
+    calls = {"n": 0}
+
+    async def stale_once(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        return None if calls["n"] == 1 else await real(*args, **kwargs)
+
+    monkeypatch.setattr(selected_context, "_selection", stale_once)
+    saved = await save_selection(db, await _user(db), CONSENT, [THIRD])
+    assert saved.selected_memory_ids == [THIRD]
+    monkeypatch.setattr(selected_context, "_selection", real)
+    assert _memory_ids(await read_selected_context(db, _grant_context())) == [
+        str(THIRD)
+    ]
+
+
+async def test_selected_memories_stay_listed_past_the_newest_hundred(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await save_selection(db, await _user(db), CONSENT, [KEEP])
+    monkeypatch.setattr(selected_context, "MAX_OPTIONS", 1)
+    options = await context_options(db, await _user(db), CONSENT)
+    assert KEEP in {m.id for m in options.memories}
+    assert options.selected_memory_ids == [KEEP]
+
+
+async def test_deleted_memories_leave_the_saved_selection(db: AsyncSession) -> None:
+    await save_selection(db, await _user(db), CONSENT, [KEEP, THIRD])
+    await db.execute(
+        update(ProjectMemory).where(ProjectMemory.id == KEEP).values(is_deleted=True)
+    )
+    await db.commit()
+    options = await context_options(db, await _user(db), CONSENT)
+    assert options.selected_memory_ids == [THIRD]
+
+
+async def test_oversized_selection_is_refused_and_growth_is_truncated(
+    db: AsyncSession,
+) -> None:
+    # Multibyte text is measured in UTF-8 bytes, not escaped ASCII.
+    big = "\u6f22" * 12_000  # 36,000 bytes each in UTF-8
+    for memory_id in (KEEP, THIRD):
+        await db.execute(
+            update(ProjectMemory)
+            .where(ProjectMemory.id == memory_id)
+            .values(content=big)
+        )
+    await db.commit()
+    with pytest.raises(ContextSelectionTooLarge):
+        await save_selection(db, await _user(db), CONSENT, [KEEP, THIRD])
+    await save_selection(db, await _user(db), CONSENT, [KEEP])
+    # THIRD is small again when saved, then grows past the budget.
+    await db.execute(
+        update(ProjectMemory).where(ProjectMemory.id == THIRD).values(content="short")
+    )
+    await db.commit()
+    await save_selection(db, await _user(db), CONSENT, [KEEP, THIRD])
+    await db.execute(
+        update(ProjectMemory).where(ProjectMemory.id == THIRD).values(content=big)
+    )
+    await db.commit()
+    result = await read_selected_context(db, _grant_context())
+    assert result.is_error is False
+    assert _memory_ids(result) == [str(KEEP)]
+    assert result.content[0]["truncated"] is True
