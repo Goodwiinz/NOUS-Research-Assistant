@@ -7,6 +7,7 @@ from typing import Any
 
 from src.services.research_engine.report_identity import (
     IDENTITY_KINDS,
+    MAX_IDENTIFIER_LENGTH,
     assign_report,
     report_identifiers,
 )
@@ -87,3 +88,21 @@ def test_gold_fixture_precision_and_recall() -> None:
     assert recall >= gold["min_recall"]  # identifier-only ceiling
     for a, b in gold["known_false_merges"]:
         assert clusters[a] != clusters[b]
+
+
+def test_overlong_identifiers_are_dropped_not_truncated() -> None:
+    """The index key and the persisted ``String(512)`` value must be the same
+    string, so an identifier that cannot be stored whole is not an identity key."""
+    prefix = "10.1000/" + "a" * 600
+    first = {"doi": prefix + "x", "pmid": "1"}
+    second = {"doi": prefix + "y", "pmid": "2"}
+    assert report_identifiers(first) == {"pmid": "1"}
+    exact = {"doi": "10.1000/" + "a" * (MAX_IDENTIFIER_LENGTH - 8)}
+    assert report_identifiers(exact) == exact
+    clusters = cluster_records(
+        [
+            {"id": "s1", "connector_type": "crossref", "identifiers": first},
+            {"id": "s2", "connector_type": "crossref", "identifiers": second},
+        ]
+    )
+    assert clusters["s1"] != clusters["s2"]
