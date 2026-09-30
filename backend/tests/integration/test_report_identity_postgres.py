@@ -64,7 +64,9 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _IDENTITY_TABLES = (
-    # GOO-301 screening tables reference research_reports: drop them first.
+    # GOO-301/302 screening tables reference research_reports: drop them first,
+    # resolutions before the tables they reference.
+    "screening_resolutions",
     "screening_suggestions",
     "screening_observations",
     "screening_assignments",
