@@ -4,7 +4,7 @@ Two layers:
 
 1. Behavior tests — for each audit-named endpoint family (realtime document
    status, thread/message search, health readiness) a mocked dependency raises
-   ``RuntimeError("S3CR3T-internal")`` and the response must keep the original
+   ``RuntimeError(LEAK_MARKER)`` and the response must keep the original
    status code, return the generic message, and never echo the secret.
 
 2. Source tripwire — scans ``backend/src/api`` and ``backend/src/health`` for
@@ -25,7 +25,7 @@ from src.health import endpoints as ep
 
 pytestmark = pytest.mark.unit
 
-SECRET = "S3CR3T-internal"
+LEAK_MARKER = "i8-leak-marker-internal"
 
 
 def _raising_async(exc: Exception) -> AsyncMock:
@@ -95,7 +95,7 @@ def _rt_deps():
     user = MagicMock(id="00000000-0000-0000-0000-000000000001")
     org = MagicMock(id="00000000-0000-0000-0000-000000000002")
     session = MagicMock()
-    session.execute = _raising_async(RuntimeError(SECRET))
+    session.execute = _raising_async(RuntimeError(LEAK_MARKER))
     return user, org, session
 
 
@@ -115,7 +115,7 @@ async def test_realtime_subscribe_leak_free():
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to subscribe to document updates"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 async def test_realtime_get_status_leak_free():
@@ -133,7 +133,7 @@ async def test_realtime_get_status_leak_free():
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to get document status"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 async def test_realtime_bulk_status_leak_free():
@@ -149,7 +149,7 @@ async def test_realtime_bulk_status_leak_free():
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to get bulk status"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 async def test_realtime_system_metrics_leak_free(monkeypatch):
@@ -159,7 +159,7 @@ async def test_realtime_system_metrics_leak_free(monkeypatch):
     monkeypatch.setattr(
         rds.status_update_service,
         "get_system_status",
-        _raising_async(RuntimeError(SECRET)),
+        _raising_async(RuntimeError(LEAK_MARKER)),
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -169,7 +169,7 @@ async def test_realtime_system_metrics_leak_free(monkeypatch):
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to get system metrics"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 async def test_realtime_broadcast_leak_free():
@@ -184,7 +184,7 @@ async def test_realtime_broadcast_leak_free():
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to trigger status broadcast"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 async def test_realtime_connection_status_leak_free(monkeypatch):
@@ -194,7 +194,7 @@ async def test_realtime_connection_status_leak_free(monkeypatch):
     monkeypatch.setattr(
         rds.connection_manager,
         "get_user_connections",
-        MagicMock(side_effect=RuntimeError(SECRET)),
+        MagicMock(side_effect=RuntimeError(LEAK_MARKER)),
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -202,7 +202,7 @@ async def test_realtime_connection_status_leak_free(monkeypatch):
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to get connection status"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ def _patch_service(monkeypatch, method: str) -> None:
     monkeypatch.setattr(
         thread_search_module.thread_message_search_service,
         method,
-        MagicMock(side_effect=RuntimeError(SECRET)),
+        MagicMock(side_effect=RuntimeError(LEAK_MARKER)),
     )
 
 
@@ -237,7 +237,7 @@ def test_thread_search_post_leak_free(monkeypatch):
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Search failed"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 def test_thread_search_get_leak_free(monkeypatch):
@@ -262,7 +262,7 @@ def test_thread_search_get_leak_free(monkeypatch):
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Search failed"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 def test_message_search_post_leak_free(monkeypatch):
@@ -278,7 +278,7 @@ def test_message_search_post_leak_free(monkeypatch):
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Search failed"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 def test_message_search_get_leak_free(monkeypatch):
@@ -305,7 +305,7 @@ def test_message_search_get_leak_free(monkeypatch):
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Search failed"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 def test_combined_search_leak_free(monkeypatch):
@@ -317,7 +317,7 @@ def test_combined_search_leak_free(monkeypatch):
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Search failed"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ def _reset_readiness_state():
 async def test_readiness_leak_free(monkeypatch):
     class _RaisingChecker:
         async def check_database(self):
-            raise RuntimeError(SECRET)
+            raise RuntimeError(LEAK_MARKER)
 
         async def check_redis(self):  # pragma: no cover - never reached
             raise AssertionError("redis should not be reached")
@@ -353,4 +353,4 @@ async def test_readiness_leak_free(monkeypatch):
 
     assert exc.value.status_code == 503
     assert exc.value.detail == "Readiness check failed"
-    assert SECRET not in str(exc.value.detail)
+    assert LEAK_MARKER not in str(exc.value.detail)
