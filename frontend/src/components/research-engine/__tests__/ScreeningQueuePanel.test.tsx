@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScreeningQueuePanel } from '../ScreeningQueuePanel';
+import { APIErrorClass } from '@/types/api';
 import {
   assignScreeningReviewer,
   createScreeningQueue,
@@ -342,5 +343,90 @@ describe('ScreeningQueuePanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Observation exists; supersede the current observation'
     );
+  });
+
+  it('never fetches ledger history for a reviewer', async () => {
+    renderPanel([role('me', 'reviewer')]);
+
+    expect(await screen.findByText('Alpha trial')).toBeInTheDocument();
+    expect(listScreeningHistory).not.toHaveBeenCalled();
+  });
+
+  it('two clicks send two different idempotency keys', async () => {
+    renderPanel([role('me', 'reviewer')]);
+    const user = userEvent.setup();
+    const include = await screen.findByRole('button', {
+      name: 'Include Alpha trial',
+    });
+
+    await user.click(include);
+    await waitFor(() =>
+      expect(submitScreeningObservation).toHaveBeenCalledTimes(1)
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Include Alpha trial' })
+    );
+    await waitFor(() =>
+      expect(submitScreeningObservation).toHaveBeenCalledTimes(2)
+    );
+
+    const [first, second] = vi
+      .mocked(submitScreeningObservation)
+      .mock.calls.map(([, , body]) => body.idempotency_key);
+    expect(first).toBeTruthy();
+    expect(first).not.toBe(second);
+  });
+
+  it('clears the row note after a successful submission', async () => {
+    renderPanel([role('me', 'reviewer')]);
+    const user = userEvent.setup();
+    const note = await screen.findByLabelText('Note for Alpha trial');
+
+    await user.type(note, 'fits population');
+    await user.click(
+      screen.getByRole('button', { name: 'Include Alpha trial' })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Note for Alpha trial')).toHaveValue('')
+    );
+  });
+
+  it('surfaces a history failure to a supervisor', async () => {
+    vi.mocked(listScreeningHistory).mockRejectedValue(new Error('ledger down'));
+    renderPanel([role('me', 'supervisor')], {
+      approvedProtocolVersionId: 'version-1',
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('ledger down');
+  });
+
+  it('an unassigned reviewer sees a notice, other failures an alert', async () => {
+    vi.mocked(getMyScreeningQueue).mockRejectedValue(
+      new APIErrorClass({
+        message: 'Not assigned to this queue',
+        status_code: 403,
+        type: 'http_error',
+      })
+    );
+    renderPanel([role('me', 'reviewer')]);
+
+    expect(
+      await screen.findByText('You are not assigned to this queue.')
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('a failed queue load is an alert', async () => {
+    vi.mocked(getMyScreeningQueue).mockRejectedValue(
+      new APIErrorClass({
+        message: 'backend down',
+        status_code: 500,
+        type: 'http_error',
+      })
+    );
+    renderPanel([role('me', 'reviewer')]);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('backend down');
   });
 });

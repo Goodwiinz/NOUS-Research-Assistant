@@ -3,6 +3,7 @@
 import { useState, type ReactElement, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
+import { APIErrorClass } from '@/types/api';
 import {
   assignScreeningReviewer,
   createScreeningQueue,
@@ -105,7 +106,9 @@ export function ScreeningQueuePanel({
     void queryClient.invalidateQueries({ queryKey: [...queryKey] });
   };
 
-  // Each click mints one idempotency key, so a retry of that click replays.
+  // One idempotency key per click. Mutations are not retried; a transport-level
+  // resend of the same request carries the same key and the server replays it,
+  // while a second click is a new request with a new key.
   const create = useMutation({
     mutationFn: (key: string) =>
       createScreeningQueue(projectId, {
@@ -171,13 +174,29 @@ export function ScreeningQueuePanel({
         supersedes_observation_id: item.observation?.id ?? null,
         idempotency_key: key,
       }),
-    onSuccess: refresh,
+    onSuccess: (_observation, { item }) => {
+      // The submitted note/reason belong to that decision; start the row clean.
+      const clear = (all: Record<string, string>): Record<string, string> => {
+        const { [item.report_id]: _dropped, ...rest } = all;
+        return rest;
+      };
+      setNotes(clear);
+      setReasons(clear);
+      refresh();
+    },
   });
 
   const mutations = [create, assign, revoke, submit];
   const busy = mutations.some((mutation) => mutation.isPending);
   const error =
-    mutations.find((mutation) => mutation.error)?.error ?? queues.error;
+    mutations.find((mutation) => mutation.error)?.error ??
+    queues.error ??
+    history.error;
+  // A reviewer who is not assigned to the selected queue gets a 403: that is a
+  // normal state, not an error.
+  const notAssigned =
+    myQueue.error instanceof APIErrorClass &&
+    myQueue.error.error.status_code === 403;
   const clearErrors = (): void => mutations.forEach((m) => m.reset());
   const active = activeAssignments(history.data ?? []);
   const view = myQueue.data;
@@ -339,10 +358,16 @@ export function ScreeningQueuePanel({
               Loading your queue…
             </p>
           )}
-          {myQueue.error && (
+          {notAssigned ? (
             <p className="mt-2 text-sm text-muted-foreground">
-              {errorText(myQueue.error)}
+              You are not assigned to this queue.
             </p>
+          ) : (
+            myQueue.error && (
+              <p role="alert" className="mt-2 text-sm text-destructive">
+                {errorText(myQueue.error)}
+              </p>
+            )
           )}
           {view && (
             <ul className="mt-2 divide-y divide-border">
