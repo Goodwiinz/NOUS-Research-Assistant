@@ -1029,3 +1029,32 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
   the second merge rewired `r2` to `r3` instead of returning 409 "Report already
   merged".
 - **Restored result:** `1 passed`.
+
+## GOO-299 review follow-ups — 2026-09-29
+
+Guards added after the #1752 review, mutation-verified with the same
+procedure (copy the file, mutate, run, restore from the copy, `cmp -s`,
+rerun). These are pure unit tests; no database is involved. No mutant was
+committed.
+
+### Over-long identifiers are dropped, not truncated
+
+- **Source and guard:** `backend/src/services/research_engine/report_identity.py`,
+  `report_identifiers`, line 26, `return {k: v for k, v in ids.items() if
+  len(v) <= MAX_IDENTIFIER_LENGTH}` (pre-mutation SHA-256
+  `406dd1c635e02b82172150173d81f0e1051db9d3b11a63248f64dd75bf55ff35`). Both
+  the in-memory index and the `research_report_identifiers` insert consume this
+  function, so the index key and the persisted `String(512)` value are the same
+  string; `observe_sources` no longer truncates.
+- **Covering test:**
+  `backend/tests/unit/services/test_report_identity_matching.py::test_overlong_identifiers_are_dropped_not_truncated`.
+- **Mutation:** replaced the line with `return ids`.
+- **Command:**
+
+  ```sh
+  cd backend && .venv/bin/pytest -q tests/unit/services/test_report_identity_matching.py -k overlong
+  ```
+
+- **Observed mutant failure:** exit 1; `assert {'doi': '10.1..., 'pmid': '1'}
+  == {'pmid': '1'}` — the 600+-char DOI stayed an identity key.
+- **Restored result:** `cmp -s` exit 0; `1 passed`.

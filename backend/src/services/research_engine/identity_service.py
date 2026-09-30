@@ -332,7 +332,7 @@ async def observe_sources(
                         collection_id=collection_id,
                         report_id=report_id,
                         kind=kind,
-                        value=value[:512],
+                        value=value,
                     )
                 )
         await db.flush()
