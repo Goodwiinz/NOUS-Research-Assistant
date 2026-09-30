@@ -324,3 +324,69 @@ def test_identity_moved_identifiers_are_kind_value_pairs(moved: list[object]) ->
         _validate_event(
             **_identity_event("identity.report_merged", payload, survivor)  # type: ignore[arg-type]
         )
+
+
+# --- GOO-300: schema 2 moves imported records too --------------------------
+
+
+def test_identity_merge_v2_requires_import_ids_key() -> None:
+    collection_id, survivor, loser = uuid4(), uuid4(), uuid4()
+    v1_shape = _merge_payload(collection_id, survivor, loser)
+    event = {
+        **_identity_event("identity.report_merged", v1_shape, survivor),
+        "event_schema_version": 2,
+    }
+    with pytest.raises(DecisionValidationError, match="does not match its event"):
+        _validate_event(**event)  # type: ignore[arg-type]
+
+    v2 = {**v1_shape, "moved_import_record_ids": [str(uuid4())]}
+    _validate_event(
+        **{  # type: ignore[arg-type]
+            **_identity_event("identity.report_merged", v2, survivor),
+            "event_schema_version": 2,
+        }
+    )
+    bad = {**v1_shape, "moved_import_record_ids": ["not-a-uuid"]}
+    with pytest.raises(DecisionValidationError, match="moved_import_record_ids"):
+        _validate_event(
+            **{  # type: ignore[arg-type]
+                **_identity_event("identity.report_merged", bad, survivor),
+                "event_schema_version": 2,
+            }
+        )
+
+
+def test_identity_split_v2_accepts_import_ids() -> None:
+    collection_id, source_report, new_report = uuid4(), uuid4(), uuid4()
+    payload: dict[str, object] = {
+        "collection_id": str(collection_id),
+        "source_report_id": str(source_report),
+        "new_report_id": str(new_report),
+        "moved_source_ids": [],
+        "moved_import_record_ids": [str(uuid4())],
+        "moved_identifiers": [],
+        "protocol_version_id": None,
+    }
+    _validate_event(
+        **{  # type: ignore[arg-type]
+            **_identity_event("identity.report_split", payload, source_report),
+            "event_schema_version": 2,
+        }
+    )
+
+
+def test_v1_merge_events_still_replay() -> None:
+    collection_id, survivor, loser = uuid4(), uuid4(), uuid4()
+    payload = _merge_payload(collection_id, survivor, loser)
+    _validate_event(**_identity_event("identity.report_merged", payload, survivor))  # type: ignore[arg-type]
+    with pytest.raises(DecisionValidationError, match="does not match its event"):
+        _validate_event(
+            **_identity_event(  # type: ignore[arg-type]
+                "identity.report_merged",
+                {**payload, "moved_import_record_ids": []},
+                survivor,
+            )
+        )
+    _validate_identity_transitions(
+        [_stored("identity.report_merged", payload)], collection_id
+    )

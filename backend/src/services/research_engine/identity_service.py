@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
+from src.models.research_import import ResearchImportRecord
 from src.models.research_project_role import ResearchProjectRole
 from src.models.research_protocol import ResearchProtocol
 from src.models.research_report import (
@@ -29,6 +30,7 @@ from src.models.research_report import (
 from src.models.research_source import ResearchSource
 from src.schemas.research_engine import (
     IdentityEventResponse,
+    ImportedRecordObservation,
     ReportCandidatesResponse,
     ReportMergeRequest,
     ReportObservationResponse,
@@ -47,6 +49,7 @@ from src.services.research_decisions import (
 from src.services.research_engine.project_access import ProjectContext
 from src.services.research_engine.report_identity import (
     IDENTITY_KINDS,
+    ReportAssignment,
     assign_report,
     report_identifiers,
 )
@@ -96,7 +99,9 @@ async def _replayed_event(
     return existing
 
 
-async def _protocol_version_id(db: AsyncSession, collection_id: UUID) -> str | None:
+async def current_protocol_version_id(
+    db: AsyncSession, collection_id: UUID
+) -> str | None:
     version_id = (
         await db.execute(
             select(ResearchProtocol.current_approved_version_id)
@@ -129,6 +134,7 @@ async def _append(
     payload: dict[str, Any],
     idempotency_key: str,
     fingerprint: str,
+    schema_version: int = 1,
 ) -> None:
     try:
         await append_decision(
@@ -137,7 +143,7 @@ async def _append(
             aggregate_type=AGGREGATE_TYPE,
             aggregate_id=collection_id,
             event_type=event_type,
-            event_schema_version=1,
+            event_schema_version=schema_version,
             actor_user_id=actor_user_id,
             actor_role=actor_role,
             subject_type=SUBJECT_TYPE,
@@ -239,6 +245,26 @@ async def _responses(
                 evidence=observation.evidence,
             )
         )
+    imported: dict[UUID, list[ImportedRecordObservation]] = {i: [] for i in ids}
+    for record in (
+        (
+            await db.execute(
+                select(ResearchImportRecord)
+                .where(ResearchImportRecord.report_id.in_(ids))
+                .order_by(ResearchImportRecord.created_at, ResearchImportRecord.id)
+            )
+        )
+        .scalars()
+        .all()
+    ):
+        imported[cast(UUID, record.report_id)].append(
+            ImportedRecordObservation(
+                import_record_id=cast(UUID, record.id),
+                receipt_id=cast(UUID, record.receipt_id),
+                match_method=cast(str, record.match_method),
+                evidence=cast(dict[str, Any], record.evidence or {}),
+            )
+        )
     return [
         ReportResponse.model_validate(
             {
@@ -250,6 +276,7 @@ async def _responses(
                 "study_link_rationale": report.study_link_rationale,
                 "merged_into_report_id": report.merged_into_report_id,
                 "observations": observations[cast(UUID, report.id)],
+                "imported_records": imported[cast(UUID, report.id)],
             }
         )
         for report in reports
@@ -260,6 +287,66 @@ async def _response(
     db: AsyncSession, collection_id: UUID, report_id: UUID
 ) -> ReportResponse:
     return (await _responses(db, collection_id, [report_id]))[0]
+
+
+async def _assign(
+    db: AsyncSession,
+    collection_id: UUID,
+    items: Sequence[tuple[str | None, Any]],
+) -> list[tuple[UUID, ReportAssignment]]:
+    """Resolve each ``(title, raw identifiers)`` to a report, creating as needed.
+
+    Runs under the caller's ``_lock``. Identity comes from identifiers only; the
+    identifier set only grows, and a value already claimed by another report is
+    a conflict kept in evidence, never inserted.
+    """
+    index: dict[tuple[str, str], UUID] = {
+        (kind, value): report_id
+        for kind, value, report_id in (
+            await db.execute(
+                select(
+                    ResearchReportIdentifier.kind,
+                    ResearchReportIdentifier.value,
+                    ResearchReportIdentifier.report_id,
+                )
+                .join(
+                    ResearchReport,
+                    ResearchReport.id == ResearchReportIdentifier.report_id,
+                )
+                .where(
+                    ResearchReportIdentifier.collection_id == collection_id,
+                    ResearchReport.merged_into_report_id.is_(None),
+                )
+            )
+        ).all()
+    }
+    assigned: list[tuple[UUID, ReportAssignment]] = []
+    for title, raw in items:
+        hit = assign_report(index, raw or {})
+        report_id = cast(UUID | None, hit.report_key)
+        if report_id is None:
+            report_id = uuid4()
+            db.add(
+                ResearchReport(
+                    id=report_id,
+                    collection_id=collection_id,
+                    title_snapshot=(title or "")[:500],
+                )
+            )
+        for kind, value in report_identifiers(raw or {}).items():
+            if kind in IDENTITY_KINDS and (kind, value) not in index:
+                index[(kind, value)] = report_id
+                db.add(
+                    ResearchReportIdentifier(
+                        collection_id=collection_id,
+                        report_id=report_id,
+                        kind=kind,
+                        value=value[:512],
+                    )
+                )
+        await db.flush()
+        assigned.append((report_id, hit))
+    return assigned
 
 
 async def observe_sources(
@@ -285,57 +372,25 @@ async def observe_sources(
         .scalars()
         .all()
     )
-    index: dict[tuple[str, str], UUID] = {
-        (kind, value): report_id
-        for kind, value, report_id in (
-            await db.execute(
-                select(
-                    ResearchReportIdentifier.kind,
-                    ResearchReportIdentifier.value,
-                    ResearchReportIdentifier.report_id,
-                )
-                .join(
-                    ResearchReport,
-                    ResearchReport.id == ResearchReportIdentifier.report_id,
-                )
-                .where(
-                    ResearchReportIdentifier.collection_id == collection_id,
-                    ResearchReport.merged_into_report_id.is_(None),
-                )
-            )
-        ).all()
-    }
-    created: list[ResearchReportObservation] = []
+    fresh: list[ResearchSource] = []
     for source in candidates:
         if source.id in observed:
             continue
         observed.add(source.id)
-        raw = cast(dict[str, Any], source.metadata_ or {}).get("identifiers") or {}
-        hit = assign_report(index, raw)
-        report_id = cast(UUID | None, hit.report_key)
-        if report_id is None:
-            report_id = uuid4()
-            db.add(
-                ResearchReport(
-                    id=report_id,
-                    collection_id=collection_id,
-                    title_snapshot=(source.title or "")[:500],
-                )
+        fresh.append(source)
+    assigned = await _assign(
+        db,
+        collection_id,
+        [
+            (
+                cast(str | None, source.title),
+                cast(dict[str, Any], source.metadata_ or {}).get("identifiers"),
             )
-        # The identifier set only grows; values claimed by another report are
-        # conflicts, kept in evidence and never inserted.
-        for kind, value in report_identifiers(raw).items():
-            if kind in IDENTITY_KINDS and (kind, value) not in index:
-                index[(kind, value)] = report_id
-                db.add(
-                    ResearchReportIdentifier(
-                        collection_id=collection_id,
-                        report_id=report_id,
-                        kind=kind,
-                        value=value[:512],
-                    )
-                )
-        await db.flush()
+            for source in fresh
+        ],
+    )
+    created: list[ResearchReportObservation] = []
+    for source, (report_id, hit) in zip(fresh, assigned):
         observation_id = (
             await db.execute(
                 pg_insert(ResearchReportObservation)
@@ -359,6 +414,37 @@ async def observe_sources(
                 )
             )
     return created
+
+
+async def observe_import_records(
+    db: AsyncSession,
+    *,
+    collection_id: UUID,
+    records: Sequence[ResearchImportRecord],
+) -> None:
+    """Link accepted, not-yet-inserted import records to reports (GOO-300).
+
+    Sets ``report_id``/``match_method``/``evidence`` on the objects before the
+    caller adds and flushes them; rejected records never get a report.
+    """
+    await _lock(db, collection_id)
+    # Any: legacy Column attributes are not assignable under mypy (see _live_reports).
+    accepted: list[Any] = [r for r in records if r.status == "accepted"]
+    assigned = await _assign(
+        db,
+        collection_id,
+        [
+            (
+                cast(dict[str, Any], record.parsed or {}).get("title"),
+                cast(dict[str, Any], record.parsed or {}).get("identifiers"),
+            )
+            for record in accepted
+        ],
+    )
+    for record, (report_id, hit) in zip(accepted, assigned):
+        record.report_id = report_id
+        record.match_method = hit.match_method
+        record.evidence = _json_safe(hit.evidence)
 
 
 async def list_reports(
@@ -505,7 +591,7 @@ async def link_study(
             "prior_study_id": str(prior_study_id) if prior_study_id else None,
             "prior_status": prior_status,
             "match_evidence": evidence.model_dump(mode="json"),
-            "protocol_version_id": await _protocol_version_id(db, collection_id),
+            "protocol_version_id": await current_protocol_version_id(db, collection_id),
         },
         idempotency_key=data.idempotency_key,
         fingerprint=fingerprint,
@@ -567,8 +653,24 @@ async def merge_reports(
         .scalars()
         .all()
     ]
+    moved_import_record_ids = [
+        str(record_id)
+        for record_id in (
+            await db.execute(
+                select(ResearchImportRecord.id)
+                .where(ResearchImportRecord.report_id.in_(loser_ids))
+                .order_by(ResearchImportRecord.id)
+            )
+        )
+        .scalars()
+        .all()
+    ]
     moved_identifiers = await _identifier_pairs(db, loser_ids)
-    models: tuple[Any, ...] = (ResearchReportIdentifier, ResearchReportObservation)
+    models: tuple[Any, ...] = (
+        ResearchReportIdentifier,
+        ResearchReportObservation,
+        ResearchImportRecord,
+    )
     for model in models:
         await db.execute(
             update(model)
@@ -598,11 +700,13 @@ async def merge_reports(
             "surviving_report_id": str(survivor_id),
             "merged_report_ids": [str(loser_id) for loser_id in loser_ids],
             "moved_source_ids": moved_source_ids,
+            "moved_import_record_ids": moved_import_record_ids,
             "moved_identifiers": moved_identifiers,
-            "protocol_version_id": await _protocol_version_id(db, collection_id),
+            "protocol_version_id": await current_protocol_version_id(db, collection_id),
         },
         idempotency_key=data.idempotency_key,
         fingerprint=fingerprint,
+        schema_version=2,
     )
     return await _response(db, collection_id, survivor_id)
 
@@ -614,7 +718,8 @@ async def split_report(
     actor_user_id: UUID,
     data: ReportSplitRequest,
 ) -> ReportResponse:
-    """Move named observations (and identifiers only they carry) to a new report."""
+    """Move named observations and import records (and identifiers only they
+    carry) to a new report."""
     _require_role(context, ResearchProjectRole.ADJUDICATOR)
     collection_id = cast(UUID, context.collection.id)
     stream = await _lock(db, collection_id)
@@ -623,7 +728,8 @@ async def split_report(
             "operation": "split",
             "report_id": str(report_id),
             "actor_user_id": str(actor_user_id),
-            **data.model_dump(mode="json"),
+            # exclude_defaults keeps pre-GOO-300 request fingerprints stable.
+            **data.model_dump(mode="json", exclude_defaults=True),
         }
     )
     replayed = await _replayed_event(db, stream, data.idempotency_key, fingerprint)
@@ -643,17 +749,36 @@ async def split_report(
             )
         )
     ).all()
-    wanted = set(data.source_ids)
-    moving = [(obs, title) for obs, title in rows if obs.source_id in wanted]
-    staying = [obs for obs, _title in rows if obs.source_id not in wanted]
-    if len(moving) != len(wanted):
+    imports = (
+        (
+            await db.execute(
+                select(ResearchImportRecord)
+                .where(ResearchImportRecord.report_id == report_id)
+                .order_by(ResearchImportRecord.created_at, ResearchImportRecord.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    wanted, wanted_imports = set(data.source_ids), set(data.import_record_ids)
+    moving: list[tuple[Any, str | None]] = [
+        (obs, title) for obs, title in rows if obs.source_id in wanted
+    ]
+    moving_imports = [record for record in imports if record.id in wanted_imports]
+    if len(moving) != len(wanted) or len(moving_imports) != len(wanted_imports):
         raise HTTPException(status_code=404, detail="Source not found in report")
+    moving += [
+        (record, cast(dict[str, Any], record.parsed or {}).get("title"))
+        for record in moving_imports
+    ]
+    staying: list[Any] = [obs for obs, _title in rows if obs.source_id not in wanted]
+    staying += [record for record in imports if record.id not in wanted_imports]
     if not staying:
         raise HTTPException(
             status_code=409, detail="Split must leave at least one source"
         )
 
-    def observed(observations: Iterable[ResearchReportObservation]) -> set[tuple]:
+    def observed(observations: Iterable[Any]) -> set[tuple]:
         return {
             (kind, value)
             for obs in observations
@@ -702,12 +827,16 @@ async def split_report(
             "collection_id": str(collection_id),
             "source_report_id": str(report_id),
             "new_report_id": str(new_id),
-            "moved_source_ids": sorted(str(obs.source_id) for obs, _t in moving),
+            "moved_source_ids": sorted(str(source_id) for source_id in wanted),
+            "moved_import_record_ids": sorted(
+                str(record_id) for record_id in wanted_imports
+            ),
             "moved_identifiers": moved_identifiers,
-            "protocol_version_id": await _protocol_version_id(db, collection_id),
+            "protocol_version_id": await current_protocol_version_id(db, collection_id),
         },
         idempotency_key=data.idempotency_key,
         fingerprint=fingerprint,
+        schema_version=2,
     )
     return await _response(db, collection_id, new_id)
 

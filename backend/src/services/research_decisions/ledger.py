@@ -58,6 +58,11 @@ _IDENTITY_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     | {"surviving_report_id", "merged_report_ids"},
     ("identity.report_split", 1): _IDENTITY_MOVE_KEYS
     | {"source_report_id", "new_report_id"},
+    # Schema 2 (GOO-300): the move also names re-pointed imported records.
+    ("identity.report_merged", 2): _IDENTITY_MOVE_KEYS
+    | {"surviving_report_id", "merged_report_ids", "moved_import_record_ids"},
+    ("identity.report_split", 2): _IDENTITY_MOVE_KEYS
+    | {"source_report_id", "new_report_id", "moved_import_record_ids"},
     ("identity.study_linked", 1): frozenset(
         {
             "collection_id",
@@ -263,6 +268,10 @@ def _validate_identity_payload(
             raise DecisionValidationError("match_evidence must be an object")
     else:
         _validated_uuid_list(payload["moved_source_ids"], "moved_source_ids")
+        if "moved_import_record_ids" in payload:
+            _validated_uuid_list(
+                payload["moved_import_record_ids"], "moved_import_record_ids"
+            )
         moved_identifiers = payload["moved_identifiers"]
         if not isinstance(moved_identifiers, list) or not all(
             isinstance(item, Mapping)

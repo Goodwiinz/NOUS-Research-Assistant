@@ -64,6 +64,8 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _IDENTITY_TABLES = (
+    "research_import_records",
+    "research_import_receipts",
     "research_report_observations",
     "research_report_identifiers",
     "research_reports",
@@ -72,13 +74,20 @@ _IDENTITY_TABLES = (
 
 
 def _upgrade(connection: Connection) -> None:
-    path = VERSIONS / "c9d2e4f6a8b1_create_report_identities.py"
-    spec = importlib.util.spec_from_file_location("report_identity_migration", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    setattr(module, "op", Operations(MigrationContext.configure(connection)))
-    cast(Callable[[], None], module.upgrade)()
+    # GOO-300's import tables reference research_reports, so they are rebuilt
+    # by their own revision on top of the identity tables.
+    for filename in (
+        "c9d2e4f6a8b1_create_report_identities.py",
+        "d4e6f8a0b2c3_create_search_imports.py",
+    ):
+        spec = importlib.util.spec_from_file_location(
+            filename[:-3], VERSIONS / filename
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        setattr(module, "op", Operations(MigrationContext.configure(connection)))
+        cast(Callable[[], None], module.upgrade)()
 
 
 @pytest.fixture
