@@ -406,7 +406,8 @@ async def test_extraction_forms_legacy_migration_and_observation_lifecycle(
                     rationale="R1 matches the methods section",
                     supersedes_accepted_value_id=supersedes,
                     idempotency_key=key,
-                    **({"value": 12} | body),
+                    # GOO-305: these observations cite nothing (unverified).
+                    **({"value": 12, "accept_unverified": True} | body),
                 ),
                 current_user=_user(world, user),
                 db=db,
