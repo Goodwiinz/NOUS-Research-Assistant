@@ -123,6 +123,7 @@ from .research_protocol import (
     ResearchQuestion,
     ResearchQuestionVersion,
 )
+from .research_import import ResearchImportReceipt, ResearchImportRecord
 from .research_project import ResearchProject
 from .research_project_role import ResearchProjectRole, ResearchProjectRoleAssignment
 from .research_report import (
@@ -289,6 +290,8 @@ __all__ = [
     "ExecutionMode",
     "ResearchSource",
     "ResearchStageReview",
+    "ResearchImportReceipt",
+    "ResearchImportRecord",
     "ResearchReport",
     "ResearchReportIdentifier",
     "ResearchReportObservation",

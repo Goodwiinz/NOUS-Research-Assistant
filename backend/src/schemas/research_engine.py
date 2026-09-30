@@ -1,9 +1,9 @@
 """Pydantic v2 schemas for the research engine API."""
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar, Union
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -386,6 +386,15 @@ class ReportObservationResponse(BaseModel):
     evidence: Dict[str, Any]
 
 
+class ImportedRecordObservation(BaseModel):
+    """An externally imported record (GOO-300) attached to this report."""
+
+    import_record_id: UUID
+    receipt_id: UUID
+    match_method: str
+    evidence: Dict[str, Any]
+
+
 class ReportResponse(BaseModel):
     id: UUID
     title_snapshot: str
@@ -395,6 +404,7 @@ class ReportResponse(BaseModel):
     study_link_rationale: Optional[str] = None
     merged_into_report_id: Optional[UUID] = None
     observations: List[ReportObservationResponse]
+    imported_records: List[ImportedRecordObservation] = []
 
 
 class ReportSuggestion(BaseModel):
@@ -425,9 +435,16 @@ class ReportMergeRequest(BaseModel):
 
 
 class ReportSplitRequest(BaseModel):
-    source_ids: List[UUID] = Field(..., min_length=1)
+    source_ids: List[UUID] = []
+    import_record_ids: List[UUID] = []
     rationale: str = Field(..., min_length=1, max_length=10_000)
     idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def _moves_something(self) -> "ReportSplitRequest":
+        if not self.source_ids and not self.import_record_ids:
+            raise ValueError("name at least one source_id or import_record_id")
+        return self
 
 
 class IdentityEventResponse(BaseModel):
@@ -438,6 +455,90 @@ class IdentityEventResponse(BaseModel):
     reason: Optional[str] = None
     payload: Dict[str, Any]
     occurred_at: datetime
+
+
+# --- Search import / corpus (GOO-300) --------------------------------------
+
+
+class ImportDeclaration(BaseModel):
+    """What the importer declares about the search; never inferred from the file."""
+
+    database: str = Field(..., min_length=1, max_length=200)
+    query_text: Optional[str] = Field(default=None, min_length=1, max_length=20_000)
+    search_date: Optional[date] = None
+    exported_at: Optional[datetime] = None
+    redistribution: Literal["restricted", "allowed"] = "restricted"
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CitationChaseDeclaration(BaseModel):
+    """What a citation-chase receipt records as requested (server-set licence)."""
+
+    seed_report_id: UUID
+    direction: Literal["backward", "forward"]
+    requested_limit: int
+    redistribution: Literal["allowed"]
+
+
+class ImportReceiptResponse(BaseModel):
+    id: UUID
+    kind: Literal["file_import", "citation_chase"]
+    version: int
+    previous_receipt_id: Optional[UUID] = None
+    # Exactly the validated declaration: an import's, or a chase's request.
+    declared: Union[ImportDeclaration, CitationChaseDeclaration]
+    observed: Dict[str, Any]
+    parsed_count: int
+    accepted_count: int
+    rejected_count: int
+    replayed: bool = False
+    created_at: datetime
+
+
+class ImportRecordResponse(BaseModel):
+    id: UUID
+    record_index: int
+    status: Literal["accepted", "rejected"]
+    rejection_reason: Optional[str] = None
+    parsed: Dict[str, Any]
+    report_id: Optional[UUID] = None
+    # Omitted (null) when the receipt's redistribution is "restricted".
+    raw: Optional[str] = None
+
+
+class ImportReceiptDetail(ImportReceiptResponse):
+    records: List[ImportRecordResponse]
+
+
+class CitationChaseRequest(BaseModel):
+    seed_report_id: UUID
+    direction: Literal["backward", "forward"]
+    # 50 mirrors step_executor.MAX_CONNECTOR_RESULTS (pinned by a unit test).
+    max_results: int = Field(default=50, ge=1, le=50)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+COVERAGE_STATEMENT = (
+    "Coverage lists what was searched, imported and chased for this project. "
+    "It is not exhaustive and does not prove that no other relevant records exist."
+)
+
+
+class CoverageRequest(BaseModel):
+    """Known records to check, each ``{kind: value}`` (e.g. ``{"doi": "10.1/x"}``)."""
+
+    known: List[Dict[str, str]] = Field(default_factory=list, max_length=1000)
+
+
+class CoverageResponse(BaseModel):
+    found: List[Dict[str, Any]]
+    missing: List[Dict[str, str]]
+    recall: Optional[float] = None
+    searched: List[Dict[str, Any]]
+    not_searched: List[str]
+    citation_chasing: Optional[Dict[str, Any]] = None
+    exhaustive: Literal[False] = False
+    statement: str = COVERAGE_STATEMENT
 
 
 class ProtocolRegistrationCreate(BaseModel):

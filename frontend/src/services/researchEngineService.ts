@@ -6,6 +6,15 @@ import type {
   ApiReportMergeRequest,
   ApiStudyLinkRequest,
 } from '@/types/api/research-identity-contract';
+import type {
+  ApiCitationChaseRequest,
+  ApiCoverage,
+  ApiCoverageRequest,
+  ApiImportDeclaration,
+  ApiImportFormat,
+  ApiImportReceipt,
+  ApiImportReceiptDetail,
+} from '@/types/api/research-corpus-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -226,3 +235,57 @@ export const mergeReports = (
   data: ApiReportMergeRequest
 ): Promise<ApiReport> =>
   api.post<ApiReport>(`${BASE}/projects/${projectId}/reports/merge`, data);
+
+// --- Search import / citation chase / corpus export (GOO-300) --------------
+
+export type {
+  ApiCoverage as CorpusCoverage,
+  ApiImportDeclaration as ImportDeclaration,
+  ApiImportFormat as ImportFormat,
+  ApiImportReceipt as ImportReceipt,
+  ApiImportReceiptDetail as ImportReceiptDetail,
+} from '@/types/api/research-corpus-contract';
+
+export const importSearchResults = (
+  projectId: string,
+  file: File,
+  format: ApiImportFormat,
+  declaration: ApiImportDeclaration
+): Promise<ApiImportReceipt> =>
+  api.upload<ApiImportReceipt>(`${BASE}/projects/${projectId}/imports`, file, {
+    metadata: { format, declaration: JSON.stringify(declaration) },
+  });
+
+export const listImports = (projectId: string): Promise<ApiImportReceipt[]> =>
+  api.get<ApiImportReceipt[]>(`${BASE}/projects/${projectId}/imports`);
+
+export const getImport = (
+  projectId: string,
+  receiptId: string
+): Promise<ApiImportReceiptDetail> =>
+  api.get<ApiImportReceiptDetail>(
+    `${BASE}/projects/${projectId}/imports/${receiptId}`
+  );
+
+export const chaseCitations = (
+  projectId: string,
+  data: ApiCitationChaseRequest
+): Promise<ApiImportReceipt> =>
+  api.post<ApiImportReceipt>(
+    `${BASE}/projects/${projectId}/citation-chases`,
+    data
+  );
+
+export const getCorpusCoverage = (
+  projectId: string,
+  data: ApiCoverageRequest = { known: [] }
+): Promise<ApiCoverage> =>
+  api.post<ApiCoverage>(`${BASE}/projects/${projectId}/corpus/coverage`, data);
+
+export const downloadCorpus = (
+  projectId: string,
+  format: 'json' | 'zip'
+): Promise<void> =>
+  api.download(
+    `/research-engine/projects/${projectId}/corpus/export?${new URLSearchParams({ format })}`
+  );
