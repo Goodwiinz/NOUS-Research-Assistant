@@ -4,6 +4,9 @@ import { api } from '@/services/api-client';
 import { clearWorkspaceServiceCache } from '@/services/workspaceService';
 import { getAppQueryClient } from '@/lib/query-client';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
+import { useChatStore } from '@/store/chat-store';
+import { useAgentChatStore } from '@/store/agentChatStore';
+import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { Organization, RegisterResult, User } from '@/types';
 import { supabaseAuthErrorMessage } from '@/utils/supabaseAuthError';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -93,6 +96,9 @@ let profileFetchInFlight: Promise<void> | null = null;
 
 function clearUserScopedClientState(): void {
   clearWorkspaceServiceCache();
+  useChatStore.getState().reset();
+  useAgentChatStore.getState().reset();
+  useAgentActivityStore.setState({ runs: {}, currentThreadId: null });
   useArtifactPanelStore.getState().reset();
   // The root QueryClient and APIClient singleton survive client-side auth
   // transitions, so neither may retain the previous user's private data or
@@ -172,6 +178,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
+        if (get().user && get().user?.id !== profileData.user.id) {
+          clearUserScopedClientState();
+        }
         set({
           user: profileData.user,
           organization: profileData.organization ?? null,
@@ -376,6 +385,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         } = await supabase.auth.getUser();
 
         if (userError || !user) {
+          clearUserScopedClientState();
           set({
             user: null,
             organization: null,
@@ -391,6 +401,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const accessToken = session?.access_token;
 
         if (!accessToken) {
+          clearUserScopedClientState();
           set({
             user: null,
             organization: null,
@@ -404,6 +415,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
+        if (get().user && get().user?.id !== profileData.user.id) {
+          clearUserScopedClientState();
+        }
         set({
           user: profileData.user,
           organization: profileData.organization ?? null,
@@ -429,6 +443,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           return;
         }
 
+        clearUserScopedClientState();
         set({
           user: null,
           organization: null,

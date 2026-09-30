@@ -152,8 +152,9 @@ export function useChatComposerActions({
       // renders both answers after reconcile/reload. Omitted for legacy rows
       // with no persisted client_message_id (FE-only truncation, as before).
       const supersedes = priorUser.clientMessageId;
+      const attachmentIds = priorUser.attachments?.map((file) => file.document_id);
       setTimeout(
-        () => handleSubmit(contentToSend, regenerationHistory, supersedes),
+        () => handleSubmit(contentToSend, regenerationHistory, supersedes, attachmentIds),
         0
       );
     },
@@ -179,10 +180,11 @@ export function useChatComposerActions({
       // client_message_id — a legacy row or one that never reached the server;
       // the FE-only truncation is then the same behaviour as before.
       const supersedes = edited.clientMessageId;
+      const attachmentIds = edited.attachments?.map((file) => file.document_id);
       // Pass content explicitly — setInput only schedules an update, and the
       // deferred handleSubmit would otherwise read the stale input value.
       setTimeout(
-        () => handleSubmit(content, editedHistory, supersedes),
+        () => handleSubmit(content, editedHistory, supersedes, attachmentIds),
         0
       );
     },

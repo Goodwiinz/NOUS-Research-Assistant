@@ -23,8 +23,8 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 116,
-    "warnings": 2003,
+    "errors": 114,
+    "warnings": 2001,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
         "errors": 1,
@@ -1577,10 +1577,6 @@
       "src/services/__tests__/streamingService.test.ts": {
         "errors": 0,
         "warnings": 1
-      },
-      "src/services/__tests__/workspaceService.cache.test.ts": {
-        "errors": 2,
-        "warnings": 2
       },
       "src/services/analytics/analyticsApi.ts": {
         "errors": 0,

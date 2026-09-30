@@ -1557,6 +1557,8 @@ async def list_agent_threads(
         .join(Workspace, Conversation.workspace_id == Workspace.id)
         .where(
             Workspace.owner_id == current_user.id,
+            Workspace.is_deleted == False,
+            Conversation.is_deleted == False,
             Thread.is_deleted == False,
             Thread.rag_document_scope.contains(AGENT_THREAD_MARKER),
         )
@@ -1623,6 +1625,8 @@ async def get_thread_messages(
         .where(
             Thread.id == thread_id,
             Workspace.owner_id == current_user.id,
+            Workspace.is_deleted == False,
+            Conversation.is_deleted == False,
             Thread.is_deleted == False,
         )
     )
@@ -1639,6 +1643,7 @@ async def get_thread_messages(
             select(ChatMessage)
             .where(
                 ChatMessage.thread_id == thread_id,
+                ChatMessage.is_deleted == False,
                 # Edit-and-resend tombstones: a superseded turn (and everything
                 # after it) must never render, or a reload shows the answer to a
                 # question the user replaced.
@@ -1662,6 +1667,7 @@ async def get_thread_messages(
         # full-thread total instead of the filtered one).
         filters = [
             ChatMessage.thread_id == thread_id,
+            ChatMessage.is_deleted == False,
             ChatMessage.superseded_by_message_id.is_(None),
         ]
         if before is not None:
