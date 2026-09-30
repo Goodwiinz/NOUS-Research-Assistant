@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -124,7 +124,7 @@ def _invocation(invocation_id: UUID | None = None, **args: Any) -> ToolInvocatio
 async def _user(db: AsyncSession, user_id: UUID = USER) -> User:
     user = await db.get(User, user_id)
     assert user is not None
-    return user
+    return cast(User, user)
 
 
 async def _note_count(db: AsyncSession) -> int:
