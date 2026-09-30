@@ -15,6 +15,7 @@ Two layers:
 
 import ast
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -59,7 +60,7 @@ LEAK_PATTERNS = [
 ]
 
 
-def _iter_python_files():
+def _iter_python_files() -> Iterator[Path]:
     for directory in SCAN_DIRS:
         yield from sorted(directory.rglob("*.py"))
 
@@ -103,7 +104,7 @@ def _scan_source(text: str) -> list[int]:
     return sorted(lines)
 
 
-def _scan_hits():
+def _scan_hits() -> list[str]:
     hits = []
     for path in _iter_python_files():
         text = path.read_text(encoding="utf-8")
@@ -146,17 +147,17 @@ except Exception as e:
 """
 
 
-def test_tripwire_catches_multiline_detail_kwargs():
+def test_tripwire_catches_multiline_detail_kwargs() -> None:
     # Codex P2 on #1733: a kwarg on its own line must still be detected.
     assert _scan_source(_MULTILINE_LEAK) == [7]
     assert _scan_source(_MULTILINE_FSTRING_LEAK) == [7]
 
 
-def test_tripwire_ignores_local_detail_variable():
+def test_tripwire_ignores_local_detail_variable() -> None:
     assert _scan_source(_LOCAL_DETAIL_VARIABLE) == []
 
 
-def test_no_raw_exception_text_in_client_details():
+def test_no_raw_exception_text_in_client_details() -> None:
     hits = _scan_hits()
     assert not hits, (
         "client-facing detail= values must not embed raw exception text "
@@ -169,7 +170,7 @@ def test_no_raw_exception_text_in_client_details():
 # ---------------------------------------------------------------------------
 
 
-def _rt_deps():
+def _rt_deps() -> tuple[MagicMock, MagicMock, MagicMock]:
     user = MagicMock(id="00000000-0000-0000-0000-000000000001")
     org = MagicMock(id="00000000-0000-0000-0000-000000000002")
     session = MagicMock()
@@ -177,7 +178,7 @@ def _rt_deps():
     return user, org, session
 
 
-async def test_realtime_subscribe_leak_free():
+async def test_realtime_subscribe_leak_free() -> None:
     from src.api.realtime import realtime_document_status as rds
 
     user, org, session = _rt_deps()
@@ -196,7 +197,7 @@ async def test_realtime_subscribe_leak_free():
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-async def test_realtime_get_status_leak_free():
+async def test_realtime_get_status_leak_free() -> None:
     from src.api.realtime import realtime_document_status as rds
 
     user, org, session = _rt_deps()
@@ -214,7 +215,7 @@ async def test_realtime_get_status_leak_free():
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-async def test_realtime_bulk_status_leak_free():
+async def test_realtime_bulk_status_leak_free() -> None:
     from src.api.realtime import realtime_document_status as rds
 
     user, org, session = _rt_deps()
@@ -230,7 +231,9 @@ async def test_realtime_bulk_status_leak_free():
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-async def test_realtime_system_metrics_leak_free(monkeypatch):
+async def test_realtime_system_metrics_leak_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from src.api.realtime import realtime_document_status as rds
 
     user, org, _ = _rt_deps()
@@ -250,7 +253,7 @@ async def test_realtime_system_metrics_leak_free(monkeypatch):
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-async def test_realtime_broadcast_leak_free():
+async def test_realtime_broadcast_leak_free() -> None:
     from src.api.realtime import realtime_document_status as rds
 
     user, org, session = _rt_deps()
@@ -265,7 +268,9 @@ async def test_realtime_broadcast_leak_free():
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-async def test_realtime_connection_status_leak_free(monkeypatch):
+async def test_realtime_connection_status_leak_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from src.api.realtime import realtime_document_status as rds
 
     user, _, _ = _rt_deps()
@@ -288,13 +293,13 @@ async def test_realtime_connection_status_leak_free(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _search_deps():
+def _search_deps() -> tuple[MagicMock, MagicMock]:
     user = MagicMock(id="00000000-0000-0000-0000-000000000001")
     db = MagicMock()
     return user, db
 
 
-def _patch_service(monkeypatch, method: str) -> None:
+def _patch_service(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
     monkeypatch.setattr(
         thread_search_module.thread_message_search_service,
         method,
@@ -302,7 +307,7 @@ def _patch_service(monkeypatch, method: str) -> None:
     )
 
 
-def test_thread_search_post_leak_free(monkeypatch):
+def test_thread_search_post_leak_free(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.services.threads.thread_message_search_service import ThreadSearchRequest
 
     user, db = _search_deps()
@@ -318,7 +323,7 @@ def test_thread_search_post_leak_free(monkeypatch):
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-def test_thread_search_get_leak_free(monkeypatch):
+def test_thread_search_get_leak_free(monkeypatch: pytest.MonkeyPatch) -> None:
     user, db = _search_deps()
     _patch_service(monkeypatch, "search_threads")
 
@@ -343,7 +348,7 @@ def test_thread_search_get_leak_free(monkeypatch):
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-def test_message_search_post_leak_free(monkeypatch):
+def test_message_search_post_leak_free(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.services.threads.thread_message_search_service import MessageSearchRequest
 
     user, db = _search_deps()
@@ -359,7 +364,7 @@ def test_message_search_post_leak_free(monkeypatch):
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-def test_message_search_get_leak_free(monkeypatch):
+def test_message_search_get_leak_free(monkeypatch: pytest.MonkeyPatch) -> None:
     user, db = _search_deps()
     _patch_service(monkeypatch, "search_messages")
 
@@ -386,7 +391,7 @@ def test_message_search_get_leak_free(monkeypatch):
     assert LEAK_MARKER not in str(exc.value.detail)
 
 
-def test_combined_search_leak_free(monkeypatch):
+def test_combined_search_leak_free(monkeypatch: pytest.MonkeyPatch) -> None:
     user, db = _search_deps()
     _patch_service(monkeypatch, "combined_search")
 
@@ -404,7 +409,7 @@ def test_combined_search_leak_free(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_readiness_state():
+def _reset_readiness_state() -> Iterator[None]:
     ep._readiness_cached_result = None
     ep._readiness_last_check_time = 0.0
     ep._readiness_lock = None
@@ -416,12 +421,12 @@ def _reset_readiness_state():
     ep._llm_config_ready = True
 
 
-async def test_readiness_leak_free(monkeypatch):
+async def test_readiness_leak_free(monkeypatch: pytest.MonkeyPatch) -> None:
     class _RaisingChecker:
-        async def check_database(self):
+        async def check_database(self) -> None:
             raise RuntimeError(LEAK_MARKER)
 
-        async def check_redis(self):  # pragma: no cover - never reached
+        async def check_redis(self) -> None:  # pragma: no cover - never reached
             raise AssertionError("redis should not be reached")
 
     monkeypatch.setattr(ep, "get_health_checker", lambda: _RaisingChecker())
