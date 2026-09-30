@@ -29,8 +29,12 @@ import type {
   WriteResponse,
 } from '@/types/scispace';
 import type {
+  ApiExtractionAcceptCreate,
+  ApiExtractionAcceptedValue,
   ApiExtractionCellObservations,
   ApiExtractionFormVersion,
+  ApiExtractionObservation,
+  ApiExtractionObservationCreate,
 } from '@/types/api/research-extraction-contract';
 
 // ============================================================================
@@ -97,6 +101,26 @@ export const getCellObservations = (
       document_id: documentId,
       field_id: fieldId,
     })}`
+  );
+
+/** A reviewer's own observation; `anchor_start` picks one citation occurrence. */
+export const createObservation = (
+  matrixId: string,
+  data: ApiExtractionObservationCreate
+): Promise<ApiExtractionObservation> =>
+  api.post<ApiExtractionObservation>(
+    `${RESEARCH_BASE}/matrices/${matrixId}/observations`,
+    data
+  );
+
+/** Adjudicator accept; `anchor_start` / `accept_unverified` resolve the anchor. */
+export const acceptExtractionValue = (
+  matrixId: string,
+  data: ApiExtractionAcceptCreate
+): Promise<ApiExtractionAcceptedValue> =>
+  api.post<ApiExtractionAcceptedValue>(
+    `${RESEARCH_BASE}/matrices/${matrixId}/accepted-values`,
+    data
   );
 
 export const getExtractionTaskStatus = (taskId: string) =>

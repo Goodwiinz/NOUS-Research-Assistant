@@ -421,3 +421,26 @@ async def test_legacy_cell_view_is_legacy_unanchored_with_uncalibrated_confidenc
     assert cell["source"] == "legacy"
     assert cell["anchor_status"] == "legacy_unanchored"
     assert (cell["confidence"], cell["confidence_calibration"]) == (0.8, "uncalibrated")
+
+
+async def test_cell_view_counts_distinct_values_and_shows_machine_anchor(
+    world: _World,
+) -> None:
+    machine = _observation(world, "120")
+    human = _observation(world, "118", kind="human", created_at=NOW)
+    world.db.execute = AsyncMock(
+        side_effect=[
+            _result(rows=[]),
+            _result(rows=[machine, human]),
+            _result(rows=[world.document]),
+        ]
+    )
+    world.version.provenance = "authored"
+    world.version.version_no, world.version.created_at = 1, NOW
+    world.version.protocol_version_id = None
+    _, cells = await svc.cell_view(world.db, world.matrix, [world.document.id])
+    (cell,) = cells
+    assert (cell["source"], cell["value"]) == ("machine", "120")
+    assert cell["anchor_status"] == "verified"
+    assert cell["observed_values"] == 2
+    assert cell["confidence_calibration"] is None

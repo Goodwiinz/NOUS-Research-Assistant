@@ -1170,24 +1170,25 @@ async def cell_view(
     field_ids = [UUID(f["field_id"]) for f in current.fields]
     machine: dict[tuple[Any, str], list[rules.Obs]] = {}
     status: dict[tuple[Any, str], str | None] = {}  # latest machine / tip anchor
+    values: dict[tuple[Any, str], set[str]] = {}  # distinct observed values
     for row in (
         await db.execute(
             select(ExtractionObservation)
             .where(
                 ExtractionObservation.form_version_id.in_(list(by_id)),
-                ExtractionObservation.kind == "machine",
                 ExtractionObservation.document_id.in_(allowed),
                 ExtractionObservation.field_id.in_(field_ids),
             )
             .order_by(ExtractionObservation.created_at, ExtractionObservation.id)
         )
     ).scalars():
-        machine.setdefault((row.document_id, str(row.field_id)), []).append(
-            _rule_obs(row)
-        )
-        status[(row.document_id, str(row.field_id))] = (
-            None if row.missingness else row.anchor_status or "unverified"
-        )
+        key = (row.document_id, str(row.field_id))
+        if row.missingness is None:
+            values.setdefault(key, set()).add(rules.display(row.value) or "")
+        if row.kind != "machine":
+            continue
+        machine.setdefault(key, []).append(_rule_obs(row))
+        status[key] = None if row.missingness else row.anchor_status or "unverified"
     # ponytail: loads text to hash it; add a stored text hash if that ever
     # gets slow.
     pins: dict[Any, tuple[str, str]] = {
@@ -1251,5 +1252,7 @@ async def cell_view(
                         view,
                         status.get(key),
                     )
+                    # Distinct observed values: >1 is a disagreement badge.
+                    | {"observed_values": len(values.get(key, ()))}
                 )
     return _summary(current), cells

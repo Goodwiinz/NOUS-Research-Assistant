@@ -10,6 +10,10 @@ import {
 } from '@/services/scispaceService';
 import type { ApiExtractionObservation } from '@/types/api/research-extraction-contract';
 
+vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'me' } }) }));
+vi.mock('@/services/researchEngineService', () => ({
+  listProjectRoles: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('@/services/scispaceService', () => ({
   createMatrix: vi.fn(),
   deleteMatrix: vi.fn(),
@@ -92,16 +96,14 @@ describe('GOO-304 extraction forms UI', () => {
   });
 
   it('hides confidence when null', async () => {
-    const { user } = render(
-      <CellCitation citation_snippet="n = 120" confidence={null} />
-    );
-    await user.click(screen.getByLabelText('View citation'));
+    const { user } = render(<CellCitation citation_snippet="n = 120" />);
+    await user.click(screen.getByLabelText('Evidence: unverified'));
     expect(await screen.findByText('n = 120')).toBeInTheDocument();
     expect(screen.queryByText('Confidence')).not.toBeInTheDocument();
     expect(screen.queryByText(/Low/)).not.toBeInTheDocument();
   });
 
-  it('observations popover lists both reviewers', async () => {
+  it('observations drawer lists both reviewers', async () => {
     vi.mocked(listFormVersions).mockResolvedValue([]);
     vi.mocked(getCellObservations).mockResolvedValue({
       observations: [
@@ -112,6 +114,7 @@ describe('GOO-304 extraction forms UI', () => {
     });
     const { user } = render(
       <CellObservations
+        projectId="p-1"
         matrixId="m-1"
         documentId="doc-1"
         fieldId="field-1"
@@ -122,9 +125,11 @@ describe('GOO-304 extraction forms UI', () => {
     expect(getCellObservations).not.toHaveBeenCalled();
     await user.click(screen.getByLabelText('Observations for Sample size'));
 
-    expect(await screen.findByText(/Reviewer aaaaaaaa/)).toBeInTheDocument();
+    expect(
+      (await screen.findAllByText(/Reviewer aaaaaaaa/)).length
+    ).toBeGreaterThan(0);
     expect(screen.getByText(/Reviewer bbbbbbbb/)).toBeInTheDocument();
-    expect(screen.getByText('120')).toBeInTheDocument();
+    expect(screen.getAllByText('120').length).toBeGreaterThan(0);
     expect(screen.getByText('118')).toBeInTheDocument();
     expect(getCellObservations).toHaveBeenCalledWith('m-1', 'doc-1', 'field-1');
   });
