@@ -311,7 +311,23 @@ async def test_concurrent_identical_requests_replay_one_row(
         {**NOTE_ARGS, "tags": [1]},
         {"content": "c"},
     ],
-    ids=lambda a: str(sorted(a))[:40],
+    ids=[
+        "project_id",
+        "user_id",
+        "organization_id",
+        "thread_id",
+        "unknown-key",
+        "empty-title",
+        "blank-title",
+        "long-title",
+        "empty-content",
+        "long-content",
+        "tags-string",
+        "tag-empty",
+        "tag-long",
+        "tag-int",
+        "missing-title",
+    ],
 )
 async def test_invalid_note_arguments_are_rejected_without_a_row(
     db: AsyncSession, arguments: dict[str, Any]
@@ -466,7 +482,24 @@ async def test_renewed_or_expired_token_still_executes_under_live_consent(
         ("grant", {"organization_id": ORG2}),
         ("grant", {"request_id": uuid4()}),
     ],
-    ids=lambda v: str(v)[:40],
+    # Static ids: values hold per-worker uuid4()/now(), and xdist workers must
+    # collect identical test names.
+    ids=[
+        "consent-revoked",
+        "consent-pending",
+        "consent-scope",
+        "consent-project",
+        "consent-user",
+        "consent-org",
+        "consent-device",
+        "consent-deleted",
+        "grant-deleted",
+        "grant-scope",
+        "grant-project",
+        "grant-user",
+        "grant-org",
+        "grant-other-consent",
+    ],
 )
 async def test_authority_lost_after_approval_fails_before_the_effect(
     db: AsyncSession, table: str, values: dict[str, Any]
