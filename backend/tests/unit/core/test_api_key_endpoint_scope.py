@@ -318,3 +318,30 @@ async def test_router_created_scoped_key_enforced_end_to_end() -> None:
     with pytest.raises(HTTPException) as excinfo:
         await _validate(denied_env, path="/api/v1/other")
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
+
+
+# --- legacy str(list) storage (pre-I5 create path) -------------------------
+
+
+def test_legacy_python_repr_scope_parses_to_same_allowlist() -> None:
+    """Keys created before I5 stored ``str(list)`` (``"['/api/v1/search']"``).
+    They must keep their intended scope, not collapse to deny-all."""
+    legacy = str(["/api/v1/search"])
+    assert _parse_allowed_endpoints(legacy) == ["/api/v1/search"]
+
+
+async def test_legacy_python_repr_scope_enforced() -> None:
+    env = _make_env(str(["/api/v1/search"]))
+    _, endpoint, _ = await _validate(env)
+    assert endpoint == "/api/v1/search/authenticated/hybrid"
+
+    with pytest.raises(HTTPException) as excinfo:
+        await _validate(_make_env(str(["/api/v1/search"])), path="/api/v1/other")
+    assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.parametrize(
+    "raw", ["{'endpoints': '/api/v1/search'}", "[1, 2]", "__import__('os')", "['']"]
+)
+def test_legacy_python_repr_malformed_still_denies_all(raw: str) -> None:
+    assert _parse_allowed_endpoints(raw) == []

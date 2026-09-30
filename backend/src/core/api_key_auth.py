@@ -2,6 +2,7 @@
 API Key Authentication for Public Endpoints
 """
 
+import ast
 import asyncio
 import hashlib
 import json
@@ -107,7 +108,8 @@ def _endpoint_allowed(allowed: Optional[list[str]], path: str) -> bool:
 def _parse_allowed_endpoints(
     raw: Optional[str], key_prefix: str = "unknown"
 ) -> Optional[list[str]]:
-    """Parse the ``api_keys.allowed_endpoints`` Text column (JSON array).
+    """Parse the ``api_keys.allowed_endpoints`` Text column (JSON array,
+    or the pre-I5 legacy Python-repr list).
 
     Returns ``None`` for an unscoped key (``NULL`` column). Fail CLOSED:
     malformed JSON, a non-list value, non-string entries, or blank
@@ -122,10 +124,16 @@ def _parse_allowed_endpoints(
     try:
         parsed = json.loads(raw)
     except (TypeError, ValueError) as e:
-        logger.error(
-            f"Malformed allowed_endpoints JSON on API key {key_prefix}*** (deny all): {e}"
-        )
-        return []
+        # Keys created before I5 stored ``str(list)`` (a Python repr such as
+        # ``"['/api/v1/search']"``). ``literal_eval`` only evaluates literals,
+        # and the result still goes through the string-array checks below.
+        try:
+            parsed = ast.literal_eval(raw)
+        except Exception:
+            logger.error(
+                f"Malformed allowed_endpoints JSON on API key {key_prefix}*** (deny all): {e}"
+            )
+            return []
     if not isinstance(parsed, list) or not all(
         isinstance(entry, str) for entry in parsed
     ):
