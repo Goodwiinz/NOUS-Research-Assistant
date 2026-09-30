@@ -27,6 +27,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 pytestmark = pytest.mark.unit
 
@@ -52,7 +53,7 @@ def _conn(user_id: str) -> SimpleNamespace:
     )
 
 
-def _patch_org_lookup(monkeypatch, org_id: str | None) -> AsyncMock:
+def _patch_org_lookup(monkeypatch: pytest.MonkeyPatch, org_id: str | None) -> AsyncMock:
     lookup = AsyncMock(return_value=org_id)
     monkeypatch.setattr(ws, "_get_user_organization_id", lookup, raising=False)
     return lookup
@@ -61,7 +62,9 @@ def _patch_org_lookup(monkeypatch, org_id: str | None) -> AsyncMock:
 # --- GET /connections/{user_id} ----------------------------------------------
 
 
-async def test_connections_foreign_org_admin_denied(monkeypatch):
+async def test_connections_foreign_org_admin_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Org-A admin cannot enumerate an org-B user's connections -> 403."""
     manager = SimpleNamespace(
         get_user_connections=Mock(return_value=[]),
@@ -78,7 +81,9 @@ async def test_connections_foreign_org_admin_denied(monkeypatch):
     manager.get_user_connections.assert_not_called()
 
 
-async def test_connections_same_org_admin_allowed(monkeypatch):
+async def test_connections_same_org_admin_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Admin inspecting a user in their OWN org -> 200."""
     manager = SimpleNamespace(
         get_user_connections=Mock(return_value=[]),
@@ -94,7 +99,9 @@ async def test_connections_same_org_admin_allowed(monkeypatch):
     manager.get_user_connections.assert_called_once_with(TARGET)
 
 
-async def test_connections_self_allowed_without_lookup(monkeypatch):
+async def test_connections_self_allowed_without_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Self access keeps working and never needs the target-user lookup."""
     manager = SimpleNamespace(
         get_user_connections=Mock(return_value=[]),
@@ -110,7 +117,9 @@ async def test_connections_self_allowed_without_lookup(monkeypatch):
     lookup.assert_not_awaited()
 
 
-async def test_connections_nonexistent_target_user_indistinguishable(monkeypatch):
+async def test_connections_nonexistent_target_user_indistinguishable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Admin + unknown target user -> same 403 as a foreign-org target."""
     manager = SimpleNamespace(
         get_user_connections=Mock(return_value=[]),
@@ -128,7 +137,9 @@ async def test_connections_nonexistent_target_user_indistinguishable(monkeypatch
     manager.get_user_connections.assert_not_called()
 
 
-async def test_connections_deactivated_target_user_indistinguishable(monkeypatch):
+async def test_connections_deactivated_target_user_indistinguishable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Admin + deactivated/soft-deleted target -> same 403 as foreign-org."""
     manager = SimpleNamespace(
         get_user_connections=Mock(return_value=[]),
@@ -146,7 +157,9 @@ async def test_connections_deactivated_target_user_indistinguishable(monkeypatch
     manager.get_user_connections.assert_not_called()
 
 
-async def test_connections_null_org_admin_denied(monkeypatch):
+async def test_connections_null_org_admin_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A null-org admin has no tenant to match against -> fail closed 403."""
     manager = SimpleNamespace(
         get_user_connections=Mock(return_value=[]),
@@ -165,7 +178,9 @@ async def test_connections_null_org_admin_denied(monkeypatch):
 # --- POST /test-connection ----------------------------------------------------
 
 
-def _patch_test_manager(monkeypatch, target_user_id: str):
+def _patch_test_manager(
+    monkeypatch: pytest.MonkeyPatch, target_user_id: str
+) -> SimpleNamespace:
     manager = SimpleNamespace(
         active_connections={"conn-1": _conn(target_user_id)},
         send_message_to_connection=AsyncMock(return_value=True),
@@ -174,7 +189,9 @@ def _patch_test_manager(monkeypatch, target_user_id: str):
     return manager
 
 
-async def test_test_connection_foreign_org_admin_denied(monkeypatch):
+async def test_test_connection_foreign_org_admin_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Org-A admin cannot message an org-B user's connection -> 403."""
     manager = _patch_test_manager(monkeypatch, TARGET)
     _patch_org_lookup(monkeypatch, ORG_B)
@@ -187,7 +204,9 @@ async def test_test_connection_foreign_org_admin_denied(monkeypatch):
     manager.send_message_to_connection.assert_not_awaited()
 
 
-async def test_test_connection_same_org_admin_allowed(monkeypatch):
+async def test_test_connection_same_org_admin_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Admin messaging a connection owned by a same-org user -> success."""
     _patch_test_manager(monkeypatch, TARGET)
     _patch_org_lookup(monkeypatch, ORG_A)
@@ -200,7 +219,7 @@ async def test_test_connection_same_org_admin_allowed(monkeypatch):
     assert result["success"] is True
 
 
-async def test_test_connection_self_allowed(monkeypatch):
+async def test_test_connection_self_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Owner messaging their own connection keeps working, no lookup."""
     user = _user(UserRole.USER, org_id=ORG_A)
     manager = _patch_test_manager(monkeypatch, str(user.id))
@@ -214,7 +233,9 @@ async def test_test_connection_self_allowed(monkeypatch):
     lookup.assert_not_awaited()
 
 
-async def test_test_connection_nonexistent_target_user_indistinguishable(monkeypatch):
+async def test_test_connection_nonexistent_target_user_indistinguishable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Connection alive but target user gone from DB -> same 403 as foreign-org."""
     manager = _patch_test_manager(monkeypatch, TARGET)
     _patch_org_lookup(monkeypatch, None)
@@ -231,7 +252,7 @@ async def test_test_connection_nonexistent_target_user_indistinguishable(monkeyp
 # --- GET /status ---------------------------------------------------------------
 
 
-def _patch_status_manager(monkeypatch):
+def _patch_status_manager(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     manager = SimpleNamespace(
         get_connection_stats=Mock(
             return_value={
@@ -247,7 +268,7 @@ def _patch_status_manager(monkeypatch):
     return manager
 
 
-def _patch_status_service(monkeypatch):
+def _patch_status_service(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     system_status = SimpleNamespace(
         active_jobs=0,
         queued_jobs=0,
@@ -261,16 +282,14 @@ def _patch_status_service(monkeypatch):
     return service
 
 
-def _status_route():
-    from fastapi.routing import APIRoute
-
+def _status_route() -> APIRoute:
     for route in ws.router.routes:
         if isinstance(route, APIRoute) and route.path.endswith("/status"):
             return route
     raise AssertionError("WS v2 /status route not found")
 
 
-def test_status_route_requires_platform_operator():
+def test_status_route_requires_platform_operator() -> None:
     """Platform-wide stats are gated by the platform-operator allowlist,
     not by tenant ADMIN (an org admin must not see other tenants' volume)."""
     from src.core.dependencies import get_current_user, require_platform_operator
@@ -280,7 +299,7 @@ def test_status_route_requires_platform_operator():
     assert get_current_user not in calls
 
 
-def test_status_dependency_denies_tenant_admin(monkeypatch):
+def test_status_dependency_denies_tenant_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     """A tenant ADMIN without an allowlisted UUID is refused by the gate."""
     from src.core import dependencies as deps
 
@@ -292,7 +311,7 @@ def test_status_dependency_denies_tenant_admin(monkeypatch):
     assert ei.value.status_code == 403
 
 
-async def test_status_operator_shape_unchanged(monkeypatch):
+async def test_status_operator_shape_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     """A platform operator still gets the full status payload."""
     _patch_status_manager(monkeypatch)
     _patch_status_service(monkeypatch)
