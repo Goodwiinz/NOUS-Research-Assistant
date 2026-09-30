@@ -658,18 +658,21 @@ def _observation(row: Any, document: Any = None) -> ExtractionObservationRespons
             text, row.anchor_start_char, row.anchor_end_char
         )
     coverage = row.inspected_coverage
-    return response.model_copy(
-        update={
-            "anchor": _anchor(row, text),
-            "context_before": before,
-            "context_after": after,
-            "coverage_complete": (
-                None
-                if coverage is None or row.text_length is None
-                else coverage == [[0, row.text_length]]
-            ),
-            "source_changed": changed,
-        }
+    return cast(
+        ExtractionObservationResponse,
+        response.model_copy(
+            update={
+                "anchor": _anchor(row, text),
+                "context_before": before,
+                "context_after": after,
+                "coverage_complete": (
+                    None
+                    if coverage is None or row.text_length is None
+                    else coverage == [[0, row.text_length]]
+                ),
+                "source_changed": changed,
+            }
+        ),
     )
 
 
@@ -677,12 +680,15 @@ def _accepted(row: Any, document: Any = None) -> ExtractionAcceptedValueResponse
     response: ExtractionAcceptedValueResponse = (
         ExtractionAcceptedValueResponse.model_validate(row)
     )
-    return response.model_copy(
-        update={
-            "anchor_resolution": row.anchor_resolution or "legacy",
-            "source_changed": document is not None
-            and _changed(document_pins(document), row.source_hash, row.text_sha256),
-        }
+    return cast(
+        ExtractionAcceptedValueResponse,
+        response.model_copy(
+            update={
+                "anchor_resolution": row.anchor_resolution or "legacy",
+                "source_changed": document is not None
+                and _changed(document_pins(document), row.source_hash, row.text_sha256),
+            }
+        ),
     )
 
 
