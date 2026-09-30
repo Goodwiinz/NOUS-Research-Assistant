@@ -196,3 +196,77 @@ def test_short_bare_quote_does_not_ground() -> None:
     for evidence in ("Transformer", "e", "“self-attention”", "input and output"):
         assert evidence_location(_PAPER, evidence) == _UNGROUNDED, evidence
         assert verbatim_evidence(_PAPER, evidence) is None, evidence
+
+
+_TWO_PAGE_PAPER = (
+    "[Page 4]\nWe train on the WMT 2014 English-German dataset.\n\n"
+    "Sentences were encoded using byte-pair encoding.\n"
+    "[Page 5]\nThe shared vocabulary has about 37000 tokens."
+)
+
+
+def test_quote_crossing_a_passage_boundary_is_located_on_its_start_page() -> None:
+    """GOO-321 (D-02): the verifier's excerpt joins passages with spaces, so its
+    quote can cross a paragraph or page boundary while still being verbatim.
+
+    Mutation check (2026-09-30): restoring the pre-fix per-passage search in
+    ``evidence_location`` (``needle in passage_text`` for each passage from
+    ``_passages``) makes the two boundary-crossing asserts fail with
+    ``(None, "source excerpt", None)``. Restoring the joined search makes it
+    pass.
+    """
+    across_paragraph = (
+        "the WMT 2014 English-German dataset. Sentences were encoded using"
+    )
+    across_page = "encoded using byte-pair encoding. The shared vocabulary has"
+
+    assert evidence_location(_TWO_PAGE_PAPER, across_paragraph) == (
+        4,
+        "Page 4",
+        across_paragraph,
+    )
+    assert evidence_location(_TWO_PAGE_PAPER, across_page) == (
+        4,
+        "Page 4",
+        across_page,
+    )
+    # The stored span is the source's own text, not the model's casing.
+    assert evidence_location(_TWO_PAGE_PAPER, across_page.upper())[2] == across_page
+    # A paraphrase across the same boundary is still rejected.
+    paraphrase = "the WMT 2014 English-German dataset. Sentences were tokenised using"
+    assert evidence_location(_TWO_PAGE_PAPER, paraphrase) == _UNGROUNDED
+
+
+_RAW_PDF_PAPER = (
+    "[Page 7]\nThe ﬁnal model improves training eﬃ-\nciency by a factor of "
+    "three over the base­line."
+)
+
+
+def test_pdf_ligatures_and_line_break_hyphens_match_repaired_quotes() -> None:
+    """GOO-321 (D-02): a quote with repaired PDF typography is still verbatim.
+
+    Mutation check (2026-09-30): dropping the typographic folding in
+    ``_normalize_with_offsets`` (``folded = char`` instead of NFKC, and
+    ``_JOIN_RE = re.compile(r"\\s+")`` without the soft-hyphen and
+    de-hyphenation alternatives) makes this test fail with
+    ``(None, "source excerpt") == (7, "Page 7")``. Restoring it makes it pass.
+    """
+    repaired = "The final model improves training efficiency by a factor of three"
+    soft_hyphen = "by a factor of three over the baseline."
+    # The verifier sees newlines as spaces, so it may copy the hyphen as-is.
+    as_seen = "model improves training eﬃ- ciency by a factor"
+
+    located = evidence_location(_RAW_PDF_PAPER, repaired)
+    assert located[:2] == (7, "Page 7")
+    # Stored span is the raw source text, ligatures and hyphen included.
+    assert located[2] == (
+        "The ﬁnal model improves training eﬃ- ciency by a factor of three"
+    )
+    assert evidence_location(_RAW_PDF_PAPER, soft_hyphen)[:2] == (7, "Page 7")
+    assert evidence_location(_RAW_PDF_PAPER, as_seen)[:2] == (7, "Page 7")
+    assert verbatim_evidence(_RAW_PDF_PAPER, repaired) == repaired
+    # A changed word is still rejected.
+    changed = "The final model improves inference efficiency by a factor of three"
+    assert evidence_location(_RAW_PDF_PAPER, changed) == _UNGROUNDED
+    assert verbatim_evidence(_RAW_PDF_PAPER, changed) is None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Iterable, Sequence
 
@@ -198,8 +199,49 @@ _NEGATION_RE = re.compile(
 )
 
 
+# PDF extraction artefacts folded before matching, identically on source and
+# quote: soft hyphens vanish and a hyphen before a line break joins the word
+# (``effi-\nciency`` -> ``efficiency``). The verifier sees newlines as spaces,
+# so any whitespace after the hyphen counts. ponytail: a real "well- and"
+# also joins, harmlessly, because both sides fold the same way.
+_JOIN_RE = re.compile(r"(?<=\w)-\s+(?=\w)|\u00ad|\s+")
+
+
+def _normalize_with_offsets(text: str) -> tuple[str, list[int]]:
+    """Normalise ``text`` for verbatim matching, with each output char's source index.
+
+    NFKC (which also folds ligatures such as ``ﬁ``/``ﬂ`` to ``fi``/``fl``),
+    quote folding and lowercasing are applied per character so every output
+    character maps back to the source character it came from.
+    ponytail: per-char Python loop, O(len(text)); fine for paper-sized text.
+    """
+    chars: list[str] = []
+    offsets: list[int] = []
+    for index, char in enumerate(text):
+        folded = char if char.isascii() else unicodedata.normalize("NFKC", char)
+        for out in folded.translate(_QUOTE_FOLD).lower():
+            chars.append(out)
+            offsets.append(index)
+    folded_text = "".join(chars)
+    out_chars: list[str] = []
+    out_offsets: list[int] = []
+    cursor = 0
+    for match in _JOIN_RE.finditer(folded_text):
+        out_chars.extend(folded_text[cursor : match.start()])
+        out_offsets.extend(offsets[cursor : match.start()])
+        if match.group().isspace():
+            out_chars.append(" ")
+            out_offsets.append(offsets[match.start()])
+        cursor = match.end()
+    out_chars.extend(folded_text[cursor:])
+    out_offsets.extend(offsets[cursor:])
+    start = 1 if out_chars[:1] == [" "] else 0
+    end = len(out_chars) - (1 if len(out_chars) > start and out_chars[-1] == " " else 0)
+    return "".join(out_chars[start:end]), out_offsets[start:end]
+
+
 def _normalize_for_match(text: str) -> str:
-    return " ".join(text.translate(_QUOTE_FOLD).lower().split())
+    return _normalize_with_offsets(text)[0]
 
 
 def _long_enough(text: str) -> bool:
@@ -256,19 +298,30 @@ def evidence_location(
     """
     if not source or not evidence:
         return None, "source excerpt", None
-    passages = [
-        (passage, _normalize_for_match(passage.text))
-        for passage in _passages(str(source))
-    ]
+    source = str(source)
+    markers = list(_PAGE_MARKER_RE.finditer(source))
+    # Blank page markers in place (offsets preserved) so the match space is the
+    # source minus page markers: the consecutive passages joined the way the
+    # verifier's excerpt joins them, so a quote may cross a passage boundary.
+    unmarked = _PAGE_MARKER_RE.sub(lambda m: " " * len(m.group()), source)
+    haystack, offsets = _normalize_with_offsets(unmarked)
 
-    def find(span: str) -> _Passage | None:
+    def find(span: str) -> int:
         needle = _normalize_for_match(span)
-        return next((p for p, text in passages if needle in text), None)
+        return haystack.find(needle) if needle else -1
 
-    span = _grounded_span(str(evidence), lambda value: find(value) is not None)
-    passage = find(span) if span is not None else None
-    if span is None or passage is None:
+    span = _grounded_span(str(evidence), lambda value: find(value) >= 0)
+    start = find(span) if span is not None else -1
+    if span is None or start < 0:
         return None, "source excerpt", None
-    if passage.page is not None:
-        return passage.page, f"Page {passage.page}", span
-    return None, "legacy unanchored text", span
+    end = start + len(_normalize_for_match(span))
+    raw_start, raw_end = offsets[start], offsets[end - 1] + 1
+    # Store the source's own text (whitespace collapsed), not the quote.
+    located = " ".join(unmarked[raw_start:raw_end].split())
+    # The page is that of the passage where the match starts.
+    page = next(
+        (int(m.group(1)) for m in reversed(markers) if m.start() <= raw_start), None
+    )
+    if page is not None:
+        return page, f"Page {page}", located
+    return None, "legacy unanchored text", located
