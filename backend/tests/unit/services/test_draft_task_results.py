@@ -7,13 +7,14 @@ concurrent real-PostgreSQL versions live in
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -37,6 +38,9 @@ from src.services.research.draft_generation_service import (
 )
 
 pytestmark = pytest.mark.unit
+
+# The pipeline fixture mocks asyncio.sleep; race tests need the real one.
+_real_sleep = asyncio.sleep
 
 
 @pytest.fixture
@@ -585,3 +589,61 @@ async def test_cancel_latest_route_falls_back_to_the_retained_row(
         with pytest.raises(HTTPException) as nothing_left:
             await cancel(ACTOR)
         assert nothing_left.value.status_code == 400
+
+
+async def test_duplicate_request_waits_for_durable_acceptance(
+    pipeline: tuple[async_sessionmaker[AsyncSession], UUID],
+) -> None:
+    """Two identical requests: the first registers, then its retained-row
+    commit fails. The duplicate must not have been told "already in
+    progress" for that task; it registers (and commits) its own."""
+    from src.services.research import draft_generation_service as module
+
+    factory, document_id = pipeline
+    real_start_task = module.start_task
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def failing_first_start(db: AsyncSession, **kw: Any) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+            raise RuntimeError("retained row commit failed")
+        await real_start_task(db, **kw)
+
+    def no_background(coro: Any) -> MagicMock:
+        coro.close()
+        return MagicMock()
+
+    async def request() -> dict[str, Any]:
+        async with factory() as db:
+            return await DraftGenerationService(db=db).generate_draft(
+                project_id=PROJECT,
+                user_id=ACTOR,
+                themes=["t"],
+                document_ids=[document_id],
+            )
+
+    with (
+        patch("asyncio.sleep", _real_sleep),
+        patch(f"{_MODULE}.start_task", new=failing_first_start),
+        patch.object(
+            DraftGenerationService, "_fire_and_forget", new=staticmethod(no_background)
+        ),
+    ):
+        first = asyncio.create_task(request())
+        await entered.wait()
+        second = asyncio.create_task(request())
+        await _real_sleep(0.2)
+        release.set()
+        with pytest.raises(RuntimeError):
+            await first
+        duplicate = await asyncio.wait_for(second, timeout=5)
+
+    assert "error" not in duplicate
+    async with factory() as db:
+        row = await db.get(DraftTaskResult, duplicate["task_id"])
+    assert row is not None, "a duplicate was accepted for a task with no retained row"
+    assert row.state == "running"

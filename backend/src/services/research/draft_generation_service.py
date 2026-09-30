@@ -55,6 +55,8 @@ class DraftGenerationStatus:
 # R2-L2: bounded — unbounded growth leaked one entry per generation forever.
 _GENERATION_STATUS_MAX = 500
 _generation_status: Dict[str, Dict[str, Any]] = {}
+# Registered in _generation_status but retained row not committed yet.
+_unaccepted_task_ids: set[str] = set()
 _generation_registration_locks_guard = threading.Lock()
 _generation_registration_locks: WeakValueDictionary[str, Any] = WeakValueDictionary()
 _DRAFT_STATUS_KEY_PREFIX = "research:draft-status:"
@@ -343,43 +345,51 @@ class DraftGenerationService:
             include_abstract=include_abstract,
         )
 
-        # Use MD5 for non-security task ID generation (usedforsecurity=False)
-        with _generation_registration_lock(project_id):
-            active = self.get_latest_status(
-                project_id, user_id=user_id, active_only=True
-            )
-            if active:
-                if (
-                    active.get("user_id") == str(user_id)
-                    and active.get("generation_request_hash") == request_hash
-                ):
-                    return {
-                        "task_id": active["task_id"],
-                        "status": active["status"],
-                        "message": "Matching draft generation already in progress",
-                        "selection_mode": active.get("selection_mode"),
-                        "document_ids": active.get("document_ids", []),
+        # A registration is visible to duplicate callers only once its
+        # retained row has committed; until then they wait (GOO-297).
+        while True:
+            with _generation_registration_lock(project_id):
+                active = self.get_latest_status(
+                    project_id, user_id=user_id, active_only=True
+                )
+                if active is None:
+                    # Use MD5 for non-security task ID generation (usedforsecurity=False)
+                    task_id = hashlib.md5(
+                        f"{project_id}:{time.time()}".encode(), usedforsecurity=False
+                    ).hexdigest()[:12]
+                    _generation_status[task_id] = {
+                        "status": DraftGenerationStatus.PENDING,
+                        "progress": 0,
+                        "current_step": "Initializing",
+                        "started_at": datetime.utcnow().isoformat(),
+                        "estimated_remaining": None,
+                        "project_id": str(project_id),
+                        "user_id": str(user_id),
+                        "generation_request_hash": request_hash,
+                        "selection_mode": selection_mode,
+                        "document_ids": list(normalized_ids),
                     }
-                return {
-                    "error": "A different draft generation is already in progress for this project.",
-                    "error_category": "draft_generation_conflict",
-                }
-
-            task_id = hashlib.md5(
-                f"{project_id}:{time.time()}".encode(), usedforsecurity=False
-            ).hexdigest()[:12]
-            _generation_status[task_id] = {
-                "status": DraftGenerationStatus.PENDING,
-                "progress": 0,
-                "current_step": "Initializing",
-                "started_at": datetime.utcnow().isoformat(),
-                "estimated_remaining": None,
-                "project_id": str(project_id),
-                "user_id": str(user_id),
-                "generation_request_hash": request_hash,
-                "selection_mode": selection_mode,
-                "document_ids": list(normalized_ids),
-            }
+                    _unaccepted_task_ids.add(task_id)
+                    break
+                if active["task_id"] not in _unaccepted_task_ids:
+                    if (
+                        active.get("user_id") == str(user_id)
+                        and active.get("generation_request_hash") == request_hash
+                    ):
+                        return {
+                            "task_id": active["task_id"],
+                            "status": active["status"],
+                            "message": "Matching draft generation already in progress",
+                            "selection_mode": active.get("selection_mode"),
+                            "document_ids": active.get("document_ids", []),
+                        }
+                    return {
+                        "error": "A different draft generation is already in progress for this project.",
+                        "error_category": "draft_generation_conflict",
+                    }
+            # ponytail: poll; bounded by the entry's own commit or, if its
+            # caller vanished, by the stale-active cutoff.
+            await asyncio.sleep(0.05)
         # GOO-297: the task is never fired without its retained row.
         try:
             await start_task(
@@ -390,9 +400,11 @@ class DraftGenerationService:
                 request_fingerprint=request_hash,
             )
             await self.db.commit()
-        except Exception:
+        except BaseException:
             _generation_status.pop(task_id, None)
             raise
+        finally:
+            _unaccepted_task_ids.discard(task_id)
         await self.publish_status(task_id)
 
         # Start generation in background
