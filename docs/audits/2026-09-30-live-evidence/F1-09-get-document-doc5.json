@@ -1,0 +1,71 @@
+{
+  "step": "F1-09-get-document-doc5",
+  "as": "owner",
+  "at": "2026-09-30T05:24:24.360190+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/documents/8b220cbe-6d5f-459c-a435-b7c590694e51",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "8b220cbe-6d5f-459c-a435-b7c590694e51",
+    "title": "Learnable Multi-Scale Wavelet Transformer: A Novel Alternative to Self-Attention",
+    "filename": "2504.08801v1.pdf",
+    "document_type": "pdf",
+    "file_size_bytes": 504470,
+    "file_size_mb": 0.48110008239746094,
+    "mime_type": "application/pdf",
+    "processing_status": "indexed",
+    "tags": null,
+    "is_public": false,
+    "content_preview": "# Abstract\n\nTransformer architectures, underpinned by the self-attention mechanism, have achieved state-of-the-art results across numerous natural language processing (NLP) tasks by effectively modeling long-range dependencies. However, the computational complexity of self-attention, scaling quadratically with input sequence length, presents significant challenges for processing very long sequences or operating under resource constraints. This paper introduces the Learnable Multi-Scale Wavelet T...",
+    "content_summary": null,
+    "created_at": "2026-08-21T23:18:27.372835+00:00",
+    "updated_at": "2026-08-21T23:18:35.844517+00:00",
+    "uploaded_by_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "organization_id": "e050bd43-6b0b-4425-9848-1bc5ad9d5cc2",
+    "content_text": null,
+    "metadata": {
+      "title": "Learnable Multi-Scale Wavelet Transformer: A Novel Alternative to Self-Attention",
+      "description": "Transformer architectures, underpinned by the self-attention mechanism, have achieved state-of-the-art results across numerous natural language processing (NLP) tasks by effectively modeling long-range dependencies. However, the computational complexity of self-attention, scaling quadratically with input sequence length, presents significant challenges for processing very long sequences or operating under resource constraints. This paper introduces the Learnable Multi-Scale Wavelet Transformer (...",
+      "authors": [
+        "Andrew Kiruluta",
+        "Priscilla Burity",
+        "Samantha Williams"
+      ],
+      "publication_date": "2025-04-08T22:16:54+00:00",
+      "categories": [
+        "cs.LG",
+        "cs.CL"
+      ],
+      "tags": [
+        "cs.LG",
+        "cs.CL"
+      ],
+      "arxiv_id": "2504.08801v1",
+      "arxiv_categories": [
+        "cs.LG",
+        "cs.CL"
+      ],
+      "arxiv_primary_category": "cs.LG",
+      "journal_reference": null,
+      "doi": null,
+      "comment": null,
+      "source": "arxiv",
+      "language": "en",
+      "modality": "text",
+      "content_type": "academic_paper",
+      "num_pages": 14,
+      "pdf_path": "data/arxiv/2504.08801v1.pdf",
+      "has_full_text": true
+    },
+    "processing_started_at": null,
+    "processing_completed_at": null,
+    "processing_error": null,
+    "processing_retry_count": 0
+  }
+}
