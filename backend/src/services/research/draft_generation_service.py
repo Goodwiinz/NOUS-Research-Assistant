@@ -29,6 +29,7 @@ from src.models.draft_citation import DraftCitation
 from src.models.draft_review import DraftReview
 from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
+from src.models.research_claim import ResearchClaimVersion
 from src.services.agent.job_store import get_redis
 from src.services.research.bibliography_service import BibliographyService
 from src.services.research.evidence_selection import select_relevant_passages
@@ -118,6 +119,10 @@ def _ensure_draft_metrics() -> None:
 
 class DraftTaskNotRunning(RuntimeError):
     """The task's retained row is already terminal; its draft must not land."""
+
+
+class DraftRetainedError(RuntimeError):
+    """A claim version pins this draft (GOO-306); it is retained as evidence."""
 
 
 def _utcnow() -> datetime:
@@ -2199,6 +2204,17 @@ Key takeaways include the importance of continued investigation and the potentia
 
         if not draft:
             return False
+        # GOO-306: a pinned passage must stay resolvable; the RESTRICT FK on
+        # research_claim_versions.draft_id is the backstop.
+        pinned = (
+            await self.db.execute(
+                select(ResearchClaimVersion.id)
+                .where(ResearchClaimVersion.draft_id == draft_id)
+                .limit(1)
+            )
+        ).first()
+        if pinned is not None:
+            raise DraftRetainedError(str(draft_id))
 
         was_current = draft.is_current
         await self.db.delete(draft)

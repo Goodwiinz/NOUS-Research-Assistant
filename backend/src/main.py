@@ -66,6 +66,7 @@ from src.api.realtime import (
 from src.api.research import (
     chat_router,
     citations_router,
+    claims_router,
     drafts_router,
     export_router,
     extraction_matrix_router,
@@ -642,6 +643,7 @@ app.include_router(project_report_router)  # GET /api/v1/projects/{id}/report.ht
 app.include_router(project_skills_router)  # Project skill catalog and staged approvals
 app.include_router(project_chat_router)  # Project-Chat integration endpoints
 app.include_router(drafts_router)  # Research Assistant drafts endpoints
+app.include_router(claims_router)  # GOO-306 versioned claims and evidence links
 app.include_router(tone_engine_router)  # Scholarly Tone Engine endpoints
 app.include_router(extraction_matrix_router)  # Extraction Matrix endpoints
 app.include_router(writer_router)  # AI Writer endpoints

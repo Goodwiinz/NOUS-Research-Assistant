@@ -1590,3 +1590,29 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/te
 | `project_documents_query` in `_document` (`:581`), used by `list_observations` and the accept guard | replaced with bare `select(Document).where(Document.id == document_id)` | PG `-k authorization` | `DID NOT RAISE HTTPException` at test line 541: the soft-deleted document's evidence (citation included) is served. |
 | `coverage_complete` condition in `aggregate` (`source_anchors.py:192`) | `elif coverage_complete:` replaced with `elif True:` | unit `-k partial_coverage_without_value` | `assert ['not_reported'] == ['unavailable_text']`. |
 | Window loop in `read_whole_text` (`source_anchors.py:211`) | `plan_windows(len(text))` replaced with `[(0, min(len(text), CHUNK_CHARS))]` | unit `-k late_document` | `assert (None == '412')`: the only candidate is `unavailable_text`; nothing is verified at 55,000. |
+
+## GOO-306 versioned claims (Task 4: service and routes) — 2026-09-30
+
+Unit selectors run from `backend/`. Each mutant was applied by an exact-string
+replacement, run, and then restored from a copy of the pre-mutation file;
+`cmp` against that copy succeeded for every mutant and the full file passed
+again afterwards. No mutant was committed. The PostgreSQL mutants in the plan
+(tip checks, SQLSTATE backstop, accepted-value project check, composite FK)
+belong to the Task 6 proof and are **NOT RUN** here.
+
+Pre-mutation SHA-256 (working tree at the time of the run):
+
+- `backend/src/services/research/claims_service.py`
+  `a71bb0de31a40640da0e1773284a6960b3972cbd778efb9eae46b66314376a02`
+- `backend/src/services/research/draft_generation_service.py`
+  `4bf80b6344f628cf39fb2002709827fb774aa5c9839e021dea7b041ddce3c866`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/api/test_claims_routes.py -k <selector>
+```
+
+| Guard (line) | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| `ADJUDICATOR` check in `assess` (`claims_service.py:870`) | the two-line check deleted | `adjudicator` | `test_assess_requires_adjudicator_owner_403` fails: the route (which does not enforce ADJUDICATE in the harness) reaches the database instead of answering 403. |
+| `_replayed_event` call in `_begin` (`claims_service.py:147`) | replaced with `replay = None` | `replay` | `test_replay_returns_200_same_ids` fails: the retry answers 201 and appends a second `claim.versioned`. |
+| Pinned-claims pre-check in `DraftGenerationService.delete_draft` (`draft_generation_service.py:2216`) | the `raise DraftRetainedError` branch deleted | `delete_draft` | both `test_delete_draft_with_claims_409` (200 instead of 409; the draft is deleted) and `test_delete_draft_service_raises_retained` fail. |
