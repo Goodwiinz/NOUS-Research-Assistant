@@ -18,7 +18,8 @@ from src.services.evidence.consensus_calculator import ConsensusCalculator
 KINDS = ("factual", "interpretation")
 LINK_KINDS = ("extraction", "source_span", "legacy_unanchored")
 LINK_STATUSES = ("linked", "withdrawn")
-STANCES = tuple(s.value for s in StanceEnum) + ("unresolved",)
+OBSERVED_STANCES = tuple(s.value for s in StanceEnum)
+STANCES = OBSERVED_STANCES + ("unresolved",)
 # Stances an adjudicator may record without citing a link.
 UNCITED_STANCES = frozenset({"unresolved", "not_addressed"})
 TEXT_MISMATCH = "Text does not match the draft passage"
