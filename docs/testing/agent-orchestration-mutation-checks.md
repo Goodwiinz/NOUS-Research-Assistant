@@ -1679,3 +1679,17 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/te
 | Post-lock role reload in `resolve_project` (`project_access.py:266`), through RELEASE | the role query moved above the Workspace/Collection locks | `race` (no `-x`) | `test_release_role_revocation_race[adjudicator-committed-first]`: `DID NOT RAISE HTTPException` — the promotion that waited on the lock commits after the role was revoked. The membership variants still pass: members are reloaded after the lock separately. |
 | Live-release short-circuit in `promote` (`:566-568`) alone | `live is not None` replaced with `False` | `gate_invalidation` | Survives by design: the second concurrent promoter passes the gate, hits `uq_draft_releases_live`, and the SQLSTATE backstop returns the same release with `replayed=True`. Running this mutant first exposed a real defect: the backstop read `draft.id` after `rollback()` expired it (`MissingGreenlet`); it now uses the `draft_id` argument. |
 | Short-circuit off plus the backstop (`:599`) re-raising | both edits | `gate_invalidation` | Step 6: unhandled `IntegrityError` (`duplicate key value violates unique constraint "uq_draft_releases_live"`). The backstop is what carries the lone short-circuit mutant. |
+
+### GOO-307 seeded-failure evaluation hook
+
+Same procedure, pure test (no database). Pre-mutation SHA-256 of
+`backend/src/services/research/release_rules.py`:
+`14ed3872209ead65491f0cc3cb4e46d7d009259a419d9565e7e5b41207d9cc6a`.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider evals/academic-writing-baseline-v1/tests/test_release_gate_seeded.py
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| `model_only` rule in `_factual_code` (`release_rules.py:169`) | `return "model_only" if ...` replaced with `return None if ...` (a model stance counts as accepted) | `[dev-unsupported-number]` fails with `assert [] == [('model_only', ...)]`: the seeded unsupported number would promote. The other three conditions still block. |
