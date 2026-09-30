@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from src.models.artifact import (
     Artifact,
+    ArtifactLifecycleOutbox,
     ArtifactReference,
     ArtifactUpload,
     ArtifactVersion,
@@ -81,6 +82,7 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         ArtifactVersion,
         ArtifactUpload,
         ArtifactReference,
+        ArtifactLifecycleOutbox,
     ]
     async with engine.begin() as conn:
         for model in tables:

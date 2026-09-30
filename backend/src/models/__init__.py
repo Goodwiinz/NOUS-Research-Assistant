@@ -308,7 +308,13 @@ from .evidence import StanceClassificationModel, StanceEnum  # noqa: E402
 
 __all__ += ["StanceClassificationModel", "StanceEnum"]
 
-from .artifact import Artifact, ArtifactReference, ArtifactUpload, ArtifactVersion
+from .artifact import (
+    Artifact,
+    ArtifactLifecycleOutbox,
+    ArtifactReference,
+    ArtifactUpload,
+    ArtifactVersion,
+)
 from .bridge_device import BridgeDevice, WorkspaceBinding
 from .harness_session import HarnessNativeRequest, HarnessSession
 from .integration_grant import IntegrationGrant, IntegrationGrantRequest
@@ -323,4 +329,5 @@ __all__ += [
     "ArtifactVersion",
     "ArtifactUpload",
     "ArtifactReference",
+    "ArtifactLifecycleOutbox",
 ]

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.artifact import (
     Artifact,
+    ArtifactLifecycleOutbox,
     ArtifactReference,
     ArtifactUpload,
     ArtifactVersion,
@@ -46,6 +47,8 @@ from src.schemas.artifact import (
 )
 from src.schemas.integration_context import IntegrationContext
 from src.services.artifacts.storage import get_artifact_storage
+
+ARTIFACT_VERSION_CREATED = "artifact.version_created"
 from src.services.integrations.context import (
     IntegrationAccessDenied,
     authorized_project,
@@ -353,6 +356,18 @@ async def publish_version(
     )
     db.add(version)
     db.add(reference)
+    # Announcement intent commits with the version; the drain delivers it.
+    db.add(
+        ArtifactLifecycleOutbox(
+            id=uuid4(),
+            organization_id=context.organization_id,
+            artifact_id=artifact.id,
+            version_id=version.id,
+            kind=ARTIFACT_VERSION_CREATED,
+            run_id=version.run_id,
+            thread_id=context.thread_id,
+        )
+    )
     upload.version_id = version.id
     upload.publish_hash = publish_hash
     upload_pk = upload.id  # rollback expires the row; keep the key as a plain value

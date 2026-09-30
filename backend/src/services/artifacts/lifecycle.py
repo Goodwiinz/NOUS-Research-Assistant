@@ -1,0 +1,112 @@
+"""Artifact lifecycle workers: announce versions to open runs, sweep reservations.
+
+The run ledger closes at its terminal event, but uploads and later edits can
+land afterwards. The outbox row is the durable record; the ledger event is
+only an announcement, suppressed when the run is closed or unbound.
+"""
+
+import logging
+from datetime import datetime, timezone
+from typing import cast
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models.artifact import ArtifactLifecycleOutbox, ArtifactUpload
+from src.services.agent.run_event_store import (
+    RunAlreadyTerminalError,
+    append_event,
+    has_terminal_event,
+)
+from src.services.agent.run_event_types import RunEventType
+from src.services.artifacts.storage import get_artifact_storage
+
+logger = logging.getLogger(__name__)
+MAX_ATTEMPTS = 5
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+async def drain_artifact_outbox(db: AsyncSession, *, limit: int = 100) -> int:
+    """Deliver pending announcements. Returns how many events were appended.
+
+    Each row commits on its own so one failure cannot roll back its siblings;
+    the row's status is the delivery receipt, so a repeated drain is a no-op.
+    """
+    rows = (
+        await db.scalars(
+            select(ArtifactLifecycleOutbox)
+            .where(ArtifactLifecycleOutbox.status == "pending")
+            .order_by(ArtifactLifecycleOutbox.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    delivered = 0
+    for row in rows:
+        row.attempts += 1
+        if row.run_id is None or await has_terminal_event(db, row.run_id):
+            # Closed ledger: suppress only the announcement; the row stays queryable.
+            row.status = "skipped"
+        else:
+            try:
+                await append_event(
+                    db,
+                    run_id=row.run_id,
+                    event_type=RunEventType.ARTIFACT_VERSION_CREATED,
+                    payload={
+                        "artifact_id": str(row.artifact_id),
+                        "version_id": str(row.version_id),
+                    },
+                    organization_id=row.organization_id,
+                )
+                row.status = "delivered"
+                row.delivered_at = _now()
+                delivered += 1
+            except RunAlreadyTerminalError:
+                row.status = "skipped"
+            except Exception as error:  # noqa: BLE001 - keep draining other rows
+                logger.warning("artifact announcement failed", exc_info=error)
+                row.last_error = str(error)[:200]
+                if row.attempts >= MAX_ATTEMPTS:
+                    row.status = "skipped"
+        await db.commit()
+    return delivered
+
+
+async def sweep_artifact_uploads(db: AsyncSession, *, limit: int = 100) -> int:
+    """Soft-delete expired, unfinalized reservations and drop their bytes."""
+    now = _now()
+    rows = (
+        await db.scalars(
+            select(ArtifactUpload)
+            .where(
+                ArtifactUpload.version_id.is_(None),
+                ArtifactUpload.is_deleted.is_(False),
+                ArtifactUpload.expires_at < now,
+            )
+            .order_by(ArtifactUpload.expires_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    storage = get_artifact_storage()
+    swept = 0
+    for upload in rows:
+        key = cast(str | None, upload.storage_key)
+        if key is not None:
+            try:
+                await storage.delete(key)
+            except Exception as error:  # noqa: BLE001 - retry on the next sweep
+                logger.warning("artifact upload blob delete failed", exc_info=error)
+                continue
+        await db.execute(
+            update(ArtifactUpload)
+            .where(ArtifactUpload.id == upload.id)
+            .values(is_deleted=True, deleted_at=now, storage_key=None)
+        )
+        swept += 1
+    await db.commit()
+    return swept
