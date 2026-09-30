@@ -1,7 +1,7 @@
 """Artifact lifecycle outbox.
 
 Revision ID: aw02_artifact_lifecycle
-Revises: aw01_artifact_workspace
+Revises: 70f0b2060bc5
 """
 
 import sqlalchemy as sa
@@ -9,8 +9,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "aw02_artifact_lifecycle"
-# Merge point: develop carried aw01 (artifacts) and d4e6f8a0b2c3 (search
-# imports, #1754) as sibling heads off c9d1e2f3a4b5.
+# #1758 and #1769 each merged the aw01 / d4e6f8a0b2c3 sibling heads, which
+# left two heads. 70f0b2060bc5 is the no-op merge; this revision follows it.
 down_revision = "70f0b2060bc5"
 branch_labels = None
 depends_on = None
