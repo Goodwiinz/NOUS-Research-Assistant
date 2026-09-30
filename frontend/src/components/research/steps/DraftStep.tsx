@@ -222,6 +222,7 @@ export const DraftStep: React.FC<DraftStepProps> = ({
                   {currentDraft ? (
                     <DraftViewer
                       draft={currentDraft}
+                      projectId={projectId}
                       versions={draftVersions.map((v) => ({
                         version: v.version,
                         created_at: v.created_at,
