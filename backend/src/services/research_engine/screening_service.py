@@ -851,6 +851,25 @@ async def _active_assignment(db: AsyncSession, queue_id: UUID, user_id: UUID) ->
     ).scalar_one_or_none()
 
 
+async def _identifiers(
+    db: AsyncSession, report_ids: Sequence[UUID]
+) -> dict[UUID, dict[str, list[str]]]:
+    identifiers: dict[UUID, dict[str, list[str]]] = {i: {} for i in report_ids}
+    for report_id, kind, value in (
+        await db.execute(
+            select(
+                ResearchReportIdentifier.report_id,
+                ResearchReportIdentifier.kind,
+                ResearchReportIdentifier.value,
+            )
+            .where(ResearchReportIdentifier.report_id.in_(report_ids))
+            .order_by(ResearchReportIdentifier.kind, ResearchReportIdentifier.value)
+        )
+    ).all():
+        identifiers[report_id].setdefault(kind, []).append(value)
+    return identifiers
+
+
 async def my_queue(
     db: AsyncSession, context: ProjectContext, queue_id: UUID, user_id: UUID
 ) -> MyScreeningQueueResponse:
@@ -873,19 +892,7 @@ async def my_queue(
             )
         ).all()
     }
-    identifiers: dict[UUID, dict[str, list[str]]] = {i: {} for i in report_ids}
-    for report_id, kind, value in (
-        await db.execute(
-            select(
-                ResearchReportIdentifier.report_id,
-                ResearchReportIdentifier.kind,
-                ResearchReportIdentifier.value,
-            )
-            .where(ResearchReportIdentifier.report_id.in_(report_ids))
-            .order_by(ResearchReportIdentifier.kind, ResearchReportIdentifier.value)
-        )
-    ).all():
-        identifiers[report_id].setdefault(kind, []).append(value)
+    identifiers = await _identifiers(db, report_ids)
     abstracts: dict[UUID, str] = {}
     for report_id, abstract in (
         await db.execute(
@@ -1206,10 +1213,16 @@ async def conflicts(
             )
         ).all()
     )
+    identifiers = await _identifiers(db, list(tips))
+    reasons = screening_rules.exclusion_reasons(
+        (await _version(db, queue.protocol_version_id)).snapshot
+    )
     return [
         ScreeningConflictResponse(
             report_id=report_id,
             title_snapshot=titles.get(report_id, ""),
+            identifiers=identifiers[report_id],
+            exclusion_reasons=reasons,
             resolution=_resolution_response(tips[report_id]),
             observations=[
                 ScreeningObservationResponse.model_validate(observations[oid])

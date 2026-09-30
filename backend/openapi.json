@@ -13267,6 +13267,23 @@
       },
       "ScreeningConflictResponse": {
         "properties": {
+          "exclusion_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusion Reasons",
+            "type": "array"
+          },
+          "identifiers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Identifiers",
+            "type": "object"
+          },
           "observations": {
             "items": {
               "$ref": "#/components/schemas/ScreeningObservationResponse"
@@ -13290,6 +13307,8 @@
         "required": [
           "report_id",
           "title_snapshot",
+          "identifiers",
+          "exclusion_reasons",
           "resolution",
           "observations"
         ],

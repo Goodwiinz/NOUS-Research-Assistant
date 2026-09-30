@@ -1340,6 +1340,8 @@ async def test_adjudicate_stale_inputs_409(db: AsyncSession) -> None:
     project, report = dual.project, dual.project.reports[0]
     conflict = await _conflict(db, dual)
     assert conflict.report_id == report and conflict.title_snapshot == "Alpha"
+    assert conflict.identifiers == {"doi": ["10.1000/alpha"]}
+    assert conflict.exclusion_reasons == REASONS
     assert {o.id for o in conflict.observations} == set(
         conflict.resolution.input_observation_ids
     )

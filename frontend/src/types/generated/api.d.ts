@@ -15139,6 +15139,12 @@ export interface components {
         };
         /** ScreeningConflictResponse */
         ScreeningConflictResponse: {
+            /** Exclusion Reasons */
+            exclusion_reasons: string[];
+            /** Identifiers */
+            identifiers: {
+                [key: string]: string[];
+            };
             /** Observations */
             observations: components["schemas"]["ScreeningObservationResponse"][];
             /**
