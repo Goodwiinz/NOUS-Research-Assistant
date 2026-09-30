@@ -11349,6 +11349,47 @@ export interface components {
             /** Source Document Ids */
             source_document_ids: string[];
         };
+        /**
+         * DraftTaskStatusResponse
+         * @description Draft task status: live cache, or the retained ``draft_task_results`` row.
+         */
+        DraftTaskStatusResponse: {
+            /** Artifact Hash */
+            artifact_hash?: string | null;
+            /** Artifact Version */
+            artifact_version?: number | null;
+            /**
+             * Current Step
+             * @default
+             */
+            current_step: string;
+            /** Draft Id */
+            draft_id?: string | null;
+            /** Duration */
+            duration?: number | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Progress
+             * @default 0
+             */
+            progress: number;
+            /** Started At */
+            started_at: string;
+            /**
+             * State Source
+             * @enum {string}
+             */
+            state_source: "cache" | "database";
+            /** Status */
+            status: string;
+            /** Task Id */
+            task_id: string;
+            /** Updated At */
+            updated_at?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** DuplicateCheckRequest */
         DuplicateCheckRequest: {
             /**
@@ -25670,7 +25711,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DraftTaskStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -25702,7 +25743,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DraftTaskStatusResponse"];
                 };
             };
             /** @description Validation Error */

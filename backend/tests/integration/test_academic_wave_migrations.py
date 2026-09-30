@@ -515,7 +515,7 @@ def test_search_import_migration_upgrade_downgrade_round_trip(
     for table in _IMPORT_TABLES:
         connection.exec_driver_sql(f'DROP TABLE "{table}"')
     migration = _load_migration("d4e6f8a0b2c3_create_search_imports.py")
-    assert migration.down_revision == "c9d2e4f6a8b1"
+    assert migration.down_revision == "c9d1e2f3a4b5"
 
     _run_migration(connection, migration, "upgrade")
     inspector = inspect(connection)
