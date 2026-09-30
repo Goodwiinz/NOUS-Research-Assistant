@@ -1338,6 +1338,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/threads/{thread_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Thread Artifacts */
+        get: operations["thread_artifacts_api_v1_artifacts_threads__thread_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve */
+        post: operations["reserve_api_v1_artifacts_uploads_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/uploads/{upload_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upload Content */
+        put: operations["upload_content_api_v1_artifacts_uploads__upload_id__content_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish */
+        post: operations["publish_api_v1_artifacts_versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/versions/{version_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Content */
+        get: operations["version_content_api_v1_artifacts_versions__version_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/{artifact_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Artifact Versions */
+        get: operations["artifact_versions_api_v1_artifacts__artifact_id__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/arxiv/bulk/start": {
         parameters: {
             query?: never;
@@ -9508,6 +9610,83 @@ export interface components {
              */
             sort_order: string;
         };
+        /** ArtifactProvenance */
+        ArtifactProvenance: {
+            /** Code Revision */
+            code_revision?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Native Item Id */
+            native_item_id?: string | null;
+            /**
+             * Producer
+             * @enum {string}
+             */
+            producer: "harness" | "nous" | "user";
+            /** Source Ids */
+            source_ids?: string[];
+        };
+        /** ArtifactReferenceDTO */
+        ArtifactReferenceDTO: {
+            /**
+             * Artifact Id
+             * Format: uuid
+             */
+            artifact_id: string;
+            /** Message Id */
+            message_id: string | null;
+            /** Run Id */
+            run_id: string | null;
+            /** Thread Id */
+            thread_id: string | null;
+            /**
+             * Version Id
+             * Format: uuid
+             */
+            version_id: string;
+        };
+        /** ArtifactUploadDTO */
+        ArtifactUploadDTO: {
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Upload Id
+             * Format: uuid
+             */
+            upload_id: string;
+        };
+        /** ArtifactVersionDTO */
+        ArtifactVersionDTO: {
+            /**
+             * Artifact Id
+             * Format: uuid
+             */
+            artifact_id: string;
+            /** Byte Size */
+            byte_size: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Mime Type */
+            mime_type: string;
+            /** Parent Version Id */
+            parent_version_id: string | null;
+            provenance: components["schemas"]["ArtifactProvenance"];
+            /** Sha256 */
+            sha256: string;
+            /** Title */
+            title: string;
+            /**
+             * Version Id
+             * Format: uuid
+             */
+            version_id: string;
+        };
         /**
          * AuditEventResponse
          * @description Response model for audit event data
@@ -14094,6 +14273,26 @@ export interface components {
          * @enum {string}
          */
         PublicationRetractionStatus: "unknown";
+        /** PublishVersionRequest */
+        PublishVersionRequest: {
+            /** Artifact Id */
+            artifact_id?: string | null;
+            /** Expected Parent Version Id */
+            expected_parent_version_id?: string | null;
+            provenance: components["schemas"]["ArtifactProvenance"];
+            /**
+             * Publication Id
+             * Format: uuid
+             */
+            publication_id: string;
+            /** Title */
+            title: string;
+            /**
+             * Upload Id
+             * Format: uuid
+             */
+            upload_id: string;
+        };
         /**
          * QualityAlertResponse
          * @description Quality alert response
@@ -14690,6 +14889,20 @@ export interface components {
          * @enum {string}
          */
         ResearchStatus: "active" | "paused" | "completed" | "archived";
+        /** ReserveArtifactUploadRequest */
+        ReserveArtifactUploadRequest: {
+            /** Byte Size */
+            byte_size: number;
+            /** Mime Type */
+            mime_type: string;
+            /**
+             * Publication Id
+             * Format: uuid
+             */
+            publication_id: string;
+            /** Sha256 */
+            sha256: string;
+        };
         /**
          * RetrievedContext
          * @description Retrieved document context
@@ -16320,6 +16533,11 @@ export interface components {
              * @description Snippet text with highlights
              */
             text: string;
+        };
+        /** ThreadArtifactDTO */
+        ThreadArtifactDTO: {
+            reference: components["schemas"]["ArtifactReferenceDTO"];
+            version: components["schemas"]["ArtifactVersionDTO"];
         };
         /**
          * ThreadCreate
@@ -19988,6 +20206,194 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    thread_artifacts_api_v1_artifacts_threads__thread_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadArtifactDTO"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reserve_api_v1_artifacts_uploads_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReserveArtifactUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactUploadDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_content_api_v1_artifacts_uploads__upload_id__content_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_api_v1_artifacts_versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishVersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactVersionDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_content_api_v1_artifacts_versions__version_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    artifact_versions_api_v1_artifacts__artifact_id__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactVersionDTO"][];
                 };
             };
             /** @description Validation Error */

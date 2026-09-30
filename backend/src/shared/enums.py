@@ -321,6 +321,8 @@ class AgentStreamEvent(StrEnum):
     APPROVAL_REQUIRED = "approval_required"
     DONE = "done"
     ERROR = "error"
+    # ID-only announcement that an artifact version was committed for this run.
+    ARTIFACT = "artifact"
 
 
 class AgentErrorCategory(StrEnum):
