@@ -224,7 +224,7 @@ async def test_drain_announces_once_to_an_open_run(db: AsyncSession) -> None:
     )
 
 
-@pytest.mark.parametrize("run_id", [RUN_DONE, None])
+@pytest.mark.parametrize("run_id", [RUN_DONE, None], ids=["closed-run", "no-run"])
 async def test_closed_or_unbound_runs_keep_the_row_but_announce_nothing(
     db: AsyncSession, run_id: str | None
 ) -> None:
