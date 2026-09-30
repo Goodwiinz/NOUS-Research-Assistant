@@ -39,7 +39,13 @@ from src.models.research_claim import (
 from src.models.research_decision import ResearchDecisionStream
 from src.models.research_project_role import ResearchProjectRole
 from src.services.evidence.stance_classifier import StanceClassifier
-from src.services.research import claim_rules, claims_export, extraction_rules
+from src.services.research import (
+    claim_rules,
+    claims_export,
+    draft_release_service,
+    extraction_rules,
+)
+from src.services.research import release_rules as rules
 from src.services.research import source_anchors as anchors
 from src.services.research.extraction_forms_service import (
     _changed,
@@ -163,14 +169,15 @@ async def _append(
     key: str,
     fingerprint: str,
     reason: str | None = None,
-) -> None:
+) -> UUID:
+    """Append one event; returns its id (a GOO-307 staling cause)."""
     payload = {
         "collection_id": str(_cid(context)),
         "claim_id": str(claim_id),
         **payload,
     }
     try:
-        await append_decision(
+        result = await append_decision(
             db,
             collection_id=_cid(context),
             aggregate_type=AGGREGATE_TYPE,
@@ -190,6 +197,27 @@ async def _append(
         )
     except DecisionIdempotencyConflict as exc:
         raise HTTPException(status_code=409, detail="Idempotency conflict") from exc
+    return cast(UUID, result.event.id)
+
+
+async def _invalidate(
+    db: AsyncSession,
+    context: ProjectContext,
+    changed: rules.Node,
+    actor_id: UUID,
+    actor_role: str,
+    event_id: UUID,
+    kind: str,
+) -> None:
+    """Write-order step 8 (GOO-307): stale the releases built on ``changed``."""
+    await draft_release_service.invalidate_dependents(
+        db,
+        collection_id=_cid(context),
+        changed={changed},
+        actor_id=actor_id,
+        actor_role=actor_role,
+        cause={"family": AGGREGATE_TYPE, "event_id": str(event_id), "kind": kind},
+    )
 
 
 def _unprocessable(error: ValueError) -> HTTPException:
@@ -395,8 +423,8 @@ async def _append_versioned(
     actor_id: UUID,
     key: str,
     fingerprint: str,
-) -> None:
-    await _append(
+) -> UUID:
+    return await _append(
         db,
         context,
         event_type="claim.versioned",
@@ -460,7 +488,7 @@ async def create_claim(
     db.add(row)
     await _flush_or_conflict(db, VERSION_STALE)
     await _append_versioned(db, context, row, actor_id, key, fingerprint)
-    # ponytail: GOO-307 seam - invalidate_dependents(...) goes here.
+    # ponytail: a brand-new claim has no dependents; nothing to invalidate.
     await db.commit()
     await db.refresh(claim)
     await db.refresh(row)
@@ -504,8 +532,16 @@ async def create_version(
     )
     db.add(row)
     await _flush_or_conflict(db, VERSION_STALE)
-    await _append_versioned(db, context, row, actor_id, key, fingerprint)
-    # ponytail: GOO-307 seam - invalidate_dependents(...) goes here.
+    event_id = await _append_versioned(db, context, row, actor_id, key, fingerprint)
+    await _invalidate(
+        db,
+        context,
+        rules.node("claim_version", tip.id),
+        actor_id,
+        "editor",
+        event_id,
+        "claim.versioned",
+    )
     await db.commit()
     await db.refresh(row)
     return ClaimVersionResponse.model_validate(row), False
@@ -687,7 +723,7 @@ async def link(
     )
     db.add(row)
     await _flush_or_conflict(db, LINK_STALE)
-    await _append(
+    event_id = await _append(
         db,
         context,
         event_type="claim.linked",
@@ -712,7 +748,16 @@ async def link(
         key=key,
         fingerprint=fingerprint,
     )
-    # ponytail: GOO-307 seam - invalidate_dependents(...) goes here.
+    if data.supersedes_link_id is not None:  # re-pointed or withdrawn
+        await _invalidate(
+            db,
+            context,
+            rules.node("link", data.supersedes_link_id),
+            actor_id,
+            "editor",
+            event_id,
+            "claim.linked",
+        )
     await db.commit()
     await db.refresh(row)
     return ClaimLinkResponse.model_validate(row), False
@@ -933,7 +978,7 @@ async def assess(
     )
     db.add(row)
     await _flush_or_conflict(db, ASSESSMENT_STALE)
-    await _append(
+    event_id = await _append(
         db,
         context,
         event_type="claim.assessed",
@@ -952,7 +997,16 @@ async def assess(
         key=key,
         fingerprint=fingerprint,
     )
-    # ponytail: GOO-307 seam - invalidate_dependents(...) goes here.
+    if data.supersedes_assessment_id is not None:
+        await _invalidate(
+            db,
+            context,
+            rules.node("assessment", data.supersedes_assessment_id),
+            actor_id,
+            "adjudicator",
+            event_id,
+            "claim.assessed",
+        )
     await db.commit()
     await db.refresh(row)
     return ClaimAssessmentResponse.model_validate(row), False

@@ -26,6 +26,7 @@ from src.models.citation import Citation
 from src.models.collection import Collection
 from src.models.document import Document
 from src.models.draft_citation import DraftCitation
+from src.models.draft_release import DraftRelease
 from src.models.draft_review import DraftReview
 from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
@@ -123,7 +124,8 @@ class DraftTaskNotRunning(RuntimeError):
 
 
 class DraftRetainedError(RuntimeError):
-    """A claim version pins this draft (GOO-306); it is retained as evidence."""
+    """A claim version (GOO-306) or a release (GOO-307) pins this draft; it
+    is retained as evidence."""
 
 
 def _utcnow() -> datetime:
@@ -2207,10 +2209,15 @@ Key takeaways include the importance of continued investigation and the potentia
             return False
         # GOO-306: a pinned passage must stay resolvable; the RESTRICT FK on
         # research_claim_versions.draft_id is the backstop.
+        # GOO-307: a verified (or once-verified) version is never deleted;
+        # the RESTRICT FK on draft_releases.draft_id is the backstop.
         pinned = (
             await self.db.execute(
                 select(ResearchClaimVersion.id)
                 .where(ResearchClaimVersion.draft_id == draft_id)
+                .union_all(
+                    select(DraftRelease.id).where(DraftRelease.draft_id == draft_id)
+                )
                 .limit(1)
             )
         ).first()
@@ -2344,9 +2351,19 @@ Key takeaways include the importance of continued investigation and the potentia
         draft = await self.get_draft(project_id, draft_id)
         if not draft:
             return {"error": "Draft not found"}
+        if format not in ("markdown", "latex"):
+            return {"error": f"Unsupported format: {format}"}
+        # GOO-307: the stored content is wrapped, never altered: a status
+        # header plus the gate's unresolved and interpretation labels.
+        from src.services.research import draft_release_service, release_rules
+
+        gate, header = await draft_release_service.export_header(
+            self.db, project_id, draft
+        )
+        labelled = release_rules.label_export(draft.content, gate, format, header)
 
         if format == "markdown":
-            content = draft.content
+            content = labelled
             if include_bibliography:
                 citations = await self.get_draft_citations(project_id, draft_id)
                 if citations:
@@ -2367,7 +2384,7 @@ Key takeaways include the importance of continued investigation and the potentia
 
         elif format == "latex":
             # Convert to LaTeX
-            latex_content = self._convert_to_latex(draft.content)
+            latex_content = self._convert_to_latex(labelled)
             bib_content = ""
 
             if include_bibliography:

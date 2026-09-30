@@ -1107,8 +1107,12 @@ async def append_decision(
     payload: Mapping[str, Any],
     idempotency_key: str,
     request_fingerprint: str,
+    event_id: UUID | None = None,
 ) -> AppendDecisionResult:
-    """Append one event under a stream lock without ending the transaction."""
+    """Append one event under a stream lock without ending the transaction.
+
+    ``event_id`` lets a caller stamp rows with the event's id before the
+    append (GOO-307 ``release.staled``); by default a new id is drawn."""
     _validate_event(
         aggregate_type=aggregate_type,
         aggregate_id=aggregate_id,
@@ -1161,7 +1165,7 @@ async def append_decision(
 
     seq = cast(int, stream.next_seq)
     event = ResearchDecisionEvent(
-        id=uuid4(),
+        id=event_id or uuid4(),
         stream_id=stream.id,
         collection_id=collection_id,
         seq=seq,

@@ -138,10 +138,12 @@ def ledger(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                 return SimpleNamespace(payload=event["payload"])
         return None
 
-    async def append(_db: object, **kwargs: Any) -> None:
+    async def append(_db: object, **kwargs: Any) -> Any:
         events.append(kwargs)
+        return SimpleNamespace(event=SimpleNamespace(id=uuid4()))
 
     monkeypatch.setattr(svc, "lock_aggregate_stream", AsyncMock())
+    monkeypatch.setattr(svc, "_invalidate", AsyncMock())  # GOO-307 seam
     monkeypatch.setattr(svc, "_replayed_event", replayed)
     monkeypatch.setattr(svc, "append_decision", append)
     return events
