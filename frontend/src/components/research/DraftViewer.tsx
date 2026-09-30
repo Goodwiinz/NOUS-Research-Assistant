@@ -57,6 +57,8 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
     left: number;
   } | null>(null);
   const [writeResult, setWriteResult] = useState<WriteResponse | null>(null);
+  // Captured at click time: reading contentRef during render is not allowed.
+  const [cursorContext, setCursorContext] = useState('');
   const [showOutlineDialog, setShowOutlineDialog] = useState(false);
   const release = useDraftRelease(projectId, draft.id, draft.version);
 
@@ -78,6 +80,7 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
       const containerRect = contentRef.current.getBoundingClientRect();
       const surroundingText = contentRef.current.textContent || '';
       if (surroundingText.trim().length > 0) {
+        setCursorContext(surroundingText);
         setWriterToolbarPos({
           top: event.clientY - containerRect.top - 44,
           left: event.clientX - containerRect.left,
@@ -293,7 +296,7 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
           !writeResult &&
           !rewriteResult && (
             <WriterToolbar
-              cursorContext={contentRef.current?.textContent || ''}
+              cursorContext={cursorContext}
               position={writerToolbarPos}
               documentIds={documentIds}
               onInsert={handleWriteInsert}
