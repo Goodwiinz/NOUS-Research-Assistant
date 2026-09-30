@@ -65,9 +65,9 @@ from src.services.research_decisions import (
 )
 from src.services.research_engine import screening_rules
 from src.services.research_engine.identity_service import (
-    _live_reports,
     _replayed_event,
     _require_role,
+    live_reports,
 )
 from src.services.research_engine.project_access import ProjectContext
 
@@ -118,7 +118,7 @@ def _is_unique_violation(error: IntegrityError) -> bool:
 async def _queue(db: AsyncSession, context: ProjectContext, queue_id: UUID) -> Any:
     """The queue, scoped to this Collection; a foreign id looks missing.
 
-    Typed ``Any`` like identity_service._live_reports: legacy ``Column``
+    Typed ``Any`` like identity_service.live_reports: legacy ``Column``
     attributes are not assignable under mypy without the plugin.
     """
     queue = (
@@ -285,7 +285,7 @@ async def _corpus(
 ) -> list[UUID]:
     if data.report_ids is not None:
         report_ids = list(dict.fromkeys(data.report_ids))
-        await _live_reports(db, collection_id, report_ids)
+        await live_reports(db, collection_id, report_ids)
         return report_ids
     if data.stage == "full_text":
         raise HTTPException(

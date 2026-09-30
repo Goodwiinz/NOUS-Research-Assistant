@@ -1030,6 +1030,126 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
   merged".
 - **Restored result:** `1 passed`.
 
+## GOO-300 search import / corpus export guards — 2026-09-29
+
+Four guards were mutation-verified against
+`backend/tests/integration/test_search_import_postgres.py` on a disposable local
+PostgreSQL 14.23 database (schema-per-test; the identity and import tables are
+created by revisions `c9d2e4f6a8b1` and `d4e6f8a0b2c3` themselves).
+Pre-mutation SHA-256:
+`backend/src/services/research_engine/corpus_service.py`
+`630c01f070f00244882f8652628d581919f5810e62ec55c42c6c19ba5afca66a`,
+`backend/src/services/research_engine/corpus_export.py`
+`bd71b819cbeedc315b5f961782034622cc9cbc442d4279b48eb3973d71520296`.
+Each mutant was applied by exact string replacement, run, then restored from a
+copy of the pre-mutation file; `cmp -s` and `git diff --quiet` both succeeded
+and the same command passed again. No mutant was committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_search_import_postgres.py -k <selector>
+```
+
+### Import idempotency lookup
+
+- **Source and guard:** `import_file`, line 217, `existing = await
+  _receipt(db, collection_id, dedup_key=dedup_key)`, evaluated under the
+  Collection `FOR UPDATE` lock taken by `resolve_project(EDIT)`.
+  `UNIQUE(collection_id, dedup_key)` is only the backstop; a violation inside
+  the insert savepoint becomes 409 `import_conflict`, never a 500.
+- **Covering test:** `test_concurrent_duplicate_import_yields_one_receipt`
+  (`-k concurrent_duplicate_import`). Importer one pauses after its insert,
+  before commit; importer two is observed blocked on the Collection lock via
+  `pg_blocking_pids`; importer one commits and importer two must replay.
+- **Mutation:** replaced the line with `existing = None`.
+- **Observed mutant failure:** exit 1; `HTTPException: 409: {'code':
+  'import_conflict', ...}` — the second writer re-inserted the same file and
+  hit `uq_research_import_receipt_dedup` instead of returning the replayed
+  receipt.
+- **Restored result:** `1 passed`.
+
+### Citation-chase phase-3 replay recheck
+
+- **Source and guard:** `chase_citations`, line 485, `if (hit := await
+  replayed(collection_id)) is not None: return hit, False`, run after the
+  network call under a fresh `resolve_project(EDIT)`.
+- **Covering test:** `test_concurrent_identical_chases_yield_one_receipt`
+  (`-k concurrent_identical_chases`). A connector barrier releases only after
+  both chases (same idempotency key) passed the phase-1 check with no receipt.
+- **Mutation:** removed the two-line recheck.
+- **Observed mutant failure:** exit 1; `IntegrityError ...
+  uq_research_import_receipt_dedup` inside the savepoint, surfaced as
+  `HTTPException: 409: {'code': 'import_conflict', ...}` instead of a replay.
+- **Restored result:** `1 passed`.
+
+### Export read-only guarantee
+
+- **Source and guard:** `corpus_export` builds every value it returns from
+  copies (`declared = dict(...)`, line 419; `deepcopy(row.metadata_)`) and the
+  export route never commits.
+- **Covering test:** `test_downloaded_package_matches_persisted_rows`
+  (`-k downloaded_package`): row counts and `research_decision_streams.next_seq`
+  are unchanged after two exports, the session has no pending changes, and two
+  exports in one session plus one in a new session share `body_sha256`.
+- **Mutation:** injected `receipt.declared = declared` after the
+  `for key in missing:` loop (line 423), i.e. writing the export's
+  `not_declared` view back onto the retained receipt.
+- **Observed mutant failure:** exit 1; `AssertionError: assert '9a913fad…' ==
+  '35da1c6e…'` — the second export autoflushed the rewritten declaration and its
+  body hash drifted from the first.
+- **Restored result:** `1 passed`.
+- **Survivor, recorded honestly:** removing only the `dict(...)` copy (so the
+  loop edits the loaded JSONB dict in place) is *not* detected. A plain JSONB
+  column does not track in-place edits, so the object is never marked dirty and
+  nothing is flushed. The session's identity map holds only weak references to
+  clean objects, so once the first export drops its last strong reference the
+  receipt is garbage-collected and the second export's `SELECT` reloads the
+  stored row. Anything that kept a strong reference across both exports (or a
+  `MutableDict` column) would expose the edit; this test does not.
+
+### Provenance `full_text` strip
+
+- **Source and guard:** `corpus_export._source`, line 361, `if
+  entry.pop("full_text", None):`.
+- **Covering test:** `-k downloaded_package`.
+- **Mutation:** replaced the condition with `if False:` (the key is kept).
+- **Observed mutant failure:** exit 1; `assert b'OA-FULLTEXT-SENTINEL' not in
+  b'{ "body": ...'`.
+- **Restored result:** `1 passed`.
+
+### Unit-level guards added in the same review round
+
+Each was checked the same way with the unit suites (SQLite):
+
+- `identity_service.split_report` fingerprint `model_dump(mode="json",
+  exclude_defaults=True)` → plain `model_dump(mode="json")`:
+  `test_v1_split_request_fingerprint_is_unchanged` fails with a fingerprint
+  mismatch.
+- `corpus_service.insert_receipt` `except IntegrityError` → `except KeyError`:
+  `test_unique_violation_after_a_bypassed_lookup_is_409_not_500` fails with the
+  raw `IntegrityError`.
+- `chase_citations` phase-3 `live_reports` seed recheck → `pass`:
+  `test_seed_merged_during_the_network_call_is_409` fails with `DID NOT RAISE
+  HTTPException`.
+- `chase_citations` `into=works` → `into=None`:
+  `test_pages_fetched_before_a_failure_are_kept` fails with `accepted_count ==
+  0`.
+
+### Chase phase-1 rollback (amendment, same day)
+
+- **Source and guard:** `chase_citations`, line 464, `await db.rollback()`
+  after the phase-1 checks, so no Collection or stream lock is held during the
+  provider call (pre-mutation SHA-256 of `corpus_service.py`
+  `465ada2afdabeba17f8d78fbf2f36779be2ae17d8da7456d4b45dc3b07e27b38`).
+- **Covering test:** `-k concurrent_identical_chases`.
+- **Mutation:** replaced the line with `pass`.
+- **Observed mutant failure:** exit 1; `assert 1 == 2` on `connector.calls`.
+  Chase one kept the Collection lock across the network call, so chase two
+  blocked in phase 1 until the barrier timed out, then replayed chase one's
+  (failed) receipt instead of reaching the provider.
+- **Restored result:** `1 passed`.
+
 ## GOO-301 screening queue guards — 2026-09-29
 
 Two guards in `backend/src/services/research_engine/screening_service.py`

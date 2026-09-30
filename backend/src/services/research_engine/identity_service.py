@@ -159,7 +159,7 @@ async def _append(
         raise HTTPException(status_code=409, detail="Idempotency conflict") from exc
 
 
-async def _live_reports(
+async def live_reports(
     db: AsyncSession,
     collection_id: UUID,
     report_ids: Iterable[UUID],
@@ -428,7 +428,7 @@ async def observe_import_records(
     caller adds and flushes them; rejected records never get a report.
     """
     await _lock(db, collection_id)
-    # Any: legacy Column attributes are not assignable under mypy (see _live_reports).
+    # Any: legacy Column attributes are not assignable under mypy (see live_reports).
     accepted: list[Any] = [r for r in records if r.status == "accepted"]
     assigned = await _assign(
         db,
@@ -542,7 +542,7 @@ async def link_study(
     )
     if await _replayed_event(db, stream, data.idempotency_key, fingerprint):
         return await _response(db, collection_id, report_id)
-    report = (await _live_reports(db, collection_id, [report_id], merged_status=404))[
+    report = (await live_reports(db, collection_id, [report_id], merged_status=404))[
         report_id
     ]
     if proposing and report.study_link_status in {"confirmed", "disputed"}:
@@ -640,7 +640,7 @@ async def merge_reports(
     )
     if await _replayed_event(db, stream, data.idempotency_key, fingerprint):
         return await _response(db, collection_id, survivor_id)
-    reports = await _live_reports(db, collection_id, [survivor_id, *loser_ids])
+    reports = await live_reports(db, collection_id, [survivor_id, *loser_ids])
     moved_source_ids = [
         str(source_id)
         for source_id in (
@@ -736,7 +736,7 @@ async def split_report(
     if replayed is not None:
         new_id = UUID(cast(dict[str, Any], replayed.payload)["new_report_id"])
         return await _response(db, collection_id, new_id)
-    await _live_reports(db, collection_id, [report_id])
+    await live_reports(db, collection_id, [report_id])
     rows = (
         await db.execute(
             select(ResearchReportObservation, ResearchSource.title)

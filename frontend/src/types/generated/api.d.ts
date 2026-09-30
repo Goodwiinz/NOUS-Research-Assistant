@@ -5939,6 +5939,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/citation-chases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Chase Citations Route
+         * @description OpenAlex citation chase; the service checks EDIT before and after I/O.
+         */
+        post: operations["chase_citations_route_api_v1_research_engine_projects__project_id__citation_chases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/corpus/coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Corpus Coverage Route */
+        post: operations["corpus_coverage_route_api_v1_research_engine_projects__project_id__corpus_coverage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/corpus/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Corpus Route */
+        get: operations["export_corpus_route_api_v1_research_engine_projects__project_id__corpus_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Imports Route */
+        get: operations["list_imports_route_api_v1_research_engine_projects__project_id__imports_get"];
+        put?: never;
+        /**
+         * Import Search Results Route
+         * @description Import one exported result file (RIS, CSV, NBIB) as an immutable receipt.
+         */
+        post: operations["import_search_results_route_api_v1_research_engine_projects__project_id__imports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/imports/{receipt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Import Route */
+        get: operations["get_import_route_api_v1_research_engine_projects__project_id__imports__receipt_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/protocols": {
         parameters: {
             query?: never;
@@ -9787,6 +9879,15 @@ export interface components {
              */
             paper_id: string;
         };
+        /** Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post */
+        Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post: {
+            /** Declaration */
+            declaration: string;
+            /** File */
+            file: string;
+            /** Format */
+            format: string;
+        };
         /** Body_upload_file_api_v1_files_upload_post */
         Body_upload_file_api_v1_files_upload_post: {
             /** Custom Metadata */
@@ -10253,6 +10354,49 @@ export interface components {
             feedback_rating?: number | null;
             /** Feedback Text */
             feedback_text?: string | null;
+        };
+        /**
+         * CitationChaseDeclaration
+         * @description What a citation-chase receipt records as requested (server-set licence).
+         */
+        CitationChaseDeclaration: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "backward" | "forward";
+            /**
+             * Redistribution
+             * @constant
+             */
+            redistribution: "allowed";
+            /** Requested Limit */
+            requested_limit: number;
+            /**
+             * Seed Report Id
+             * Format: uuid
+             */
+            seed_report_id: string;
+        };
+        /** CitationChaseRequest */
+        CitationChaseRequest: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "backward" | "forward";
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Max Results
+             * @default 50
+             */
+            max_results: number;
+            /**
+             * Seed Report Id
+             * Format: uuid
+             */
+            seed_report_id: string;
         };
         /**
          * CitationExtractRequest
@@ -10764,6 +10908,50 @@ export interface components {
             is_pinned?: boolean | null;
             /** Title */
             title?: string | null;
+        };
+        /**
+         * CoverageRequest
+         * @description Known records to check, each ``{kind: value}`` (e.g. ``{"doi": "10.1/x"}``).
+         */
+        CoverageRequest: {
+            /** Known */
+            known?: {
+                [key: string]: string;
+            }[];
+        };
+        /** CoverageResponse */
+        CoverageResponse: {
+            /** Citation Chasing */
+            citation_chasing?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Exhaustive
+             * @default false
+             * @constant
+             */
+            exhaustive: false;
+            /** Found */
+            found: {
+                [key: string]: unknown;
+            }[];
+            /** Missing */
+            missing: {
+                [key: string]: string;
+            }[];
+            /** Not Searched */
+            not_searched: string[];
+            /** Recall */
+            recall?: number | null;
+            /** Searched */
+            searched: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Statement
+             * @default Coverage lists what was searched, imported and chased for this project. It is not exhaustive and does not prove that no other relevant records exist.
+             */
+            statement: string;
         };
         /**
          * CreateEntityRequest
@@ -12184,6 +12372,133 @@ export interface components {
             reason?: string | null;
             /** Seq */
             seq: number;
+        };
+        /**
+         * ImportDeclaration
+         * @description What the importer declares about the search; never inferred from the file.
+         */
+        ImportDeclaration: {
+            /** Database */
+            database: string;
+            /** Exported At */
+            exported_at?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Query Text */
+            query_text?: string | null;
+            /**
+             * Redistribution
+             * @default restricted
+             * @enum {string}
+             */
+            redistribution: "restricted" | "allowed";
+            /** Search Date */
+            search_date?: string | null;
+        };
+        /** ImportReceiptDetail */
+        ImportReceiptDetail: {
+            /** Accepted Count */
+            accepted_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Declared */
+            declared: components["schemas"]["ImportDeclaration"] | components["schemas"]["CitationChaseDeclaration"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "file_import" | "citation_chase";
+            /** Observed */
+            observed: {
+                [key: string]: unknown;
+            };
+            /** Parsed Count */
+            parsed_count: number;
+            /** Previous Receipt Id */
+            previous_receipt_id?: string | null;
+            /** Records */
+            records: components["schemas"]["ImportRecordResponse"][];
+            /** Rejected Count */
+            rejected_count: number;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+            /** Version */
+            version: number;
+        };
+        /** ImportReceiptResponse */
+        ImportReceiptResponse: {
+            /** Accepted Count */
+            accepted_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Declared */
+            declared: components["schemas"]["ImportDeclaration"] | components["schemas"]["CitationChaseDeclaration"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "file_import" | "citation_chase";
+            /** Observed */
+            observed: {
+                [key: string]: unknown;
+            };
+            /** Parsed Count */
+            parsed_count: number;
+            /** Previous Receipt Id */
+            previous_receipt_id?: string | null;
+            /** Rejected Count */
+            rejected_count: number;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+            /** Version */
+            version: number;
+        };
+        /** ImportRecordResponse */
+        ImportRecordResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parsed */
+            parsed: {
+                [key: string]: unknown;
+            };
+            /** Raw */
+            raw?: string | null;
+            /** Record Index */
+            record_index: number;
+            /** Rejection Reason */
+            rejection_reason?: string | null;
+            /** Report Id */
+            report_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "rejected";
         };
         /**
          * ImportedRecordObservation
@@ -27351,6 +27666,226 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["src__schemas__research_engine__ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chase_citations_route_api_v1_research_engine_projects__project_id__citation_chases_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CitationChaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Replayed receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    corpus_coverage_route_api_v1_research_engine_projects__project_id__corpus_coverage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoverageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoverageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_corpus_route_api_v1_research_engine_projects__project_id__corpus_export_get: {
+        parameters: {
+            query?: {
+                format?: "json" | "zip";
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned corpus package download */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/zip": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_imports_route_api_v1_research_engine_projects__project_id__imports_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_search_results_route_api_v1_research_engine_projects__project_id__imports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post"];
+            };
+        };
+        responses: {
+            /** @description Replayed receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_import_route_api_v1_research_engine_projects__project_id__imports__receipt_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                receipt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptDetail"];
                 };
             };
             /** @description Validation Error */
