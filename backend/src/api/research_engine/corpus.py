@@ -8,6 +8,7 @@ one ``commit``. Exports and coverage are read-only and never commit.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal, cast
 from uuid import UUID
 
@@ -169,8 +170,9 @@ async def export_corpus_route(
     context = await resolve_project(
         db, project_id, cast(UUID, current_user.id), ResearchAction.VIEW
     )
-    content, media_type, filename = render(
-        await build_package(db, context), export_format
+    # Serializing a large package must not block the event loop.
+    content, media_type, filename = await asyncio.to_thread(
+        render, await build_package(db, context), export_format
     )
     return Response(
         content=content,

@@ -146,10 +146,14 @@ def test_oversized_upload_is_413_before_any_access_or_parse(
     service = AsyncMock()
     monkeypatch.setattr(_routes(), "import_file", service)
 
+    # Even a caller without EDIT gets 413: the bounded read happens before
+    # resolve_project takes any lock, so moving it after the read fails here.
+    harness.denied[ResearchAction.EDIT] = 404
     response = _upload(harness, uuid4(), b"12345")
 
     assert response.status_code == 413
     assert "file_too_large" in response.text
+    assert harness.actions == []
     service.assert_not_awaited()
 
 

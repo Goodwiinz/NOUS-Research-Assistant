@@ -428,14 +428,82 @@ async def test_legacy_import_without_query_reports_not_declared(
 async def test_export_too_large_is_413(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """3 sources + 4 import records = 7 rows: a cap of 7 passes, 6 refuses."""
     context, _ = await _seed(db)
-    monkeypatch.setattr(corpus_export, "MAX_EXPORT_RECORDS", 3)
+    monkeypatch.setattr(corpus_export, "MAX_EXPORT_RECORDS", 7)
+    await corpus_export.build_package(db, context)
+    monkeypatch.setattr(corpus_export, "MAX_EXPORT_RECORDS", 6)
 
     with pytest.raises(HTTPException) as large:
         await corpus_export.build_package(db, context)
 
     assert large.value.status_code == 413
     assert cast(dict, large.value.detail)["code"] == "export_too_large"
+
+
+@pytest.mark.asyncio
+async def test_export_byte_cap_counts_only_exportable_text(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Source abstracts total 50 bytes; restricted raw records do not count."""
+    context, _ = await _seed(db)
+    monkeypatch.setattr(corpus_export, "MAX_EXPORT_BYTES", 50)
+    await corpus_export.build_package(db, context)
+    monkeypatch.setattr(corpus_export, "MAX_EXPORT_BYTES", 49)
+
+    with pytest.raises(HTTPException) as large:
+        await corpus_export.build_package(db, context)
+
+    assert large.value.status_code == 413
+    assert cast(dict, large.value.detail)["code"] == "export_too_large"
+
+
+@pytest.mark.asyncio
+async def test_coverage_skips_record_bodies_and_applies_the_count_guard(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, _ = await _seed(db)
+    calls: list[bool] = []
+    real_imports = corpus_export._imports
+
+    async def spy(*args: Any, with_records: bool = True) -> Any:
+        calls.append(with_records)
+        return await real_imports(*args, with_records=with_records)
+
+    monkeypatch.setattr(corpus_export, "_imports", spy)
+    await corpus_export.coverage(db, context, [])
+    assert calls == [False]
+
+    monkeypatch.setattr(corpus_export, "MAX_EXPORT_RECORDS", 6)
+    with pytest.raises(HTTPException) as large:
+        await corpus_export.coverage(db, context, [])
+    assert large.value.status_code == 413
+
+
+@pytest.mark.parametrize("body", [{"identities": "x"}, [], {"identities": {}}])
+def test_verify_rejects_malformed_bodies_with_a_package_error(body: Any) -> None:
+    package = corpus_export.seal(
+        cast(dict[str, Any], body), "2026-09-29T00:00:00+00:00"
+    )
+    data = json.dumps(package).encode()
+
+    with pytest.raises(corpus_export.CorpusPackageError, match="unexpected shape"):
+        corpus_export.verify_package(data)
+
+
+@pytest.mark.asyncio
+async def test_verify_refuses_an_oversized_corpus_json(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, _ = await _seed(db)
+    zipped, _type, _name = corpus_export.render(
+        await corpus_export.build_package(db, context), "zip"
+    )
+    assert b"integrity, not authenticity" in _unzip(zipped)["README.txt"]
+    monkeypatch.setattr(corpus_export, "MAX_PACKAGE_BYTES", 1024)
+
+    with pytest.raises(corpus_export.CorpusPackageError, match="too large"):
+        corpus_export.verify_package(zipped)
 
 
 @pytest.mark.asyncio

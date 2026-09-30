@@ -6,6 +6,7 @@ per execution, and re-runs the identity ledger's transition rules over the
 packaged decisions, without a database.
 """
 
+import asyncio
 import hashlib
 import io
 import json
@@ -49,6 +50,10 @@ from src.services.research_engine.report_identity import report_identifiers
 
 PACKAGE_SCHEMA = "nous.academic.corpus-export.v1"
 MAX_EXPORT_RECORDS = 50_000  # over -> 413 export_too_large, never truncated
+# Exported free text (allowed raw records + source abstracts); over -> 413.
+MAX_EXPORT_BYTES = 256 * 1024 * 1024
+# verify_package refuses a corpus.json larger than this (zip-bomb guard).
+MAX_PACKAGE_BYTES = 1024 * 1024 * 1024
 _JOURNAL_KEY = "_search_receipts_v1"
 _NOT_DECLARED = "not_declared"
 _NO_DATE_FILTER = "no date filter (connector capability date_filter=false)"
@@ -389,7 +394,11 @@ def _source(row: Any, omissions: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 async def _imports(
-    db: AsyncSession, collection_id: UUID, omissions: list[dict[str, Any]] | None
+    db: AsyncSession,
+    collection_id: UUID,
+    omissions: list[dict[str, Any]] | None,
+    *,
+    with_records: bool = True,
 ) -> list[dict[str, Any]]:
     receipts = (
         (
@@ -412,6 +421,8 @@ async def _imports(
         )
         .scalars()
         .all()
+        if with_records
+        else []
     )
     out = []
     for receipt in receipts:
@@ -529,13 +540,67 @@ async def _used_connectors(db: AsyncSession, runs: list[Any]) -> set[str]:
     )
 
 
+async def _scalar(db: AsyncSession, query: Any) -> int:
+    return int((await db.execute(query)).scalar_one() or 0)
+
+
+async def _check_size(
+    db: AsyncSession, run_ids: list[Any], collection_id: UUID, *, bytes_too: bool
+) -> None:
+    """413 before loading anything large: row count, then exported text bytes."""
+    rows = await _scalar(
+        db,
+        select(func.count())
+        .select_from(ResearchSource)
+        .where(ResearchSource.run_id.in_(run_ids)),
+    ) + await _scalar(
+        db,
+        select(func.count())
+        .select_from(ResearchImportRecord)
+        .where(ResearchImportRecord.collection_id == collection_id),
+    )
+    if rows > MAX_EXPORT_RECORDS:
+        raise _too_large()
+    if not bytes_too:
+        return
+    allowed = [
+        receipt_id
+        for receipt_id, declared in (
+            await db.execute(
+                select(ResearchImportReceipt.id, ResearchImportReceipt.declared).where(
+                    ResearchImportReceipt.collection_id == collection_id
+                )
+            )
+        ).all()
+        if (declared or {}).get("redistribution") == "allowed"
+    ]
+    size = await _scalar(
+        db,
+        select(func.sum(func.octet_length(ResearchImportRecord.raw))).where(
+            ResearchImportRecord.receipt_id.in_(allowed)
+        ),
+    ) + await _scalar(
+        db,
+        select(func.sum(func.octet_length(ResearchSource.abstract))).where(
+            ResearchSource.run_id.in_(run_ids)
+        ),
+    )
+    if size > MAX_EXPORT_BYTES:
+        raise _too_large()
+
+
 async def coverage(
     db: AsyncSession, context: ProjectContext, known: list[dict[str, str]]
 ) -> CoverageResponse:
-    """Read-only: what was searched, imported and chased; never exhaustive."""
+    """Read-only: what was searched, imported and chased; never exhaustive.
+
+    Loads receipts only (no record raw/parsed/evidence) and applies the same
+    row-count guard as the export.
+    """
     collection_id = cast(UUID, context.collection.id)
     runs = await _runs(db, context)
-    imports = await _imports(db, collection_id, None)
+    await _check_size(db, [run.id for run in runs], collection_id, bytes_too=False)
+    imports = await _imports(db, collection_id, None, with_records=False)
     executions = _executions(await _searches(db, runs), imports)
     return _coverage(
         await _identifier_index(db, collection_id),
@@ -553,27 +618,7 @@ async def build_package(db: AsyncSession, context: ProjectContext) -> dict[str, 
     collection_id = cast(UUID, context.collection.id)
     runs = await _runs(db, context)
     run_ids = [run.id for run in runs]
-    size = cast(
-        int,
-        (
-            await db.execute(
-                select(func.count())
-                .select_from(ResearchSource)
-                .where(ResearchSource.run_id.in_(run_ids))
-            )
-        ).scalar_one(),
-    ) + cast(
-        int,
-        (
-            await db.execute(
-                select(func.count())
-                .select_from(ResearchImportRecord)
-                .where(ResearchImportRecord.collection_id == collection_id)
-            )
-        ).scalar_one(),
-    )
-    if size > MAX_EXPORT_RECORDS:
-        raise _too_large()
+    await _check_size(db, run_ids, collection_id, bytes_too=True)
 
     omissions: list[dict[str, Any]] = []
     searches = await _searches(db, runs)
@@ -693,7 +738,8 @@ async def build_package(db: AsyncSession, context: ProjectContext) -> dict[str, 
             protocol["citation_chasing"],
         ).model_dump(mode="json"),
     }
-    return seal(body, datetime.now(timezone.utc).isoformat())
+    # Canonical JSON + hashing of a large body must not block the event loop.
+    return await asyncio.to_thread(seal, body, datetime.now(timezone.utc).isoformat())
 
 
 def render(
@@ -711,19 +757,30 @@ def render(
             "README.txt",
             f"{PACKAGE_SCHEMA}\n\n{COVERAGE_STATEMENT}\n\n"
             "corpus.json holds the package; body_sha256 is the SHA-256 of its "
-            "body as canonical JSON (sorted keys, no whitespace).\n",
+            "body as canonical JSON (sorted keys, no whitespace). It proves "
+            "integrity, not authenticity: anyone can recompute it.\n",
         )
     return buffer.getvalue(), "application/zip", f"{name}.zip"
 
 
 def verify_package(data: bytes) -> Reconstruction:
-    """Check the body hash and rebuild identity and search evidence (pure)."""
+    """Check the body hash and rebuild identity and search evidence (pure).
+
+    Any unreadable, oversized or malformed package raises
+    ``CorpusPackageError``; nothing else escapes.
+    """
     try:
         if data[:2] == b"PK":
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                if archive.getinfo("corpus.json").file_size > MAX_PACKAGE_BYTES:
+                    raise CorpusPackageError("corpus.json is too large to verify")
                 data = archive.read("corpus.json")
+        elif len(data) > MAX_PACKAGE_BYTES:
+            raise CorpusPackageError("package is too large to verify")
         package = json.loads(data)
     except (zipfile.BadZipFile, KeyError, ValueError) as exc:
+        if isinstance(exc, CorpusPackageError):
+            raise
         raise CorpusPackageError("package is not a readable corpus export") from exc
     if not isinstance(package, dict) or package.get("schema") != PACKAGE_SCHEMA:
         raise CorpusPackageError("unsupported package schema")
@@ -731,7 +788,15 @@ def verify_package(data: bytes) -> Reconstruction:
     digest = hashlib.sha256(_canonical(body)).hexdigest()
     if digest != package.get("body_sha256"):
         raise CorpusPackageError("body_sha256 does not match the package body")
-    assert isinstance(body, dict)
+    try:
+        return _reconstruct(cast(dict[str, Any], body), digest)
+    except CorpusPackageError:
+        raise
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise CorpusPackageError("package body has an unexpected shape") from exc
+
+
+def _reconstruct(body: dict[str, Any], digest: str) -> Reconstruction:
     identities = body["identities"]
     merged_into = {r["id"]: r["merged_into_report_id"] for r in identities["reports"]}
 

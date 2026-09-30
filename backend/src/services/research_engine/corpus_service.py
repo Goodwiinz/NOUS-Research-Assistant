@@ -10,6 +10,7 @@ guard underneath.
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
@@ -46,6 +47,8 @@ from src.services.research_engine.project_access import (
     ResearchAction,
     resolve_project,
 )
+
+logger = logging.getLogger(__name__)
 
 _IMPORT_NOT_FOUND = "Import not found"
 _FORMAT_MESSAGES = {
@@ -133,6 +136,10 @@ async def insert_receipt(
                 records=records,
             )
     except IntegrityError as exc:
+        logger.warning(
+            "import receipt insert hit a unique constraint",
+            extra={"collection_id": str(collection_id), "error": str(exc.orig)},
+        )
         raise _error(
             409,
             "import_conflict",
