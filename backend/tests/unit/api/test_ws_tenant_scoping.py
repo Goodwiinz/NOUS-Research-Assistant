@@ -175,9 +175,7 @@ async def test_test_connection_foreign_org_admin_denied(monkeypatch):
 
     admin = _user(UserRole.ADMIN, org_id=ORG_A)
     with pytest.raises(HTTPException) as ei:
-        await ws.test_websocket_connection(
-            connection_id="conn-1", current_user=admin
-        )
+        await ws.test_websocket_connection(connection_id="conn-1", current_user=admin)
 
     assert ei.value.status_code == 403
     manager.send_message_to_connection.assert_not_awaited()
@@ -217,9 +215,7 @@ async def test_test_connection_nonexistent_target_user_404(monkeypatch):
 
     admin = _user(UserRole.ADMIN, org_id=ORG_A)
     with pytest.raises(HTTPException) as ei:
-        await ws.test_websocket_connection(
-            connection_id="conn-1", current_user=admin
-        )
+        await ws.test_websocket_connection(connection_id="conn-1", current_user=admin)
 
     assert ei.value.status_code == 404
 
