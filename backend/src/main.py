@@ -87,6 +87,7 @@ from src.api.research_engine import (
     research_engine_protocols_router,
     research_engine_reviews_router,
     research_engine_runs_router,
+    research_engine_screening_router,
     research_engine_steps_router,
 )
 from src.api.search import knowledge_graph_router, search_quality_router, search_router
@@ -673,6 +674,9 @@ app.include_router(
 app.include_router(
     research_engine_identities_router, prefix="/api/v1"
 )  # Research Engine report/study identities (GOO-299)
+app.include_router(
+    research_engine_screening_router, prefix="/api/v1"
+)  # Research Engine screening queues (GOO-301)
 app.include_router(
     research_engine_corpus_router, prefix="/api/v1"
 )  # Research Engine search import, citation chase, corpus export (GOO-300)

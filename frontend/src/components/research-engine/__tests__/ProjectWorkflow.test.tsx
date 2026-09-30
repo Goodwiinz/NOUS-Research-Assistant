@@ -43,6 +43,19 @@ vi.mock('../CorpusPanel', () => ({
     </div>
   ),
 }));
+vi.mock('../ScreeningQueuePanel', () => ({
+  ScreeningQueuePanel: ({
+    projectId,
+    readOnly,
+  }: {
+    projectId: string;
+    readOnly?: boolean;
+  }) => (
+    <div>
+      Screening for {projectId} {readOnly ? '(read only)' : '(active)'}
+    </div>
+  ),
+}));
 vi.mock('@/services/researchEngineService', () => ({
   createProject: vi.fn(),
   listProjectRoles: vi.fn(),
@@ -52,6 +65,13 @@ vi.mock('@/services/researchEngineService', () => ({
   listReportHistory: vi.fn(),
   linkStudy: vi.fn(),
   mergeReports: vi.fn(),
+  listScreeningQueues: vi.fn(),
+  createScreeningQueue: vi.fn(),
+  assignScreeningReviewer: vi.fn(),
+  revokeScreeningAssignment: vi.fn(),
+  getMyScreeningQueue: vi.fn(),
+  submitScreeningObservation: vi.fn(),
+  listScreeningHistory: vi.fn(),
 }));
 describe('ProjectWorkflow', () => {
   beforeEach(() => {
@@ -85,6 +105,9 @@ describe('ProjectWorkflow', () => {
     expect(screen.getByText('Reports for collection-1')).toBeInTheDocument();
     expect(
       screen.getByText('Corpus for collection-1 (editable)')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Screening for collection-1 (active)')
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(listProjectRoles).toHaveBeenCalledWith('collection-1')
@@ -209,6 +232,9 @@ describe('ProjectWorkflow', () => {
 
     expect(
       await screen.findByText('Corpus for collection-3 (read only)')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Screening for collection-3 (read only)')
     ).toBeInTheDocument();
   });
 });

@@ -7,6 +7,16 @@ import type {
   ApiStudyLinkRequest,
 } from '@/types/api/research-identity-contract';
 import type {
+  ApiMyScreeningQueue,
+  ApiScreeningAssignment,
+  ApiScreeningAssignmentCreate,
+  ApiScreeningObservation,
+  ApiScreeningObservationCreate,
+  ApiScreeningQueue,
+  ApiScreeningQueueCreate,
+  ApiScreeningRevokeRequest,
+} from '@/types/api/research-screening-contract';
+import type {
   ApiCitationChaseRequest,
   ApiCoverage,
   ApiCoverageRequest,
@@ -235,6 +245,72 @@ export const mergeReports = (
   data: ApiReportMergeRequest
 ): Promise<ApiReport> =>
   api.post<ApiReport>(`${BASE}/projects/${projectId}/reports/merge`, data);
+
+// --- Screening queues (GOO-301) ------------------------------------------
+
+export type {
+  ApiMyScreeningItem as MyScreeningItem,
+  ApiMyScreeningQueue as MyScreeningQueue,
+  ApiScreeningDecision as ScreeningDecision,
+  ApiScreeningQueue as ScreeningQueue,
+} from '@/types/api/research-screening-contract';
+
+const screening = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/screening/queues`;
+
+export const listScreeningQueues = (
+  projectId: string
+): Promise<ApiScreeningQueue[]> =>
+  api.get<ApiScreeningQueue[]>(screening(projectId));
+
+export const createScreeningQueue = (
+  projectId: string,
+  data: ApiScreeningQueueCreate
+): Promise<ApiScreeningQueue> =>
+  api.post<ApiScreeningQueue>(screening(projectId), data);
+
+export const assignScreeningReviewer = (
+  projectId: string,
+  queueId: string,
+  data: ApiScreeningAssignmentCreate
+): Promise<ApiScreeningAssignment> =>
+  api.post<ApiScreeningAssignment>(
+    `${screening(projectId)}/${queueId}/assignments`,
+    data
+  );
+
+export const revokeScreeningAssignment = (
+  projectId: string,
+  queueId: string,
+  assignmentId: string,
+  data: ApiScreeningRevokeRequest
+): Promise<ApiScreeningAssignment> =>
+  api.post<ApiScreeningAssignment>(
+    `${screening(projectId)}/${queueId}/assignments/${assignmentId}/revoke`,
+    data
+  );
+
+export const getMyScreeningQueue = (
+  projectId: string,
+  queueId: string
+): Promise<ApiMyScreeningQueue> =>
+  api.get<ApiMyScreeningQueue>(`${screening(projectId)}/${queueId}/mine`);
+
+export const submitScreeningObservation = (
+  projectId: string,
+  queueId: string,
+  data: ApiScreeningObservationCreate
+): Promise<ApiScreeningObservation> =>
+  api.post<ApiScreeningObservation>(
+    `${screening(projectId)}/${queueId}/observations`,
+    data
+  );
+
+export const listScreeningHistory = (
+  projectId: string,
+  queueId: string
+): Promise<ApiIdentityEvent[]> =>
+  api.get<ApiIdentityEvent[]>(`${screening(projectId)}/${queueId}/history`);
 
 // --- Search import / citation chase / corpus export (GOO-300) --------------
 

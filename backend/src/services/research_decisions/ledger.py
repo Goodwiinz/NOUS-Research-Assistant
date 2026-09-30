@@ -1,6 +1,7 @@
 """Caller-owned append and replay operations for research decisions.
 
-Each aggregate family (``research_protocol``, ``research_identity``) registers
+Each aggregate family (``research_protocol``, ``research_identity``,
+``research_screening``) registers
 its subject type, payload vocabulary, value validation and replay transition
 rules in ``_FAMILIES``.
 
@@ -25,6 +26,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
+from src.services.research_engine import screening_rules
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PROTOCOL_AGGREGATE = "research_protocol"
@@ -75,6 +77,40 @@ _IDENTITY_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
             "protocol_version_id",
         }
     ),
+}
+
+_SCREENING_AGGREGATE = "research_screening"
+_SCREENING_SUBJECT = "screening_queue"
+_SCREENING_ASSIGNMENT_KEYS = frozenset(
+    {"collection_id", "queue_id", "assignment_id", "reviewer_id"}
+)
+_SCREENING_OBSERVATION_KEYS = _SCREENING_ASSIGNMENT_KEYS | {
+    "observation_id",
+    "report_id",
+    "decision",
+    "exclusion_reason",
+}
+_SCREENING_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("screening.queue_created", 1): frozenset(
+        {
+            "collection_id",
+            "queue_id",
+            "stage",
+            "protocol_version_id",
+            "criteria_hash",
+            "report_ids",
+            "exclusion_reasons",
+            "supersedes_queue_id",
+            "reviewer_mode",
+            # Count of AI suggestion rows not imported (None: no import).
+            "suggestions_skipped",
+        }
+    ),
+    ("screening.assigned", 1): _SCREENING_ASSIGNMENT_KEYS,
+    ("screening.unassigned", 1): _SCREENING_ASSIGNMENT_KEYS,
+    ("screening.observed", 1): _SCREENING_OBSERVATION_KEYS,
+    ("screening.superseded", 1): _SCREENING_OBSERVATION_KEYS
+    | {"superseded_observation_id"},
 }
 
 
@@ -304,6 +340,66 @@ def _validate_identity_payload(
                 raise DecisionValidationError("split must create a new report")
     if subject != subject_id:
         raise DecisionValidationError("identity event subject is not its report")
+
+
+def _validate_screening_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    _validated_payload_uuid(payload["collection_id"], "collection_id")
+    queue_id = _validated_payload_uuid(payload["queue_id"], "queue_id")
+    if not queue_id == aggregate_id == subject_id:
+        raise DecisionValidationError(
+            "decision payload belongs to another screening queue"
+        )
+    if event_type == "screening.queue_created":
+        if payload["stage"] not in screening_rules.STAGES:
+            raise DecisionValidationError("screening stage is invalid")
+        if payload["reviewer_mode"] not in screening_rules.MODES:
+            raise DecisionValidationError("screening reviewer_mode is invalid")
+        _validated_payload_uuid(payload["protocol_version_id"], "protocol_version_id")
+        criteria = payload["criteria_hash"]
+        if not isinstance(criteria, str) or not _SHA256_RE.fullmatch(criteria):
+            raise DecisionValidationError(
+                "criteria_hash must be a lowercase SHA-256 digest"
+            )
+        reports = _validated_uuid_list(payload["report_ids"], "report_ids")
+        if not reports or len(set(reports)) != len(reports):
+            raise DecisionValidationError("report_ids must be non-empty and unique")
+        reasons = payload["exclusion_reasons"]
+        if not isinstance(reasons, list) or not all(
+            isinstance(reason, str) for reason in reasons
+        ):
+            raise DecisionValidationError("exclusion_reasons must be a string list")
+        _validated_optional_uuid(payload["supersedes_queue_id"], "supersedes_queue_id")
+        skipped = payload["suggestions_skipped"]
+        if skipped is not None and (
+            not isinstance(skipped, int) or isinstance(skipped, bool) or skipped < 0
+        ):
+            raise DecisionValidationError(
+                "suggestions_skipped must be a non-negative integer"
+            )
+        return
+    _validated_payload_uuid(payload["assignment_id"], "assignment_id")
+    _validated_payload_uuid(payload["reviewer_id"], "reviewer_id")
+    if event_type in {"screening.assigned", "screening.unassigned"}:
+        return
+    observation = _validated_payload_uuid(payload["observation_id"], "observation_id")
+    _validated_payload_uuid(payload["report_id"], "report_id")
+    if payload["decision"] not in screening_rules.DECISIONS:
+        raise DecisionValidationError("screening decision is invalid")
+    reason = payload["exclusion_reason"]
+    if reason is not None and not isinstance(reason, str):
+        raise DecisionValidationError("exclusion_reason must be a string")
+    if event_type == "screening.superseded" and observation == (
+        _validated_payload_uuid(
+            payload["superseded_observation_id"], "superseded_observation_id"
+        )
+    ):
+        raise DecisionValidationError("observation cannot supersede itself")
 
 
 async def _locked_stream(
@@ -626,6 +722,69 @@ def _validate_identity_transitions(
             live(payload["new_report_id"], "new_report_id")
 
 
+def _validate_screening_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Self-contained queue replay: event 1 carries the corpus and the reasons.
+
+    Assignments must be active for their reviewer; an initial observation needs
+    no current one, and a supersession must name the current one.
+    """
+    created: dict[str, Any] | None = None
+    corpus: set[UUID] = set()
+    active: dict[UUID, UUID] = {}  # assignment -> reviewer
+    current: dict[tuple[UUID, UUID], UUID] = {}  # (reviewer, report) -> observation
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["queue_id"], "queue_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another queue")
+        if (event.event_type == "screening.queue_created") != (created is None):
+            raise DecisionReplayError("screening stream must open with queue_created")
+        if created is None:
+            created = payload
+            corpus = {_payload_uuid(r, "report_ids") for r in payload["report_ids"]}
+            continue
+        if payload["collection_id"] != created["collection_id"]:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        assignment = _payload_uuid(payload["assignment_id"], "assignment_id")
+        reviewer = _payload_uuid(payload["reviewer_id"], "reviewer_id")
+        if event.event_type == "screening.assigned":
+            if reviewer in active.values() or assignment in active:
+                raise DecisionReplayError("contradictory screening assignment")
+            active[assignment] = reviewer
+            continue
+        if active.get(assignment) != reviewer:
+            raise DecisionReplayError("screening action without an active assignment")
+        if event.event_type == "screening.unassigned":
+            del active[assignment]
+            continue
+        if event.actor_user_id != reviewer:
+            raise DecisionReplayError("screening observation actor is not its reviewer")
+        report = _payload_uuid(payload["report_id"], "report_id")
+        if report not in corpus:
+            raise DecisionReplayError("screening observation outside corpus")
+        try:
+            screening_rules.validate_observation(
+                created["stage"],
+                payload["decision"],
+                payload["exclusion_reason"],
+                created["exclusion_reasons"],
+            )
+        except ValueError as error:
+            raise DecisionReplayError(
+                "screening observation violates protocol criteria"
+            ) from error
+        key = (reviewer, report)
+        if event.event_type == "screening.observed":
+            if key in current:
+                raise DecisionReplayError("contradictory initial screening observation")
+        elif current.get(key) != _payload_uuid(
+            payload["superseded_observation_id"], "superseded_observation_id"
+        ):
+            raise DecisionReplayError("contradictory screening supersession")
+        current[key] = _payload_uuid(payload["observation_id"], "observation_id")
+
+
 _FAMILIES: dict[str, _Family] = {
     _PROTOCOL_AGGREGATE: _Family(
         subject_type=_PROTOCOL_SUBJECT,
@@ -639,6 +798,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_IDENTITY_PAYLOAD_KEYS,
         validate_payload=_validate_identity_payload,
         validate_transitions=_validate_identity_transitions,
+        requires_subject_version=False,
+    ),
+    _SCREENING_AGGREGATE: _Family(
+        subject_type=_SCREENING_SUBJECT,
+        payload_keys=_SCREENING_PAYLOAD_KEYS,
+        validate_payload=_validate_screening_payload,
+        validate_transitions=_validate_screening_transitions,
         requires_subject_version=False,
     ),
 }

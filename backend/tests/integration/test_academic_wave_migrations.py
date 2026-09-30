@@ -467,6 +467,12 @@ def test_academic_wave_migrations_upgrade_downgrade_round_trip(
     assert "research_project_role_assignments" in inspect(connection).get_table_names()
 
 
+_SCREENING_TABLES = (
+    "screening_suggestions",
+    "screening_observations",
+    "screening_assignments",
+    "screening_queues",
+)
 _IMPORT_TABLES = ("research_import_records", "research_import_receipts")
 _IDENTITY_TABLES = (
     "research_report_observations",
@@ -481,7 +487,8 @@ def test_report_identity_migration_upgrade_downgrade_round_trip(
 ) -> None:
     """GOO-299 tables are created by the revision itself, with RLS enabled."""
     connection = pre_wave_connection
-    for table in (*_IMPORT_TABLES, *_IDENTITY_TABLES):
+    # GOO-301 screening tables reference research_reports: drop them first.
+    for table in (*_SCREENING_TABLES, *_IMPORT_TABLES, *_IDENTITY_TABLES):
         connection.exec_driver_sql(f'DROP TABLE "{table}"')
     migration = _load_migration("c9d2e4f6a8b1_create_report_identities.py")
 
@@ -546,3 +553,44 @@ def test_search_import_migration_upgrade_downgrade_round_trip(
     _run_migration(connection, migration, "downgrade")
     inspector = inspect(connection)
     assert not any(inspector.has_table(table) for table in _IMPORT_TABLES)
+
+
+def test_screening_queue_migration_upgrade_downgrade_round_trip(
+    pre_wave_connection: Connection,
+) -> None:
+    """GOO-301 tables are created by e1f3a5c7d9b2 itself, with RLS enabled."""
+    connection = pre_wave_connection
+    for table in _SCREENING_TABLES:
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    connection.exec_driver_sql("DROP INDEX idx_research_decision_event_idempotency")
+    migration = _load_migration("e1f3a5c7d9b2_create_screening_queues.py")
+    assert migration.down_revision == "aw02_artifact_lifecycle"
+
+    _run_migration(connection, migration, "upgrade")
+    inspector = inspect(connection)
+    for table in _SCREENING_TABLES:
+        assert inspector.has_table(table)
+        assert connection.execute(
+            text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
+            {"t": table},
+        ).scalar_one()
+    partial = {
+        index["name"]: index["dialect_options"].get("postgresql_where")
+        for table in ("screening_assignments", "screening_observations")
+        for index in inspector.get_indexes(table)
+        if index["unique"] and index["dialect_options"].get("postgresql_where")
+    }
+    assert partial == {
+        "uq_screening_assignment_active": "(revoked_at IS NULL)",
+        "uq_screening_observation_initial": "(supersedes_observation_id IS NULL)",
+    }
+    assert "idx_research_decision_event_idempotency" in {
+        index["name"] for index in inspector.get_indexes("research_decision_events")
+    }
+
+    _run_migration(connection, migration, "downgrade")
+    inspector = inspect(connection)
+    assert not any(inspector.has_table(table) for table in _SCREENING_TABLES)
+    assert "idx_research_decision_event_idempotency" not in {
+        index["name"] for index in inspector.get_indexes("research_decision_events")
+    }

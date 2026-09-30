@@ -136,6 +136,12 @@ from .research_run import ResearchRun, RunStatus
 from .research_source import ResearchSource
 from .research_stage_review import ResearchStageReview
 from .research_step import ExecutionMode, ResearchStep, StepType
+from .screening import (
+    ScreeningAssignment,
+    ScreeningObservation,
+    ScreeningQueue,
+    ScreeningSuggestion,
+)
 
 # Evaluation models (must import after User/Organization for monkey-patched relationships)
 from .evaluation import (
@@ -296,6 +302,10 @@ __all__ = [
     "ResearchReportIdentifier",
     "ResearchReportObservation",
     "ResearchStudy",
+    "ScreeningQueue",
+    "ScreeningAssignment",
+    "ScreeningObservation",
+    "ScreeningSuggestion",
     # Research Pipeline
     "ResearchPipeline",
     # Evaluation models
