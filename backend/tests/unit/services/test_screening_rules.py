@@ -1,6 +1,7 @@
 """Pure GOO-301 screening rules: reasons, criterion version, observation shape."""
 
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -134,3 +135,88 @@ def test_reviewer_mode_missing_or_unknown_is_malformed(section: Any) -> None:
     with pytest.raises(ValueError):
         screening_rules.reviewer_mode(snapshot)
     assert screening_rules.reviewer_mode(_snapshot()) == "dual_independent"
+
+
+# --- GOO-302: derivation and reveal ------------------------------------------
+
+_A, _B, _C = (UUID(int=i) for i in (1, 2, 3))
+
+
+def _obs(n: int, reviewer: UUID, decision: str, reason: str | None = None) -> Any:
+    return screening_rules.Obs(UUID(int=100 + n), reviewer, decision, reason)
+
+
+def test_single_mode_resolves_on_first_observation() -> None:
+    derived = screening_rules.derive("single", [_obs(1, _A, "include")])
+    assert derived == screening_rules.Derived(
+        "single", "include", None, [str(UUID(int=101))]
+    )
+    assert screening_rules.derive("single", []) is None
+
+
+def test_dual_needs_two_distinct_reviewers() -> None:
+    assert screening_rules.derive("dual_independent", [_obs(1, _A, "include")]) is None
+    same_reviewer = [_obs(1, _A, "include"), _obs(2, _A, "include")]
+    assert screening_rules.derive("dual_independent", same_reviewer) is None
+    with pytest.raises(ValueError):
+        screening_rules.derive("independent", [_obs(1, _A, "include")])
+
+
+def test_dual_agreement_same_decision_and_reason() -> None:
+    derived = screening_rules.derive(
+        "dual_independent",
+        [
+            _obs(2, _B, "exclude", "wrong design"),
+            _obs(1, _A, "exclude", "wrong design"),
+        ],
+    )
+    assert derived == screening_rules.Derived(
+        "agreement", "exclude", "wrong design", [str(UUID(int=101)), str(UUID(int=102))]
+    )
+    conflict = screening_rules.derive(
+        "dual_independent", [_obs(1, _A, "include"), _obs(2, _B, "exclude")]
+    )
+    assert conflict is not None
+    assert (conflict.basis, conflict.outcome) == ("conflict", None)
+
+
+def test_full_text_different_reasons_is_conflict() -> None:
+    derived = screening_rules.derive(
+        "dual_independent",
+        [
+            _obs(1, _A, "exclude", "wrong design"),
+            _obs(2, _B, "exclude", "wrong population"),
+        ],
+    )
+    assert derived is not None
+    assert (derived.basis, derived.outcome, derived.exclusion_reason) == (
+        "conflict",
+        None,
+        None,
+    )
+
+
+@pytest.mark.parametrize("mode", screening_rules.MODES)
+def test_uncertain_never_auto_resolves(mode: str) -> None:
+    fresh = [_obs(1, _A, "uncertain"), _obs(2, _B, "uncertain")]
+    derived = screening_rules.derive(mode, fresh[: screening_rules.REQUIRED[mode]])
+    assert derived is not None
+    assert (derived.basis, derived.outcome) == ("conflict", None)
+
+
+def test_visible_only_own_or_revealed() -> None:
+    own, peer = UUID(int=11), UUID(int=12)
+    assert screening_rules.visible(_A, own, _A, set())
+    assert not screening_rules.visible(_B, peer, _A, set())
+    assert screening_rules.visible(_B, peer, _A, {peer})
+    assert not screening_rules.visible(_B, peer, _C, {own})
+
+
+def test_auto_resolution_id_is_deterministic_per_event() -> None:
+    event = UUID(int=7)
+    assert screening_rules.auto_resolution_id(event) == (
+        screening_rules.auto_resolution_id(event)
+    )
+    assert screening_rules.auto_resolution_id(event) != (
+        screening_rules.auto_resolution_id(UUID(int=8))
+    )
