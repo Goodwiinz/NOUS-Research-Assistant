@@ -464,11 +464,11 @@ class ImportDeclaration(BaseModel):
     """What the importer declares about the search; never inferred from the file."""
 
     database: str = Field(..., min_length=1, max_length=200)
-    query_text: Optional[str] = Field(None, min_length=1, max_length=20_000)
+    query_text: Optional[str] = Field(default=None, min_length=1, max_length=20_000)
     search_date: Optional[date] = None
     exported_at: Optional[datetime] = None
     redistribution: Literal["restricted", "allowed"] = "restricted"
-    notes: Optional[str] = Field(None, max_length=2000)
+    notes: Optional[str] = Field(default=None, max_length=2000)
 
 
 class ImportReceiptResponse(BaseModel):
@@ -506,6 +506,29 @@ class CitationChaseRequest(BaseModel):
     # 50 mirrors step_executor.MAX_CONNECTOR_RESULTS (pinned by a unit test).
     max_results: int = Field(50, ge=1, le=50)
     idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+COVERAGE_STATEMENT = (
+    "Coverage lists what was searched, imported and chased for this project. "
+    "It is not exhaustive and does not prove that no other relevant records exist."
+)
+
+
+class CoverageRequest(BaseModel):
+    """Known records to check, each ``{kind: value}`` (e.g. ``{"doi": "10.1/x"}``)."""
+
+    known: List[Dict[str, str]] = Field(default_factory=list, max_length=1000)
+
+
+class CoverageResponse(BaseModel):
+    found: List[Dict[str, Any]]
+    missing: List[Dict[str, str]]
+    recall: Optional[float] = None
+    searched: List[Dict[str, Any]]
+    not_searched: List[str]
+    citation_chasing: Optional[Dict[str, Any]] = None
+    exhaustive: Literal[False] = False
+    statement: str = COVERAGE_STATEMENT
 
 
 class ProtocolRegistrationCreate(BaseModel):
