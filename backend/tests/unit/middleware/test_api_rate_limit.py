@@ -70,6 +70,22 @@ def _make_app(limiter: Any) -> FastAPI:
     async def documents() -> dict[str, bool]:
         return {"ok": True}
 
+    @app.post("/api/v1/files/upload")
+    async def upload() -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.post("/api/v1/agent/execute")
+    async def agent_execute() -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.get("/api/v1/agent/jobs/j1")
+    async def agent_job() -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.post("/api/v1/auth/cleanup")
+    async def auth_cleanup() -> dict[str, bool]:
+        return {"ok": True}
+
     @app.get("/api/v1/anything")
     async def anything() -> dict[str, bool]:
         return {"ok": True}
@@ -118,10 +134,23 @@ def test_bucket_table_longest_prefix_and_method_match() -> None:
     assert resolve_bucket("/api/v1/research/writer", "POST").name == "research"
     assert resolve_bucket("/api/v1/connectors", "GET").name == "connectors"
 
-    # Documents uploads are method-gated: POST is heavy, GET falls to default.
-    upload = resolve_bucket("/api/v1/documents", "POST")
+    # Codex P1: the upload bucket targets the real upload route
+    # (POST /api/v1/files/upload), not unrelated /documents POSTs.
+    upload = resolve_bucket("/api/v1/files/upload", "POST")
     assert (upload.name, upload.requests) == ("documents_upload", 30)
+    assert resolve_bucket("/api/v1/documents", "POST") is DEFAULT_BUCKET
+    assert resolve_bucket("/api/v1/documents/search", "POST") is DEFAULT_BUCKET
     assert resolve_bucket("/api/v1/documents", "GET") is DEFAULT_BUCKET
+
+    # Codex P2: agent polling/resume/cancel keep their own 120/min budget
+    # (mirrors _AGENT_READ_RPM in api/agent/execute.py).
+    for method, path in (
+        ("GET", "/api/v1/agent/jobs/j1"),
+        ("GET", "/api/v1/agent/stream/resume/t1"),
+        ("POST", "/api/v1/agent/stream/cancel/t1"),
+    ):
+        read = resolve_bucket(path, method)
+        assert (read.name, read.requests, read.window) == ("agent_read", 120, 60)
 
     # Anything else is the wide default bucket.
     default = resolve_bucket("/api/v1/threads/abc/messages", "GET")
@@ -135,14 +164,21 @@ def test_skip_paths_exempt_from_limiting() -> None:
     for path in (
         "/health",
         "/api/v1/health",
-        "/api/v1/auth/login",
-        "/api/v1/auth",
-        "/api/v1/cli-auth/token",
         "/docs",
         "/openapi.json",
     ):
         assert is_skipped_path(path), path
     assert not is_skipped_path("/api/v1/search")
+    # Codex P2: auth/CLI-auth routes have no dedicated limiter (except
+    # /cli-auth/start), so they must count against the default bucket.
+    for path in (
+        "/api/v1/auth",
+        "/api/v1/auth/cleanup",
+        "/api/v1/auth/me",
+        "/api/v1/cli-auth/status/s1",
+        "/api/v1/cli-auth/approve",
+    ):
+        assert not is_skipped_path(path), path
     assert not is_skipped_path("/api/v1/authentication-helper")  # prefix safety
 
 
@@ -183,19 +219,31 @@ def test_documents_upload_bucket_method_gated() -> None:
     client = TestClient(_make_app(_memory_limiter()))
 
     for _ in range(30):
-        assert client.post("/api/v1/documents").status_code == 200
-    assert client.post("/api/v1/documents").status_code == 429
+        assert client.post("/api/v1/files/upload").status_code == 200
+    assert client.post("/api/v1/files/upload").status_code == 429
 
-    # GET on the same prefix uses the default bucket — still allowed.
+    # Other document operations use the default bucket — still allowed.
+    assert client.post("/api/v1/documents").status_code == 200
     assert client.get("/api/v1/documents").status_code == 200
 
 
-def test_auth_login_not_limited_by_this_middleware() -> None:
+def test_agent_turns_do_not_consume_polling_budget() -> None:
     client = TestClient(_make_app(_memory_limiter()))
 
-    for _ in range(70):
-        response = client.post("/api/v1/auth/login")
-        assert response.status_code == 200, response.status_code
+    for _ in range(60):
+        assert client.post("/api/v1/agent/execute").status_code == 200
+    assert client.post("/api/v1/agent/execute").status_code == 429
+
+    # Exhausted turn bucket must not block job polling.
+    assert client.get("/api/v1/agent/jobs/j1").status_code == 200
+
+
+def test_auth_routes_count_against_default_bucket() -> None:
+    client = TestClient(_make_app(_memory_limiter()))
+
+    response = client.post("/api/v1/auth/cleanup")
+    assert response.status_code == 200
+    assert response.headers["X-RateLimit-Limit"] == "600"
 
 
 def test_health_and_docs_not_limited() -> None:
@@ -302,6 +350,63 @@ async def test_fail_open_default_allows_request_during_outage(
     client = TestClient(_make_app(limiter))
 
     assert client.get("/api/v1/anything").status_code == 200
+
+
+class _FlakyStore:
+    """Redis store double: first call succeeds, the follow-up call hits an
+    outage and pins the store into its in-memory fallback."""
+
+    def __init__(self, allowed: bool, ttl: int = 0) -> None:
+        self._allowed = allowed
+        self._ttl = ttl
+        self._fallback = False
+
+    def _in_fallback_window(self) -> bool:
+        return self._fallback
+
+    async def is_allowed(self, key: str) -> bool:
+        return self._allowed
+
+    async def get_remaining_attempts(self, key: str) -> int:
+        self._fallback = True  # outage begins between the two calls
+        return 1
+
+    async def check_rate_limit(self, key: str) -> tuple[bool, int]:
+        return False, self._ttl
+
+
+@pytest.mark.asyncio
+async def test_degraded_sampled_after_every_store_call() -> None:
+    """Codex P2: an outage that starts between is_allowed() and the
+    remaining-attempts lookup must still surface as degraded (so
+    RATE_LIMIT_FAIL_CLOSED answers 503)."""
+    from src.middleware.rate_limiting import ApiRateLimiter
+
+    limiter = ApiRateLimiter(use_redis=False)
+    limiter._stores[(5, 1)] = _FlakyStore(allowed=True)
+
+    allowed, info = await limiter.is_allowed("k", limit=5, window=60)
+    assert allowed is True
+    assert info["degraded"] is True
+
+
+@pytest.mark.asyncio
+async def test_blocked_reset_time_matches_store_ttl() -> None:
+    """Codex P2: on a 429 the X-RateLimit-Reset must agree with the fixed
+    window's real expiry (Retry-After), not now + full window."""
+    import time
+
+    from src.middleware.rate_limiting import ApiRateLimiter
+
+    limiter = ApiRateLimiter(use_redis=False)
+    limiter._stores[(5, 1)] = _FlakyStore(allowed=False, ttl=10)
+
+    before = time.time()
+    allowed, info = await limiter.is_allowed("k", limit=5, window=60)
+    assert allowed is False
+    assert info["retry_after"] == 10
+    assert info["reset_time"] <= time.time() + 10
+    assert info["reset_time"] >= before + 10
 
 
 # --------------------------------------------------------------------------

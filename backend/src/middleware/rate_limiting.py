@@ -152,18 +152,37 @@ API_BUCKETS: Tuple[BucketConfig, ...] = (
     # Bulk ingestion is the heaviest abuse vector — tightest budget first.
     BucketConfig(name="arxiv", requests=10, window=60, prefix="/api/v1/arxiv"),
     BucketConfig(name="agent", requests=60, window=60, prefix="/api/v1/agent"),
+    # Agent polling / SSE resume / cancel share one read budget (mirrors
+    # _AGENT_READ_RPM in api/agent/execute.py) so turn traffic can never
+    # starve job tracking or stream recovery. Same name => same counter.
+    BucketConfig(
+        name="agent_read", requests=120, window=60, prefix="/api/v1/agent/jobs/"
+    ),
+    BucketConfig(
+        name="agent_read",
+        requests=120,
+        window=60,
+        prefix="/api/v1/agent/stream/resume/",
+    ),
+    BucketConfig(
+        name="agent_read",
+        requests=120,
+        window=60,
+        prefix="/api/v1/agent/stream/cancel/",
+    ),
     BucketConfig(name="chat", requests=60, window=60, prefix="/api/v1/chat"),
     BucketConfig(name="research", requests=60, window=60, prefix="/api/v1/research"),
     BucketConfig(name="search", requests=60, window=60, prefix="/api/v1/search"),
     BucketConfig(
         name="connectors", requests=60, window=60, prefix="/api/v1/connectors"
     ),
-    # Uploads only — document GETs/DELETEs share the default budget.
+    # The ingestion upload route (api/documents/files.py); other document
+    # operations share the default budget.
     BucketConfig(
         name="documents_upload",
         requests=30,
         window=60,
-        prefix="/api/v1/documents",
+        prefix="/api/v1/files/upload",
         methods=frozenset({"POST"}),
     ),
 )
@@ -171,10 +190,10 @@ API_BUCKETS: Tuple[BucketConfig, ...] = (
 # Per-identity default for every other /api/ route: 600 requests / 5 min.
 DEFAULT_BUCKET = BucketConfig(name="default", requests=600, window=300)
 
-# Paths served by dedicated limiters or infra — never double-count here.
+# Infra paths only. Auth / CLI-auth routes are NOT skipped: apart from
+# /cli-auth/start they have no dedicated limiter, so they use the default
+# bucket (double-counting /cli-auth/start against 600/5min is harmless).
 _SKIPPED_PREFIXES = (
-    "/api/v1/auth/",  # auth limiter in core.rate_limit owns these
-    "/api/v1/cli-auth/",  # same
     "/api/v1/health",
     "/health",
     "/docs",
@@ -185,10 +204,7 @@ _SKIPPED_PREFIXES = (
 
 def is_skipped_path(path: str) -> bool:
     """True for paths this middleware must not count."""
-    return path.startswith(_SKIPPED_PREFIXES) or path in (
-        "/api/v1/auth",
-        "/api/v1/cli-auth",
-    )
+    return path.startswith(_SKIPPED_PREFIXES)
 
 
 def resolve_bucket(path: str, method: str) -> BucketConfig:
@@ -263,22 +279,31 @@ class ApiRateLimiter:
         now = time.time()
         allowed = await store.is_allowed(key)
 
-        degraded = bool(getattr(store, "_in_fallback_window", lambda: False)())
-
         retry_after: Optional[int] = None
         current_requests: int
+        # Upper bound; on a block the store's real expiry is known.
+        # ponytail: allowed responses still advertise now + window; exact
+        # reset there needs an extra Redis TTL round trip per request.
+        reset_time = now + window
         if allowed:
             remaining = await store.get_remaining_attempts(key)
             current_requests = limit - remaining
         else:
             _, retry_after = await store.check_rate_limit(key)
             current_requests = limit
+            if retry_after:
+                reset_time = now + retry_after
+
+        # Sampled after EVERY store call: an outage starting between
+        # is_allowed() and the follow-up lookup must still read as degraded
+        # so RATE_LIMIT_FAIL_CLOSED answers 503.
+        degraded = bool(getattr(store, "_in_fallback_window", lambda: False)())
 
         info = {
             "current_requests": current_requests,
             "limit": limit,
             "window": window,
-            "reset_time": now + window,
+            "reset_time": reset_time,
             "retry_after": retry_after,
             "degraded": degraded,
         }
