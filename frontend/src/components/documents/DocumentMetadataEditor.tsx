@@ -71,6 +71,7 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
     customFields: [],
   });
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [newTag, setNewTag] = useState('');
   const [newCustomField, setNewCustomField] = useState<CustomField>({
@@ -102,6 +103,7 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
           : [],
       });
       setHasChanges(false);
+      setSaveError(null);
     }
   }, [document]);
 
@@ -190,10 +192,11 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
     if (!document || !hasChanges) return;
 
     setIsSaving(true);
+    setSaveError(null);
     try {
       const customFieldsObject = formData.customFields.reduce(
         (acc, field) => {
-          let value: any = field.value;
+          let value: string | number | boolean = field.value;
 
           // Convert value based on type
           if (field.type === 'number') {
@@ -207,7 +210,7 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
           acc[field.key] = value;
           return acc;
         },
-        {} as Record<string, any>
+        {} as Record<string, string | number | boolean>
       );
 
       const updatedMetadata: Partial<Document> = {
@@ -221,7 +224,7 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
       onClose();
     } catch (error) {
       console.error('Failed to save metadata:', error);
-      // TODO: Show error toast
+      setSaveError('Failed to save metadata. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -509,6 +512,12 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
               )}
             </div>
           </div>
+
+          {saveError && (
+            <p role="alert" className="text-sm text-destructive">
+              {saveError}
+            </p>
+          )}
 
           {/* Actions */}
           <div className="flex justify-end space-x-3 pt-4 border-t">

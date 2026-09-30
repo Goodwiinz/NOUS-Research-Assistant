@@ -112,11 +112,12 @@ export const LinkThreadModal: React.FC<LinkThreadModalProps> = ({
       setContextNote('');
       setSearchQuery('');
       onClose();
-    } catch (err: any) {
-      if (err?.message?.includes('already linked')) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '';
+      if (message.includes('already linked')) {
         setError('This thread is already linked to this project');
       } else {
-        setError(err instanceof Error ? err.message : 'Failed to link thread');
+        setError(message || 'Failed to link thread');
       }
     } finally {
       setIsSubmitting(false);
