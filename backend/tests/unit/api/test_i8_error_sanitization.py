@@ -71,7 +71,9 @@ def _scan_hits():
             code = line.split("#", 1)[0]
             for pattern in LEAK_PATTERNS:
                 if pattern.search(code):
-                    hits.append(f"{path.relative_to(BACKEND_ROOT)}:{line_no}: {line.strip()}")
+                    hits.append(
+                        f"{path.relative_to(BACKEND_ROOT)}:{line_no}: {line.strip()}"
+                    )
                     break
     return hits
 

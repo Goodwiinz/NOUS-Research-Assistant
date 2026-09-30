@@ -317,9 +317,7 @@ async def get_evidence_meter(
                 parsed_source_ids = [UUID(s.strip()) for s in source_ids.split(",")]
             except ValueError:
                 logger.warning("Invalid source ID format", exc_info=True)
-                raise HTTPException(
-                    status_code=400, detail="Invalid source ID format"
-                )
+                raise HTTPException(status_code=400, detail="Invalid source ID format")
 
         if not parsed_source_ids:
             raise HTTPException(status_code=400, detail="source_ids parameter required")
@@ -380,9 +378,11 @@ async def get_evidence_meter(
             raise HTTPException(
                 status_code=400, detail="Batch classification limit exceeded"
             )
-        except BatchClassificationTimeoutError :
+        except BatchClassificationTimeoutError:
             logger.warning("Batch classification timed out", exc_info=True)
-            raise HTTPException(status_code=504, detail="Batch classification timed out")
+            raise HTTPException(
+                status_code=504, detail="Batch classification timed out"
+            )
 
         # Calculate consensus
         evidence_meter = consensus_calculator.calculate_consensus(
@@ -628,9 +628,11 @@ async def classify_sources_for_claim(
             raise HTTPException(
                 status_code=400, detail="Batch classification limit exceeded"
             )
-        except BatchClassificationTimeoutError :
+        except BatchClassificationTimeoutError:
             logger.warning("Batch classification timed out", exc_info=True)
-            raise HTTPException(status_code=504, detail="Batch classification timed out")
+            raise HTTPException(
+                status_code=504, detail="Batch classification timed out"
+            )
 
         # Store results in database (upsert to avoid duplicates/races)
         saved_count = _save_stance_classifications(

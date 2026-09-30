@@ -279,9 +279,7 @@ async def start_batch_processing(
                 }
             )
         except Exception:
-            logger.error(
-                "Batch processing: failed to queue document", exc_info=True
-            )
+            logger.error("Batch processing: failed to queue document", exc_info=True)
             errors.append(
                 {"document_id": str(document.id), "error": "Failed to queue document"}
             )

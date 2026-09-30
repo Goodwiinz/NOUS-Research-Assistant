@@ -107,7 +107,9 @@ async def list_projects(
         )
 
     except Exception:
-        logger.error("list_projects_failed", exc_info=True, user_id=str(current_user.id))
+        logger.error(
+            "list_projects_failed", exc_info=True, user_id=str(current_user.id)
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list projects",
