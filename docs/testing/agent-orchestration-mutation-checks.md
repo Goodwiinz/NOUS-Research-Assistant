@@ -1078,3 +1078,26 @@ committed.
 - **Observed mutant failure:** exit 1; `AssertionError: dispute minted a new
   study`.
 - **Restored result:** `cmp -s` exit 0; `1 passed`.
+
+### Panel: Dispute is offered only on a linked report; history errors surface
+
+- **Source and guards:** `frontend/src/components/research-engine/ReportIdentityPanel.tsx`,
+  line 94, `const error = link.error ?? merge.error ?? reports.error ??
+  history.error;` and line 207, `{(report.study_id ? ['confirmed', 'disputed']
+  : ['confirmed'])`.
+- **Covering tests:**
+  `frontend/src/components/research-engine/__tests__/ReportIdentityPanel.test.tsx`,
+  "surfaces a history failure even when reports load" and "offers Dispute only
+  on a report that already has a study".
+- **Mutations:** (a) dropped `?? history.error`; (b) replaced `report.study_id`
+  in the ternary with `true`.
+- **Command:**
+
+  ```sh
+  pnpm --dir frontend exec vitest run src/components/research-engine/__tests__/ReportIdentityPanel.test.tsx
+  ```
+
+- **Observed mutant failures:** (a) `Unable to find role="alert"` in the
+  history-failure test; (b) `expect(element).not.toBeInTheDocument()` — the
+  unlinked preprint row offered Dispute.
+- **Restored result:** `cmp -s` exit 0; `7 passed`.

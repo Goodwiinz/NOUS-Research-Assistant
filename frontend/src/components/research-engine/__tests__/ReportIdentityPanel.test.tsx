@@ -156,6 +156,20 @@ describe('ReportIdentityPanel', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('surfaces a history failure even when reports load', async () => {
+    vi.mocked(listReportHistory).mockRejectedValue(
+      new Error('history unavailable')
+    );
+    renderPanel();
+
+    expect(
+      await screen.findByText('Deep residual learning')
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'history unavailable'
+    );
+  });
+
   it('merges into another report and surfaces the API error', async () => {
     vi.mocked(mergeReports).mockRejectedValue(
       new Error('adjudicator role required')
