@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 import redis.asyncio as redis
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -51,6 +51,25 @@ class APIKeyCreate(BaseModel):
     rate_limit_per_hour: int = 100
     expires_days: Optional[int] = None  # Days until expiration
     allowed_endpoints: Optional[list] = None
+
+    @field_validator("allowed_endpoints")
+    @classmethod
+    def _validate_allowed_endpoints(cls, v: Optional[list]) -> Optional[list]:
+        # Reject entries the auth path could never match (I5), so a bad
+        # request gets a 422 instead of a key that is denied everywhere.
+        # ponytail: validator only, no schema type change -> no OpenAPI drift.
+        for entry in v or []:
+            if (
+                not isinstance(entry, str)
+                or entry != entry.strip()
+                or not entry.startswith("/")
+                or not entry.rstrip("/")
+            ):
+                raise ValueError(
+                    "allowed_endpoints entries must be non-blank paths "
+                    "starting with '/', e.g. '/api/v1/search'"
+                )
+        return v
 
 
 class APIKeyResponse(BaseModel):

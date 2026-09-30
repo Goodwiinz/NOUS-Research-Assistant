@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.auth.api_keys import create_api_key
@@ -345,3 +346,22 @@ async def test_legacy_python_repr_scope_enforced() -> None:
 )
 def test_legacy_python_repr_malformed_still_denies_all(raw: str) -> None:
     assert _parse_allowed_endpoints(raw) == []
+
+
+# --- creation-time validation (422 instead of an unusable key) ------------
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [[""], ["  "], ["/"], [123], [None], ["api/v1/search"], [" /api/v1/search"]],
+)
+def test_create_rejects_invalid_scope_entries(entries: list[object]) -> None:
+    with pytest.raises(ValidationError):
+        APIKeyCreate(name="k", allowed_endpoints=entries)
+
+
+@pytest.mark.parametrize("entries", [None, [], ["/api/v1/search", "/api/v1/x/"]])
+def test_create_accepts_valid_scope(entries: Optional[list[str]]) -> None:
+    assert APIKeyCreate(name="k", allowed_endpoints=entries).allowed_endpoints == (
+        entries
+    )
