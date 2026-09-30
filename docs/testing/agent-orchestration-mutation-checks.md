@@ -1319,3 +1319,75 @@ the four checks (`create_queue`, `assign`, `revoke`, `submit`) was replaced
 with `pass` during fix-up `e864f9131`, and each mutant failed exactly that
 test.
 
+
+## GOO-299 review follow-ups — 2026-09-29
+
+Guards added after the #1752 review, mutation-verified with the same
+procedure (copy the file, mutate, run, restore from the copy, `cmp -s`,
+rerun). These are pure unit tests; no database is involved. No mutant was
+committed.
+
+### Over-long identifiers are dropped, not truncated
+
+- **Source and guard:** `backend/src/services/research_engine/report_identity.py`,
+  `report_identifiers`, line 26, `return {k: v for k, v in ids.items() if
+  len(v) <= MAX_IDENTIFIER_LENGTH}` (pre-mutation SHA-256
+  `406dd1c635e02b82172150173d81f0e1051db9d3b11a63248f64dd75bf55ff35`). Both
+  the in-memory index and the `research_report_identifiers` insert consume this
+  function, so the index key and the persisted `String(512)` value are the same
+  string; `observe_sources` no longer truncates.
+- **Covering test:**
+  `backend/tests/unit/services/test_report_identity_matching.py::test_overlong_identifiers_are_dropped_not_truncated`.
+- **Mutation:** replaced the line with `return ids`.
+- **Command:**
+
+  ```sh
+  cd backend && .venv/bin/pytest -q tests/unit/services/test_report_identity_matching.py -k overlong
+  ```
+
+- **Observed mutant failure:** exit 1; `assert {'doi': '10.1..., 'pmid': '1'}
+  == {'pmid': '1'}` — the 600+-char DOI stayed an identity key.
+- **Restored result:** `cmp -s` exit 0; `1 passed`.
+
+### A dispute needs an existing study
+
+- **Source and guard:** `backend/src/services/research_engine/identity_service.py`,
+  `link_study`, line 466, `if study_id is None and data.status == "disputed":`
+  followed by a 409 "No study link to dispute" (pre-mutation SHA-256
+  `66132c771ddb81a0ea292054ef4937e1638314b9a25b0002baf8763177fd2495`).
+- **Covering test:**
+  `backend/tests/unit/services/test_research_identity_service.py::test_dispute_without_a_target_study_is_rejected`
+  (the mocked session's `add` raises, so minting a study fails loudly).
+- **Mutation:** replaced the condition with `if False:`.
+- **Command:**
+
+  ```sh
+  cd backend && .venv/bin/pytest -q tests/unit/services/test_research_identity_service.py -k dispute_without
+  ```
+
+- **Observed mutant failure:** exit 1; `AssertionError: dispute minted a new
+  study`.
+- **Restored result:** `cmp -s` exit 0; `1 passed`.
+
+### Panel: Dispute is offered only on a linked report; history errors surface
+
+- **Source and guards:** `frontend/src/components/research-engine/ReportIdentityPanel.tsx`,
+  line 94, `const error = link.error ?? merge.error ?? reports.error ??
+  history.error;` and line 207, `{(report.study_id ? ['confirmed', 'disputed']
+  : ['confirmed'])`.
+- **Covering tests:**
+  `frontend/src/components/research-engine/__tests__/ReportIdentityPanel.test.tsx`,
+  "surfaces a history failure even when reports load" and "offers Dispute only
+  on a report that already has a study".
+- **Mutations:** (a) dropped `?? history.error`; (b) replaced `report.study_id`
+  in the ternary with `true`.
+- **Command:**
+
+  ```sh
+  pnpm --dir frontend exec vitest run src/components/research-engine/__tests__/ReportIdentityPanel.test.tsx
+  ```
+
+- **Observed mutant failures:** (a) `Unable to find role="alert"` in the
+  history-failure test; (b) `expect(element).not.toBeInTheDocument()` — the
+  unlinked preprint row offered Dispute.
+- **Restored result:** `cmp -s` exit 0; `7 passed`.
