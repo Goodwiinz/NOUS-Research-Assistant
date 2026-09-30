@@ -586,3 +586,43 @@ async def test_verifier_grounds_on_verbatim_quote_field() -> None:
     entry = result["verdicts"][0]
     assert entry["evidence"] == quote
     assert (entry["page_number"], entry["location"]) == (4, "Page 4")
+
+
+@pytest.mark.asyncio
+async def test_stored_evidence_is_the_matched_span_not_the_narrative() -> None:
+    """GOO-292: with only narrative evidence, store the located span alone.
+
+    Mutation check (2026-09-30): dropping ``evidence = grounded or evidence``
+    in ``_verify_document`` (storing the whole narrative) makes this test fail.
+    Restoring it makes it pass.
+    """
+    quote = "The Transformer relies entirely on self-attention mechanisms."
+    document = _make_document(
+        content_summary=None,
+        content_text=f"[Page 1]\nIntro text.\n[Page 4]\n{quote}",
+    )
+    llm, _ = _llm_mock(
+        _LLMVerdict(
+            verdict="exact",
+            evidence=f"The excerpt explicitly states: “{quote}” which fits.",
+        )
+    )
+    service = CitationVerificationService(AsyncMock())
+    with patch(f"{_MODULE}.build_lightweight_llm", return_value=llm):
+        result = await service.verify_draft_citations(
+            "The Transformer uses only self-attention [Doc 1].", [document]
+        )
+
+    entry = result["verdicts"][0]
+    assert entry["evidence"] == quote
+    assert entry["checks"]["support"]["evidence"] == quote
+    assert (entry["page_number"], entry["location"]) == (4, "Page 4")
+
+
+def test_llm_verdict_quote_defaults_to_empty() -> None:
+    """A model that omits ``quote`` must not fail validation (→ unverified).
+
+    Mutation check (2026-09-30): removing ``default=""`` from ``quote`` makes
+    this test fail with a ValidationError. Restoring it makes it pass.
+    """
+    assert _LLMVerdict(verdict="exact", evidence="Reasoning.").quote == ""

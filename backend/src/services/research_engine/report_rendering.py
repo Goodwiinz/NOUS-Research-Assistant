@@ -167,6 +167,8 @@ def _coerce_year(candidate: Any) -> int | None:
         candidate = candidate.get("date-parts")
     while isinstance(candidate, list) and candidate:  # Crossref [[Y, M, D]]
         candidate = candidate[0]
+    if not isinstance(candidate, (int, str)):  # date/datetime objects
+        candidate = getattr(candidate, "year", None)
     if isinstance(candidate, int) and 1000 <= candidate <= 9999:
         return candidate
     if isinstance(candidate, str):
