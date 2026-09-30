@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -69,6 +69,56 @@ async def test_reviewer_proposal_cannot_overwrite_an_adjudicated_link(
 
     assert blocked.value.status_code == 409
     assert (report.study_id, report.study_link_status) == (study_id, adjudicated)
+    append.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispute_without_a_target_study_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disputing needs an existing study; it must never mint a new one."""
+    collection_id, report_id = uuid4(), uuid4()
+    report = SimpleNamespace(
+        id=report_id,
+        title_snapshot="Paper",
+        study_id=None,
+        study_link_status=None,
+        study_link_actor_id=None,
+        study_link_rationale=None,
+    )
+
+    async def live_reports(*_args: Any, **_kwargs: Any) -> dict[UUID, Any]:
+        return {report_id: report}
+
+    monkeypatch.setattr(identity_service, "_lock", AsyncMock())
+    monkeypatch.setattr(
+        identity_service, "_replayed_event", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(identity_service, "_live_reports", live_reports)
+    append = AsyncMock()
+    monkeypatch.setattr(identity_service, "_append", append)
+    db = AsyncMock()
+    db.add = MagicMock(side_effect=AssertionError("dispute minted a new study"))
+    context = cast(
+        ProjectContext,
+        SimpleNamespace(
+            collection=SimpleNamespace(id=collection_id),
+            effective_roles=frozenset({ResearchProjectRole.ADJUDICATOR}),
+        ),
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await identity_service.link_study(
+            cast(AsyncSession, db),
+            context,
+            report_id,
+            uuid4(),
+            StudyLinkRequest(status="disputed", rationale="no", idempotency_key="k"),
+        )
+
+    assert blocked.value.status_code == 409
+    assert blocked.value.detail == "No study link to dispute"
+    assert (report.study_id, report.study_link_status) == (None, None)
     append.assert_not_awaited()
 
 
