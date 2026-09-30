@@ -42,7 +42,7 @@ const item = (
 
 function seedThread(
   messages: Array<{ id: string; role: 'user' | 'assistant' }>
-) {
+): void {
   act(() =>
     useChatStore.setState((s) => ({
       ...s,
