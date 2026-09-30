@@ -457,6 +457,122 @@ class IdentityEventResponse(BaseModel):
     occurred_at: datetime
 
 
+# --- Screening queues (GOO-301) ---------------------------------------------
+
+ScreeningStage = Literal["title_abstract", "full_text"]
+ScreeningDecisionValue = Literal["include", "exclude", "uncertain"]
+_IdempotencyKey = Annotated[str, Field(min_length=1, max_length=240)]
+
+
+class ScreeningQueueCreate(BaseModel):
+    protocol_version_id: UUID
+    stage: ScreeningStage
+    # None on title_abstract = every live report; full_text needs an explicit list.
+    report_ids: Optional[List[UUID]] = Field(None, min_length=1, max_length=10_000)
+    supersedes_queue_id: Optional[UUID] = None
+    suggestion_step_id: Optional[UUID] = None
+    idempotency_key: _IdempotencyKey
+
+
+class ScreeningAssignmentCreate(BaseModel):
+    reviewer_user_id: UUID
+    idempotency_key: _IdempotencyKey
+
+
+class ScreeningRevokeRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: _IdempotencyKey
+
+
+class ScreeningObservationCreate(BaseModel):
+    report_id: UUID
+    assignment_id: UUID
+    criteria_hash: str = Field(..., min_length=64, max_length=64)
+    decision: ScreeningDecisionValue
+    exclusion_reason: Optional[str] = Field(None, min_length=1, max_length=200)
+    note: Optional[str] = Field(None, max_length=10_000)
+    supersedes_observation_id: Optional[UUID] = None
+    idempotency_key: _IdempotencyKey
+
+
+class ScreeningQueueResponse(BaseModel):
+    """Counts only: decision breakdowns belong to GOO-302's reveal rules."""
+
+    id: UUID
+    stage: ScreeningStage
+    protocol_version_id: UUID
+    criteria_hash: str
+    reviewer_mode: str
+    supersedes_queue_id: Optional[UUID] = None
+    created_by_id: UUID
+    created_at: datetime
+    report_count: int
+    assignment_count: int
+    observation_count: int
+    suggestion_count: int
+    # Set only on the create response that imported them.
+    suggestions_skipped: Optional[int] = None
+    stale: Optional[str] = None
+
+
+class ScreeningAssignmentResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    queue_id: UUID
+    reviewer_id: UUID
+    assigned_by_id: UUID
+    created_at: datetime
+    revoked_at: Optional[datetime] = None
+    revoked_by_id: Optional[UUID] = None
+
+
+class ScreeningObservationResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    queue_id: UUID
+    report_id: UUID
+    reviewer_id: UUID
+    assignment_id: UUID
+    decision: ScreeningDecisionValue
+    exclusion_reason: Optional[str] = None
+    note: Optional[str] = None
+    supersedes_observation_id: Optional[UUID] = None
+    created_at: datetime
+
+
+class MyScreeningQueueInfo(BaseModel):
+    id: UUID
+    stage: ScreeningStage
+    protocol_version_id: UUID
+    criteria_hash: str
+    exclusion_reasons: List[str]
+    stale: Optional[str] = None
+
+
+class MyScreeningQueueItem(BaseModel):
+    report_id: UUID
+    title_snapshot: str
+    identifiers: Dict[str, List[str]]
+    abstract: Optional[str] = None
+    # The caller's own current observation only; peers stay hidden (GOO-302).
+    observation: Optional[ScreeningObservationResponse] = None
+
+
+class ScreeningCounts(BaseModel):
+    total: int
+    screened: int
+    remaining: int
+
+
+class MyScreeningQueueResponse(BaseModel):
+    queue: MyScreeningQueueInfo
+    assignment_id: UUID
+    items: List[MyScreeningQueueItem]
+    counts: ScreeningCounts
+
+
 # --- Search import / corpus (GOO-300) --------------------------------------
 
 
