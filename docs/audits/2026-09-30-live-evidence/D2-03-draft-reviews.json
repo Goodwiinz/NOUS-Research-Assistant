@@ -1,0 +1,2572 @@
+{
+  "step": "D2-03-draft-reviews",
+  "as": "owner",
+  "at": "2026-09-30T05:23:02.942076+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/drafts/reviews",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "reviews": [
+      {
+        "id": "be869bdc-7ed3-43b2-8e12-970a2aebc075",
+        "project_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "base_draft_id": null,
+        "candidate_content_hash": "2020f6b043a72f5b34074e0050fedc874b7cfd9ad6de94d24de8305cff5e218f",
+        "candidate_content": "## Abstract\n\nRetrieval-augmented generation (RAG) has become a central approach for reducing hallucination and knowledge staleness in large language models (LLMs) by coupling parametric generation with externally retrieved evidence. The literature, however, indicates that retrieval alone does not guarantee grounded outputs: failures may arise from ambiguous document matching, incomplete evidence coverage, temporal or domain mismatch, embedding instability, and the model’s inability or unwillingness to faithfully use retrieved context. Across general, domain-specific, multimodal, and longitudinal settings, recent work therefore shifts attention from simple retrieval toward metadata-aware indexing, adaptive evidence planning, prototype-guided selection, and iterative evidence assessment. Parallel research examines verification, showing both the promise of grounding-sensitive confidence estimation and the limitations of self-verification by capacity-coupled models. Collectively, these studies frame trustworthy RAG as a pipeline-level problem involving evidence acquisition, provenance, generation faithfulness, uncertainty estimation, and recovery from infrastructure changes.\n\n## RAG, Knowledge Access, and Hallucination\n\nThe foundational motivation for RAG is that LLMs’ parametric knowledge is difficult to update, precisely manipulate, and expose through explicit provenance. By adding a differentiable or modular interface to non-parametric memory, RAG improves access to external information and has been shown to produce more specific, diverse, and factual language than parametric-only generation systems [Doc 8]. This establishes RAG as a mechanism for mitigating two related causes of hallucination: factual gaps in model parameters and knowledge staleness. Nevertheless, the basic architecture does not eliminate hallucination, because correctness depends on whether relevant evidence is retrieved and whether the generator uses that evidence appropriately.\n\nEmpirical studies in specialized domains illustrate both the benefits and variability of this approach. In music question answering, MusT-RAG combines a music-specific vector database with retrieval-aware inference and fine-tuning, outperforming conventional fine-tuning across in-domain and out-of-domain benchmarks while also improving computational efficiency relative to general Wikipedia retrieval [Doc 9]. Similarly, RadioRAG retrieves authoritative radiology information online rather than relying on a fixed corpus, thereby addressing the temporal limitations of static training data. However, its gains vary substantially by model: GPT-3.5-turbo and Mixtral-8x7B-instruct-v0.1 improve, whereas Mistral-7B-instruct-v0.2 shows no improvement [Doc 7]. These findings suggest that grounding is an interaction between corpus quality, retrieval design, model capability, and the model’s capacity to integrate external evidence; retrieval access should not be treated as a uniform or model-independent remedy for hallucination.\n\nThe retrieval stage itself is a major source of downstream error. In repetitive and highly structured corpora such as regulatory filings, semantic chunk similarity may return textually similar but document-inappropriate evidence. Metadata-aware strategies—including metadata prefixes or suffixes, unified metadata-content embeddings, late fusion, and query reformulation—are therefore investigated as mechanisms for disambiguating otherwise overlapping passages [Doc 1]. The broader implication is that hallucination prevention begins before generation: document identity, temporal attributes, source type, and other structural cues can determine whether the context is genuinely relevant. In longitudinal clinical data, fixed windows and uniform aggregation similarly risk obscuring salient historical events. EHR-RAGp addresses this problem through prototype-guided retrieval, which estimates the relevance of historical chunks to a particular prediction task and dynamically selects context across heterogeneous clinical events [Doc 3]. Thus, grounding is task-relative rather than reducible to generic semantic similarity.\n\n## Adaptive Grounding and Evidence-Centered Generation\n\nRecent RAG systems increasingly model retrieval as an evidence-construction process rather than a one-shot nearest-neighbor operation. This change is especially important for multi-hop and evidence-intensive questions, where the answer depends on combining dispersed facts. FAIR-RAG introduces a Structured Evidence Assessment module that decomposes a question into required findings, distinguishes confirmed facts from informational gaps, and generates targeted follow-up queries until the evidence is judged sufficient [Doc 10]. Its central contribution is an explicit feedback loop between evidence assessment and retrieval. Rather than allowing initial retrieval noise or incompleteness to propagate directly into generation, the system treats missing evidence as a signal for adaptive query refinement.\n\nAPT-RAG adopts a related but structurally distinct strategy. Its adaptive planning dynamically expands a reasoning structure according to question dependencies and evidence requirements, while topology-aware gathering supports sibling evidence reuse, direct retrieval, and aggregation from child nodes [Doc 2]. Evidence-guided batched generation is further used to reduce the computational overhead associated with intensive retrieval and reasoning. Taken together, these approaches indicate that effective grounding requires both coverage and organization: evidence must be sufficient, linked to the relevant subproblem, and aggregated in a way that preserves relationships among claims. This extends the conventional notion of retrieval relevance toward evidence completeness and relational coherence.\n\nThe literature also reveals that grounding infrastructures are sensitive to representation and system evolution. A controlled study of memory portability compares raw histories, chunk-based RAG, model-generated notes, and fixed-schema knowledge graphs under model upgrades. Fixed-schema knowledge graphs transfer reliably, with accuracy changing by only \\(+0.0004 \\pm 0.0020\\) after a writer-model swap, whereas compressed notes show asymmetric changes of \\(+9.91\\) and \\(-13.28\\) percentage points depending on migration direction [Doc 4]. For RAG specifically, a 50/50 mixed embedding index produces only a 4.96-point improvement, compared with an 11.90-point gain from full re-embedding. Diagnostic analysis attributes 81% of the RAG deficit to retrieval failures, while raw source retention enables recovery in 34 of 48 tested cases for one migration direction [Doc 4]. These results position provenance and re-indexability as components of grounding: an output cannot be reliably verified or repaired when the system has lost access to the evidence or when representations are incompatible across model versions.\n\nTrust must also be considered alongside privacy. Conventional vector databases store document embeddings that may be vulnerable to embedding inversion attacks. SHAQ addresses this risk by storing embeddings of generated “shadow queries” that decompose document semantics and decouple the stored representation from the original text. The method reportedly reduces text recovery while preserving retrieval performance, reaching up to 0.7967 MAP@10 and improving utility by up to 5.53% over baseline defenses [Doc 6]. Although privacy protection does not directly establish answer faithfulness, it demonstrates that trustworthy RAG involves a joint design problem: systems must preserve access to useful evidence without exposing the underlying source material or compromising the integrity of retrieval.\n\n## Verification, Confidence, and Open Challenges\n\nGrounding should not be equated with the mere presence of retrieved context. Verification requires assessing whether an output is supported by the evidence and whether the model’s confidence tracks that support. In multimodal systems, Blind-Image Contrastive Ranking (BICR) operationalizes grounding as sensitivity to input evidence. A lightweight probe compares hidden states produced with a real image against those produced with the image blacked out, penalizing higher confidence when visual information is unavailable. Across five vision-language models and tasks including visual question answering, object hallucination detection, medical imaging, and financial document understanding, BICR achieves the strongest reported cross-model combination of calibration and discrimination while using substantially fewer parameters than the strongest probing baseline [Doc 5]. This approach is notable because it evaluates whether the modality that should support an answer actually influenced the model, rather than relying solely on verbal confidence.\n\nBy contrast, self-verification can create an illusion of reliability. The medical VQA study on “verification mirage” reports that a model re-invoked to check its own answer may exhibit high agreement with an incorrect generator output while possessing poor discriminatory ability [Doc 11]. The problem is especially pronounced for knowledge-intensive clinical tasks; saliency analyses indicate that verifiers under-attend to image evidence relative to generators, producing a “lazy verifier.” Cross-verification reduces but does not eliminate the effect, and repeated actor–verifier loops can lock in initially incorrect answers through false acceptance [Doc 11]. These findings challenge the assumption that an additional prompting pass constitutes independent verification. A verifier that shares the generator’s blind spots, representations, or model capacity may reproduce rather than detect error.\n\nAcross the literature, several unresolved challenges emerge. First, retrieval quality must be evaluated in terms of disambiguation, coverage, temporal validity, and task-specific relevance, not only similarity scores [Docs 1, 3, 4]. Second, complex questions require adaptive evidence acquisition and explicit gap detection rather than static top-\\(k\\) retrieval [Docs 2, 10]. Third, generation faithfulness remains a distinct problem from retrieval success: a model may ignore, misinterpret, or overextend retrieved evidence, and confidence estimation must therefore be grounded in demonstrable evidence use [Doc 5]. Fourth, verification mechanisms require independence or external signals; self-agreement is insufficient and may amplify errors [Doc 11]. Finally, durable grounding depends on maintainable provenance, compatible representations, and recoverable source histories, particularly as models, embedding schemes, and knowledge stores evolve [Doc 4]. The systematic review of RAG architectures accordingly frames trust as a stack-wide concern spanning retrieval, fusion, orchestration, evaluation, and alignment rather than as a property supplied by any single component [Doc 12].",
+        "source_document_ids": [
+          "03be7c34-698e-4c1b-8df0-e2440a0db101",
+          "0b861512-9a44-46d6-aa58-56ed0142adb0",
+          "0d73d115-762d-4c3c-95bb-75ee470c6813",
+          "14c3a929-e371-461c-a76b-d38ed177a950",
+          "22aa7651-4a11-4a54-ae71-20af5a45dd70",
+          "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+          "43d53bca-a5f4-4eda-9c43-ec91068e74e8",
+          "6a9b211c-5505-41c0-9ccc-c81c04c92c8a",
+          "8f7f2119-182d-4a00-b19a-7a7e16abea17",
+          "aa67db1b-8077-4c15-b9e5-9ec7a1beaa62",
+          "b0fec607-9fe1-4024-a2bb-fb3201d709c3",
+          "f92e6be6-20b5-41b6-9300-b29b8b7e3fb1"
+        ],
+        "review": {
+          "verdicts": [
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt explicitly states: “Our evaluation spans metadata-as-text (prefix and suffix), a dual-encoder unified embedding that fuses metadata and content in a single index, dual-encoder late-fusion retrieval, and metadata-aware query reformulation.” It also explains that these strategies address overlapping language and reports that metadata integration reduces “inter-document confusion.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt explicitly states: “Our evaluation spans metadata-as-text (prefix and suffix), a dual-encoder unified embedding that fuses metadata and content in a single index, dual-encoder late-fusion retrieval, and metadata-aware query reformulation.” It also explains that these strategies address overlapping language and reports that metadata integration reduces “inter-document confusion.”",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 1,
+              "document_id": "03be7c34-698e-4c1b-8df0-e2440a0db101",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The source states: “Adaptive planning dynamically expands the reasoning structure based on question dependencies and evidence requirements, while topology-aware evidence gathering improves evidence coverage through sibling evidence reuse, direct retrieval, and evidence aggregation from child nodes.” This directly supports every element of the claim.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The source states: “Adaptive planning dynamically expands the reasoning structure based on question dependencies and evidence requirements, while topology-aware evidence gathering improves evidence coverage through sibling evidence reuse, direct retrieval, and evidence aggregation from child nodes.” This directly supports every element of the claim.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 2,
+              "document_id": "0b861512-9a44-46d6-aa58-56ed0142adb0",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt states that EHR-RAGp “dynamically integrates the most relevant patient history across diverse clinical event types” and proposes “a prototype-guided retrieval module” that “estimates the relevance of retrieved historical chunks with respect to a given prediction task, guiding the model towards the most informative context.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt states that EHR-RAGp “dynamically integrates the most relevant patient history across diverse clinical event types” and proposes “a prototype-guided retrieval module” that “estimates the relevance of retrieved historical chunks with respect to a given prediction task, guiding the model towards the most informative context.”",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 3,
+              "document_id": "0d73d115-762d-4c3c-95bb-75ee470c6813",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "major",
+                  "evidence": "Claim 3 introduces a broad conclusion—“durable grounding depends on maintainable provenance, compatible representations, and recoverable source histories”—that is not stated or directly established in the excerpt; the excerpt instead says the findings “highlight the necessity of direction-specific migration testing, strict embedding space isolation, and the retention of source histories for memory repair.” Claims 1 and 2 are directly supported by the excerpt.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "major",
+              "evidence": "Claim 3 introduces a broad conclusion—“durable grounding depends on maintainable provenance, compatible representations, and recoverable source histories”—that is not stated or directly established in the excerpt; the excerpt instead says the findings “highlight the necessity of direction-specific migration testing, strict embedding space isolation, and the retention of source histories for memory repair.” Claims 1 and 2 are directly supported by the excerpt.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 4,
+              "document_id": "14c3a929-e371-461c-a76b-d38ed177a950",
+              "page_number": null,
+              "claims_checked": 3,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "major",
+                  "evidence": "The excerpt supports claim 1 in broad outline: “Evaluated across five modern LVLMs and seven baselines on a benchmark covering visual question answering, object hallucination detection, medical imaging, and financial document understanding, BICR achieves the best cross-LVLM average on both calibration and discrimination simultaneously ... at 4–18× fewer parameters than the strongest probing baseline.” However, claim 2 is unsupported: the excerpt contains no discussion of retrieval success, retrieved evidence, or generation faithfulness as a distinct problem.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "major",
+              "evidence": "The excerpt supports claim 1 in broad outline: “Evaluated across five modern LVLMs and seven baselines on a benchmark covering visual question answering, object hallucination detection, medical imaging, and financial document understanding, BICR achieves the best cross-LVLM average on both calibration and discrimination simultaneously ... at 4–18× fewer parameters than the strongest probing baseline.” However, claim 2 is unsupported: the excerpt contains no discussion of retrieval success, retrieved evidence, or generation faithfulness as a distinct problem.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 5,
+              "document_id": "22aa7651-4a11-4a54-ae71-20af5a45dd70",
+              "page_number": null,
+              "claims_checked": 2,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The source states that SHAQ “substantially improves privacy while preserving retrieval utility” and reaches “up to 0.7967 MAP@10 with up to 5.53% utility improvement.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The source states that SHAQ “substantially improves privacy while preserving retrieval utility” and reaches “up to 0.7967 MAP@10 with up to 5.53% utility improvement.”",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 6,
+              "document_id": "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt states: “However, the degree of improvement varied among models; GPT-3.5-turbo and Mixtral-8x7B-instruct-v0.1 saw notable gains, while Mistral-7B-instruct-v0.2 showed no improvement.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": "crossref",
+                  "status": "match",
+                  "available": true
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt states: “However, the degree of improvement varied among models; GPT-3.5-turbo and Mixtral-8x7B-instruct-v0.1 saw notable gains, while Mistral-7B-instruct-v0.2 showed no improvement.”",
+              "identity": "match",
+              "location": "source excerpt",
+              "doc_index": 7,
+              "document_id": "43d53bca-a5f4-4eda-9c43-ec91068e74e8",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": "crossref",
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "minor",
+                  "evidence": "The excerpt supports that RAG combines parametric and non-parametric memory and that it generates “more specific, diverse and factual language than a state-of-the-art parametric-only seq2seq baseline.” However, it does not specifically say that RAG “improves access to external information,” and “modular interface” is not the source’s wording; it describes a “differentiable access mechanism” and a dense Wikipedia index accessed by a neural retriever.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "minor",
+              "evidence": "The excerpt supports that RAG combines parametric and non-parametric memory and that it generates “more specific, diverse and factual language than a state-of-the-art parametric-only seq2seq baseline.” However, it does not specifically say that RAG “improves access to external information,” and “modular interface” is not the source’s wording; it describes a “differentiable access mechanism” and a dense Wikipedia index accessed by a neural retriever.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 8,
+              "document_id": "6a9b211c-5505-41c0-9ccc-c81c04c92c8a",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt states that MusT-RAG proposes “MusWikiDB, a music-specialized vector database for the retrieval stage” and “utilizes context information during both inference and fine-tuning processes.” It also reports that it “significantly outperforms traditional fine-tuning approaches,” with “consistent improvements across both in-domain and out-of-domain MQA benchmarks,” while MusWikiDB is “substantially more effective than general Wikipedia corpora, delivering superior performance and computational efficiency.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt states that MusT-RAG proposes “MusWikiDB, a music-specialized vector database for the retrieval stage” and “utilizes context information during both inference and fine-tuning processes.” It also reports that it “significantly outperforms traditional fine-tuning approaches,” with “consistent improvements across both in-domain and out-of-domain MQA benchmarks,” while MusWikiDB is “substantially more effective than general Wikipedia corpora, delivering superior performance and computational efficiency.”",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 9,
+              "document_id": "8f7f2119-182d-4a00-b19a-7a7e16abea17",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt states that FAIR-RAG's SEA \"deconstructs the initial query into a checklist of required findings\" and audits evidence to identify \"confirmed facts\" and \"explicit informational gaps.\" It further says the gaps signal an agent that \"generates new, targeted sub-queries to retrieve the missing information,\" and that \"This cycle repeats until the evidence is verified as sufficient.\"",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt states that FAIR-RAG's SEA \"deconstructs the initial query into a checklist of required findings\" and audits evidence to identify \"confirmed facts\" and \"explicit informational gaps.\" It further says the gaps signal an agent that \"generates new, targeted sub-queries to retrieve the missing information,\" and that \"This cycle repeats until the evidence is verified as sufficient.\"",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 10,
+              "document_id": "aa67db1b-8077-4c15-b9e5-9ec7a1beaa62",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "minor",
+                  "evidence": "The excerpt directly supports Claims 1 and 2: it describes a “verification mirage” with “high verifier error and high agreement bias,” caused by “systematic false acceptance of incorrect answers”; it also states that “Cross-verification can reduce verification mirage, though the mirage is not fully eliminated” and that in “multi-turn actor-verifier loops, most initially wro...” [the excerpt truncates the final phrase]. Claim 3 is a reasonable implication of the source’s finding that verification is “not an independent safety signal,” but the prescriptive wording “require independence or external signals” is not explicitly stated in the excerpt. The truncation also leaves the loop-lock-in wording only partially verifiable.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "minor",
+              "evidence": "The excerpt directly supports Claims 1 and 2: it describes a “verification mirage” with “high verifier error and high agreement bias,” caused by “systematic false acceptance of incorrect answers”; it also states that “Cross-verification can reduce verification mirage, though the mirage is not fully eliminated” and that in “multi-turn actor-verifier loops, most initially wro...” [the excerpt truncates the final phrase]. Claim 3 is a reasonable implication of the source’s finding that verification is “not an independent safety signal,” but the prescriptive wording “require independence or external signals” is not explicitly stated in the excerpt. The truncation also leaves the loop-lock-in wording only partially verifiable.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 11,
+              "document_id": "b0fec607-9fe1-4024-a2bb-fb3201d709c3",
+              "page_number": null,
+              "claims_checked": 3,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "minor",
+                  "evidence": "The excerpt states that the review provides “quantitative assessment frameworks” and “analyze[s] the implications for trust and alignment,” but it does not explicitly say that trust spans “retrieval, fusion, orchestration, evaluation, and alignment,” nor that it is not supplied by any single component.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "minor",
+              "evidence": "The excerpt states that the review provides “quantitative assessment frameworks” and “analyze[s] the implications for trust and alignment,” but it does not explicitly say that trust spans “retrieval, fusion, orchestration, evaluation, and alignment,” nor that it is not supplied by any single component.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 12,
+              "document_id": "f92e6be6-20b5-41b6-9300-b29b8b7e3fb1",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            }
+          ],
+          "uncited_assertions": [
+            {
+              "text": "Retrieval-augmented generation (RAG) has become a central approach for reducing hallucination and knowledge staleness in large language models (LLMs) by coupling parametric generation with externally retrieved evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The literature, however, indicates that retrieval alone does not guarantee grounded outputs: failures may arise from ambiguous document matching, incomplete evidence coverage, temporal or domain mismatch, embedding instability, and the model’s inability or unwillingness to faithfully use retrieved context.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Across general, domain-specific, multimodal, and longitudinal settings, recent work therefore shifts attention from simple retrieval toward metadata-aware indexing, adaptive evidence planning, prototype-guided selection, and iterative evidence assessment.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Parallel research examines verification, showing both the promise of grounding-sensitive confidence estimation and the limitations of self-verification by capacity-coupled models.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Collectively, these studies frame trustworthy RAG as a pipeline-level problem involving evidence acquisition, provenance, generation faithfulness, uncertainty estimation, and recovery from infrastructure changes.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The foundational motivation for RAG is that LLMs’ parametric knowledge is difficult to update, precisely manipulate, and expose through explicit provenance.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This establishes RAG as a mechanism for mitigating two related causes of hallucination: factual gaps in model parameters and knowledge staleness.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Nevertheless, the basic architecture does not eliminate hallucination, because correctness depends on whether relevant evidence is retrieved and whether the generator uses that evidence appropriately.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Empirical studies in specialized domains illustrate both the benefits and variability of this approach.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Similarly, RadioRAG retrieves authoritative radiology information online rather than relying on a fixed corpus, thereby addressing the temporal limitations of static training data.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "These findings suggest that grounding is an interaction between corpus quality, retrieval design, model capability, and the model’s capacity to integrate external evidence; retrieval access should not be treated as a uniform or model-independent remedy for hallucination.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The retrieval stage itself is a major source of downstream error.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In repetitive and highly structured corpora such as regulatory filings, semantic chunk similarity may return textually similar but document-inappropriate evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The broader implication is that hallucination prevention begins before generation: document identity, temporal attributes, source type, and other structural cues can determine whether the context is genuinely relevant.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In longitudinal clinical data, fixed windows and uniform aggregation similarly risk obscuring salient historical events.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Thus, grounding is task-relative rather than reducible to generic semantic similarity.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Recent RAG systems increasingly model retrieval as an evidence-construction process rather than a one-shot nearest-neighbor operation.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This change is especially important for multi-hop and evidence-intensive questions, where the answer depends on combining dispersed facts.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Its central contribution is an explicit feedback loop between evidence assessment and retrieval.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Rather than allowing initial retrieval noise or incompleteness to propagate directly into generation, the system treats missing evidence as a signal for adaptive query refinement.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "APT-RAG adopts a related but structurally distinct strategy.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Evidence-guided batched generation is further used to reduce the computational overhead associated with intensive retrieval and reasoning.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Taken together, these approaches indicate that effective grounding requires both coverage and organization: evidence must be sufficient, linked to the relevant subproblem, and aggregated in a way that preserves relationships among claims.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This extends the conventional notion of retrieval relevance toward evidence completeness and relational coherence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The literature also reveals that grounding infrastructures are sensitive to representation and system evolution.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A controlled study of memory portability compares raw histories, chunk-based RAG, model-generated notes, and fixed-schema knowledge graphs under model upgrades.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "For RAG specifically, a 50/50 mixed embedding index produces only a 4.96-point improvement, compared with an 11.90-point gain from full re-embedding.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "These results position provenance and re-indexability as components of grounding: an output cannot be reliably verified or repaired when the system has lost access to the evidence or when representations are incompatible across model versions.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Trust must also be considered alongside privacy.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Conventional vector databases store document embeddings that may be vulnerable to embedding inversion attacks.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "SHAQ addresses this risk by storing embeddings of generated “shadow queries” that decompose document semantics and decouple the stored representation from the original text.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Although privacy protection does not directly establish answer faithfulness, it demonstrates that trustworthy RAG involves a joint design problem: systems must preserve access to useful evidence without exposing the underlying source material or compromising the integrity of retrieval.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Grounding should not be equated with the mere presence of retrieved context.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Verification requires assessing whether an output is supported by the evidence and whether the model’s confidence tracks that support.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In multimodal systems, Blind-Image Contrastive Ranking (BICR) operationalizes grounding as sensitivity to input evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A lightweight probe compares hidden states produced with a real image against those produced with the image blacked out, penalizing higher confidence when visual information is unavailable.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This approach is notable because it evaluates whether the modality that should support an answer actually influenced the model, rather than relying solely on verbal confidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "By contrast, self-verification can create an illusion of reliability.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The problem is especially pronounced for knowledge-intensive clinical tasks; saliency analyses indicate that verifiers under-attend to image evidence relative to generators, producing a “lazy verifier.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "These findings challenge the assumption that an additional prompting pass constitutes independent verification.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A verifier that shares the generator’s blind spots, representations, or model capacity may reproduce rather than detect error.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Across the literature, several unresolved challenges emerge.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "First, retrieval quality must be evaluated in terms of disambiguation, coverage, temporal validity, and task-specific relevance, not only similarity scores [Docs 1, 3, 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Second, complex questions require adaptive evidence acquisition and explicit gap detection rather than static top-\\(k\\) retrieval [Docs 2, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            }
+          ],
+          "summary": {
+            "exact": 7,
+            "major": 2,
+            "minor": 3,
+            "unverified": 0
+          },
+          "coverage": {
+            "complete": true,
+            "batch_size": 10,
+            "batch_count": 2,
+            "classification": "conservative_prose_heuristic",
+            "requested_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ],
+            "unresolved_indices": [],
+            "claim_excerpt_chars": 400,
+            "source_excerpt_chars": 8000,
+            "summary_excerpt_chars": 2000,
+            "factual_classification_complete": false
+          },
+          "fully_verified": false,
+          "claims": [
+            {
+              "text": "Retrieval-augmented generation (RAG) has become a central approach for reducing hallucination and knowledge staleness in large language models (LLMs) by coupling parametric generation with externally retrieved evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The literature, however, indicates that retrieval alone does not guarantee grounded outputs: failures may arise from ambiguous document matching, incomplete evidence coverage, temporal or domain mismatch, embedding instability, and the model’s inability or unwillingness to faithfully use retrieved context.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Across general, domain-specific, multimodal, and longitudinal settings, recent work therefore shifts attention from simple retrieval toward metadata-aware indexing, adaptive evidence planning, prototype-guided selection, and iterative evidence assessment.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Parallel research examines verification, showing both the promise of grounding-sensitive confidence estimation and the limitations of self-verification by capacity-coupled models.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Collectively, these studies frame trustworthy RAG as a pipeline-level problem involving evidence acquisition, provenance, generation faithfulness, uncertainty estimation, and recovery from infrastructure changes.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The foundational motivation for RAG is that LLMs’ parametric knowledge is difficult to update, precisely manipulate, and expose through explicit provenance.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "By adding a differentiable or modular interface to non-parametric memory, RAG improves access to external information and has been shown to produce more specific, diverse, and factual language than parametric-only generation systems [Doc 8].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                8
+              ]
+            },
+            {
+              "text": "This establishes RAG as a mechanism for mitigating two related causes of hallucination: factual gaps in model parameters and knowledge staleness.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Nevertheless, the basic architecture does not eliminate hallucination, because correctness depends on whether relevant evidence is retrieved and whether the generator uses that evidence appropriately.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Empirical studies in specialized domains illustrate both the benefits and variability of this approach.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In music question answering, MusT-RAG combines a music-specific vector database with retrieval-aware inference and fine-tuning, outperforming conventional fine-tuning across in-domain and out-of-domain benchmarks while also improving computational efficiency relative to general Wikipedia retrieval [Doc 9].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                9
+              ]
+            },
+            {
+              "text": "Similarly, RadioRAG retrieves authoritative radiology information online rather than relying on a fixed corpus, thereby addressing the temporal limitations of static training data.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "However, its gains vary substantially by model: GPT-3.5-turbo and Mixtral-8x7B-instruct-v0.1 improve, whereas Mistral-7B-instruct-v0.2 shows no improvement [Doc 7].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                7
+              ]
+            },
+            {
+              "text": "These findings suggest that grounding is an interaction between corpus quality, retrieval design, model capability, and the model’s capacity to integrate external evidence; retrieval access should not be treated as a uniform or model-independent remedy for hallucination.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The retrieval stage itself is a major source of downstream error.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In repetitive and highly structured corpora such as regulatory filings, semantic chunk similarity may return textually similar but document-inappropriate evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Metadata-aware strategies—including metadata prefixes or suffixes, unified metadata-content embeddings, late fusion, and query reformulation—are therefore investigated as mechanisms for disambiguating otherwise overlapping passages [Doc 1].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                1
+              ]
+            },
+            {
+              "text": "The broader implication is that hallucination prevention begins before generation: document identity, temporal attributes, source type, and other structural cues can determine whether the context is genuinely relevant.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In longitudinal clinical data, fixed windows and uniform aggregation similarly risk obscuring salient historical events.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "EHR-RAGp addresses this problem through prototype-guided retrieval, which estimates the relevance of historical chunks to a particular prediction task and dynamically selects context across heterogeneous clinical events [Doc 3].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                3
+              ]
+            },
+            {
+              "text": "Thus, grounding is task-relative rather than reducible to generic semantic similarity.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Recent RAG systems increasingly model retrieval as an evidence-construction process rather than a one-shot nearest-neighbor operation.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This change is especially important for multi-hop and evidence-intensive questions, where the answer depends on combining dispersed facts.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "FAIR-RAG introduces a Structured Evidence Assessment module that decomposes a question into required findings, distinguishes confirmed facts from informational gaps, and generates targeted follow-up queries until the evidence is judged sufficient [Doc 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                10
+              ]
+            },
+            {
+              "text": "Its central contribution is an explicit feedback loop between evidence assessment and retrieval.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Rather than allowing initial retrieval noise or incompleteness to propagate directly into generation, the system treats missing evidence as a signal for adaptive query refinement.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "APT-RAG adopts a related but structurally distinct strategy.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Its adaptive planning dynamically expands a reasoning structure according to question dependencies and evidence requirements, while topology-aware gathering supports sibling evidence reuse, direct retrieval, and aggregation from child nodes [Doc 2].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                2
+              ]
+            },
+            {
+              "text": "Evidence-guided batched generation is further used to reduce the computational overhead associated with intensive retrieval and reasoning.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Taken together, these approaches indicate that effective grounding requires both coverage and organization: evidence must be sufficient, linked to the relevant subproblem, and aggregated in a way that preserves relationships among claims.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This extends the conventional notion of retrieval relevance toward evidence completeness and relational coherence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The literature also reveals that grounding infrastructures are sensitive to representation and system evolution.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A controlled study of memory portability compares raw histories, chunk-based RAG, model-generated notes, and fixed-schema knowledge graphs under model upgrades.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Fixed-schema knowledge graphs transfer reliably, with accuracy changing by only \\(+0.0004 \\pm 0.0020\\) after a writer-model swap, whereas compressed notes show asymmetric changes of \\(+9.91\\) and \\(-13.28\\) percentage points depending on migration direction [Doc 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                4
+              ]
+            },
+            {
+              "text": "For RAG specifically, a 50/50 mixed embedding index produces only a 4.96-point improvement, compared with an 11.90-point gain from full re-embedding.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Diagnostic analysis attributes 81% of the RAG deficit to retrieval failures, while raw source retention enables recovery in 34 of 48 tested cases for one migration direction [Doc 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                4
+              ]
+            },
+            {
+              "text": "These results position provenance and re-indexability as components of grounding: an output cannot be reliably verified or repaired when the system has lost access to the evidence or when representations are incompatible across model versions.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Trust must also be considered alongside privacy.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Conventional vector databases store document embeddings that may be vulnerable to embedding inversion attacks.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "SHAQ addresses this risk by storing embeddings of generated “shadow queries” that decompose document semantics and decouple the stored representation from the original text.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The method reportedly reduces text recovery while preserving retrieval performance, reaching up to 0.7967 MAP@10 and improving utility by up to 5.53% over baseline defenses [Doc 6].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                6
+              ]
+            },
+            {
+              "text": "Although privacy protection does not directly establish answer faithfulness, it demonstrates that trustworthy RAG involves a joint design problem: systems must preserve access to useful evidence without exposing the underlying source material or compromising the integrity of retrieval.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Grounding should not be equated with the mere presence of retrieved context.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Verification requires assessing whether an output is supported by the evidence and whether the model’s confidence tracks that support.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In multimodal systems, Blind-Image Contrastive Ranking (BICR) operationalizes grounding as sensitivity to input evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A lightweight probe compares hidden states produced with a real image against those produced with the image blacked out, penalizing higher confidence when visual information is unavailable.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Across five vision-language models and tasks including visual question answering, object hallucination detection, medical imaging, and financial document understanding, BICR achieves the strongest reported cross-model combination of calibration and discrimination while using substantially fewer parameters than the strongest probing baseline [Doc 5].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                5
+              ]
+            },
+            {
+              "text": "This approach is notable because it evaluates whether the modality that should support an answer actually influenced the model, rather than relying solely on verbal confidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "By contrast, self-verification can create an illusion of reliability.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The medical VQA study on “verification mirage” reports that a model re-invoked to check its own answer may exhibit high agreement with an incorrect generator output while possessing poor discriminatory ability [Doc 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                11
+              ]
+            },
+            {
+              "text": "The problem is especially pronounced for knowledge-intensive clinical tasks; saliency analyses indicate that verifiers under-attend to image evidence relative to generators, producing a “lazy verifier.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "” Cross-verification reduces but does not eliminate the effect, and repeated actor–verifier loops can lock in initially incorrect answers through false acceptance [Doc 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                11
+              ]
+            },
+            {
+              "text": "These findings challenge the assumption that an additional prompting pass constitutes independent verification.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A verifier that shares the generator’s blind spots, representations, or model capacity may reproduce rather than detect error.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Across the literature, several unresolved challenges emerge.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "First, retrieval quality must be evaluated in terms of disambiguation, coverage, temporal validity, and task-specific relevance, not only similarity scores [Docs 1, 3, 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Second, complex questions require adaptive evidence acquisition and explicit gap detection rather than static top-\\(k\\) retrieval [Docs 2, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Third, generation faithfulness remains a distinct problem from retrieval success: a model may ignore, misinterpret, or overextend retrieved evidence, and confidence estimation must therefore be grounded in demonstrable evidence use [Doc 5].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                5
+              ]
+            },
+            {
+              "text": "Fourth, verification mechanisms require independence or external signals; self-agreement is insufficient and may amplify errors [Doc 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                11
+              ]
+            },
+            {
+              "text": "Finally, durable grounding depends on maintainable provenance, compatible representations, and recoverable source histories, particularly as models, embedding schemes, and knowledge stores evolve [Doc 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                4
+              ]
+            },
+            {
+              "text": "The systematic review of RAG architectures accordingly frames trust as a stack-wide concern spanning retrieval, fusion, orchestration, evaluation, and alignment rather than as a property supplied by any single component [Doc 12].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                12
+              ]
+            }
+          ],
+          "docs_checked": 12,
+          "docs_skipped": 0,
+          "duration_ms": 34516
+        },
+        "outcome": "blocked",
+        "created_at": "2026-09-30T05:22:40.582160Z"
+      },
+      {
+        "id": "2e3adf79-7c58-4119-a021-4e7ff9608c6c",
+        "project_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "base_draft_id": null,
+        "candidate_content_hash": "28d2ff62aa83dbc59c685704fd23b139ae97ee0290f5491603527c65e1f522bd",
+        "candidate_content": "## Abstract\n\nRetrieval-augmented generation (RAG) has emerged as a principal strategy for reducing the factual limitations, knowledge staleness, and weak provenance of large language models (LLMs) by coupling parametric generation with external, non-parametric information sources. However, retrieval alone does not guarantee grounded generation: failures may arise from inadequate document selection, incomplete evidence coverage, representation drift, noisy context, or the model’s tendency to generate unsupported claims. The literature increasingly therefore treats grounding as a systems problem encompassing retrieval design, evidence organization, context alignment, provenance, and output verification. Foundational work demonstrates that RAG can produce more factual and specific language than parametric-only models [Doc 8], while recent studies show that metadata-aware retrieval, adaptive evidence gathering, domain-specific indexing, and structured memory can improve the reliability of retrieved context [Docs 1–4, 7, 9, 10]. At the same time, verification mechanisms remain imperfect: self-verification may reproduce the generator’s errors, whereas modality-sensitive confidence estimation offers a more independent signal of grounding [Docs 5, 11]. Collectively, these studies indicate that reliable RAG requires explicit mechanisms for evidence sufficiency, source alignment, uncertainty estimation, and recovery from retrieval or representation failures.\n\n## Retrieval-Augmented Generation and the Problem of Hallucination\n\n### RAG as an external grounding mechanism\n\nThe central motivation for RAG is that LLMs encode knowledge implicitly in model parameters but have limited ability to precisely access, update, and provide provenance for that knowledge [Doc 8]. By retrieving external passages at inference time, RAG supplements parametric memory with non-parametric memory. The foundational RAG study reports that this combination improves the specificity, diversity, and factuality of generated language relative to a parametric sequence-to-sequence baseline, while also outperforming task-specific retrieve-and-extract systems on knowledge-intensive tasks [Doc 8]. Subsequent domain-specific studies support the value of external evidence. MusT-RAG, for example, combines a music-specialized vector database with retrieval-informed inference and fine-tuning, producing consistent gains over conventional fine-tuning on both in-domain and out-of-domain musical question-answering benchmarks [Doc 9]. Similarly, RadioRAG retrieves information from authoritative radiology sources in real time, addressing the problem of outdated training data; nevertheless, its benefits vary across models, with some showing substantial diagnostic gains and another showing no improvement [Doc 7].\n\nThese findings complicate a simple interpretation of RAG as a universal hallucination remedy. RAG can provide relevant evidence, but the final answer remains dependent on the quality of retrieval, the model’s ability to use the context, and the compatibility between the evidence and the generation process. The model variability observed in RadioRAG demonstrates that the same retrieval intervention can produce different outcomes across generators [Doc 7]. Thus, grounding should be understood as an interaction between retrieved information and model behavior rather than as a property guaranteed by the presence of retrieved passages.\n\n### Retrieval quality, representation, and context selection\n\nA major source of hallucination is retrieval failure. In structured and repetitive corpora, semantic similarity between chunks may be insufficient because documents contain overlapping language. The metadata-aware retrieval study addresses this problem by comparing metadata-as-text strategies, unified metadata-content embeddings, late-fusion retrieval, and metadata-aware query reformulation [Doc 1]. Its framing emphasizes that structural cues can disambiguate otherwise similar documents, suggesting that grounding depends not only on textual relevance but also on document identity, provenance, and corpus structure. This observation is particularly important for regulatory, clinical, and other high-stakes domains in which a semantically similar passage from the wrong document can support an apparently plausible but incorrect answer.\n\nLongitudinal and heterogeneous data introduce a related problem: retrieving relevant information from a large history. EHR-RAGp uses prototype-guided retrieval to align historical clinical chunks with a prediction task, dynamically selecting patient context rather than relying on fixed windows or uniform aggregation [Doc 3]. This approach illustrates a shift from generic relevance toward task-conditioned relevance. The goal is not merely to retrieve information that resembles the query, but to estimate which historical evidence is informative for the downstream decision.\n\nThe organization of evidence becomes even more consequential for multi-hop and evidence-intensive questions. APT-RAG uses adaptive planning to expand reasoning structures according to question dependencies and evidence requirements, while topology-aware gathering supports sibling evidence reuse, direct retrieval, and aggregation from child nodes [Doc 2]. FAIR-RAG similarly introduces a structured evidence assessment process that decomposes a query into required findings, distinguishes confirmed facts from evidence gaps, and issues targeted follow-up queries until the evidence is judged sufficient [Doc 10]. These methods address a limitation of one-shot retrieval: a top-ranked set of passages may be individually relevant while collectively failing to establish the relationships required by the answer.\n\n### Memory, maintenance, and grounding durability\n\nGrounding also depends on the stability of the representations used to store and retrieve evidence. The controlled memory-portability study compares raw long-context histories, chunked RAG memories, model-generated notes, and fixed-schema knowledge graphs across model upgrades [Doc 4]. Fixed-schema knowledge graphs transfer reliably across writer swaps, whereas compressed notes display strong model coupling and substantial asymmetric performance changes. For RAG, partial embedding migration yields only a 4.96-point accuracy improvement compared with an 11.90-point gain after full re-embedding, and retrieval failures account for 81% of the observed RAG deficit [Doc 4]. These results show that a system can retain its underlying documents while losing grounding because the retrieval representation becomes incompatible with the upgraded model.\n\nThis finding extends the hallucination problem beyond the generation stage. A response may be unsupported not because the model invents content in isolation, but because relevant evidence is inaccessible, poorly indexed, or lost during memory compression. The study’s recovery results further indicate that retaining raw source histories enables repair more effectively than attempting to reconstruct compressed notes without their original evidence [Doc 4]. Consequently, robust grounding requires lifecycle management, including representation versioning, complete re-indexing when necessary, and preservation of provenance-bearing source material.\n\n## Grounding and Verification of LLM Outputs\n\n### Evidence-grounded generation and provenance\n\nGrounding requires more than retrieving passages; the generated claim must be attributable to evidence that actually supports it. The foundational RAG literature identifies provenance as an unresolved challenge even when external memory is available [Doc 8]. Recent adaptive frameworks respond by making evidence coverage an explicit intermediate objective. FAIR-RAG’s structured evidence assessment identifies missing findings before final generation, while APT-RAG expands and aggregates evidence according to the topology of the reasoning structure [Docs 2, 10]. Both approaches treat answer generation as the endpoint of an evidence-acquisition process rather than as an immediate response to the initial retrieval results.\n\nEvidence-guided batched generation in APT-RAG also addresses the computational cost of extensive evidence gathering [Doc 2]. This is significant because verification-oriented RAG can increase latency and inference overhead. The challenge is therefore to balance evidence completeness with operational efficiency. Domain-specific systems provide another form of grounding constraint: RadioRAG uses authoritative online radiology sources, and MusT-RAG uses a specialized music knowledge base rather than a general corpus [Docs 7, 9]. However, the inconsistent model-level benefits in RadioRAG indicate that authoritative retrieval does not by itself ensure faithful use of evidence [Doc 7].\n\n### Confidence estimation and independent verification\n\nOutput verification is often implemented through confidence estimation or a second model pass. In multimodal settings, BICR estimates whether an answer was actually influenced by visual evidence by comparing hidden states produced with the real image and with a blacked-out image while holding the question constant [Doc 5]. Its contrastive ranking objective penalizes higher confidence for the image-absent condition. Across five LVLMs and tasks including visual question answering, object hallucination detection, medical imaging, and financial document understanding, BICR reportedly achieves the strongest joint calibration and discrimination performance among the evaluated methods, with substantially fewer parameters than the strongest probing baseline [Doc 5]. The key contribution is conceptual as well as methodological: grounding is operationalized as sensitivity to the relevant modality, not merely confidence in the generated answer.\n\nThis approach contrasts with self-verification, in which the same or a closely related model is asked to reassess its own answer. The medical VQA study identifies a “verification mirage” in which the verifier agrees with an incorrect generator output because of capacity coupling and insufficient attention to image evidence [Doc 11]. Across six open-weight VLMs and five medical VQA datasets, verifier reliability is strongly task-conditioned: knowledge-intensive clinical tasks are most vulnerable, perceptual tasks are comparatively more resistant, and mixed tasks occupy an intermediate position [Doc 11]. The study further reports that verifier errors and agreement bias increase when the generator is wrong, while repeated actor-verifier loops can lock in initially incorrect answers through false acceptance [Doc 11]. Cross-verification reduces but does not eliminate this problem.\n\nTogether, these findings establish an important distinction between agreement and verification. A verifier that reproduces the generator’s judgment may provide reassurance without adding independent evidential support. More reliable verification should therefore incorporate an external or structurally distinct signal, such as source entailment, evidence coverage, modality ablation, retrieval diversity, or an independently trained confidence estimator. BICR exemplifies this principle through blind-input contrast, whereas FAIR-RAG and APT-RAG implement it through explicit evidence auditing and gap-directed retrieval [Docs 2, 5, 10].\n\n## Synthesis and Research Gaps\n\nThe literature converges on a layered account of hallucination in RAG systems. First, failures occur at the retrieval layer when relevant documents are missed or ambiguous documents are selected; metadata-aware retrieval and task-conditioned retrieval address these problems [Docs 1, 3]. Second, failures arise at the evidence-organization layer when individually relevant passages do not collectively cover a multi-hop question; adaptive planning, topology-aware gathering, and iterative evidence assessment provide corresponding remedies [Docs 2, 10]. Third, failures occur at the representation and maintenance layer when embeddings, compressed memories, or model upgrades disrupt access to stored evidence [Doc 4]. Finally, failures persist at the generation and verification layers when models ignore evidence, overgeneralize from partial context, or accept their own unsupported answers [Docs 5, 7, 11].\n\nSeveral research gaps follow. Evaluation should distinguish retrieval success, evidence sufficiency, claim-level entailment, and final-answer factuality rather than treating answer accuracy as the sole measure of grounding. Verification studies should also report independence from the generator, since high agreement can reflect shared error rather than correctness [Doc 11]. Further, RAG benchmarks should incorporate temporal updates, model migrations, incomplete evidence, and domain-specific source authority, given the demonstrated effects of online retrieval variability and embedding incompatibility [Docs 4, 7]. Finally, trustworthy systems should preserve raw evidence and provenance while supporting efficient adaptive retrieval. The emerging direction is therefore not simply larger retrieval indexes or more elaborate prompting, but evidence-centered orchestration: systems that identify what must be established, retrieve and organize the necessary sources, verify whether claims are supported, and communicate uncertainty when grounding remains insufficient.",
+        "source_document_ids": [
+          "03be7c34-698e-4c1b-8df0-e2440a0db101",
+          "0b861512-9a44-46d6-aa58-56ed0142adb0",
+          "0d73d115-762d-4c3c-95bb-75ee470c6813",
+          "14c3a929-e371-461c-a76b-d38ed177a950",
+          "22aa7651-4a11-4a54-ae71-20af5a45dd70",
+          "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+          "43d53bca-a5f4-4eda-9c43-ec91068e74e8",
+          "6a9b211c-5505-41c0-9ccc-c81c04c92c8a",
+          "8f7f2119-182d-4a00-b19a-7a7e16abea17",
+          "aa67db1b-8077-4c15-b9e5-9ec7a1beaa62",
+          "b0fec607-9fe1-4024-a2bb-fb3201d709c3",
+          "f92e6be6-20b5-41b6-9300-b29b8b7e3fb1"
+        ],
+        "review": {
+          "verdicts": [
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt explicitly says: “Our evaluation spans metadata-as-text (prefix and suffix), a dual-encoder unified embedding that fuses metadata and content in a single index, dual-encoder late-fusion retrieval, and metadata-aware query reformulation.” This directly supports all strategies listed in the claim.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt explicitly says: “Our evaluation spans metadata-as-text (prefix and suffix), a dual-encoder unified embedding that fuses metadata and content in a single index, dual-encoder late-fusion retrieval, and metadata-aware query reformulation.” This directly supports all strategies listed in the claim.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 1,
+              "document_id": "03be7c34-698e-4c1b-8df0-e2440a0db101",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "minor",
+                  "evidence": "The excerpt directly supports Claim 1: it says adaptive planning “dynamically expands the reasoning structure based on question dependencies and evidence requirements,” and topology-aware evidence gathering uses “sibling evidence reuse, direct retrieval, and evidence aggregation from child nodes.” Claim 2 is only partially supported: the excerpt says evidence-guided batched answer generation is introduced “to reduce significant generation overhead,” but it does not explicitly say that this addresses the computational cost of extensive evidence gathering.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "minor",
+              "evidence": "The excerpt directly supports Claim 1: it says adaptive planning “dynamically expands the reasoning structure based on question dependencies and evidence requirements,” and topology-aware evidence gathering uses “sibling evidence reuse, direct retrieval, and evidence aggregation from child nodes.” Claim 2 is only partially supported: the excerpt says evidence-guided batched answer generation is introduced “to reduce significant generation overhead,” but it does not explicitly say that this addresses the computational cost of extensive evidence gathering.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 2,
+              "document_id": "0b861512-9a44-46d6-aa58-56ed0142adb0",
+              "page_number": null,
+              "claims_checked": 2,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt states: “We propose a prototype-guided retrieval module that acts as an alignment mechanism and estimates the relevance of retrieved historical chunks with respect to a given prediction task, guiding the model towards the most informative context.” It also says EHR-RAGp “dynamically integrates the most relevant patient history” and contrasts this with approaches using “fixed windows or uniform aggregation.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt states: “We propose a prototype-guided retrieval module that acts as an alignment mechanism and estimates the relevance of retrieved historical chunks with respect to a given prediction task, guiding the model towards the most informative context.” It also says EHR-RAGp “dynamically integrates the most relevant patient history” and contrasts this with approaches using “fixed windows or uniform aggregation.”",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 3,
+              "document_id": "0d73d115-762d-4c3c-95bb-75ee470c6813",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "major",
+                  "evidence": "Claim 4 asserts a broader conclusion about failures at a “representation and maintenance layer” and disruption of access to stored evidence. The excerpt discusses specific mechanisms—“a new model may interpret old notes differently, mixed embedding versions may break retrieval, and repair may fail without the original evidence”—but does not establish the stated layered framing. The other claims are largely supported, though claim 3’s comparative “more effectively” wording is stronger than the excerpt’s reported, direction-specific recovery counts.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "major",
+              "evidence": "Claim 4 asserts a broader conclusion about failures at a “representation and maintenance layer” and disruption of access to stored evidence. The excerpt discusses specific mechanisms—“a new model may interpret old notes differently, mixed embedding versions may break retrieval, and repair may fail without the original evidence”—but does not establish the stated layered framing. The other claims are largely supported, though claim 3’s comparative “more effectively” wording is stronger than the excerpt’s reported, direction-specific recovery counts.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 4,
+              "document_id": "14c3a929-e371-461c-a76b-d38ed177a950",
+              "page_number": null,
+              "claims_checked": 4,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt states that BICR extracts hidden states “once with the real image-question pair, and once with the image blacked out while the question is held fixed.” It also reports evaluation “across five modern LVLMs” on “visual question answering, object hallucination detection, medical imaging, and financial document understanding,” with “the best cross-LVLM average on both calibration and discrimination” and “4–18× fewer parameters than the strongest probing baseline.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt states that BICR extracts hidden states “once with the real image-question pair, and once with the image blacked out while the question is held fixed.” It also reports evaluation “across five modern LVLMs” on “visual question answering, object hallucination detection, medical imaging, and financial document understanding,” with “the best cross-LVLM average on both calibration and discrimination” and “4–18× fewer parameters than the strongest probing baseline.”",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 5,
+              "document_id": "22aa7651-4a11-4a54-ae71-20af5a45dd70",
+              "page_number": null,
+              "claims_checked": 2,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "minor",
+                  "evidence": "The excerpt states that RadioRAG “retrieves data from authoritative radiologic online sources in real-time” and that “the degree of improvement varied among models,” with “GPT-3.5-turbo and Mixtral-8x7B-instruct-v0.1” showing gains while “Mistral-7B-instruct-v0.2 showed no improvement.” This supports Claims 1 and 2. Claim 3 is an inference about faithful use of evidence, which is not directly established by the excerpt; the excerpt discusses accuracy and factuality potential, not whether models faithfully use retrieved evidence.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": "crossref",
+                  "status": "match",
+                  "available": true
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "minor",
+              "evidence": "The excerpt states that RadioRAG “retrieves data from authoritative radiologic online sources in real-time” and that “the degree of improvement varied among models,” with “GPT-3.5-turbo and Mixtral-8x7B-instruct-v0.1” showing gains while “Mistral-7B-instruct-v0.2 showed no improvement.” This supports Claims 1 and 2. Claim 3 is an inference about faithful use of evidence, which is not directly established by the excerpt; the excerpt discusses accuracy and factuality potential, not whether models faithfully use retrieved evidence.",
+              "identity": "match",
+              "location": "source excerpt",
+              "doc_index": 7,
+              "document_id": "43d53bca-a5f4-4eda-9c43-ec91068e74e8",
+              "page_number": null,
+              "claims_checked": 3,
+              "identity_source": "crossref",
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "major",
+                  "evidence": "The excerpt supports the RAG-specific portions: “For language generation tasks, we find that RAG models generate more specific, diverse and factual language than a state-of-the-art parametric-only seq2seq baseline” and says they are “outperforming parametric seq2seq models and task-specific retrieve-and-extract architectures.” However, it contains no evidence for the additional claim in Claim 1 that “recent studies” show metadata-aware retrieval, adaptive evidence gathering, domain-specific indexing, and structured memory improve reliability; those cited documents are not included in the excerpt.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "major",
+              "evidence": "The excerpt supports the RAG-specific portions: “For language generation tasks, we find that RAG models generate more specific, diverse and factual language than a state-of-the-art parametric-only seq2seq baseline” and says they are “outperforming parametric seq2seq models and task-specific retrieve-and-extract architectures.” However, it contains no evidence for the additional claim in Claim 1 that “recent studies” show metadata-aware retrieval, adaptive evidence gathering, domain-specific indexing, and structured memory improve reliability; those cited documents are not included in the excerpt.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 8,
+              "document_id": "6a9b211c-5505-41c0-9ccc-c81c04c92c8a",
+              "page_number": null,
+              "claims_checked": 4,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt states that MusT-RAG proposes “MusWikiDB, a music-specialized vector database for the retrieval stage” and “utilizes context information during both inference and fine-tuning processes.” It also says MusT-RAG “significantly outperforms traditional fine-tuning approaches” with “consistent improvements across both in-domain and out-of-domain MQA benchmarks.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt states that MusT-RAG proposes “MusWikiDB, a music-specialized vector database for the retrieval stage” and “utilizes context information during both inference and fine-tuning processes.” It also says MusT-RAG “significantly outperforms traditional fine-tuning approaches” with “consistent improvements across both in-domain and out-of-domain MQA benchmarks.”",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 9,
+              "document_id": "8f7f2119-182d-4a00-b19a-7a7e16abea17",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "exact",
+                  "evidence": "The excerpt states that SEA “deconstructs the initial query into a checklist of required findings,” “identify[ies] confirmed facts and, critically, explicit informational gaps,” and that the gaps signal an agent that “generates new, targeted sub-queries to retrieve missing information.” It further says, “This cycle repeats until the evidence is verified as sufficient.”",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "exact",
+              "evidence": "The excerpt states that SEA “deconstructs the initial query into a checklist of required findings,” “identify[ies] confirmed facts and, critically, explicit informational gaps,” and that the gaps signal an agent that “generates new, targeted sub-queries to retrieve missing information.” It further says, “This cycle repeats until the evidence is verified as sufficient.”",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 10,
+              "document_id": "aa67db1b-8077-4c15-b9e5-9ec7a1beaa62",
+              "page_number": null,
+              "claims_checked": 1,
+              "identity_source": null,
+              "escalated_to_fulltext": false
+            },
+            {
+              "checks": {
+                "support": {
+                  "status": "major",
+                  "evidence": "The excerpt supports the verification mirage, task conditioning, generator-error association, and loop failures, but Claim 2 reverses the source’s task ordering: the source says “Knowledge-intensive clinical tasks sit deepest in the mirage, and simpler tasks are more resistant, with perceptual tasks falling in between.” Claim 4 is also a recommendation not stated in the excerpt.",
+                  "location": "source excerpt",
+                  "available": true,
+                  "page_number": null
+                },
+                "identity": {
+                  "source": null,
+                  "status": "unresolved",
+                  "available": false
+                },
+                "publication": {
+                  "source": null,
+                  "status": "unknown",
+                  "available": false,
+                  "performed": false,
+                  "observations": [],
+                  "observation_status": "unknown"
+                }
+              },
+              "verdict": "major",
+              "evidence": "The excerpt supports the verification mirage, task conditioning, generator-error association, and loop failures, but Claim 2 reverses the source’s task ordering: the source says “Knowledge-intensive clinical tasks sit deepest in the mirage, and simpler tasks are more resistant, with perceptual tasks falling in between.” Claim 4 is also a recommendation not stated in the excerpt.",
+              "identity": "unresolved",
+              "location": "source excerpt",
+              "doc_index": 11,
+              "document_id": "b0fec607-9fe1-4024-a2bb-fb3201d709c3",
+              "page_number": null,
+              "claims_checked": 4,
+              "identity_source": null,
+              "escalated_to_fulltext": true
+            }
+          ],
+          "uncited_assertions": [
+            {
+              "text": "Retrieval-augmented generation (RAG) has emerged as a principal strategy for reducing the factual limitations, knowledge staleness, and weak provenance of large language models (LLMs) by coupling parametric generation with external, non-parametric information sources.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "However, retrieval alone does not guarantee grounded generation: failures may arise from inadequate document selection, incomplete evidence coverage, representation drift, noisy context, or the model’s tendency to generate unsupported claims.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The literature increasingly therefore treats grounding as a systems problem encompassing retrieval design, evidence organization, context alignment, provenance, and output verification.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "At the same time, verification mechanisms remain imperfect: self-verification may reproduce the generator’s errors, whereas modality-sensitive confidence estimation offers a more independent signal of grounding [Docs 5, 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Collectively, these studies indicate that reliable RAG requires explicit mechanisms for evidence sufficiency, source alignment, uncertainty estimation, and recovery from retrieval or representation failures.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "By retrieving external passages at inference time, RAG supplements parametric memory with non-parametric memory.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Subsequent domain-specific studies support the value of external evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "These findings complicate a simple interpretation of RAG as a universal hallucination remedy.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "RAG can provide relevant evidence, but the final answer remains dependent on the quality of retrieval, the model’s ability to use the context, and the compatibility between the evidence and the generation process.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Thus, grounding should be understood as an interaction between retrieved information and model behavior rather than as a property guaranteed by the presence of retrieved passages.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A major source of hallucination is retrieval failure.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In structured and repetitive corpora, semantic similarity between chunks may be insufficient because documents contain overlapping language.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Its framing emphasizes that structural cues can disambiguate otherwise similar documents, suggesting that grounding depends not only on textual relevance but also on document identity, provenance, and corpus structure.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This observation is particularly important for regulatory, clinical, and other high-stakes domains in which a semantically similar passage from the wrong document can support an apparently plausible but incorrect answer.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Longitudinal and heterogeneous data introduce a related problem: retrieving relevant information from a large history.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This approach illustrates a shift from generic relevance toward task-conditioned relevance.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The goal is not merely to retrieve information that resembles the query, but to estimate which historical evidence is informative for the downstream decision.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The organization of evidence becomes even more consequential for multi-hop and evidence-intensive questions.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "These methods address a limitation of one-shot retrieval: a top-ranked set of passages may be individually relevant while collectively failing to establish the relationships required by the answer.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Grounding also depends on the stability of the representations used to store and retrieve evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Fixed-schema knowledge graphs transfer reliably across writer swaps, whereas compressed notes display strong model coupling and substantial asymmetric performance changes.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "These results show that a system can retain its underlying documents while losing grounding because the retrieval representation becomes incompatible with the upgraded model.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This finding extends the hallucination problem beyond the generation stage.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A response may be unsupported not because the model invents content in isolation, but because relevant evidence is inaccessible, poorly indexed, or lost during memory compression.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Consequently, robust grounding requires lifecycle management, including representation versioning, complete re-indexing when necessary, and preservation of provenance-bearing source material.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Grounding requires more than retrieving passages; the generated claim must be attributable to evidence that actually supports it.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Recent adaptive frameworks respond by making evidence coverage an explicit intermediate objective.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "FAIR-RAG’s structured evidence assessment identifies missing findings before final generation, while APT-RAG expands and aggregates evidence according to the topology of the reasoning structure [Docs 2, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Both approaches treat answer generation as the endpoint of an evidence-acquisition process rather than as an immediate response to the initial retrieval results.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This is significant because verification-oriented RAG can increase latency and inference overhead.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The challenge is therefore to balance evidence completeness with operational efficiency.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Domain-specific systems provide another form of grounding constraint: RadioRAG uses authoritative online radiology sources, and MusT-RAG uses a specialized music knowledge base rather than a general corpus [Docs 7, 9].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Output verification is often implemented through confidence estimation or a second model pass.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Its contrastive ranking objective penalizes higher confidence for the image-absent condition.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The key contribution is conceptual as well as methodological: grounding is operationalized as sensitivity to the relevant modality, not merely confidence in the generated answer.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This approach contrasts with self-verification, in which the same or a closely related model is asked to reassess its own answer.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Cross-verification reduces but does not eliminate this problem.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Together, these findings establish an important distinction between agreement and verification.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A verifier that reproduces the generator’s judgment may provide reassurance without adding independent evidential support.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "More reliable verification should therefore incorporate an external or structurally distinct signal, such as source entailment, evidence coverage, modality ablation, retrieval diversity, or an independently trained confidence estimator.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "BICR exemplifies this principle through blind-input contrast, whereas FAIR-RAG and APT-RAG implement it through explicit evidence auditing and gap-directed retrieval [Docs 2, 5, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The literature converges on a layered account of hallucination in RAG systems.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "First, failures occur at the retrieval layer when relevant documents are missed or ambiguous documents are selected; metadata-aware retrieval and task-conditioned retrieval address these problems [Docs 1, 3].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Second, failures arise at the evidence-organization layer when individually relevant passages do not collectively cover a multi-hop question; adaptive planning, topology-aware gathering, and iterative evidence assessment provide corresponding remedies [Docs 2, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Finally, failures persist at the generation and verification layers when models ignore evidence, overgeneralize from partial context, or accept their own unsupported answers [Docs 5, 7, 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Several research gaps follow.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Evaluation should distinguish retrieval success, evidence sufficiency, claim-level entailment, and final-answer factuality rather than treating answer accuracy as the sole measure of grounding.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Further, RAG benchmarks should incorporate temporal updates, model migrations, incomplete evidence, and domain-specific source authority, given the demonstrated effects of online retrieval variability and embedding incompatibility [Docs 4, 7].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Finally, trustworthy systems should preserve raw evidence and provenance while supporting efficient adaptive retrieval.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The emerging direction is therefore not simply larger retrieval indexes or more elaborate prompting, but evidence-centered orchestration: systems that identify what must be established, retrieve and organize the necessary sources, verify whether claims are supported, and communicate uncertainty when grounding remains insufficient.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            }
+          ],
+          "summary": {
+            "exact": 5,
+            "major": 3,
+            "minor": 2,
+            "unverified": 0
+          },
+          "coverage": {
+            "complete": true,
+            "batch_size": 10,
+            "batch_count": 1,
+            "classification": "conservative_prose_heuristic",
+            "requested_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              7,
+              8,
+              9,
+              10,
+              11
+            ],
+            "unresolved_indices": [],
+            "claim_excerpt_chars": 400,
+            "source_excerpt_chars": 8000,
+            "summary_excerpt_chars": 2000,
+            "factual_classification_complete": false
+          },
+          "fully_verified": false,
+          "claims": [
+            {
+              "text": "Retrieval-augmented generation (RAG) has emerged as a principal strategy for reducing the factual limitations, knowledge staleness, and weak provenance of large language models (LLMs) by coupling parametric generation with external, non-parametric information sources.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "However, retrieval alone does not guarantee grounded generation: failures may arise from inadequate document selection, incomplete evidence coverage, representation drift, noisy context, or the model’s tendency to generate unsupported claims.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The literature increasingly therefore treats grounding as a systems problem encompassing retrieval design, evidence organization, context alignment, provenance, and output verification.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Foundational work demonstrates that RAG can produce more factual and specific language than parametric-only models [Doc 8], while recent studies show that metadata-aware retrieval, adaptive evidence gathering, domain-specific indexing, and structured memory can improve the reliability of retrieved context [Docs 1–4, 7, 9, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                8
+              ]
+            },
+            {
+              "text": "At the same time, verification mechanisms remain imperfect: self-verification may reproduce the generator’s errors, whereas modality-sensitive confidence estimation offers a more independent signal of grounding [Docs 5, 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Collectively, these studies indicate that reliable RAG requires explicit mechanisms for evidence sufficiency, source alignment, uncertainty estimation, and recovery from retrieval or representation failures.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The central motivation for RAG is that LLMs encode knowledge implicitly in model parameters but have limited ability to precisely access, update, and provide provenance for that knowledge [Doc 8].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                8
+              ]
+            },
+            {
+              "text": "By retrieving external passages at inference time, RAG supplements parametric memory with non-parametric memory.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The foundational RAG study reports that this combination improves the specificity, diversity, and factuality of generated language relative to a parametric sequence-to-sequence baseline, while also outperforming task-specific retrieve-and-extract systems on knowledge-intensive tasks [Doc 8].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                8
+              ]
+            },
+            {
+              "text": "Subsequent domain-specific studies support the value of external evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "MusT-RAG, for example, combines a music-specialized vector database with retrieval-informed inference and fine-tuning, producing consistent gains over conventional fine-tuning on both in-domain and out-of-domain musical question-answering benchmarks [Doc 9].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                9
+              ]
+            },
+            {
+              "text": "Similarly, RadioRAG retrieves information from authoritative radiology sources in real time, addressing the problem of outdated training data; nevertheless, its benefits vary across models, with some showing substantial diagnostic gains and another showing no improvement [Doc 7].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                7
+              ]
+            },
+            {
+              "text": "These findings complicate a simple interpretation of RAG as a universal hallucination remedy.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "RAG can provide relevant evidence, but the final answer remains dependent on the quality of retrieval, the model’s ability to use the context, and the compatibility between the evidence and the generation process.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The model variability observed in RadioRAG demonstrates that the same retrieval intervention can produce different outcomes across generators [Doc 7].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                7
+              ]
+            },
+            {
+              "text": "Thus, grounding should be understood as an interaction between retrieved information and model behavior rather than as a property guaranteed by the presence of retrieved passages.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A major source of hallucination is retrieval failure.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In structured and repetitive corpora, semantic similarity between chunks may be insufficient because documents contain overlapping language.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The metadata-aware retrieval study addresses this problem by comparing metadata-as-text strategies, unified metadata-content embeddings, late-fusion retrieval, and metadata-aware query reformulation [Doc 1].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                1
+              ]
+            },
+            {
+              "text": "Its framing emphasizes that structural cues can disambiguate otherwise similar documents, suggesting that grounding depends not only on textual relevance but also on document identity, provenance, and corpus structure.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This observation is particularly important for regulatory, clinical, and other high-stakes domains in which a semantically similar passage from the wrong document can support an apparently plausible but incorrect answer.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Longitudinal and heterogeneous data introduce a related problem: retrieving relevant information from a large history.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "EHR-RAGp uses prototype-guided retrieval to align historical clinical chunks with a prediction task, dynamically selecting patient context rather than relying on fixed windows or uniform aggregation [Doc 3].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                3
+              ]
+            },
+            {
+              "text": "This approach illustrates a shift from generic relevance toward task-conditioned relevance.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The goal is not merely to retrieve information that resembles the query, but to estimate which historical evidence is informative for the downstream decision.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The organization of evidence becomes even more consequential for multi-hop and evidence-intensive questions.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "APT-RAG uses adaptive planning to expand reasoning structures according to question dependencies and evidence requirements, while topology-aware gathering supports sibling evidence reuse, direct retrieval, and aggregation from child nodes [Doc 2].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                2
+              ]
+            },
+            {
+              "text": "FAIR-RAG similarly introduces a structured evidence assessment process that decomposes a query into required findings, distinguishes confirmed facts from evidence gaps, and issues targeted follow-up queries until the evidence is judged sufficient [Doc 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                10
+              ]
+            },
+            {
+              "text": "These methods address a limitation of one-shot retrieval: a top-ranked set of passages may be individually relevant while collectively failing to establish the relationships required by the answer.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Grounding also depends on the stability of the representations used to store and retrieve evidence.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The controlled memory-portability study compares raw long-context histories, chunked RAG memories, model-generated notes, and fixed-schema knowledge graphs across model upgrades [Doc 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                4
+              ]
+            },
+            {
+              "text": "Fixed-schema knowledge graphs transfer reliably across writer swaps, whereas compressed notes display strong model coupling and substantial asymmetric performance changes.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "For RAG, partial embedding migration yields only a 4.96-point accuracy improvement compared with an 11.90-point gain after full re-embedding, and retrieval failures account for 81% of the observed RAG deficit [Doc 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                4
+              ]
+            },
+            {
+              "text": "These results show that a system can retain its underlying documents while losing grounding because the retrieval representation becomes incompatible with the upgraded model.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This finding extends the hallucination problem beyond the generation stage.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A response may be unsupported not because the model invents content in isolation, but because relevant evidence is inaccessible, poorly indexed, or lost during memory compression.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The study’s recovery results further indicate that retaining raw source histories enables repair more effectively than attempting to reconstruct compressed notes without their original evidence [Doc 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                4
+              ]
+            },
+            {
+              "text": "Consequently, robust grounding requires lifecycle management, including representation versioning, complete re-indexing when necessary, and preservation of provenance-bearing source material.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Grounding requires more than retrieving passages; the generated claim must be attributable to evidence that actually supports it.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The foundational RAG literature identifies provenance as an unresolved challenge even when external memory is available [Doc 8].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                8
+              ]
+            },
+            {
+              "text": "Recent adaptive frameworks respond by making evidence coverage an explicit intermediate objective.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "FAIR-RAG’s structured evidence assessment identifies missing findings before final generation, while APT-RAG expands and aggregates evidence according to the topology of the reasoning structure [Docs 2, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Both approaches treat answer generation as the endpoint of an evidence-acquisition process rather than as an immediate response to the initial retrieval results.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Evidence-guided batched generation in APT-RAG also addresses the computational cost of extensive evidence gathering [Doc 2].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                2
+              ]
+            },
+            {
+              "text": "This is significant because verification-oriented RAG can increase latency and inference overhead.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The challenge is therefore to balance evidence completeness with operational efficiency.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Domain-specific systems provide another form of grounding constraint: RadioRAG uses authoritative online radiology sources, and MusT-RAG uses a specialized music knowledge base rather than a general corpus [Docs 7, 9].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "However, the inconsistent model-level benefits in RadioRAG indicate that authoritative retrieval does not by itself ensure faithful use of evidence [Doc 7].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "minor",
+              "citation_indices": [
+                7
+              ]
+            },
+            {
+              "text": "Output verification is often implemented through confidence estimation or a second model pass.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "In multimodal settings, BICR estimates whether an answer was actually influenced by visual evidence by comparing hidden states produced with the real image and with a blacked-out image while holding the question constant [Doc 5].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                5
+              ]
+            },
+            {
+              "text": "Its contrastive ranking objective penalizes higher confidence for the image-absent condition.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Across five LVLMs and tasks including visual question answering, object hallucination detection, medical imaging, and financial document understanding, BICR reportedly achieves the strongest joint calibration and discrimination performance among the evaluated methods, with substantially fewer parameters than the strongest probing baseline [Doc 5].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "exact",
+              "citation_indices": [
+                5
+              ]
+            },
+            {
+              "text": "The key contribution is conceptual as well as methodological: grounding is operationalized as sensitivity to the relevant modality, not merely confidence in the generated answer.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "This approach contrasts with self-verification, in which the same or a closely related model is asked to reassess its own answer.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The medical VQA study identifies a “verification mirage” in which the verifier agrees with an incorrect generator output because of capacity coupling and insufficient attention to image evidence [Doc 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                11
+              ]
+            },
+            {
+              "text": "Across six open-weight VLMs and five medical VQA datasets, verifier reliability is strongly task-conditioned: knowledge-intensive clinical tasks are most vulnerable, perceptual tasks are comparatively more resistant, and mixed tasks occupy an intermediate position [Doc 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                11
+              ]
+            },
+            {
+              "text": "The study further reports that verifier errors and agreement bias increase when the generator is wrong, while repeated actor-verifier loops can lock in initially incorrect answers through false acceptance [Doc 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                11
+              ]
+            },
+            {
+              "text": "Cross-verification reduces but does not eliminate this problem.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Together, these findings establish an important distinction between agreement and verification.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "A verifier that reproduces the generator’s judgment may provide reassurance without adding independent evidential support.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "More reliable verification should therefore incorporate an external or structurally distinct signal, such as source entailment, evidence coverage, modality ablation, retrieval diversity, or an independently trained confidence estimator.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "BICR exemplifies this principle through blind-input contrast, whereas FAIR-RAG and APT-RAG implement it through explicit evidence auditing and gap-directed retrieval [Docs 2, 5, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The literature converges on a layered account of hallucination in RAG systems.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "First, failures occur at the retrieval layer when relevant documents are missed or ambiguous documents are selected; metadata-aware retrieval and task-conditioned retrieval address these problems [Docs 1, 3].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Second, failures arise at the evidence-organization layer when individually relevant passages do not collectively cover a multi-hop question; adaptive planning, topology-aware gathering, and iterative evidence assessment provide corresponding remedies [Docs 2, 10].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Third, failures occur at the representation and maintenance layer when embeddings, compressed memories, or model upgrades disrupt access to stored evidence [Doc 4].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                4
+              ]
+            },
+            {
+              "text": "Finally, failures persist at the generation and verification layers when models ignore evidence, overgeneralize from partial context, or accept their own unsupported answers [Docs 5, 7, 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Several research gaps follow.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Evaluation should distinguish retrieval success, evidence sufficiency, claim-level entailment, and final-answer factuality rather than treating answer accuracy as the sole measure of grounding.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Verification studies should also report independence from the generator, since high agreement can reflect shared error rather than correctness [Doc 11].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "major",
+              "citation_indices": [
+                11
+              ]
+            },
+            {
+              "text": "Further, RAG benchmarks should incorporate temporal updates, model migrations, incomplete evidence, and domain-specific source authority, given the demonstrated effects of online retrieval variability and embedding incompatibility [Docs 4, 7].",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "Finally, trustworthy systems should preserve raw evidence and provenance while supporting efficient adaptive retrieval.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            },
+            {
+              "text": "The emerging direction is therefore not simply larger retrieval indexes or more elaborate prompting, but evidence-centered orchestration: systems that identify what must be established, retrieve and organize the necessary sources, verify whether claims are supported, and communicate uncertainty when grounding remains insufficient.",
+              "classification": "conservative_prose_heuristic",
+              "fully_verified": false,
+              "support_status": "uncited",
+              "citation_indices": []
+            }
+          ],
+          "docs_checked": 10,
+          "docs_skipped": 0,
+          "duration_ms": 32827
+        },
+        "outcome": "blocked",
+        "created_at": "2026-09-29T10:21:37.928061Z"
+      }
+    ]
+  }
+}

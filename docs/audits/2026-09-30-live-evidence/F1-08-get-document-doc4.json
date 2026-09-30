@@ -1,0 +1,71 @@
+{
+  "step": "F1-08-get-document-doc4",
+  "as": "owner",
+  "at": "2026-09-30T05:24:24.155905+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/documents/4f279d5b-35e3-4a6e-bfc1-38b7120dd1b9",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "4f279d5b-35e3-4a6e-bfc1-38b7120dd1b9",
+    "title": "Hierarchical Attention Transformer Architecture For Syntactic Spell Correction",
+    "filename": "2005.04876v1.pdf",
+    "document_type": "pdf",
+    "file_size_bytes": 259437,
+    "file_size_mb": 0.24741840362548828,
+    "mime_type": "application/pdf",
+    "processing_status": "indexed",
+    "tags": null,
+    "is_public": false,
+    "content_preview": "# Abstract\n\nThe attention mechanisms are playing a boosting role in advancements in sequence-to-sequence problems. Transformer architecture achieved new state of the art results in machine translation, and it's variants are since being introduced in several other sequence-to-sequence problems. Problems which involve a shared vocabulary, can benefit from the similar semantic and syntactic structure in the source and target sentences. With the motivation of building a reliable and fast post-proces...",
+    "content_summary": null,
+    "created_at": "2026-08-21T23:18:26.896088+00:00",
+    "updated_at": "2026-08-21T23:18:35.844515+00:00",
+    "uploaded_by_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "organization_id": "e050bd43-6b0b-4425-9848-1bc5ad9d5cc2",
+    "content_text": null,
+    "metadata": {
+      "title": "Hierarchical Attention Transformer Architecture For Syntactic Spell Correction",
+      "description": "The attention mechanisms are playing a boosting role in advancements in sequence-to-sequence problems. Transformer architecture achieved new state of the art results in machine translation, and it's variants are since being introduced in several other sequence-to-sequence problems. Problems which involve a shared vocabulary, can benefit from the similar semantic and syntactic structure in the source and target sentences. With the motivation of building a reliable and fast post-processing textual...",
+      "authors": [
+        "Abhishek Niranjan",
+        "M Ali Basha Shaik",
+        "Kushal Verma"
+      ],
+      "publication_date": "2020-05-11T06:19:01+00:00",
+      "categories": [
+        "cs.LG",
+        "stat.ML"
+      ],
+      "tags": [
+        "cs.LG",
+        "stat.ML"
+      ],
+      "arxiv_id": "2005.04876v1",
+      "arxiv_categories": [
+        "cs.LG",
+        "stat.ML"
+      ],
+      "arxiv_primary_category": "cs.LG",
+      "journal_reference": null,
+      "doi": null,
+      "comment": null,
+      "source": "arxiv",
+      "language": "en",
+      "modality": "text",
+      "content_type": "academic_paper",
+      "num_pages": 5,
+      "pdf_path": "data/arxiv/2005.04876v1.pdf",
+      "has_full_text": true
+    },
+    "processing_started_at": null,
+    "processing_completed_at": null,
+    "processing_error": null,
+    "processing_retry_count": 0
+  }
+}
