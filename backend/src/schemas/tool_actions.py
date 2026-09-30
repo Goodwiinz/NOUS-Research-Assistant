@@ -50,6 +50,7 @@ class ActionReview(BaseModel):
     tool_name: str
     project_id: UUID
     project_label: str
+    project_available: bool
     title: str
     content: str
     tags: list[str]

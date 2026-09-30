@@ -30,6 +30,7 @@ from src.models.collection import Collection
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
+from src.models.workspace import Workspace
 from src.schemas.integration_tools import ToolInvocation, ToolResult
 from src.schemas.tool_actions import ActionActor, ActionReview, ActionStatus
 from src.services.integrations.context import live
@@ -98,10 +99,13 @@ def _validate_note_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     return {"title": title, "content": content, "tags": tags}
 
 
-def approval_url(invocation_id: UUID) -> str:
-    # Same origin rule as the CLI login link (api/auth/cli_auth.py).
-    base = (settings.FRONTEND_BASE_URL or settings.cors_origins_list[0]).rstrip("/")
-    return f"{base}/integrations/actions/{invocation_id}"
+def approval_url(invocation_id: UUID) -> str | None:
+    # Same origin rule as the CLI login link (api/auth/cli_auth.py), but a
+    # missing origin yields no link instead of an error after the commit.
+    base = settings.FRONTEND_BASE_URL or next(iter(settings.cors_origins_list), "")
+    if not base.strip():
+        return None
+    return f"{base.rstrip('/')}/integrations/actions/{invocation_id}"
 
 
 def _status(row: IntegrationToolAction) -> ActionStatus:
@@ -246,8 +250,14 @@ async def get_action_for_review(
         raise ActionNotFound()
     found = (
         await db.execute(
-            select(IntegrationToolAction, Collection.name)
+            select(
+                IntegrationToolAction,
+                Collection.name,
+                Collection.is_deleted,
+                Workspace.is_deleted,
+            )
             .join(Collection, Collection.id == IntegrationToolAction.project_id)
+            .join(Workspace, Workspace.id == Collection.workspace_id)
             .where(
                 IntegrationToolAction.organization_id == user.organization_id,
                 IntegrationToolAction.user_id == user.id,
@@ -259,7 +269,7 @@ async def get_action_for_review(
     ).first()
     if found is None:
         raise ActionNotFound()
-    row, project_label = found
+    row, project_label, project_deleted, workspace_deleted = found
     arguments = row.arguments or {}
     return ActionReview(
         invocation_id=row.invocation_id,
@@ -267,6 +277,8 @@ async def get_action_for_review(
         tool_name=row.tool_name,
         project_id=row.project_id,
         project_label=str(project_label),
+        # Kept visible so it can still be denied; approval would fail closed.
+        project_available=not (project_deleted or workspace_deleted),
         title=str(arguments.get("title", "")),
         content=str(arguments.get("content", "")),
         tags=[str(t) for t in arguments.get("tags", [])],

@@ -154,6 +154,17 @@ test("get_action_status reads the stored state and flags failures", async () => 
   }
 });
 
+test("a status 404 after reconnecting says not to request the action again", async () => {
+  const server = await backend(() => ({ code: 404, body: { detail: "Action not found" } }));
+  try {
+    const outcome = await actionStatusTool(new ActionHttpClient(server.origin, credentials)).call({ invocation_id: INVOCATION });
+    assert.equal(outcome.isError, true);
+    assert.match(outcome.text, /earlier connection\. Do not request it again/);
+  } finally {
+    await server.close();
+  }
+});
+
 test("the MCP server offers request and status tools but no way to approve", async () => {
   const server = await backend(() => ({ code: 200, body: [] }));
   try {

@@ -224,6 +224,10 @@
             ],
             "title": "Last Error"
           },
+          "project_available": {
+            "title": "Project Available",
+            "type": "boolean"
+          },
           "project_id": {
             "format": "uuid",
             "title": "Project Id",
@@ -282,6 +286,7 @@
           "tool_name",
           "project_id",
           "project_label",
+          "project_available",
           "title",
           "content",
           "tags",

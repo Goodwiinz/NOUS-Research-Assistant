@@ -50,8 +50,8 @@ export function requestActionTool(client: ActionHttpClient): LocalTool {
           action: { type: "string", enum: ["create_project_note"] },
           invocation_id: { type: "string", format: "uuid", description: "Client-generated UUID; identical retries return the same request" },
           title: { type: "string", maxLength: 255 },
-          content: { type: "string", description: "Markdown body" },
-          tags: { type: "array", items: { type: "string", maxLength: 64 } },
+          content: { type: "string", maxLength: 200000, description: "Markdown body" },
+          tags: { type: "array", items: { type: "string", minLength: 1, maxLength: 64 } },
         },
       },
     },
@@ -100,7 +100,18 @@ export function actionStatusTool(client: ActionHttpClient): LocalTool {
     },
     async call(args) {
       if (!uuid(args.invocation_id)) return { text: "get_action_status requires a UUID invocation_id", isError: true };
-      return result(await client.status(args.invocation_id));
+      try {
+        return result(await client.status(args.invocation_id));
+      } catch (error) {
+        // Actions are scoped to the connection's consent; after a reconnect an
+        // earlier request is not visible, which does not mean it never existed.
+        if (error instanceof ToolRequestRejected && /not found/i.test(error.message))
+          return {
+            text: `Action ${args.invocation_id} is not visible to this connection; it may belong to an earlier connection. Do not request it again; ask the user to check NOUS.`,
+            isError: true,
+          };
+        throw error;
+      }
     },
   };
 }

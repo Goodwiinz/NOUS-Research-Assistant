@@ -95,6 +95,7 @@ def app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list[Any]]) -> FastAPI
                 tool_name="create_project_note",
                 project_id=PROJECT,
                 project_label="Project",
+                project_available=True,
                 title="t",
                 content="c",
                 tags=[],

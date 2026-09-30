@@ -9646,6 +9646,8 @@ export interface components {
             invocation_id: string;
             /** Last Error */
             last_error?: string | null;
+            /** Project Available */
+            project_available: boolean;
             /**
              * Project Id
              * Format: uuid

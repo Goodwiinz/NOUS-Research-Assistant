@@ -15,7 +15,10 @@ import type {
   ApiActionReview,
 } from '@/types/api/integration-action-contract';
 
-import { IntegrationActionApproval } from '../IntegrationActionApproval';
+import {
+  IntegrationActionApproval,
+  revealHidden,
+} from '../IntegrationActionApproval';
 
 const ID = '44444444-4444-4444-8444-444444444444';
 
@@ -28,6 +31,7 @@ const review = (
   tool_name: 'create_project_note',
   project_id: 'p1',
   project_label: 'Thesis',
+  project_available: true,
   title: 'Findings',
   content: '# Findings\n**not bold here**',
   tags: ['draft'],
@@ -36,6 +40,14 @@ const review = (
   result: null,
   last_error: null,
   ...extra,
+});
+
+describe('revealHidden', () => {
+  it('shows bidi, zero-width and BOM characters as visible codes', () => {
+    expect(revealHidden('safe\u202Etxt.exe')).toBe('safe⟨U+202E⟩txt.exe');
+    expect(revealHidden('a\u200Bb\uFEFF')).toBe('a⟨U+200B⟩b⟨U+FEFF⟩');
+    expect(revealHidden('plain text')).toBe('plain text');
+  });
 });
 
 describe('IntegrationActionApproval', () => {
@@ -59,6 +71,11 @@ describe('IntegrationActionApproval', () => {
     expect(screen.getByText('draft')).toBeInTheDocument();
     // Markdown is not rendered: the raw markers stay visible.
     expect(screen.getByText(/\*\*not bold here\*\*/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Note content')).toHaveAttribute(
+      'tabindex',
+      '0'
+    );
+    expect(screen.getByText(/Content \(\d+ characters\)/)).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(
       'Nothing has been created yet'
     );
@@ -99,6 +116,20 @@ describe('IntegrationActionApproval', () => {
       expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
     }
   );
+
+  it('keeps a request for a deleted project deniable but not approvable', async () => {
+    vi.mocked(integrationActionService.review).mockResolvedValue(
+      review('awaiting_approval', { project_available: false })
+    );
+    render(<IntegrationActionApproval invocationId={ID} />);
+    expect(
+      await screen.findByText(/This project was deleted/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Approve and create note' })
+    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
+  });
 
   it('shows why a failed request was not created', async () => {
     vi.mocked(integrationActionService.review).mockResolvedValue(

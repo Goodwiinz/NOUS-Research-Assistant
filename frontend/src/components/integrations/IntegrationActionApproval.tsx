@@ -18,6 +18,17 @@ const STATE_TEXT: Record<ActionState, string> = {
 };
 const IN_FLIGHT = new Set<ActionState>(['approved', 'executing']);
 
+// Bidi overrides/isolates, zero-width and BOM characters can make stored text
+// read differently from what will be written; show each one as a visible code.
+const HIDDEN = /[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+export function revealHidden(value: string): string {
+  return value.replace(
+    HIDDEN,
+    (ch) =>
+      `⟨U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}⟩`
+  );
+}
+
 /**
  * Shows the exact note a connected harness asked to create and lets the
  * requester approve or deny it once. Content is shown as plain text so
@@ -49,6 +60,7 @@ export function IntegrationActionApproval({
   // One decision per page: a second click, even after an error, must not
   // race the first; the refetch shows the stored outcome.
   const canDecide = action?.state === 'awaiting_approval' && decision.isIdle;
+  const canApprove = canDecide && action?.project_available === true;
 
   return (
     <section className="mx-auto max-w-2xl space-y-6 p-6">
@@ -75,23 +87,34 @@ export function IntegrationActionApproval({
           <dl className="space-y-3 break-words">
             <div>
               <dt className="font-semibold">Project</dt>
-              <dd>{action.project_label}</dd>
+              <dd>
+                {revealHidden(action.project_label)}
+                {!action.project_available && (
+                  <span role="alert"> This project was deleted.</span>
+                )}
+              </dd>
             </div>
             <div>
               <dt className="font-semibold">Title</dt>
-              <dd>{action.title}</dd>
+              <dd>{revealHidden(action.title)}</dd>
             </div>
             {action.tags.length > 0 && (
               <div>
                 <dt className="font-semibold">Tags</dt>
-                <dd>{action.tags.join(', ')}</dd>
+                <dd>{action.tags.map(revealHidden).join(', ')}</dd>
               </div>
             )}
             <div>
-              <dt className="font-semibold">Content</dt>
+              <dt className="font-semibold">
+                Content ({action.content.length.toLocaleString()} characters)
+              </dt>
               <dd>
-                <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded border p-3 text-sm">
-                  {action.content}
+                <pre
+                  tabIndex={0}
+                  aria-label="Note content"
+                  className="max-h-96 overflow-auto whitespace-pre-wrap rounded border p-3 text-sm"
+                >
+                  {revealHidden(action.content)}
                 </pre>
               </dd>
             </div>
@@ -113,7 +136,7 @@ export function IntegrationActionApproval({
             </button>
             <button
               type="button"
-              disabled={!canDecide}
+              disabled={!canApprove}
               onClick={() => decision.mutate(true)}
               className="rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50"
             >

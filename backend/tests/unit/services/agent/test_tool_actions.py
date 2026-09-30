@@ -427,6 +427,7 @@ async def test_review_shows_the_stored_target_to_the_requester_only(
         ["x", "y"],
     )
     assert (review.project_id, review.project_label) == (PROJECT, "Project")
+    assert review.project_available is True
     assert review.state == "awaiting_approval" and review.decided_at is None
     with pytest.raises(ActionNotFound):
         await get_action_for_review(
@@ -434,6 +435,23 @@ async def test_review_shows_the_stored_target_to_the_requester_only(
         )
     with pytest.raises(ActionNotFound):
         await get_action_for_review(db, await _user(db), uuid4())
+    # A deleted workspace keeps the request visible (it can still be denied)
+    # but says the project is unavailable.
+    await db.execute(update(Workspace).values(is_deleted=True))
+    await db.commit()
+    gone = await get_action_for_review(db, await _user(db), status.invocation_id)
+    assert gone.project_available is False
+
+
+async def test_missing_frontend_origin_yields_no_link_instead_of_an_error(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only commas: the parsed allowlist is empty (an empty string falls back
+    # to localhost by design).
+    monkeypatch.setattr(tool_actions.settings, "FRONTEND_BASE_URL", "")
+    monkeypatch.setattr(tool_actions.settings, "CORS_ORIGINS", " , ")
+    status = await request_action(db, _actor(), _invocation())
+    assert status.state == "awaiting_approval" and status.approval_url is None
 
 
 # --- status scope ----------------------------------------------------------
