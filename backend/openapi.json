@@ -40898,6 +40898,50 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{project_id}/audit-bundle": {
+      "get": {
+        "operationId": "audit_bundle_route_api_v1_research_engine_projects__project_id__audit_bundle_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Offline-verifiable audit bundle (manifest + SHA256SUMS)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Audit Bundle Route",
+        "tags": [
+          "research-engine-journey"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}/citation-chases": {
       "post": {
         "description": "OpenAlex citation chase; the service checks EDIT before and after I/O.",

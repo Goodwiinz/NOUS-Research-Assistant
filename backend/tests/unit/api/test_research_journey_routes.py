@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from src.api.research_engine import journey as routes
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
-from src.services.research_engine import journey
+from src.services.research_engine import audit_bundle, journey
 from src.services.research_engine.project_access import ResearchAction
 
 BASE = "/api/v1/research-engine/projects"
@@ -122,3 +122,26 @@ def test_journey_reviewer_sees_no_observation_counts(harness: _Harness) -> None:
         "prisma_error",
     }
     assert not any("observation" in k for keys in expected.values() for k in keys)
+
+
+def test_route_404_foreign_200_archived_attachment_header(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build = AsyncMock(return_value=(b"PK-zip", "f" * 12 + "0" * 52))
+    monkeypatch.setattr(audit_bundle, "build", build)
+    foreign = uuid4()
+    harness.denied[foreign] = 404
+    assert harness.client.get(f"{BASE}/{foreign}/audit-bundle").status_code == 404
+    build.assert_not_awaited()
+
+    harness.calls.clear()
+    archived = uuid4()
+    response = harness.client.get(f"{BASE}/{archived}/audit-bundle")
+    assert response.status_code == 200, response.text
+    assert response.content == b"PK-zip"
+    assert response.headers["content-type"] == "application/zip"
+    assert response.headers["content-disposition"] == (
+        f'attachment; filename="audit-{archived}-ffffffffffff.zip"'
+    )
+    assert harness.actions == [ResearchAction.VIEW, ResearchAction.VIEW]
+    harness.db.commit.assert_not_awaited()
