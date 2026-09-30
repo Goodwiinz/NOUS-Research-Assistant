@@ -361,7 +361,7 @@ async def _retrieve(
             FulltextAttemptCreate(
                 outcome="retrieved",
                 attempted_on=date.today(),
-                document_id=document.id,
+                document_id=cast(UUID, document.id),
                 idempotency_key=f"rt-{report}",
             ),
         ),
