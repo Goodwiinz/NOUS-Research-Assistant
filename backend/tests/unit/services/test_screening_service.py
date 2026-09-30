@@ -38,8 +38,8 @@ from src.models.screening import (
     ScreeningSuggestion,
 )
 from src.schemas.research_engine import (
-    ScreeningDecisionValue,
     ScreeningAssignmentCreate,
+    ScreeningDecisionValue,
     ScreeningObservationCreate,
     ScreeningQueueCreate,
     ScreeningRevokeRequest,
@@ -488,7 +488,7 @@ async def test_assignment_revisions(db: AsyncSession) -> None:
     renewed = await _assign(db, project, queue.id, project.reviewer, "renew")
     assert renewed.id != assignment.id
     await _submit(db, project, queue, renewed.id, project.reports[0], "k")
-    history = await screening_service.history(db, _reviewer(project), queue.id)
+    history = await screening_service.history(db, _supervisor(project), queue.id)
     assert [e.event_type for e in history] == [
         "screening.queue_created",
         "screening.assigned",
@@ -614,7 +614,7 @@ async def test_changed_decision_supersedes_and_keeps_history(db: AsyncSession) -
         (first.id, "include", None),
         (second.id, "uncertain", first.id),
     ]
-    history = await screening_service.history(db, _reviewer(project), queue.id)
+    history = await screening_service.history(db, _supervisor(project), queue.id)
     assert [e.event_type for e in history][-2:] == [
         "screening.observed",
         "screening.superseded",
@@ -699,7 +699,7 @@ async def test_foreign_queue_and_protocol_are_404(db: AsyncSession) -> None:
     project, other = await _seed(db), await _seed(db)
     queue = await _queue(db, project)
     await _raises(
-        screening_service.history(db, _reviewer(other), queue.id),
+        screening_service.history(db, _supervisor(other), queue.id),
         404,
         "Screening queue not found",
     )
@@ -933,3 +933,42 @@ async def test_create_key_reused_for_another_queue_is_409(db: AsyncSession) -> N
         "Idempotency conflict",
     )
     assert await _count(db, ScreeningQueue) == 1
+
+
+@pytest.mark.asyncio
+async def test_history_is_supervisor_only_until_goo302_redaction(
+    db: AsyncSession,
+) -> None:
+    """Events carry every reviewer's decision; a reviewer must not read peers'."""
+    project = await _seed(db)
+    queue = await _queue(db, project)
+    await _raises(
+        screening_service.history(db, _reviewer(project), queue.id),
+        403,
+        "supervisor role required",
+    )
+    assert len(await screening_service.history(db, _supervisor(project), queue.id))
+
+
+class _Orig(Exception):
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__("constraint violated")
+        self.sqlstate = sqlstate
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sqlstate", "mapped"), [("23505", True), ("23503", False)])
+async def test_flush_backstop_maps_only_unique_violations(
+    sqlstate: str, mapped: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.exc import IntegrityError
+
+    session = AsyncMock()
+    session.flush.side_effect = IntegrityError("INSERT", {}, _Orig(sqlstate))
+    if mapped:
+        await _raises(screening_service._flush_unique(session, "taken"), 409, "taken")
+    else:
+        with pytest.raises(IntegrityError):
+            await screening_service._flush_unique(session, "taken")

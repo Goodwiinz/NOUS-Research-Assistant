@@ -100,9 +100,19 @@ async def _flush_unique(db: AsyncSession, detail: str) -> None:
     try:
         await db.flush()
     except IntegrityError as error:
-        if "unique" not in str(error.orig).lower():
+        if not _is_unique_violation(error):
             raise
         raise _conflict(detail) from error
+
+
+def _is_unique_violation(error: IntegrityError) -> bool:
+    """PostgreSQL SQLSTATE 23505, or SQLite's unique-constraint error code."""
+    orig = error.orig
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    return (
+        sqlstate == "23505"
+        or getattr(orig, "sqlite_errorname", None) == "SQLITE_CONSTRAINT_UNIQUE"
+    )
 
 
 async def _queue(db: AsyncSession, context: ProjectContext, queue_id: UUID) -> Any:
@@ -905,7 +915,12 @@ async def submit(
 async def history(
     db: AsyncSession, context: ProjectContext, queue_id: UUID
 ) -> list[IdentityEventResponse]:
-    """Replay-validated screening events for one queue, in order."""
+    """Replay-validated screening events for one queue, in order (SUPERVISOR).
+
+    Events carry every reviewer's decision, so until GOO-302 adds per-viewer
+    redaction (``visible_observation_ids``) only supervisors may read them.
+    """
+    _require_role(context, ResearchProjectRole.SUPERVISOR)
     await _queue(db, context, queue_id)
     events = await replay_decisions(
         db,

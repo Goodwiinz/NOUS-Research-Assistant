@@ -1085,3 +1085,34 @@ deterministic, with no sleeps and no monkeypatching.
 reload in `resolve_project`. That guard is already mutation-verified by
 `backend/tests/integration/test_research_authorization_concurrency.py` and is
 not repeated here.
+
+### Review round — additional guards (2026-09-29)
+
+These guards were mutation-checked against the later
+`screening_service.py` (pre-mutation SHA-256
+`8c61f407bf3ecf6a5437b6b2e7209026cb77d08f2ab0cea430aef2d71bac68c1`, which
+adds supervisor-only `history` and the SQLSTATE-keyed backstop). The procedure
+is the same as above: apply each mutant, run the test, restore from the copy
+and check with `cmp -s`, then rerun. The restored run of
+`test_screening_queue_postgres.py`, `test_screening_service.py` and
+`test_research_screening_routes.py` gave `31 passed`.
+
+| Guard (line) | Mutation | Test and selector | Observed mutant failure |
+|---|---|---|---|
+| Observation insert and ledger append in one transaction (`submit`, :887) | `await db.commit()` added right after the observation flush | PG `-k atomicity` | `assert 4 == 3`: the observation outlived the failed ledger append. |
+| `validate_observation` (`submit`, :857) | call replaced with `pass` | PG `-k atomicity` | `DID NOT RAISE HTTPException`: a full-text exclusion without a protocol reason was accepted. |
+| `_stale` (:144) | `return None` as its first statement | PG `-k archived_and_foreign` | `DID NOT RAISE HTTPException`: a queue on a superseded protocol version accepted a submission. |
+| Collection filter in `_queue` (:128) | `ScreeningQueue.collection_id == ...` predicate removed | PG `-k archived_and_foreign` | `(403, 'Not assigned to this queue') != (404, 'Screening queue not found')`: another Collection's queue resolved. |
+| Supervisor-only `history` (:923) | `_require_role(... SUPERVISOR)` removed | unit `-k history` (route and service) | `assert 200 == 403`: a reviewer read every reviewer's decisions. |
+| Unique-violation backstop keyed on SQLSTATE 23505 (`_is_unique_violation`, :108) | predicate replaced with `True or (...)` | unit `-k backstop` | the `23503` (foreign-key) case raised `HTTPException 409` instead of re-raising `IntegrityError`. |
+
+Role checks are covered at two levels. The PG test
+`test_role_revocation_race_denies_submission` covers the post-lock role reload
+in `project_access.resolve_project`, which was already mutation-verified in
+`test_research_authorization_concurrency.py`. The service-level
+`_require_role` checks are covered by
+`test_supervisor_and_reviewer_roles_are_required` and the route tests. Each of
+the four checks (`create_queue`, `assign`, `revoke`, `submit`) was replaced
+with `pass` during fix-up `e864f9131`, and each mutant failed exactly that
+test.
+

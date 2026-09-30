@@ -376,8 +376,16 @@ async def test_commit_reopen_and_event_state_atomicity(
         assert [r.id for r in rows if r.supersedes_observation_id] == [changed.id]
         original = next(r for r in rows if r.id == first.id)
         assert (original.decision, original.note) == ("include", None)
+        # History is supervisor-only until GOO-302 redacts peers' decisions.
         context = await resolve_project(
             db, world.collection, world.ids["V"], ResearchAction.VIEW
+        )
+        assert await _status(screening_service.history(db, context, queue.id)) == (
+            403,
+            "supervisor role required",
+        )
+        context = await resolve_project(
+            db, world.collection, world.ids["O"], ResearchAction.VIEW
         )
         history = await screening_service.history(db, context, queue.id)
     assert [e.event_type for e in history] == [
@@ -558,6 +566,20 @@ async def test_concurrent_duplicate_submission_yields_one_observation(
                     )
                 )
                 await db.flush()
+        # The service backstop maps asyncpg's SQLSTATE 23505 to a stable 409.
+        with pytest.raises(HTTPException) as backstop:
+            async with db.begin_nested():
+                db.add(
+                    ScreeningObservation(
+                        queue_id=queue.id,
+                        report_id=r1,
+                        reviewer_id=world.ids["R"],
+                        assignment_id=mine.id,
+                        decision="exclude",
+                    )
+                )
+                await screening_service._flush_unique(db, "taken")
+        assert (backstop.value.status_code, backstop.value.detail) == (409, "taken")
 
 
 @pytest.mark.asyncio

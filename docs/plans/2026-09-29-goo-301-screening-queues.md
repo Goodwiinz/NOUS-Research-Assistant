@@ -446,3 +446,30 @@ These steps run against `rag-dev` after deploy. They are blocked until a backend
    - `SELECT count(*) FROM screening_observations WHERE queue_id=…` returns 0.
    - "My queue" JSON contains no suggestion field.
 10. **CI:** record the Integration job URL where `test_screening_queue_postgres.py` passed at the merge SHA, and paste the mutation-verification transcript into the PR.
+
+---
+
+## Amendment — 2026-09-29 (implementation review)
+
+- **`GET .../history` is supervisor-only.** The service requires SUPERVISOR,
+  and a reviewer gets 403 `supervisor role required`. Screening events carry
+  every reviewer's `decision`, `exclusion_reason` and note, so VIEW would leak
+  peers' decisions before reveal. GOO-302 replaces this gate with per-viewer
+  redaction through `visible_observation_ids()` (its "History redaction"
+  decision), after which `history` can return to VIEW.
+- **Service-level role checks.** `create_queue`, `assign` and `revoke` require
+  SUPERVISOR, and `submit` requires REVIEWER, in the service as well as in
+  `resolve_project`. Assignment eligibility also checks the project
+  organization, as `projects.py` does for roles.
+- **Unique-index backstop.** SQLSTATE 23505 on insert becomes a stable 409 and
+  never a 500. Other integrity errors are re-raised.
+- **Ledger.** `screening.queue_created` (schema 1) also carries
+  `suggestions_skipped`. Replay requires an observation's actor to be its
+  reviewer.
+- **Migration.** `e1f3a5c7d9b2` also creates
+  `idx_research_decision_event_idempotency (collection_id, event_type,
+  idempotency_key)` for the per-Collection create-idempotency lookup.
+- **Archive race detail.** A submission that waited on the lock while the
+  project was archived gets 409 `Project is not writable` (from
+  `lock_active_project`), not `Archived projects are read-only`.
+

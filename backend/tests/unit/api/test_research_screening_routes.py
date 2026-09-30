@@ -17,6 +17,8 @@ from fastapi.testclient import TestClient
 
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
+from src.models.research_project_role import ResearchProjectRole
+from src.services.research_engine import screening_service
 from src.services.research_engine.project_access import ResearchAction
 
 BASE = "/api/v1/research-engine/projects"
@@ -29,6 +31,7 @@ class _Harness(SimpleNamespace):
     db: AsyncMock
     actions: list[ResearchAction]
     denied: dict[ResearchAction, tuple[int, str]]
+    roles: set[ResearchProjectRole]
 
 
 def _routes() -> Any:
@@ -41,6 +44,7 @@ def harness(test_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Har
     db = AsyncMock()
     actions: list[ResearchAction] = []
     denied: dict[ResearchAction, tuple[int, str]] = {}
+    roles: set[ResearchProjectRole] = set()
 
     async def fake_resolve(
         _db: object, project_id: UUID, user_id: UUID, action: ResearchAction
@@ -50,7 +54,10 @@ def harness(test_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Har
         if action in denied:
             status, detail = denied[action]
             raise HTTPException(status_code=status, detail=detail)
-        return SimpleNamespace(collection=SimpleNamespace(id=project_id))
+        return SimpleNamespace(
+            collection=SimpleNamespace(id=project_id),
+            effective_roles=frozenset(roles),
+        )
 
     monkeypatch.setattr(_routes(), "resolve_project", fake_resolve)
     test_app.dependency_overrides[get_current_user] = lambda: user
@@ -65,7 +72,12 @@ def harness(test_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Har
     try:
         with TestClient(test_app, raise_server_exceptions=False) as client:
             yield _Harness(
-                client=client, user=user, db=db, actions=actions, denied=denied
+                client=client,
+                user=user,
+                db=db,
+                actions=actions,
+                denied=denied,
+                roles=roles,
             )
     finally:
         test_app.router.lifespan_context = original_lifespan
@@ -264,4 +276,30 @@ def test_foreign_queue_is_a_stable_404(
 
     assert response.status_code == 404
     assert response.json()["error"]["message"] == "Screening queue not found"
+    harness.db.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("role", "status"),
+    [(ResearchProjectRole.REVIEWER, 403), (ResearchProjectRole.SUPERVISOR, 200)],
+)
+def test_history_is_supervisor_only_until_goo302_redaction(
+    harness: _Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    role: ResearchProjectRole,
+    status: int,
+) -> None:
+    """The real service gate: a reviewer must not read peers' decisions."""
+    harness.roles.add(role)
+    monkeypatch.setattr(screening_service, "_queue", AsyncMock())
+    monkeypatch.setattr(
+        screening_service, "replay_decisions", AsyncMock(return_value=[])
+    )
+
+    response = harness.client.get(
+        f"{BASE}/{uuid4()}/screening/queues/{uuid4()}/history"
+    )
+
+    assert response.status_code == status, response.text
+    assert harness.actions == [ResearchAction.VIEW]
     harness.db.commit.assert_not_awaited()
