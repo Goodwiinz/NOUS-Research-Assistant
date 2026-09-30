@@ -1019,6 +1019,36 @@ this mutant from the real code. The plan expected scenario 4 to catch it;
 it does not. The unit test
 `test_completion_binds_the_task_own_draft` catches it. Scenario 4 catches
 the out-of-transaction variant, mutation B.
+### Amendment — PR #1753 review fixes, 2026-09-30
+
+The table above is pinned to `319a14787`; its line numbers are not
+updated. These guards were added for the four Codex review findings and
+mutation-verified at source revision `ba450158a`. Pre-mutation and
+restored SHA-256: `draft_generation_service.py`
+`816c1727c3084db78807440cd574196a3d0ff50ce0801880c4c82e12e15e2cac`;
+`backend/src/services/agent/tools_impl.py`
+`81996deec6d0949a296c9969f1cb64ff1ecb093544e40fd47107880e736ddb30`.
+Same procedure (copy, `perl -0pi` mutant, run, restore, `cmp` and
+`git diff --quiet` both clean). After every restore the unit command gave
+`15 passed`. aiosqlite only; the PostgreSQL suite was not rerun.
+
+Focused command:
+
+```sh
+pytest -q backend/tests/unit/services/test_draft_task_results.py -k <selector>
+```
+
+| Guard | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| `cancel_latest_task` retained-row fallback, line 2088 (`task_id = await db.scalar(...)`) | `task_id = None and ...` | `cancel_latest_route` | `HTTPException: 400: Cannot cancel: no draft generation is in progress` |
+| same fallback's project scope, line 2083 (`collection_id == project_id`) | replace with `True` | `cancel_latest_route` | another project's cancel: "DID NOT RAISE HTTPException" |
+| same fallback's actor scope, line 2087 | replace with `pass` | `cancel_latest_route` | `assert ('foreign-actor', True) == ('remote-latest', True)` |
+| `generate_draft` waits on an unaccepted registration, line 407 (`if active["task_id"] not in _unaccepted_task_ids`) | `if True:` | `durable_acceptance` | "a duplicate was accepted for a task with no retained row" |
+| registration marked unaccepted until commit, line 405 (`_unaccepted_task_ids.add(task_id)`) | replace with `pass` | `durable_acceptance` | same |
+| `scoped_task_status` actor scope, line 238 | `or False` | `agent_recovery` | "another actor's row was read" |
+| `scoped_task_status` reconciles stale rows, line 241 (`reconcile_task`) | `get_task_result` | `agent_recovery` | `assert ('pending', False) == ('interrupted', True)` |
+| `_recover_draft_status` retained-row fallback, `tools_impl.py:2233` | `status = None and ...` | `agent_recovery` | "a retained terminal row was ignored" |
+
 ## GOO-299 report identity guards — 2026-09-29
 
 Three guards in `backend/src/services/research_engine/identity_service.py`
