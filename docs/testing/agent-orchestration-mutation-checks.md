@@ -1029,3 +1029,59 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
   the second merge rewired `r2` to `r3` instead of returning 409 "Report already
   merged".
 - **Restored result:** `1 passed`.
+
+## GOO-301 screening queue guards — 2026-09-29
+
+Two guards in `backend/src/services/research_engine/screening_service.py`
+(pre-mutation SHA-256
+`1b049dac7404e3872d55c064b1265cc407fb8182519ad3a2668d4959791b5fd3`) were
+mutation-verified against
+`backend/tests/integration/test_screening_queue_postgres.py` on a disposable
+local PostgreSQL 14 database (schema-per-test; the four screening tables are
+created by revision `e1f3a5c7d9b2` itself). Each mutant was applied with
+`sed`, run, then restored from a copy of the pre-mutation file; `cmp -s` and
+`git diff --quiet` both succeeded and the same command passed again. No mutant
+was committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_screening_queue_postgres.py -k concurrent_duplicate
+```
+
+The covering test is `test_concurrent_duplicate_submission_yields_one_observation`.
+Session one resolves `REVIEW` and holds the Collection `UPDATE` lock. Session
+two's `resolve_project` + `submit` is observed blocked through
+`pg_blocking_pids` before session one submits and commits. The overlap is
+deterministic, with no sleeps and no monkeypatching.
+
+### Current-observation check
+
+- **Source and guard:** `submit`, line 863, `if data.supersedes_observation_id
+  != current_id: raise _conflict(OBSERVATION_EXISTS)`, evaluated under the
+  Collection lock. The partial unique index `uq_screening_observation_initial`
+  is only the backstop. The test runs `SELECT 1` after the 409, so a refusal
+  that came from the index (which aborts the transaction) would also fail.
+- **Mutation:** replaced the condition with `if False:`.
+- **Observed mutant failure:** exit 1; `assert isinstance(refused,
+  HTTPException)` failed. The second, different-key submission was silently
+  stored as a supersession of the first observation (`supersedes_observation_id`
+  set) instead of being refused with 409.
+- **Restored result:** `1 passed`.
+
+### Submission idempotency replay
+
+- **Source and guard:** `submit`, line 823, `if replayed is not None: return
+  ...` (the `_replayed_event` check under the queue's stream lock).
+- **Mutation:** replaced the condition with `if False:`.
+- **Observed mutant failure:** exit 1; the same-key retry returned
+  `HTTPException(409, 'Observation exists; supersede the current observation')`
+  instead of the replayed observation.
+- **Restored result:** `1 passed`.
+
+### Post-lock role reload
+
+`test_role_revocation_race_denies_submission` relies on the post-lock role
+reload in `resolve_project`. That guard is already mutation-verified by
+`backend/tests/integration/test_research_authorization_concurrency.py` and is
+not repeated here.
