@@ -6,6 +6,7 @@
 import { api } from '@/services/api-client';
 import { API_CONFIG } from '@/types/api';
 import type { components } from '@/types/generated/api';
+import type { ApiClaimListResponse } from '@/types/api/research-claims-contract';
 
 // Types
 export interface Project {
@@ -487,6 +488,25 @@ export const projectService = {
     return api.get<DraftReviewListResponse>(
       `/projects/${projectId}/drafts/reviews`
     );
+  },
+
+  /** GOO-306: claims whose version is pinned to this draft (read-only). */
+  async listClaims(
+    projectId: string,
+    draftId: string
+  ): Promise<ApiClaimListResponse> {
+    const qs = new URLSearchParams({ draft_id: draftId }).toString();
+    return api.get<ApiClaimListResponse>(`/projects/${projectId}/claims?${qs}`);
+  },
+
+  /** GOO-306: the reconstructable claims evidence package for one draft. */
+  async downloadClaimsExport(
+    projectId: string,
+    draftId: string
+  ): Promise<void> {
+    const qs = new URLSearchParams({ draft_id: draftId }).toString();
+    // The server names the file after the body hash.
+    await api.download(`/projects/${projectId}/claims/export?${qs}`);
   },
 
   /**
