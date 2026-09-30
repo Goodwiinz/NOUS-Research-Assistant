@@ -28,6 +28,10 @@ import type {
   WriteRequest,
   WriteResponse,
 } from '@/types/scispace';
+import type {
+  ApiExtractionCellObservations,
+  ApiExtractionFormVersion,
+} from '@/types/api/research-extraction-contract';
 
 // ============================================================================
 // Feature 1: Extraction Matrix
@@ -76,10 +80,27 @@ export const deleteMatrix = (matrixId: string) =>
     `${RESEARCH_BASE}/matrices/${matrixId}`
   );
 
-export const getExtractionTaskStatus = (taskId: string) =>
-  api.get<ExtractionTaskStatus>(
-    `${RESEARCH_BASE}/extraction-tasks/${taskId}`
+export const listFormVersions = (
+  matrixId: string
+): Promise<ApiExtractionFormVersion[]> =>
+  api.get<ApiExtractionFormVersion[]>(
+    `${RESEARCH_BASE}/matrices/${matrixId}/form-versions`
   );
+
+export const getCellObservations = (
+  matrixId: string,
+  documentId: string,
+  fieldId: string
+): Promise<ApiExtractionCellObservations> =>
+  api.get<ApiExtractionCellObservations>(
+    `${RESEARCH_BASE}/matrices/${matrixId}/observations?${new URLSearchParams({
+      document_id: documentId,
+      field_id: fieldId,
+    })}`
+  );
+
+export const getExtractionTaskStatus = (taskId: string) =>
+  api.get<ExtractionTaskStatus>(`${RESEARCH_BASE}/extraction-tasks/${taskId}`);
 
 // ============================================================================
 // Feature 2: Table/Math Extraction
@@ -125,20 +146,16 @@ export const writeText = (data: WriteRequest) =>
   api.post<WriteResponse>(`${RESEARCH_BASE}/write`, data, { timeout: 300000 });
 
 export const generateOutline = (data: OutlineRequest) =>
-  api.post<OutlineResponse>(
-    `${RESEARCH_BASE}/outline`,
-    data,
-    { timeout: 300000 }
-  );
+  api.post<OutlineResponse>(`${RESEARCH_BASE}/outline`, data, {
+    timeout: 300000,
+  });
 
 // ============================================================================
 // Feature 7: Research Pipeline
 // ============================================================================
 
 export const getPipeline = (projectId: string) =>
-  api.get<PipelineState>(
-    `${RESEARCH_BASE}/projects/${projectId}/pipeline`
-  );
+  api.get<PipelineState>(`${RESEARCH_BASE}/projects/${projectId}/pipeline`);
 
 export const updatePipeline = (
   projectId: string,

@@ -3,6 +3,8 @@
  * Mirrors backend schemas from backend/src/shared/scispace_schemas.py
  */
 
+import type { ApiExtractionFormVersionSummary } from '@/types/api/research-extraction-contract';
+
 // ============================================================================
 // Feature 1: Extraction Matrix
 // ============================================================================
@@ -18,6 +20,13 @@ export interface ExtractionCell {
   value: string | null;
   citation_snippet: string | null;
   confidence: number | null;
+  // GOO-304 keys; hand-written because GET /matrices/{id} is an untyped dict.
+  field_id?: string | null;
+  form_version_id?: string | null;
+  source?: 'accepted' | 'machine' | 'legacy';
+  missingness?: string | null;
+  validation_state?: 'valid' | 'invalid' | null;
+  stale?: boolean;
 }
 
 export interface ExtractionMatrix {
@@ -26,6 +35,7 @@ export interface ExtractionMatrix {
   name: string;
   columns: ExtractionColumn[];
   cells: ExtractionCell[];
+  form_version?: ApiExtractionFormVersionSummary | null;
   created_at: string | null;
   updated_at: string | null;
 }
