@@ -225,6 +225,39 @@ async def reconcile_task(db: AsyncSession, task_id: str) -> Optional[DraftTaskRe
     return await db.get(DraftTaskResult, task_id, populate_existing=True)
 
 
+async def scoped_task_status(
+    db: AsyncSession, task_id: str, *, collection_id: UUID, actor_user_id: UUID
+) -> Optional[Dict[str, Any]]:
+    """The retained row as a terminal status payload, or None when it is
+    missing, out of scope or still running. Scope-checks before the
+    reconcile write, like the status route."""
+    row = await get_task_result(db, task_id)
+    if (
+        row is None
+        or row.collection_id != collection_id
+        or row.actor_user_id != actor_user_id
+    ):
+        return None
+    row = await reconcile_task(db, task_id)
+    if row is None or row.state == "running":
+        return None
+    return {
+        "task_id": row.task_id,
+        "status": row.state,
+        "project_id": str(row.collection_id),
+        "user_id": str(row.actor_user_id),
+        "draft_id": str(row.artifact_id) if row.artifact_id else None,
+        "artifact_version": row.artifact_version,
+        "artifact_hash": row.artifact_hash,
+        "error_code": row.error_code,
+        "current_step": (
+            "Draft completed"
+            if row.state == "completed"
+            else f"Draft generation {row.state}"
+        ),
+    }
+
+
 class DraftGenerationService:
     """Service for generating literature review drafts"""
 

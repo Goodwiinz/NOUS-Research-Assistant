@@ -647,3 +647,51 @@ async def test_duplicate_request_waits_for_durable_acceptance(
         row = await db.get(DraftTaskResult, duplicate["task_id"])
     assert row is not None, "a duplicate was accepted for a task with no retained row"
     assert row.state == "running"
+
+
+async def test_agent_recovery_reads_the_retained_row(
+    pipeline: tuple[async_sessionmaker[AsyncSession], UUID],
+) -> None:
+    """Worker restart / Redis TTL expiry: no cached status anywhere. The
+    agent's same-identity recovery must read the scoped retained row, not
+    return a permanent pending ``draft_status_unavailable``."""
+    from src.services.agent.tools_impl import _recover_draft_status
+
+    factory, _document_id = pipeline
+    async with factory() as db:
+        for task_id in ("agent-done", "agent-stale", "agent-live"):
+            await _start(db, task_id)
+        draft = await _draft(db, 1, "recovered draft", is_current=True)
+        assert await finish_task(
+            db, task_id="agent-done", state="completed", artifact=draft
+        )
+        await db.execute(
+            update(DraftTaskResult)
+            .where(DraftTaskResult.task_id == "agent-stale")
+            .values(heartbeat_at=datetime.now(timezone.utc) - timedelta(minutes=10))
+        )
+        await db.commit()
+
+    def dispatched(task_id: str, user_id: UUID = ACTOR) -> dict[str, Any]:
+        return {
+            "task_id": task_id,
+            "project_id": str(PROJECT),
+            "project_name": "P",
+            "user_id": str(user_id),
+            "status": "pending",
+        }
+
+    with patch("src.core.database.AsyncSessionLocal", factory):
+        done = await _recover_draft_status(dispatched("agent-done"))
+        stale = await _recover_draft_status(dispatched("agent-stale"))
+        live = await _recover_draft_status(dispatched("agent-live"))
+        foreign = await _recover_draft_status(dispatched("agent-done", uuid4()))
+
+    assert done["_terminal_status"] is True, "a retained terminal row was ignored"
+    assert (done["status"], done["draft_id"]) == ("completed", str(draft.id))
+    assert (stale["status"], stale["_terminal_status"]) == ("interrupted", True)
+    assert stale["automatic_retry_allowed"] is False
+    assert (live["status"], live["_terminal_status"]) == ("pending", False)
+    assert foreign["_terminal_status"] is False, "another actor's row was read"
+    assert "draft_id" not in foreign
+    assert (await _db_state(factory, "agent-done")).state == "completed"
