@@ -5,7 +5,7 @@ import copy
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from src.services.research_engine.connectors.base import (
@@ -17,7 +17,7 @@ from src.services.research_engine.connectors.base import (
 SEARCH_TIMEOUT_SECONDS = 90.0
 
 
-def _identifiers(source: SourceDocument) -> dict[str, str]:
+def extract_identifiers(source: SourceDocument) -> dict[str, str]:
     values = dict(source.metadata)
     if source.external_id:
         values.setdefault(
@@ -26,6 +26,11 @@ def _identifiers(source: SourceDocument) -> dict[str, str]:
         )
     if source.connector_type == "pubmed":
         values.setdefault("pmid", source.external_id)
+    return extract_identifiers_from_mapping(values)
+
+
+def extract_identifiers_from_mapping(values: Mapping[str, Any]) -> dict[str, str]:
+    """Normalize known identifier kinds; unknown keys and blanks are dropped."""
     identifiers = {}
     for kind in (
         "doi",
@@ -56,6 +61,9 @@ def _identifiers(source: SourceDocument) -> dict[str, str]:
     return identifiers
 
 
+_identifiers = extract_identifiers  # compatibility alias for existing callers/tests
+
+
 def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
     """Merge verified identifier matches; never infer identity from a title.
 
@@ -69,7 +77,7 @@ def prepare_sources(documents: list[SourceDocument]) -> list[SourceDocument]:
         if not original.title.strip():
             continue
         source = copy.deepcopy(original)
-        ids = _identifiers(source)
+        ids = extract_identifiers(source)
         provenance = {**asdict(source), "retrieved_at": now}
         source.metadata["identifiers"] = ids
         source.metadata["provenance"] = [provenance]

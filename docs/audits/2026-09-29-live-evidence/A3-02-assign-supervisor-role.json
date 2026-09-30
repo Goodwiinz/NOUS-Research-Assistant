@@ -1,0 +1,24 @@
+{
+  "step": "A3-02-assign-supervisor-role",
+  "as": "owner",
+  "at": "2026-09-29T10:17:16.295016+00:00",
+  "request": {
+    "method": "PUT",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/roles",
+    "body": {
+      "user_id": "6a3cfda8-4572-4027-9e38-7c9aaba76932",
+      "role": "supervisor"
+    }
+  },
+  "status": 422,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "User is not an eligible project member",
+      "status_code": 422,
+      "type": "http_error"
+    }
+  }
+}

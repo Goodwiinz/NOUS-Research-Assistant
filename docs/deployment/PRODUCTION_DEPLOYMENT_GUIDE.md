@@ -1,5 +1,11 @@
 # Production Deployment Guide
 
+> **Legacy guide (2026-09-29):** The DigitalOcean staging/production deployment
+> workflows described here have been retired. For the current AWS dev release
+> path, use [CI and release workflows](../../.github/workflows/README.md).
+> The remaining infrastructure examples below are historical, not current
+> deployment instructions.
+
 ## Multimodal Enterprise RAG System
 
 ### Table of Contents
@@ -40,7 +46,9 @@ This guide provides step-by-step instructions for deploying the **Multimodal Ent
 >
 > **Note on Terraform**: `infrastructure/terraform/` targets AWS (`us-west-2`) and is **not the live infrastructure**. It is not used for production deployments.
 >
-> **Live deploy path**: `gitops-image-update.yml` commits an image SHA which **ArgoCD** then syncs to the cluster. Only the `dev` ArgoCD app is committed (`infrastructure/argocd/applications/dev.yaml`), auto-syncing from `develop`; staging/prod apps are planned, not yet in the repo. Running `helm upgrade` manually (e.g. via `deploy.yml`) is **not** the authoritative deploy path.
+> **Current dev release path**: `release-dev.yml` builds the tested source SHA
+> and proposes its immutable image digest in `values-aws.yaml`. AWS Argo CD
+> syncs the merged values from `develop`. See the workflow guide linked above.
 
 ---
 
@@ -140,7 +148,7 @@ Production uses the following **externally managed** services — do not deploy 
 doctl registry login
 
 # Registry: registry.digitalocean.com/ragsystemregistry
-# Images are pushed by CI (gitops-image-update.yml) and synced by ArgoCD
+# Legacy DO registry example; current image builds use docker-build.yml and ECR.
 ```
 
 ### 4. DO Spaces (Object Storage)
@@ -191,7 +199,9 @@ helm install monitoring-stack . \
 
 ### 3. Deploy Application
 
-> **Live deploy path**: CI pushes a new image SHA to the `gitops-image-update.yml` workflow, which commits the tag to the GitOps repo. **ArgoCD** then syncs the change to the cluster. Today only the `dev` app exists and auto-syncs from `develop`; staging/prod ArgoCD apps are planned. Direct `helm upgrade` runs are for emergency/manual overrides only.
+> **Current dev release path**: `release-dev.yml` opens a digest-pinned
+> `values-aws.yaml` proposal; AWS Argo CD syncs it after merge to `develop`.
+> The manual commands in this legacy guide do not describe that release path.
 >
 > The Helm chart is `infrastructure/helm/knowledge-graph-analytics`. The frontend is deployed on **Vercel** (`goodwiinz.tech`) — it is not an in-cluster workload.
 
@@ -581,7 +591,7 @@ kubectl delete pod <pod-name> -n knowledge-graph-analytics
 
 #### Application Updates
 
-The standard update path is via GitOps: push an image SHA via `gitops-image-update.yml` and let ArgoCD sync.
+The current dev update path is the `release-dev.yml` GitOps proposal and AWS Argo CD sync described above.
 For emergency manual upgrades use `--set` flags only (do not pass `--values values-production.yaml` — it is applied by ArgoCD from the chart defaults):
 
 ```bash

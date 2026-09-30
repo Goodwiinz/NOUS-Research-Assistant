@@ -2,9 +2,9 @@
 
 ## Scope and sources of truth
 
-This directory contains the older Helm/Kubernetes deployment tree and its
-GitHub Actions deployment workflows. Treat it as a consumer-specific,
-partly-retired surface, not as proof of what is deployed. Check the named
+This directory contains the older Helm/Kubernetes deployment tree.
+Its duplicate GitHub Actions workflows have been removed. Treat it as a
+consumer-specific, partly-retired surface, not as proof of what is deployed. Check the named
 workflow or manifest consumer before editing a similarly named chart, values
 file, manifest, or script.
 
@@ -19,9 +19,8 @@ The current live Argo CD source is instead
 [`infrastructure/argocd/applications/dev.yaml`](../infrastructure/argocd/applications/dev.yaml),
 and the current CI ownership and retirement notes are in
 [`.github/workflows/README.md`](../.github/workflows/README.md). The older
-[`deployment/README.md`](README.md) and
-[`deployment/github-actions/workflows/deploy.yml`](github-actions/workflows/deploy.yml)
-describe legacy material where they conflict with those sources.
+[`deployment/README.md`](README.md) describes legacy material where it
+conflicts with those sources.
 
 ## Invalid patterns
 
