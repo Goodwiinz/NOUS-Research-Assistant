@@ -109,6 +109,26 @@ def _coerce_status(value: Any) -> Optional[JobStatus]:
         return None
 
 
+def _live_job_matches_run(run: Any, job: dict[str, Any]) -> bool:
+    """Reject cached metadata whose non-null owner or correlation disagrees."""
+    request = job.get("request")
+    request_thread = request.get("thread_id") if isinstance(request, dict) else None
+    live_values = {
+        "user_id": job.get("user_id"),
+        "organization_id": job.get("organization_id"),
+        "thread_id": job.get("thread_id") or request_thread,
+    }
+    for field, live_value in live_values.items():
+        durable_value = getattr(run, field, None)
+        if (
+            live_value is not None
+            and durable_value is not None
+            and str(live_value) != str(durable_value)
+        ):
+            return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Job-store helpers (worker side)
 # ---------------------------------------------------------------------------
@@ -367,7 +387,7 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
         seconds=settings.AGENT_RUN_STALE_AWAITING_AFTER_SECONDS
     )
 
-    scanned = failed = repaired = skipped = 0
+    scanned = failed = repaired = skipped = cancelled = 0
     async with AsyncSessionLocal() as db:
         candidates = await agent_run_service.list_stale_runs(
             db, updated_before=cutoff, limit=100, now=now
@@ -380,6 +400,7 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
             # post-claim copy can't distinguish "our claim" from "progress".
             listed_status = _coerce_status(candidate.status)
             listed_updated_at = _as_utc(candidate.updated_at)
+            listed_cancel_requested_at = _as_utc(candidate.cancel_requested_at)
             try:
                 if listed_status is None:
                     skipped += 1
@@ -409,10 +430,29 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
                     )
                     skipped += 1
                     continue
-                if status is not listed_status:
-                    # Transitioned under us (e.g. a confirm re-entered the
-                    # graph) — it is making progress; leave it and let the
-                    # short sweeper lease self-expire.
+                current_cancel_requested_at = _as_utc(run.cancel_requested_at)
+                if (
+                    status is not listed_status
+                    or current_cancel_requested_at != listed_cancel_requested_at
+                ):
+                    # A Stop or other transition arrived after the list
+                    # snapshot. Preserve it for its normal grace/producer path.
+                    skipped += 1
+                    continue
+
+                has_old_cancel_request = current_cancel_requested_at is not None
+                if has_old_cancel_request and current_cancel_requested_at >= cutoff:
+                    # A fresh Stop must retain its ordinary grace even when
+                    # the prior RUNNING status itself was stale.
+                    skipped += 1
+                    continue
+
+                if run.execution_provider == "codex":
+                    from src.services.harness.runs import record_observation
+
+                    await record_observation(
+                        db, run_id=uuid.UUID(job_id), observation="unknown"
+                    )
                     skipped += 1
                     continue
 
@@ -436,66 +476,116 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
                     # reopen a run whose tools may already have executed.
                     skipped += 1
                     continue
+
+                cache_scope_matches = bool(job) and _live_job_matches_run(run, job)
                 live_status = _coerce_status(job.get("status")) if job else None
-                if live_status is not None and live_status.is_terminal:
-                    await agent_run_service.upsert_run(
-                        db,
-                        job_id=job_id,
-                        status=live_status,
-                        error=job.get("error") if job else None,
+                if not cache_scope_matches:
+                    live_status = None
+                cancellation_eligible = (
+                    status is JobStatus.STOPPING or has_old_cancel_request
+                )
+                if cancellation_eligible:
+                    requested_status = JobStatus.CANCELLED
+                    error = "Agent execution cancelled after stale producer lease."
+                elif live_status is not None and live_status.is_terminal:
+                    requested_status = live_status
+                    error = job.get("error") if job else None
+                else:
+                    requested_status = JobStatus.FAILED
+                    # Preserve a cached error only when its identity agrees
+                    # with the durable owner; contradictory cache data is not
+                    # allowed to influence the durable row.
+                    prior_error = (
+                        (job or {}).get("error") if cache_scope_matches else None
                     )
-                    await agent_run_service.release_lease(
-                        db, job_id, lease_owner=lease_owner
+                    error = prior_error or (
+                        f"Swept as stale: status '{status.value}' with no progress "
+                        "since "
+                        f"{listed_updated_at.isoformat() if listed_updated_at else 'unknown'}"
                     )
-                    repaired += 1
-                    logger.warning(
-                        "sweep_stale_agent_runs: repaired projection for job %s "
-                        "from live store (status=%s)",
-                        job_id,
-                        live_status.value,
-                    )
+
+                winning_run = await agent_run_service.upsert_run(
+                    db,
+                    job_id=job_id,
+                    status=requested_status,
+                    organization_id=run.organization_id,
+                    user_id=run.user_id,
+                    thread_id=run.thread_id,
+                    error=error,
+                )
+                decision = agent_run_service._decision_from_run(
+                    job_id, requested_status, winning_run
+                )
+                if decision is None:
+                    skipped += 1
+                    continue
+                effective_status = decision.effective_status
+                if not effective_status.is_terminal:
+                    # A Stop or other active state won after refresh. Keep
+                    # the sweeper lease until the new state receives grace.
+                    skipped += 1
                     continue
 
-                # R2-M13: preserve any real terminal error the run recorded
-                # before it went quiet instead of overwriting it with the
-                # generic swept-as-stale line.
-                prior_error = (job or {}).get("error")
-                error = prior_error or (
-                    f"Swept as stale: status '{status.value}' with no progress "
-                    "since "
-                    f"{listed_updated_at.isoformat() if listed_updated_at else 'unknown'}"
-                )
-                await agent_run_service.upsert_run(
-                    db, job_id=job_id, status=JobStatus.FAILED, error=error
-                )
-                if job is not None:
+                # Once a terminal DB decision is durable it controls counters,
+                # mirroring and release. Cache failure cannot change the
+                # committed outcome or cause a task to be enqueued again.
+                if job is not None and cache_scope_matches:
                     live_payload = dict(job)
                     live_payload.update(
                         {
-                            "status": JobStatus.FAILED,
-                            "error": error,
+                            "status": effective_status,
+                            "user_id": decision.user_id,
+                            "organization_id": decision.organization_id,
+                            "thread_id": decision.thread_id,
+                            "error": decision.error,
                             "tool_executions": live_payload.get("tool_executions", []),
                         }
                     )
+                    if not (
+                        effective_status is JobStatus.COMPLETED
+                        and live_status is JobStatus.COMPLETED
+                    ):
+                        live_payload.pop("result", None)
+                        live_payload.pop("confirmation", None)
                     try:
-                        await job_store.set_job(job_id, live_payload)
+                        await job_store.set_job(
+                            job_id,
+                            live_payload,
+                            project=False,
+                            decision=decision,
+                        )
                     except Exception:
                         logger.warning(
-                            "sweep_stale_agent_runs: live-store fail-write "
-                            "failed for %s",
+                            "sweep_stale_agent_runs: terminal cache mirror failed "
+                            "for %s after durable %s",
                             job_id,
+                            effective_status.value,
                             exc_info=True,
                         )
-                await agent_run_service.release_lease(
-                    db, job_id, lease_owner=lease_owner
-                )
-                failed += 1
+                try:
+                    await agent_run_service.release_lease(
+                        db, job_id, lease_owner=lease_owner
+                    )
+                except Exception:
+                    logger.warning(
+                        "sweep_stale_agent_runs: durable terminal %s for %s but "
+                        "lease release failed",
+                        effective_status.value,
+                        job_id,
+                        exc_info=True,
+                    )
+                if effective_status is JobStatus.CANCELLED:
+                    cancelled += 1
+                elif effective_status is JobStatus.FAILED:
+                    failed += 1
+                else:
+                    repaired += 1
                 logger.warning(
-                    "sweep_stale_agent_runs: marked job %s failed (was %s, "
-                    "stale since %s)",
+                    "sweep_stale_agent_runs: observed durable %s for job %s "
+                    "after stale %s status",
+                    effective_status.value,
                     job_id,
                     status.value,
-                    listed_updated_at.isoformat() if listed_updated_at else "unknown",
                 )
             except Exception:
                 skipped += 1
@@ -508,6 +598,7 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
         "failed": failed,
         "repaired": repaired,
         "skipped": skipped,
+        "cancelled": cancelled,
     }
     logger.info("sweep_stale_agent_runs: %s", result)
     return result

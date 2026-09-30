@@ -11,7 +11,14 @@ from uuid import uuid4
 import pytest
 from langgraph.errors import GraphInterrupt
 
+from tests.utils.agent_job_status import stub_durable_status_projection
+
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_status_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_durable_status_projection(monkeypatch)
 
 
 def _make_user():
@@ -122,11 +129,7 @@ class TestHitlCheckpointOwnership:
             ),
             patch(
                 "src.services.agent.agent_execution_service.AsyncSessionLocal",
-                return_value=_session_cm(db),
-            ),
-            patch(
-                "src.services.agent.agent_run_service.record_job_status",
-                new_callable=AsyncMock,
+                side_effect=lambda: _session_cm(db),
             ),
         ):
             await _resume_agent_graph(job_id, True, current_user)
@@ -259,7 +262,7 @@ class TestBackgroundTimeout:
             ),
             patch(
                 "src.services.agent.agent_execution_service.AsyncSessionLocal",
-                return_value=_session_cm(db),
+                side_effect=lambda: _session_cm(db),
             ),
             patch(
                 "src.services.agent.agent_execution_service._resolve_thread",

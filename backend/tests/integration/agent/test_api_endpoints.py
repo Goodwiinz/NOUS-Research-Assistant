@@ -8,12 +8,18 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.agent.execute import _get_job, _set_job, router
+from src.api.agent.execute import _get_job, _set_job, _set_job_async, router
+from tests.utils.agent_job_status import stub_durable_status_projection
 
 pytestmark = pytest.mark.integration  # NOT asyncio -- TestClient is sync
 
 USER_ID = "33333333-3333-3333-3333-333333333333"
 ORG_ID = "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_status_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_durable_status_projection(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -128,10 +134,11 @@ class TestExecuteRequiresMessage:
 class TestGetJobStatus:
     """GET /jobs/{id} should return the pre-set job."""
 
-    def test_get_job_status(self, client, mock_user):
+    @pytest.mark.asyncio
+    async def test_get_job_status(self, client, mock_user):
         """Pre-set a job via _set_job, GET /jobs/{id} returns 200."""
         job_id = str(uuid4())
-        _set_job(
+        await _set_job_async(
             job_id,
             {
                 "status": "completed",
@@ -162,10 +169,11 @@ class TestGetJobNotFound:
 class TestGetJobOwnership:
     """GET /jobs/{id} must fail closed on ownership."""
 
-    def test_other_users_job_returns_404(self, client):
+    @pytest.mark.asyncio
+    async def test_other_users_job_returns_404(self, client):
         """A job owned by another user is invisible to the caller."""
         job_id = str(uuid4())
-        _set_job(
+        await _set_job_async(
             job_id,
             {
                 "status": "completed",
@@ -178,7 +186,8 @@ class TestGetJobOwnership:
         response = client.get(f"/api/v1/agent/jobs/{job_id}")
         assert response.status_code == 404
 
-    def test_job_without_owner_returns_404(self, client):
+    @pytest.mark.asyncio
+    async def test_job_without_owner_returns_404(self, client):
         """Fail closed: a record missing user_id must not be readable.
 
         Regression test — terminal status writes used to drop user_id from
@@ -186,7 +195,7 @@ class TestGetJobOwnership:
         then let ANY authenticated user read the result.
         """
         job_id = str(uuid4())
-        _set_job(
+        await _set_job_async(
             job_id,
             {
                 "status": "completed",

@@ -1,9 +1,23 @@
 import { api } from '@/services/api-client';
 import type { components } from '@/types/generated/api';
+import type {
+  ApiIdentityEvent,
+  ApiReport,
+  ApiReportMergeRequest,
+  ApiStudyLinkRequest,
+} from '@/types/api/research-identity-contract';
+import type {
+  ApiCitationChaseRequest,
+  ApiCoverage,
+  ApiCoverageRequest,
+  ApiImportDeclaration,
+  ApiImportFormat,
+  ApiImportReceipt,
+  ApiImportReceiptDetail,
+} from '@/types/api/research-corpus-contract';
 
 const BASE = '/api/v1/research-engine';
 
-// Types
 type GeneratedProjectCreate =
   components['schemas']['src__schemas__research_engine__ProjectCreate'];
 export type ProjectCreate = Omit<GeneratedProjectCreate, 'collection_id'> & {
@@ -18,36 +32,46 @@ export type ProjectResponse = GeneratedProjectResponse & {
 
 export type LegacyProjectResponse =
   components['schemas']['LegacyProjectResponse'];
-
 export type ResearchProjectRole = components['schemas']['ResearchProjectRole'];
-
 export type ProjectRoleAssignment = Omit<
   components['schemas']['ResearchProjectRoleResponse'],
   'role'
 > & {
   role: ResearchProjectRole;
 };
+export type BlueprintStepDef = components['schemas']['BlueprintStepDefinition'];
+export type BlueprintCreate = components['schemas']['BlueprintCreate'];
+export type BlueprintResponse = components['schemas']['BlueprintResponse'];
+export type BlueprintTemplateDetail =
+  components['schemas']['BlueprintTemplateDetailResponse'];
+export type ConnectorCapability =
+  components['schemas']['ConnectorCapabilityResponse'];
+export type DailyBriefScopeConfirmation =
+  components['schemas']['DailyBriefScopeConfirmation'];
+export type RunCreate = components['schemas']['RunCreate'];
+export type RunResponse = components['schemas']['RunResponse'];
+export type RunResumeRequest = components['schemas']['RunResumeRequest'];
+export type PendingReviewResponse =
+  components['schemas']['PendingReviewResponse'];
+export type StageReviewRequest = components['schemas']['StageReviewRequest'];
+export type StageReviewResponse = components['schemas']['StageReviewResponse'];
+export type ResearchExportFormat =
+  components['schemas']['src__schemas__research_engine__ExportFormat'];
+export type StepResponse = components['schemas']['StepResponse'];
 
-export interface BlueprintStepDef {
-  type: string;
+/** Presentation model for the legacy untyped template-summary endpoint. */
+export type BlueprintTemplateSummary = {
+  id: string;
+  slug: string;
   name: string;
   description?: string;
-  parameters: Record<string, unknown>;
-  model_id?: string;
-  model_version?: string;
-  mode: 'deterministic' | 'exploratory';
-  temperature?: number;
-  seed?: number;
-}
+  step_count: number;
+};
 
-export interface BlueprintCreate {
-  name: string;
-  template_source?: string;
-  steps: BlueprintStepDef[];
-  parameters: Record<string, unknown>;
-}
+type BlueprintTemplateWireSummary = Omit<BlueprintTemplateSummary, 'id'> & {
+  id?: string;
+};
 
-// Functions
 export const listProjects = (): Promise<ProjectResponse[]> =>
   api.get<ProjectResponse[]>(`${BASE}/projects`);
 
@@ -92,34 +116,176 @@ export const removeProjectRole = (
 ): Promise<void> =>
   api.delete(`${BASE}/projects/${collectionId}/roles/${userId}/${role}`);
 
-export const listTemplates = () => api.get(`${BASE}/blueprints/templates`);
+export const listTemplates = async (): Promise<BlueprintTemplateSummary[]> => {
+  const templates = await api.get<BlueprintTemplateWireSummary[]>(
+    `${BASE}/blueprints/templates`
+  );
+  return templates.map((template) => ({
+    ...template,
+    id: template.id ?? template.slug,
+  }));
+};
 
-export const createBlueprint = (projectId: string, data: BlueprintCreate) =>
-  api.post(`${BASE}/blueprints/projects/${projectId}`, data);
+export const getTemplateDetail = (
+  slug: string
+): Promise<BlueprintTemplateDetail> =>
+  api.get<BlueprintTemplateDetail>(`${BASE}/blueprints/templates/${slug}`);
 
-export const getBlueprint = (id: string) => api.get(`${BASE}/blueprints/${id}`);
+export const getCapabilities = (): Promise<ConnectorCapability[]> =>
+  api.get<ConnectorCapability[]>(`${BASE}/capabilities`);
+
+export const createBlueprint = (
+  projectId: string,
+  data: BlueprintCreate
+): Promise<BlueprintResponse> =>
+  api.post<BlueprintResponse>(`${BASE}/blueprints/projects/${projectId}`, data);
+
+export const getBlueprint = (id: string): Promise<BlueprintResponse> =>
+  api.get<BlueprintResponse>(`${BASE}/blueprints/${id}`);
 
 export const startRun = (
   blueprintId: string,
-  protocolVersionId: string
-) =>
-  api.post(`${BASE}/blueprints/${blueprintId}/runs`, {
-    protocol_version_id: protocolVersionId,
-    parameters_override: {},
+  request: RunCreate | string
+): Promise<RunResponse> =>
+  api.post<RunResponse>(
+    `${BASE}/blueprints/${blueprintId}/runs`,
+    typeof request === 'string'
+      ? { protocol_version_id: request, parameters_override: {} }
+      : request
+  );
+
+export const getRun = (runId: string): Promise<RunResponse> =>
+  api.get<RunResponse>(`${BASE}/runs/${runId}`);
+
+export const pauseRun = (runId: string): Promise<RunResponse> =>
+  api.post<RunResponse>(`${BASE}/runs/${runId}/pause`);
+
+export const resumeRun = (
+  runId: string,
+  request: RunResumeRequest = { continue_unverified: false }
+): Promise<RunResponse> =>
+  api.post<RunResponse>(`${BASE}/runs/${runId}/resume`, request);
+
+export const getPendingReview = (
+  runId: string
+): Promise<PendingReviewResponse> =>
+  api.get<PendingReviewResponse>(`${BASE}/runs/${runId}/reviews/pending`);
+
+export const submitReview = (
+  runId: string,
+  stepIndex: number,
+  request: StageReviewRequest
+): Promise<StageReviewResponse> =>
+  api.post<StageReviewResponse>(
+    `${BASE}/runs/${runId}/reviews/${stepIndex}`,
+    request
+  );
+
+export const getRunExportUrl = (
+  runId: string,
+  format: ResearchExportFormat
+): string => `${BASE}/runs/${runId}/export?${new URLSearchParams({ format })}`;
+
+export const downloadRunExport = (
+  runId: string,
+  format: ResearchExportFormat
+): Promise<void> =>
+  api.download(
+    `/research-engine/runs/${runId}/export?${new URLSearchParams({ format })}`
+  );
+
+export const getRunManifest = (runId: string): Promise<unknown> =>
+  api.get<unknown>(`${BASE}/runs/${runId}/manifest`);
+
+export const listSteps = (runId: string): Promise<StepResponse[]> =>
+  api.get<StepResponse[]>(`${BASE}/runs/${runId}/steps`);
+
+export const getStep = (stepId: string): Promise<StepResponse> =>
+  api.get<StepResponse>(`${BASE}/steps/${stepId}`);
+
+// --- Report / study identity (GOO-299) -----------------------------------
+
+export type {
+  ApiIdentityEvent as IdentityEvent,
+  ApiReport as ResearchReport,
+  ApiReportMergeRequest as ReportMergeRequest,
+  ApiStudyLinkRequest as StudyLinkRequest,
+} from '@/types/api/research-identity-contract';
+
+export const listReports = (projectId: string): Promise<ApiReport[]> =>
+  api.get<ApiReport[]>(`${BASE}/projects/${projectId}/reports`);
+
+export const listReportHistory = (
+  projectId: string
+): Promise<ApiIdentityEvent[]> =>
+  api.get<ApiIdentityEvent[]>(`${BASE}/projects/${projectId}/reports/history`);
+
+export const linkStudy = (
+  projectId: string,
+  reportId: string,
+  data: ApiStudyLinkRequest
+): Promise<ApiReport> =>
+  api.post<ApiReport>(
+    `${BASE}/projects/${projectId}/reports/${reportId}/study-link`,
+    data
+  );
+
+export const mergeReports = (
+  projectId: string,
+  data: ApiReportMergeRequest
+): Promise<ApiReport> =>
+  api.post<ApiReport>(`${BASE}/projects/${projectId}/reports/merge`, data);
+
+// --- Search import / citation chase / corpus export (GOO-300) --------------
+
+export type {
+  ApiCoverage as CorpusCoverage,
+  ApiImportDeclaration as ImportDeclaration,
+  ApiImportFormat as ImportFormat,
+  ApiImportReceipt as ImportReceipt,
+  ApiImportReceiptDetail as ImportReceiptDetail,
+} from '@/types/api/research-corpus-contract';
+
+export const importSearchResults = (
+  projectId: string,
+  file: File,
+  format: ApiImportFormat,
+  declaration: ApiImportDeclaration
+): Promise<ApiImportReceipt> =>
+  api.upload<ApiImportReceipt>(`${BASE}/projects/${projectId}/imports`, file, {
+    metadata: { format, declaration: JSON.stringify(declaration) },
   });
 
-export const getRun = (runId: string) => api.get(`${BASE}/runs/${runId}`);
+export const listImports = (projectId: string): Promise<ApiImportReceipt[]> =>
+  api.get<ApiImportReceipt[]>(`${BASE}/projects/${projectId}/imports`);
 
-export const pauseRun = (runId: string) =>
-  api.post(`${BASE}/runs/${runId}/pause`);
+export const getImport = (
+  projectId: string,
+  receiptId: string
+): Promise<ApiImportReceiptDetail> =>
+  api.get<ApiImportReceiptDetail>(
+    `${BASE}/projects/${projectId}/imports/${receiptId}`
+  );
 
-export const resumeRun = (runId: string) =>
-  api.post(`${BASE}/runs/${runId}/resume`);
+export const chaseCitations = (
+  projectId: string,
+  data: ApiCitationChaseRequest
+): Promise<ApiImportReceipt> =>
+  api.post<ApiImportReceipt>(
+    `${BASE}/projects/${projectId}/citation-chases`,
+    data
+  );
 
-export const getRunManifest = (runId: string) =>
-  api.get(`${BASE}/runs/${runId}/manifest`);
+export const getCorpusCoverage = (
+  projectId: string,
+  data: ApiCoverageRequest = { known: [] }
+): Promise<ApiCoverage> =>
+  api.post<ApiCoverage>(`${BASE}/projects/${projectId}/corpus/coverage`, data);
 
-export const listSteps = (runId: string) =>
-  api.get(`${BASE}/runs/${runId}/steps`);
-
-export const getStep = (stepId: string) => api.get(`${BASE}/steps/${stepId}`);
+export const downloadCorpus = (
+  projectId: string,
+  format: 'json' | 'zip'
+): Promise<void> =>
+  api.download(
+    `/research-engine/projects/${projectId}/corpus/export?${new URLSearchParams({ format })}`
+  );

@@ -58,7 +58,13 @@ def _build_data_system_prompt() -> str:
         "You are a specialized Data Agent focused on extracting entities, "
         "exploring knowledge graphs, and analyzing structured data from documents.\n\n"
         f"{SHARED_AGENT_RULES}\n\n"
-        "Be analytical and thorough. Present findings in structured formats."
+        "Search the knowledge graph before using entity IDs; pass through only "
+        "IDs returned by those results, and never invent graph IDs. State only "
+        "returned entity and relationship rows. Scope neighborhood results "
+        "separately from organization graph totals. Use search_documents to "
+        "resolve a document UUID before extract_entities. The per-turn budget "
+        "is max 8 tool loops; then synthesize only from the results already "
+        "returned. Present findings in structured formats."
     )
 
 
@@ -67,35 +73,9 @@ async def data_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     from langchain_core.messages import ToolMessage
 
     from src.core.config import get_settings
-    from src.services.agent._nodes_llm import _attachment_status_part
     from src.services.agent.graph import AGENT_LLM_TIMEOUT_SECONDS
 
     sanitized = _sanitize_messages(state["messages"])
-    from src.services.agent.retrieval_provenance import render_retrieval_prompt
-
-    messages = [
-        SystemMessage(content=_build_data_system_prompt()),
-    ]
-    attachment_status_prompt = _attachment_status_part(
-        state.get("attachment_status", [])
-    )
-    if attachment_status_prompt:
-        messages.append(SystemMessage(content=attachment_status_prompt))
-    messages.append(
-        SystemMessage(
-            content=render_retrieval_prompt(
-                state.get("retrieved_contexts", []), sanitized
-            )
-        )
-    )
-    from src.services.agent.runtime_snapshot import render_project_skill_catalog
-
-    skill_catalog_prompt = render_project_skill_catalog(
-        state.get("project_skill_catalog", [])
-    )
-    if skill_catalog_prompt:
-        messages.append(SystemMessage(content=skill_catalog_prompt))
-    messages += sanitized
 
     settings = get_settings()
     use_synthesis = bool(
@@ -104,22 +84,18 @@ async def data_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         and isinstance(sanitized[-1], ToolMessage)
     )
 
-    # Close the plan→execute handoff (see planner.render_plan_directive).
-    if not use_synthesis:
-        from src.services.agent.planner import render_plan_directive
-
-        plan_directive = render_plan_directive(state.get("plan"))
-        if plan_directive:
-            messages.insert(1, SystemMessage(content=plan_directive))
-
     # Hoisted above the branch: _build_llm is used inside it, so importing
     # after would NameError.
     from src.services.agent.graph import _build_llm, _merge_run_config
 
     if use_synthesis:
-        from src.services.agent.llm_factory import build_synthesis_llm
+        from src.services.agent.llm_factory import (
+            build_synthesis_llm,
+            get_synthesis_model_name,
+        )
 
         llm = build_synthesis_llm(max_tokens=4096, tool_calling=True)
+        resolved_model = get_synthesis_model_name()
         logger.debug("data_llm_node: using synthesis model after ToolMessage")
     else:
         # Tool-decision turn runs on the main deployment — see the note in
@@ -127,14 +103,31 @@ async def data_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         # (search → neighborhood → paths), which is exactly the multi-step
         # shape small tiers degrade on.
         llm = _build_llm(model_override=state.get("model") or None)
+        from src.services.agent.llm_factory import resolve_chat_deployment
+
+        resolved_model = resolve_chat_deployment(state.get("model") or None)
         logger.debug("data_llm_node: using main model for tool decision")
+    from src.services.agent.runtime_context import render_dynamic_context
+
+    dynamic_context = render_dynamic_context(
+        state,
+        config,
+        resolved_model=resolved_model,
+        branch="data",
+        messages=sanitized,
+    )
+    messages = [
+        SystemMessage(content=_build_data_system_prompt()),
+        SystemMessage(content=dynamic_context),
+        *sanitized,
+    ]
     from src.services.agent._nodes_llm import (
         normalize_ai_content as _normalize_ai_content,
     )
-    from src.services.agent._nodes_llm import tools_for_runtime_snapshot
+    from src.services.agent._nodes_llm import tools_for_runtime_projection
 
     llm_with_tools = llm.bind_tools(
-        tools_for_runtime_snapshot(DATA_TOOLS, state),
+        tools_for_runtime_projection(state, branch="data"),
         parallel_tool_calls=settings.AGENT_PARALLEL_TOOL_CALLS,
     )
 

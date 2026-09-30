@@ -71,8 +71,13 @@ def test_shared_initial_and_resume_runtime_fields_cover_both_transports() -> Non
     expected_state = {
         "current_project_id": "project-1",
         "runtime_snapshot_id": "snapshot-1",
+        "runtime_tool_names": ["search_documents"],
+        "tool_registry_hash": "hash",
+        "tool_registry_version": "1",
+        "runtime_projection_unavailable": False,
         "project_skill_catalog": [{"name": "skill"}],
         "loaded_skill_versions": [],
+        "capability_limitation": {},
     }
     assert runtime_state_fields(snapshot, "project-1") == expected_state
     assert runtime_config_fields("snapshot-1", "project-1") == {

@@ -8,12 +8,12 @@ Security: All endpoints validate project ownership before granting access.
 import io
 import zipfile
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog import get_logger
@@ -25,6 +25,8 @@ from src.models.user import User
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
     DraftGenerationStatus,
+    get_task_result,
+    reconcile_task,
 )
 from src.services.research_engine.project_access import ResearchAction, resolve_project
 
@@ -58,6 +60,26 @@ class DraftReviewResponse(BaseModel):
 
 class DraftReviewListResponse(BaseModel):
     reviews: List[DraftReviewResponse]
+
+
+class DraftTaskStatusResponse(BaseModel):
+    """Draft task status: live cache, or the retained ``draft_task_results`` row."""
+
+    # The live payload also carries document_ids, selection_mode, ...
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str
+    status: str
+    progress: int = 0
+    current_step: str = ""
+    started_at: str
+    updated_at: Optional[str] = None
+    draft_id: Optional[str] = None
+    duration: Optional[float] = None
+    artifact_version: Optional[int] = None
+    artifact_hash: Optional[str] = None
+    error_code: Optional[str] = None
+    state_source: Literal["cache", "database"]
 
 
 # ============================================================================
@@ -121,15 +143,27 @@ async def generate_draft(
 
     service = DraftGenerationService(db)
 
-    result = await service.generate_draft(
-        project_id=project_id,
-        user_id=current_user.id,
-        themes=themes,
-        document_ids=document_ids,
-        style=style,
-        max_sections=max_sections,
-        include_abstract=include_abstract,
-    )
+    try:
+        result = await service.generate_draft(
+            project_id=project_id,
+            user_id=current_user.id,
+            themes=themes,
+            document_ids=document_ids,
+            style=style,
+            max_sections=max_sections,
+            include_abstract=include_abstract,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid draft generation request.",
+        ) from None
+
+    if result.get("error_category") == "draft_generation_conflict":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A draft generation is already active for this project.",
+        )
 
     return result
 
@@ -442,7 +476,7 @@ async def export_draft(
 # ============================================================================
 
 
-@router.get("/status")
+@router.get("/status", response_model=DraftTaskStatusResponse)
 async def get_generation_status(
     project_id: UUID,
     task_id: Optional[str] = Query(
@@ -455,27 +489,54 @@ async def get_generation_status(
     # Validate project ownership
     await _validate_project_ownership(project_id, current_user, db)
 
+    row = None
     if task_id:
         generation_status = await DraftGenerationService.get_status_shared(task_id)
+        # The retained row is the record. Scope-check it before reconciling:
+        # only the owner's read may commit a stale row's interrupt flip.
+        row = await get_task_result(db, task_id)
+        if (
+            row is not None
+            and row.collection_id == project_id
+            and row.actor_user_id == current_user.id
+        ):
+            row = await reconcile_task(db, task_id)
     else:
         generation_status = DraftGenerationService.get_latest_status(
             project_id=project_id,
             user_id=current_user.id,
         )
 
-    if not generation_status:
-        raise HTTPException(status_code=404, detail="Task not found")
+    if row is not None:
+        if row.collection_id != project_id or row.actor_user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Task not found")
+    else:
+        if not generation_status:
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    if generation_status.get("project_id") != str(project_id):
-        raise HTTPException(status_code=404, detail="Task not found")
+        if generation_status.get("project_id") != str(project_id):
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    if generation_status.get("user_id") != str(current_user.id):
-        raise HTTPException(status_code=404, detail="Task not found")
+        if generation_status.get("user_id") != str(current_user.id):
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    return generation_status
+    if row is not None and (generation_status is None or row.state != "running"):
+        return {
+            "started_at": row.started_at.isoformat(),
+            "updated_at": row.terminal_at.isoformat() if row.terminal_at else None,
+            **(generation_status or {}),
+            "task_id": row.task_id,
+            "status": row.state,
+            "draft_id": str(row.artifact_id) if row.artifact_id else None,
+            "artifact_version": row.artifact_version,
+            "artifact_hash": row.artifact_hash,
+            "error_code": row.error_code,
+            "state_source": "database",
+        }
+    return {**(generation_status or {}), "state_source": "cache"}
 
 
-@router.get("/status/{task_id}")
+@router.get("/status/{task_id}", response_model=DraftTaskStatusResponse)
 async def get_generation_status_by_task(
     project_id: UUID,
     task_id: str,
@@ -513,25 +574,36 @@ async def cancel_generation(
     if task_id:
         generation_status = DraftGenerationService.get_status(task_id)
         if not generation_status:
+            # Another replica may own the task: the retained row is the record.
+            row = await get_task_result(db, task_id)
+            if (
+                row is None
+                or row.collection_id != project_id
+                or row.actor_user_id != current_user.id
+            ):
+                raise HTTPException(status_code=404, detail="Task not found")
+        elif generation_status.get("project_id") != str(project_id):
             raise HTTPException(status_code=404, detail="Task not found")
-        if generation_status.get("project_id") != str(project_id):
+        elif generation_status.get("user_id") != str(current_user.id):
             raise HTTPException(status_code=404, detail="Task not found")
-        if generation_status.get("user_id") != str(current_user.id):
-            raise HTTPException(status_code=404, detail="Task not found")
-        success = DraftGenerationService.cancel_generation(task_id)
+        cancelled = await DraftGenerationService.cancel_task(db, task_id)
     else:
-        cancelled_task_id = DraftGenerationService.cancel_latest_generation(
+        latest_task_id, cancelled = await DraftGenerationService.cancel_latest_task(
+            db,
             project_id=project_id,
             user_id=current_user.id,
         )
-        success = cancelled_task_id is not None
-        task_id = cancelled_task_id or ""
+        if latest_task_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot cancel: no draft generation is in progress",
+            )
+        task_id = latest_task_id
 
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot cancel: task not found or already completed",
-        )
+    # Already finished, per this process's status (None) or the retained
+    # row (False): nothing was cancelled.
+    if not cancelled:
+        raise HTTPException(status_code=409, detail="Task already finished")
 
     await DraftGenerationService.publish_status(task_id)
     return {"message": "Generation cancelled", "task_id": task_id, "cancelled": True}

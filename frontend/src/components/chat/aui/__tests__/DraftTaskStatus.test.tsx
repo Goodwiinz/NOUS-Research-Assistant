@@ -141,6 +141,57 @@ describe('draft task status in chat', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('names the exact durable draft version when the status comes from the database', async () => {
+    const artifactHash = 'ab12cd34ef56'.padEnd(64, '0');
+    getGenerationStatus.mockResolvedValue({
+      task_id: taskId,
+      status: 'completed',
+      current_step: 'Draft completed',
+      progress: 100,
+      draft_id: draftId,
+      artifact_version: 3,
+      artifact_hash: artifactHash,
+      state_source: 'database',
+      started_at: '2026-09-22T07:45:00',
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderDraftMessage({ task_id: taskId, project_id: projectId });
+
+    expect(
+      await screen.findByRole('link', { name: 'View draft v3' })
+    ).toHaveAttribute(
+      'href',
+      `/projects/${projectId}?tab=drafts&draftId=${draftId}`
+    );
+    expect(screen.getByText('Hash: ab12cd34ef56')).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(getGenerationStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows an interrupted task as terminal and stops polling', async () => {
+    getGenerationStatus.mockResolvedValue({
+      task_id: taskId,
+      status: 'interrupted',
+      current_step: '',
+      progress: 0,
+      error_code: 'process_lost',
+      state_source: 'database',
+      started_at: '2026-09-22T07:45:00',
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderDraftMessage({ task_id: taskId, project_id: projectId });
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Draft interrupted'
+    );
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /View draft/ })
+    ).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(getGenerationStatus).toHaveBeenCalledTimes(1);
+  });
+
   it('never treats an unavailable status read as success', async () => {
     getGenerationStatus.mockRejectedValue(new Error('internal backend detail'));
     renderDraftMessage({ task_id: taskId, project_id: projectId });

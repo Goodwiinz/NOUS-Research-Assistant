@@ -1,0 +1,34 @@
+FEATURE: deduplicated multi-provider bibliography provenance fallback
+FINAL_SOURCE_SHA: ac17ca15a3a91af936851647bbde89d9860709ba
+
+EXPECTED RED
+CLASSIFICATION: EXPECTED RED
+TEST_STATE: new regression present; production fallback absent
+COMMAND:
+  cd backend && uv run pytest tests/unit/services/test_report_rendering.py -q
+EXIT_STATUS: 1
+RAW_CAPTURE_SHA256: e5d5f5bbd9b774fbeb4c1f2addbe671288a796a04747b08f97916bed828a98e0
+RESULT:
+  1 failed, 4 passed in 2.30s
+  OpenAlex-first same-DOI case retained Crossref provenance but rendered
+  publication_year=None instead of 2025. The reverse order passed because the
+  canonical Crossref source already carried the year and journal.
+
+RESTORED GREEN
+CLASSIFICATION: PASS
+TEST_STATE: deterministic provenance fallback implemented
+COMMAND:
+  cd backend && uv run pytest tests/unit/services/test_report_rendering.py -q
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: b148bf4673c812a9f0fd5b04527a0c6696267e13c363843fbababca305316af6
+RESULT:
+  5 passed in 2.18s
+  Both provider orders and canonical-conflict behavior passed. The final exact
+  source suite separately adds and passes the three-provider DOI/PMID bridge.
+
+FINAL ASSERTIONS
+  prepare_sources -> source_records -> build_report -> JSON/Markdown/CSV
+  preserves abstract evidence strength, DOI, publication year, journal, and
+  bibliography. Empty canonical bibliography values may be filled from retained
+  provider origin snapshots; non-empty canonical values win. Reader output does
+  not expose metadata.provenance or retrieval bookkeeping.

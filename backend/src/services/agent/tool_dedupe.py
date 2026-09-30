@@ -91,6 +91,61 @@ def _current_turn_tool_call_ids(messages: list) -> set[str]:
     return ids
 
 
+def _effect_mode(tool_name: str) -> str:
+    """Read the server-owned effect mode without making mutations cacheable."""
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    descriptor = TOOL_REGISTRY.descriptor(tool_name)
+    return descriptor.effect_mode.value if descriptor is not None else "read_only"
+
+
+def _read_cache_boundary(
+    messages: list, tool_executions: list[dict]
+) -> tuple[set[str], dict[str, int]]:
+    """Return eligible read call IDs and their message positions for this turn."""
+    boundary = _current_turn_message_boundary(messages)
+    start = boundary + 1 if boundary >= 0 else 0
+    turn_messages = messages[start:]
+    execution_by_id = {
+        str(entry.get("id")): entry
+        for entry in tool_executions
+        if isinstance(entry, dict) and entry.get("id") is not None
+    }
+    name_by_id: dict[str, str] = {}
+    for message in turn_messages:
+        for call in getattr(message, "tool_calls", []) or []:
+            call_id, name = call.get("id"), call.get("name")
+            if isinstance(call_id, str) and isinstance(name, str):
+                name_by_id[call_id] = name
+
+    positions: dict[str, int] = {}
+    latest_mutation = -1
+    for position, message in enumerate(turn_messages):
+        if not isinstance(message, ToolMessage):
+            continue
+        call_id = getattr(message, "tool_call_id", None)
+        if not isinstance(call_id, str):
+            continue
+        positions[call_id] = position
+        execution = execution_by_id.get(call_id, {})
+        name = execution.get("tool_name") or name_by_id.get(call_id, "")
+        if isinstance(name, str) and _effect_mode(name) != "read_only":
+            latest_mutation = position
+    eligible = {
+        call_id
+        for call_id, position in positions.items()
+        if position > latest_mutation
+        and _effect_mode(
+            str(
+                execution_by_id.get(call_id, {}).get("tool_name")
+                or name_by_id.get(call_id, "")
+            )
+        )
+        == "read_only"
+    }
+    return eligible, positions
+
+
 def find_cached_tool_results(
     tool_calls: list[dict],
     messages: list,
@@ -116,6 +171,11 @@ def find_cached_tool_results(
         return {}
 
     in_turn_ids = _current_turn_tool_call_ids(messages)
+    if not in_turn_ids:
+        return {}
+
+    eligible_ids, _positions = _read_cache_boundary(messages, tool_executions)
+    in_turn_ids &= eligible_ids
     if not in_turn_ids:
         return {}
 
@@ -147,6 +207,8 @@ def find_cached_tool_results(
     for tc in tool_calls:
         tc_id = tc.get("id")
         if not isinstance(tc_id, str):
+            continue
+        if _effect_mode(str(tc.get("name", ""))) != "read_only":
             continue
         key = dedupe_key(tc.get("name", ""), tc.get("args") or {})
         prior = by_key.get(key)
@@ -207,6 +269,11 @@ def find_repeated_failures(
     if not in_turn_ids:
         return {}
 
+    eligible_ids, _positions = _read_cache_boundary(messages, tool_executions)
+    in_turn_ids &= eligible_ids
+    if not in_turn_ids:
+        return {}
+
     failed = [
         te
         for te in tool_executions
@@ -230,6 +297,8 @@ def find_repeated_failures(
     for tc in tool_calls:
         tc_id = tc.get("id")
         if not isinstance(tc_id, str):
+            continue
+        if _effect_mode(str(tc.get("name", ""))) != "read_only":
             continue
         key = dedupe_key(tc.get("name", ""), tc.get("args") or {})
         if counts.get(key, 0) >= threshold:

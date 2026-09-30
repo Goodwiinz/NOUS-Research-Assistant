@@ -121,10 +121,11 @@ def test_orphan_citations_fail_closed() -> None:
 
 
 # R5-L19
-def test_export_does_not_read_empty_evidence_table() -> None:
+def test_export_derives_evidence_without_retired_table() -> None:
     src = _read("src/services/research_engine/export_service.py")
     assert "ResearchEvidence" not in src
-    assert '"evidence_count": 0' in src
+    assert "evidence_by_step" in src
+    assert '"evidence_count": len(evidence_ids)' in src
     assert not (BACKEND_ROOT / "src/models/research_evidence.py").exists()
 
 

@@ -74,6 +74,7 @@ from src.services.agent.agent_submission_service import (
     abandon_awaiting_submission,
     request_run_cancellation,
 )
+from src.services.agent.job_store import set_job as _set_job_async
 
 # Wire models moved to the service layer (audit B5) so the graph runner can
 # build them without importing src.api. Re-exported here so every existing
@@ -431,21 +432,16 @@ async def _celery_dispatch(
             "celery dispatch: enqueue failed for job %s — marking failed", job_id
         )
         error = "Agent dispatch failed (task queue unavailable). Please retry."
-        _set_job(
+        await _set_job_async(
             job_id,
             {
                 "status": JobStatus.FAILED,
                 "error": error,
                 "tool_executions": [],
+                "thread_id": str(request.thread_id) if request.thread_id else None,
                 **_actor_fields(current_user),
             },
-        )
-        # Durable projection write (await — the fire-and-forget projection
-        # scheduled by _set_job is best-effort; this one must land so the
-        # sweeper never resurrects the orphan as "stale running").
-        await agent_run_service.record_job_status(
-            job_id,
-            {"status": JobStatus.FAILED, "error": error, **_actor_fields(current_user)},
+            require_durable_decision=True,
         )
         return "failed", job_id
 
@@ -611,11 +607,22 @@ async def get_job_status(
     # poller would see "running" until the 1h TTL. get_job_fresh degrades to
     # the L1 read when Redis is unavailable, so single-process behavior (and
     # Redis-less tests) are unchanged.
-    job = _get_job(job_id)
+    from src.services.agent.job_store import get_job_for_poll as _get_job_for_poll
+
+    job = await _get_job_for_poll(job_id)
     if job is None or not _normalized_job_status(job.get("status")).is_terminal:
         from src.services.agent.job_store import get_job_fresh as _get_job_fresh
 
         job = (await _get_job_fresh(job_id)) or job
+        # The Redis refresh above yields to a concurrent terminal publisher.
+        # Resolve that generation at the final selection boundary so this
+        # poll cannot return the reservation while its Redis winner is pending.
+        terminal_snapshot = await _get_job_for_poll(job_id)
+        if (
+            terminal_snapshot is not None
+            and _normalized_job_status(terminal_snapshot.get("status")).is_terminal
+        ):
+            job = terminal_snapshot
     if not job:
         # Redis miss: fall back to the durable projection (tenancy-filtered —
         # org + user must both match; a miss 404s without confirming existence).
@@ -626,14 +633,19 @@ async def get_job_status(
             organization_id=getattr(current_user, "organization_id", None),
             user_id=current_user.id,
         )
-        if run is None:
+        # The durable read above yields while a normal terminal publication
+        # may register its local reservation. Re-enter the pending-aware
+        # selector before returning either the projection or a 404.
+        job = await _get_job_for_poll(job_id)
+        if job is None and run is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        run_thread_id = getattr(run, "thread_id", None)
-        return JobStatusResponse(
-            status=_normalized_job_status(run.status),
-            error=run.error,
-            thread_id=str(run_thread_id) if run_thread_id else None,
-        )
+        if job is None:
+            run_thread_id = getattr(run, "thread_id", None)
+            return JobStatusResponse(
+                status=_normalized_job_status(run.status),
+                error=run.error,
+                thread_id=str(run_thread_id) if run_thread_id else None,
+            )
     # Fail closed: a job record without an owner must not be readable. Every
     # write path stamps user_id; its absence means a corrupted/legacy record,
     # not a public one.
@@ -1328,6 +1340,76 @@ async def resume_stream(
     await _require_editable_agent_thread(db, current_user, thread_uuid)
 
     sid = await _stream_buffer.active_stream_id(thread_id)
+    # External runs own a PostgreSQL event ledger and keep executing when this
+    # browser goes away. Reattach directly to that durable observation path
+    # only when there is no native Redis stream to resume.
+    latest_run_for_resume = None
+    latest_run_checked = False
+    if sid is None:
+        if stream is not None:
+            latest_run_for_resume = await get_latest_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            latest_run_checked = True
+            external_run = (
+                latest_run_for_resume
+                if latest_run_for_resume is not None
+                and getattr(latest_run_for_resume, "execution_provider", "nous")
+                == "codex"
+                else None
+            )
+        else:
+            active_external = await get_active_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            external_run = (
+                active_external
+                if active_external is not None
+                and getattr(active_external, "execution_provider", "nous") == "codex"
+                else None
+            )
+            if external_run is None:
+                latest_run_for_resume = await get_latest_run_for_thread(
+                    db,
+                    thread_uuid,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+                latest_run_checked = True
+                if (
+                    latest_run_for_resume is not None
+                    and getattr(latest_run_for_resume, "execution_provider", "nous")
+                    == "codex"
+                ):
+                    external_run = latest_run_for_resume
+        if external_run is not None:
+            from src.api.agent.harness_streaming import (
+                context_for_accepted_run,
+                external_resume_cursor,
+                stream_harness_run,
+            )
+
+            external_context = await context_for_accepted_run(
+                db, run_id=_uuid.UUID(external_run.job_id), current_user=current_user
+            )
+            return StreamingResponse(
+                stream_harness_run(
+                    request,
+                    _uuid.UUID(external_run.job_id),
+                    external_context,
+                    after_seq=external_resume_cursor(
+                        after, stream, _uuid.UUID(external_run.job_id)
+                    ),
+                ),
+                media_type="text/event-stream",
+                headers=_SSE_HEADERS,
+            )
     # Run correlation (codex audit CX1): the client's seq cursor is only
     # meaningful against the stream it was read from. If the caller names its
     # stream and a DIFFERENT run now owns the thread's active pointer, replaying
@@ -1357,12 +1439,14 @@ async def resume_stream(
         owner_thread_id = await _stream_buffer.thread_id_for_stream(stream)
         if owner_thread_id is None or owner_thread_id.lower() != thread_id.lower():
             return Response(status_code=204)
-        latest_run = await get_latest_run_for_thread(
-            db,
-            thread_uuid,
-            organization_id=getattr(current_user, "organization_id", None),
-            user_id=current_user.id,
-        )
+        latest_run = latest_run_for_resume
+        if not latest_run_checked:
+            latest_run = await get_latest_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
         if latest_run is None:
             return Response(status_code=204)
         latest_stream = await _stream_buffer.stream_id_for_run(str(latest_run.job_id))

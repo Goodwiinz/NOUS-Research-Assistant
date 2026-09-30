@@ -1,5 +1,6 @@
 """Real PostgreSQL approved-plan execution and drift rejection."""
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, cast
 from unittest.mock import AsyncMock
@@ -20,6 +21,7 @@ from src.schemas.research_engine import ResearchProtocolVersionCreate, RunCreate
 from src.services.research_engine.project_access import ResearchAction, resolve_project
 from src.services.research_engine.protocol_service import add_protocol_version
 from src.services.research_engine.run_conformance import require_run_conformance
+from src.services.research_engine.search_receipts import SearchReceiptJournal
 from tests.integration.test_protocol_approval_atomicity import (  # noqa: F401
     PROTOCOL_SNAPSHOT,
     _approve_path,
@@ -277,14 +279,99 @@ async def test_resume_allows_superseded_plan_but_rejects_deviated_run(
     assert approved.status_code == 200, approved.text
 
     async with AsyncSession(protocol_engine, expire_on_commit=False) as db:
-        resumed = await runs.resume_run(created.id, _actor(ids), db)
-        assert resumed.status == "running"
+        resumed = await runs.resume_run(created.id, None, _actor(ids), db)
+        # Resume authorization is consumed only when the stream claims the run,
+        # so the durable state remains paused between POST /resume and the GET.
+        assert resumed.status == "paused"
         assert resumed.protocol_version_id == original_version_id
         run = await db.get(ResearchRun, created.id)
         assert run is not None
+        assert isinstance(
+            (run.reproducibility_manifest or {}).get("resume_authorization"), dict
+        )
         run.status = "paused"
         run.conformance_status = "deviated"
         await db.commit()
         with pytest.raises(HTTPException) as denied:
-            await runs.resume_run(created.id, _actor(ids), db)
+            await runs.resume_run(created.id, None, _actor(ids), db)
         assert denied.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_search_page_receipts_survive_reopen_and_concurrent_replay(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _approved_plan(protocol_engine)
+    async with AsyncSession(protocol_engine, expire_on_commit=False) as db:
+        created = await runs.start_run(
+            ids["blueprint"],
+            RunCreate(protocol_version_id=ids["protocol_version"]),
+            _actor(ids),
+            db,
+        )
+        run_id = created.id
+
+    strategy = {
+        "schema_version": "nous.academic.search-strategy.v1",
+        "project_id": str(ids["collection"]),
+        "protocol_version_id": str(ids["protocol_version"]),
+        "strategy_version": "sha256:" + "a" * 64,
+    }
+    execution_id = "5c4e80a8-22bc-4f0b-8803-7c4c8db3917f"
+    page_id = "54c48b54-54a0-5275-9466-89ed31731170"
+    second_page_id = "0f3c8d1a-9b52-5f7e-8a41-2d6c3e9b7a10"
+
+    def page(
+        attempt_id: str, status: str, query: str, *, index: int = 0
+    ) -> dict[str, Any]:
+        return {
+            "page_id": page_id if index == 0 else second_page_id,
+            "page_index": index,
+            "attempt_id": attempt_id,
+            "page_status": status,
+            "request": {"method": "GET", "params": {"query": query}},
+            "response": {
+                "status_code": 200 if status == "completed" else None,
+                "parsed_count": 1 if status == "completed" else 0,
+            },
+            "record_keys": [],
+            "imported_count": 0,
+            "imported_source_ids": [],
+        }
+
+    async def persist(page_value: dict[str, Any]) -> None:
+        async with AsyncSession(protocol_engine, expire_on_commit=False) as db:
+            await SearchReceiptJournal(db, run_id, ids["author"]).persist_page(
+                step_id="search",
+                strategy=strategy,
+                provider="openalex",
+                execution_id=execution_id,
+                page=page_value,
+            )
+
+    # Distinct concurrent pages: without the run-row lock one read-modify-write
+    # overwrites the other and a page disappears. Mutation guard: drop
+    # with_for_update in SearchReceiptJournal._locked_run and this must fail.
+    await asyncio.gather(
+        persist(page("attempt-1", "requested", "approved query")),
+        persist(page("attempt-1", "requested", "approved query", index=1)),
+    )
+    await persist(page("attempt-1", "completed", "approved query"))
+    await persist(page("attempt-2", "requested", "retry query"))
+
+    async with AsyncSession(protocol_engine, expire_on_commit=False) as db:
+        run = await db.get(ResearchRun, run_id)
+        assert run is not None
+        journal = run.reproducibility_manifest["_search_receipts_v1"]
+        pages = journal["executions"][execution_id]["pages"]
+        assert set(pages) == {page_id, second_page_id}
+        stored = pages[page_id]
+        assert len(stored["attempts"]) == 2
+        assert stored["attempts"][0]["page"]["page_status"] == "completed"
+        assert (
+            stored["attempts"][0]["page"]["request"]["params"]["query"]
+            == "approved query"
+        )
+        assert (
+            stored["attempts"][1]["page"]["request"]["params"]["query"] == "retry query"
+        )

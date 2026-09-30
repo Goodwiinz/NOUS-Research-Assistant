@@ -29,6 +29,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
 
 pytestmark = pytest.mark.unit
@@ -40,6 +41,7 @@ def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
         "src.services.threads.workspace_access.get_thread",
         editable_thread_getter(),
     )
+    stub_durable_status_projection(monkeypatch)
 
 
 def _make_mock_user(user_id: str = "user-pinning-test") -> Mock:
@@ -112,7 +114,7 @@ async def test_run_agent_graph_commits_before_ainvoke() -> None:
         patch("src.services.agent.graph.compile_agent_graph", return_value=mock_graph),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_yielding(db),
+            side_effect=lambda: _async_session_yielding(db),
         ),
     ):
         await _run_agent_graph(job_id, request, user)
@@ -177,7 +179,7 @@ async def test_resume_agent_graph_commits_before_ainvoke() -> None:
         patch("src.services.agent.graph.compile_agent_graph", return_value=mock_graph),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_yielding(db),
+            side_effect=lambda: _async_session_yielding(db),
         ),
         patch(
             "src.services.agent.agent_execution_service.get_run",

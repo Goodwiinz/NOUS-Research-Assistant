@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -72,6 +73,21 @@ def _parse_entry(entry: Dict[str, Any]) -> ConnectorResult:
 class UniProtConnector(ExternalDBConnector):
     """UniProt protein sequence and functional information."""
 
+    supported_filter_keys = frozenset({"organism"})
+
+    def validate_search_filters(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        validated = super().validate_search_filters(filters)
+        organism = validated.get("organism")
+        if organism is not None and (
+            not isinstance(organism, str)
+            or not all(char.isalnum() or char in " _.-" for char in organism)
+            or re.search(r"\b(?:AND|OR|NOT)\b", organism, flags=re.IGNORECASE)
+        ):
+            raise ValueError("filter 'organism' contains unsupported query syntax")
+        return validated
+
     @property
     def info(self) -> ConnectorInfo:
         return ConnectorInfo(
@@ -91,13 +107,14 @@ class UniProtConnector(ExternalDBConnector):
         max_results: int = 10,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[ConnectorResult]:
+        filters = self.validate_search_filters(filters)
         params: Dict[str, Any] = {
             "query": query,
             "size": min(max_results, self.info.max_results_per_query),
             "format": "json",
         }
         if filters and (org := filters.get("organism")):
-            params["query"] = f"{query} AND organism_name:{org}"
+            params["query"] = f'{query} AND organism_name:"{org}"'
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:

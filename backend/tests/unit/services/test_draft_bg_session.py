@@ -40,6 +40,25 @@ def _no_sleep():
 
 
 @pytest.fixture(autouse=True)
+def _task_result_row_is_running():
+    # GOO-297 binds the draft via finish_task inside the draft transaction and
+    # records failures in its own session; these mocked sessions only script
+    # the draft windows. The retained row has its own tests
+    # (test_draft_task_results.py).
+    async def _cache_only_fail(self, task_id, state, step, _error_code):
+        await self._set_status(task_id, state, 0, step)
+
+    with (
+        patch(
+            "src.services.research.draft_generation_service.finish_task",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(DraftGenerationService, "_fail_task", new=_cache_only_fail),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _passing_citation_review():
     async def _review(_db, content, documents):
         cited_indices = sorted(
@@ -104,8 +123,10 @@ def _make_bg_session(documents):
     session.execute = AsyncMock(
         side_effect=[
             docs_result,
+            docs_result,
             review_lock_result,
             draft_lock_result,
+            docs_result,
             version_result,
             update_result,
         ]
@@ -243,10 +264,7 @@ async def test_create_persists_visible_doc_two_index():
 
 @pytest.mark.asyncio
 async def test_two_session_windows_first_closed_before_build_draft_content():
-    """F3: the docs-fetch session (window 1) must be closed before the ~60s
-    _build_draft_content LLM call runs, and window 2 (reviewer/version/
-    persist/commit) must open only after that call returns — a pooled
-    connection must never sit idle across the LLM call."""
+    """Source reads finish before model work; persistence opens after it."""
     documents = [_make_document("Doc A")]
     call_order: List[str] = []
 
@@ -254,6 +272,8 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
     docs_result.scalars.return_value.all.return_value = documents
     window1_session = MagicMock()
     window1_session.execute = AsyncMock(return_value=docs_result)
+    predispatch_session = MagicMock()
+    predispatch_session.execute = AsyncMock(return_value=docs_result)
 
     version_result = MagicMock()
     version_result.scalar.return_value = 0
@@ -267,6 +287,7 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
         side_effect=[
             review_lock_result,
             draft_lock_result,
+            docs_result,
             version_result,
             update_result,
         ]
@@ -290,6 +311,7 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
     session_factory = MagicMock(
         side_effect=[
             _RecordingSessionCtx(window1_session, "w1"),
+            _RecordingSessionCtx(predispatch_session, "predispatch"),
             _RecordingSessionCtx(window2_session, "w2"),
         ]
     )
@@ -311,6 +333,8 @@ async def test_two_session_windows_first_closed_before_build_draft_content():
     assert call_order == [
         "enter:w1",
         "exit:w1",
+        "enter:predispatch",
+        "exit:predispatch",
         "build_draft_content",
         "enter:w2",
         "exit:w2",

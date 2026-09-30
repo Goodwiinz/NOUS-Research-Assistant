@@ -1,0 +1,58 @@
+{
+  "step": "A1-01-list-workspaces",
+  "as": "owner",
+  "at": "2026-09-29T10:16:44.532416+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/workspaces",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "created_at": "2026-05-08T20:24:53.327966Z",
+      "updated_at": "2026-05-08T20:24:53.327972Z",
+      "name": "Research",
+      "description": "Default workspace",
+      "is_public": false,
+      "id": "55eddd1d-a23e-4a02-88f6-5148b1bdcf9b",
+      "owner_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "organization_id": null,
+      "is_archived": false,
+      "member_count": 1,
+      "conversation_count": 68,
+      "collection_count": 3
+    },
+    {
+      "created_at": "2026-04-10T19:27:29.445654Z",
+      "updated_at": "2026-04-10T19:27:29.445660Z",
+      "name": "My Workspace",
+      "description": "Default workspace for Terminal Observatory",
+      "is_public": false,
+      "id": "a930fd15-6a0d-4d37-a4f9-0c14d31c1215",
+      "owner_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "organization_id": null,
+      "is_archived": false,
+      "member_count": 1,
+      "conversation_count": 1,
+      "collection_count": 0
+    },
+    {
+      "created_at": "2026-04-10T19:27:28.546006Z",
+      "updated_at": "2026-04-10T19:27:28.546011Z",
+      "name": "My Workspace",
+      "description": "Default workspace for Terminal Observatory",
+      "is_public": false,
+      "id": "d7612a30-602e-488b-b6ee-6a3bf9e9f94d",
+      "owner_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "organization_id": null,
+      "is_archived": false,
+      "member_count": 1,
+      "conversation_count": 289,
+      "collection_count": 24
+    }
+  ]
+}

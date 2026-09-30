@@ -105,6 +105,8 @@ async def create_approved_run(
     context: ProjectContext,
     blueprint: ResearchBlueprint,
     body: RunCreate,
+    *,
+    manifest_metadata: dict[str, Any] | None = None,
 ) -> ResearchRun:
     """Commit one pending run after its caller obtains project EDIT authority."""
     if body.protocol_version_id is None:
@@ -122,6 +124,9 @@ async def create_approved_run(
     )
     _verify_plan(version, blueprint)
     blueprint.is_immutable = True
+    metadata = deepcopy(manifest_metadata or {})
+    if "parameters_override" in metadata:
+        raise ValueError("manifest metadata cannot replace parameters_override")
     run = ResearchRun(
         blueprint_id=blueprint.id,
         blueprint_version=blueprint.version,
@@ -129,7 +134,7 @@ async def create_approved_run(
         effective_plan_hash=effective_plan_hash(version),
         conformance_status="plan_verified",
         status="pending",
-        reproducibility_manifest={"parameters_override": {}},
+        reproducibility_manifest={"parameters_override": {}, **metadata},
     )
     db.add(run)
     await db.commit()

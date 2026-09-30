@@ -200,4 +200,18 @@ describe('HTTP-level failures synthesize a client-derived category', () => {
     });
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it('only reports lost observation for incomplete Codex streams', async () => {
+    const onConnectionLost = vi.fn();
+    global.fetch = fetchWith([]);
+    await agentChatService.streamMessage(request, { onConnectionLost });
+    expect(onConnectionLost).not.toHaveBeenCalled();
+
+    global.fetch = fetchWith([]);
+    await agentChatService.streamMessage(
+      { ...request, execution_provider: 'codex' },
+      { onConnectionLost }
+    );
+    expect(onConnectionLost).toHaveBeenCalledOnce();
+  });
 });

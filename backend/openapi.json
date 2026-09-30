@@ -194,6 +194,27 @@
             "description": "Document ids to attach to this user turn. The documents are uploaded separately (POST /documents) and referenced here, so the stream body never carries file bytes. Ids the caller's organization does not own are dropped server-side, not rejected — a mixed batch still attaches the owned ones.",
             "title": "Attachment Ids"
           },
+          "device_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "execution_provider": {
+            "default": "nous",
+            "enum": [
+              "nous",
+              "codex"
+            ],
+            "title": "Execution Provider",
+            "type": "string"
+          },
           "max_context_docs": {
             "default": 5,
             "maximum": 10.0,
@@ -267,6 +288,18 @@
             "default": true,
             "title": "Use Rag",
             "type": "boolean"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
           }
         },
         "required": [
@@ -649,6 +682,212 @@
         "title": "ArXivSearchRequest",
         "type": "object"
       },
+      "ArtifactProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "code_revision": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Revision"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "native_item_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Item Id"
+          },
+          "producer": {
+            "enum": [
+              "harness",
+              "nous",
+              "user"
+            ],
+            "title": "Producer",
+            "type": "string"
+          },
+          "source_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "producer"
+        ],
+        "title": "ArtifactProvenance",
+        "type": "object"
+      },
+      "ArtifactReferenceDTO": {
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "version_id",
+          "run_id",
+          "thread_id",
+          "message_id"
+        ],
+        "title": "ArtifactReferenceDTO",
+        "type": "object"
+      },
+      "ArtifactUploadDTO": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "upload_id": {
+            "format": "uuid",
+            "title": "Upload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload_id",
+          "expires_at"
+        ],
+        "title": "ArtifactUploadDTO",
+        "type": "object"
+      },
+      "ArtifactVersionDTO": {
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "mime_type": {
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "parent_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Version Id"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ArtifactProvenance"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "version_id",
+          "parent_version_id",
+          "title",
+          "mime_type",
+          "byte_size",
+          "sha256",
+          "created_at",
+          "provenance"
+        ],
+        "title": "ArtifactVersionDTO",
+        "type": "object"
+      },
       "AuditEventResponse": {
         "description": "Response model for audit event data",
         "properties": {
@@ -1020,7 +1259,7 @@
             "type": "boolean"
           },
           "format": {
-            "$ref": "#/components/schemas/ExportFormat",
+            "$ref": "#/components/schemas/src__shared__export_schemas__ExportFormat",
             "default": "markdown",
             "description": "Export format for all threads"
           },
@@ -1210,7 +1449,6 @@
               "$ref": "#/components/schemas/BlueprintStepDefinition"
             },
             "maxItems": 32,
-            "minItems": 1,
             "title": "Steps",
             "type": "array"
           },
@@ -1227,8 +1465,7 @@
           }
         },
         "required": [
-          "name",
-          "steps"
+          "name"
         ],
         "title": "BlueprintCreate",
         "type": "object"
@@ -1404,6 +1641,77 @@
         "title": "BlueprintStepDefinition",
         "type": "object"
       },
+      "BlueprintTemplateDetailResponse": {
+        "additionalProperties": false,
+        "description": "Validated full content of one server-owned blueprint template.",
+        "properties": {
+          "constraints": {
+            "additionalProperties": true,
+            "title": "Constraints",
+            "type": "object"
+          },
+          "contract_version": {
+            "minimum": 1.0,
+            "title": "Contract Version",
+            "type": "integer"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "title": "Coverage",
+            "type": "object"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "slug": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Slug",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintStepDefinition"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Steps",
+            "type": "array"
+          },
+          "template_source": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Template Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "template_source",
+          "contract_version",
+          "parameters",
+          "constraints",
+          "coverage",
+          "steps"
+        ],
+        "title": "BlueprintTemplateDetailResponse",
+        "type": "object"
+      },
       "Body_cleanup_old_state_api_v1_arxiv_tracking_cleanup_post": {
         "properties": {
           "days": {
@@ -1428,6 +1736,30 @@
           "paper_id"
         ],
         "title": "Body_force_sync_paper_api_v1_arxiv_tracking_force_sync_post",
+        "type": "object"
+      },
+      "Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post": {
+        "properties": {
+          "declaration": {
+            "title": "Declaration",
+            "type": "string"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "format",
+          "declaration"
+        ],
+        "title": "Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post",
         "type": "object"
       },
       "Body_upload_file_api_v1_files_upload_post": {
@@ -2541,6 +2873,78 @@
         "title": "ChatMessageUpdate",
         "type": "object"
       },
+      "CitationChaseDeclaration": {
+        "description": "What a citation-chase receipt records as requested (server-set licence).",
+        "properties": {
+          "direction": {
+            "enum": [
+              "backward",
+              "forward"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "redistribution": {
+            "const": "allowed",
+            "title": "Redistribution",
+            "type": "string"
+          },
+          "requested_limit": {
+            "title": "Requested Limit",
+            "type": "integer"
+          },
+          "seed_report_id": {
+            "format": "uuid",
+            "title": "Seed Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed_report_id",
+          "direction",
+          "requested_limit",
+          "redistribution"
+        ],
+        "title": "CitationChaseDeclaration",
+        "type": "object"
+      },
+      "CitationChaseRequest": {
+        "properties": {
+          "direction": {
+            "enum": [
+              "backward",
+              "forward"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "max_results": {
+            "default": 50,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Max Results",
+            "type": "integer"
+          },
+          "seed_report_id": {
+            "format": "uuid",
+            "title": "Seed Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed_report_id",
+          "direction",
+          "idempotency_key"
+        ],
+        "title": "CitationChaseRequest",
+        "type": "object"
+      },
       "CitationExtractRequest": {
         "description": "Request payload for citation extraction.",
         "properties": {
@@ -3423,6 +3827,65 @@
         "title": "ConfirmationRequest",
         "type": "object"
       },
+      "ConnectorCapabilityResponse": {
+        "additionalProperties": false,
+        "description": "Non-sensitive connector metadata returned to setup clients.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "daily_brief_eligible": {
+            "title": "Daily Brief Eligible",
+            "type": "boolean"
+          },
+          "features": {
+            "$ref": "#/components/schemas/ConnectorFeatures"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "daily_brief_eligible",
+          "available",
+          "features"
+        ],
+        "title": "ConnectorCapabilityResponse",
+        "type": "object"
+      },
+      "ConnectorFeatures": {
+        "additionalProperties": false,
+        "description": "Safe, behavioral search features for a research connector.",
+        "properties": {
+          "cursor": {
+            "title": "Cursor",
+            "type": "boolean"
+          },
+          "date_filter": {
+            "title": "Date Filter",
+            "type": "boolean"
+          },
+          "full_text": {
+            "title": "Full Text",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "full_text",
+          "date_filter",
+          "cursor"
+        ],
+        "title": "ConnectorFeatures",
+        "type": "object"
+      },
       "ConnectorSummary": {
         "properties": {
           "available": {
@@ -3702,6 +4165,103 @@
         "title": "ConversationUpdate",
         "type": "object"
       },
+      "CoverageRequest": {
+        "description": "Known records to check, each ``{kind: value}`` (e.g. ``{\"doi\": \"10.1/x\"}``).",
+        "properties": {
+          "known": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "maxItems": 1000,
+            "title": "Known",
+            "type": "array"
+          }
+        },
+        "title": "CoverageRequest",
+        "type": "object"
+      },
+      "CoverageResponse": {
+        "properties": {
+          "citation_chasing": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation Chasing"
+          },
+          "exhaustive": {
+            "const": false,
+            "default": false,
+            "title": "Exhaustive",
+            "type": "boolean"
+          },
+          "found": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Found",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "not_searched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Searched",
+            "type": "array"
+          },
+          "recall": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall"
+          },
+          "searched": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Searched",
+            "type": "array"
+          },
+          "statement": {
+            "default": "Coverage lists what was searched, imported and chased for this project. It is not exhaustive and does not prove that no other relevant records exist.",
+            "title": "Statement",
+            "type": "string"
+          }
+        },
+        "required": [
+          "found",
+          "missing",
+          "searched",
+          "not_searched"
+        ],
+        "title": "CoverageResponse",
+        "type": "object"
+      },
       "CreateEntityRequest": {
         "description": "Request model for creating entities",
         "properties": {
@@ -3936,6 +4496,74 @@
         "title": "CreateRelationshipRequest",
         "type": "object"
       },
+      "DailyBriefScopeConfirmation": {
+        "additionalProperties": false,
+        "description": "User-confirmed, bounded scope for a Daily Research Brief run.",
+        "properties": {
+          "confirmed": {
+            "const": true,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "exclusion_criteria": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 25,
+            "title": "Exclusion Criteria",
+            "type": "array"
+          },
+          "inclusion_criteria": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 25,
+            "minItems": 1,
+            "title": "Inclusion Criteria",
+            "type": "array"
+          },
+          "limit_per_provider": {
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Limit Per Provider",
+            "type": "integer"
+          },
+          "notes": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Notes",
+            "type": "string"
+          },
+          "providers": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Providers",
+            "type": "array"
+          },
+          "research_question": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Research Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "research_question",
+          "inclusion_criteria",
+          "providers",
+          "limit_per_provider",
+          "confirmed"
+        ],
+        "title": "DailyBriefScopeConfirmation",
+        "type": "object"
+      },
       "DatasetEvaluationRequest": {
         "description": "Request for dataset-based evaluation",
         "properties": {
@@ -4076,6 +4704,44 @@
           "decision_trace_id"
         ],
         "title": "DeterministicTrace",
+        "type": "object"
+      },
+      "DeviceCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "DeviceCreate",
+        "type": "object"
+      },
+      "DeviceDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "id"
+        ],
+        "title": "DeviceDTO",
         "type": "object"
       },
       "DocumentDateRange": {
@@ -4730,6 +5396,116 @@
         "title": "DraftReviewResponse",
         "type": "object"
       },
+      "DraftTaskStatusResponse": {
+        "additionalProperties": true,
+        "description": "Draft task status: live cache, or the retained ``draft_task_results`` row.",
+        "properties": {
+          "artifact_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Hash"
+          },
+          "artifact_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Version"
+          },
+          "current_step": {
+            "default": "",
+            "title": "Current Step",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "progress": {
+            "default": 0,
+            "title": "Progress",
+            "type": "integer"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "state_source": {
+            "enum": [
+              "cache",
+              "database"
+            ],
+            "title": "State Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "started_at",
+          "state_source"
+        ],
+        "title": "DraftTaskStatusResponse",
+        "type": "object"
+      },
       "DuplicateCheckRequest": {
         "properties": {
           "sha256": {
@@ -5352,17 +6128,6 @@
         "title": "ExportError",
         "type": "object"
       },
-      "ExportFormat": {
-        "description": "Supported export formats.",
-        "enum": [
-          "markdown",
-          "pdf",
-          "json",
-          "html"
-        ],
-        "title": "ExportFormat",
-        "type": "string"
-      },
       "ExportOptions": {
         "description": "Options for customizing export output.",
         "properties": {
@@ -5474,6 +6239,53 @@
         "title": "ExtractionColumn",
         "type": "object"
       },
+      "ExtractionItemDecision": {
+        "additionalProperties": false,
+        "description": "A review decision for exactly one persisted extraction source part.",
+        "properties": {
+          "decision": {
+            "enum": [
+              "accept",
+              "reject",
+              "unresolved"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "part_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Part Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "source_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "part_id",
+          "decision"
+        ],
+        "title": "ExtractionItemDecision",
+        "type": "object"
+      },
       "ExtractionMethod": {
         "description": "Methods used for entity and relationship extraction",
         "enum": [
@@ -5541,6 +6353,26 @@
           "paper_ids"
         ],
         "title": "ExtractionRequest",
+        "type": "object"
+      },
+      "ExtractionReviewDecisionPayload": {
+        "additionalProperties": false,
+        "description": "Exact-set extraction decisions submitted for one stage output.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractionItemDecision"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ExtractionReviewDecisionPayload",
         "type": "object"
       },
       "FileListResponse": {
@@ -5681,6 +6513,125 @@
           "message"
         ],
         "title": "FileUploadResponse",
+        "type": "object"
+      },
+      "FinalReviewDecisionPayload": {
+        "additionalProperties": false,
+        "description": "Final review carries no client-authored report or evidence fields.",
+        "properties": {},
+        "title": "FinalReviewDecisionPayload",
+        "type": "object"
+      },
+      "GrantDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "approved"
+        ],
+        "title": "GrantDecision",
+        "type": "object"
+      },
+      "GrantRequestCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "device_id": {
+            "format": "uuid",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "project_id",
+          "device_id",
+          "scopes"
+        ],
+        "title": "GrantRequestCreate",
+        "type": "object"
+      },
+      "GrantRequestDTO": {
+        "properties": {
+          "approval_url": {
+            "title": "Approval Url",
+            "type": "string"
+          },
+          "device_id": {
+            "format": "uuid",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "device_label": {
+            "title": "Device Label",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_label": {
+            "title": "Project Label",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "consumed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "expires_at",
+          "approval_url",
+          "project_id",
+          "device_id",
+          "scopes",
+          "project_label",
+          "device_label"
+        ],
+        "title": "GrantRequestDTO",
         "type": "object"
       },
       "GraphAnalytics": {
@@ -6221,6 +7172,408 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IdentityEventResponse": {
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "actor_user_id": {
+            "format": "uuid",
+            "title": "Actor User Id",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "event_type",
+          "actor_user_id",
+          "actor_role",
+          "payload",
+          "occurred_at"
+        ],
+        "title": "IdentityEventResponse",
+        "type": "object"
+      },
+      "ImportDeclaration": {
+        "description": "What the importer declares about the search; never inferred from the file.",
+        "properties": {
+          "database": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Database",
+            "type": "string"
+          },
+          "exported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exported At"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "query_text": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Text"
+          },
+          "redistribution": {
+            "default": "restricted",
+            "enum": [
+              "restricted",
+              "allowed"
+            ],
+            "title": "Redistribution",
+            "type": "string"
+          },
+          "search_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Date"
+          }
+        },
+        "required": [
+          "database"
+        ],
+        "title": "ImportDeclaration",
+        "type": "object"
+      },
+      "ImportReceiptDetail": {
+        "properties": {
+          "accepted_count": {
+            "title": "Accepted Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "declared": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportDeclaration"
+              },
+              {
+                "$ref": "#/components/schemas/CitationChaseDeclaration"
+              }
+            ],
+            "title": "Declared"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "file_import",
+              "citation_chase"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "observed": {
+            "additionalProperties": true,
+            "title": "Observed",
+            "type": "object"
+          },
+          "parsed_count": {
+            "title": "Parsed Count",
+            "type": "integer"
+          },
+          "previous_receipt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Receipt Id"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/ImportRecordResponse"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "rejected_count": {
+            "title": "Rejected Count",
+            "type": "integer"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "version",
+          "declared",
+          "observed",
+          "parsed_count",
+          "accepted_count",
+          "rejected_count",
+          "created_at",
+          "records"
+        ],
+        "title": "ImportReceiptDetail",
+        "type": "object"
+      },
+      "ImportReceiptResponse": {
+        "properties": {
+          "accepted_count": {
+            "title": "Accepted Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "declared": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportDeclaration"
+              },
+              {
+                "$ref": "#/components/schemas/CitationChaseDeclaration"
+              }
+            ],
+            "title": "Declared"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "file_import",
+              "citation_chase"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "observed": {
+            "additionalProperties": true,
+            "title": "Observed",
+            "type": "object"
+          },
+          "parsed_count": {
+            "title": "Parsed Count",
+            "type": "integer"
+          },
+          "previous_receipt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Receipt Id"
+          },
+          "rejected_count": {
+            "title": "Rejected Count",
+            "type": "integer"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "version",
+          "declared",
+          "observed",
+          "parsed_count",
+          "accepted_count",
+          "rejected_count",
+          "created_at"
+        ],
+        "title": "ImportReceiptResponse",
+        "type": "object"
+      },
+      "ImportRecordResponse": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "parsed": {
+            "additionalProperties": true,
+            "title": "Parsed",
+            "type": "object"
+          },
+          "raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw"
+          },
+          "record_index": {
+            "title": "Record Index",
+            "type": "integer"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Reason"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "record_index",
+          "status",
+          "parsed"
+        ],
+        "title": "ImportRecordResponse",
+        "type": "object"
+      },
+      "ImportedRecordObservation": {
+        "description": "An externally imported record (GOO-300) attached to this report.",
+        "properties": {
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "import_record_id": {
+            "format": "uuid",
+            "title": "Import Record Id",
+            "type": "string"
+          },
+          "match_method": {
+            "title": "Match Method",
+            "type": "string"
+          },
+          "receipt_id": {
+            "format": "uuid",
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "import_record_id",
+          "receipt_id",
+          "match_method",
+          "evidence"
+        ],
+        "title": "ImportedRecordObservation",
+        "type": "object"
+      },
       "IntegrityScoreResponse": {
         "description": "Full integrity score for a document.",
         "properties": {
@@ -6295,6 +7648,25 @@
         "title": "IntegritySegmentScore",
         "type": "object"
       },
+      "IssuedGrant": {
+        "properties": {
+          "grant_id": {
+            "format": "uuid",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "grant_id"
+        ],
+        "title": "IssuedGrant",
+        "type": "object"
+      },
       "JobStartResponse": {
         "properties": {
           "job_id": {
@@ -6315,6 +7687,7 @@
           "running",
           "awaiting_confirmation",
           "stopping",
+          "recovering",
           "completed",
           "failed",
           "cancelled"
@@ -7383,6 +8756,119 @@
         "title": "MetricTimeRange",
         "type": "string"
       },
+      "NativeDecision": {
+        "additionalProperties": false,
+        "description": "A strict one-time decision, or exact answers to native questions.",
+        "properties": {
+          "allow": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow"
+          },
+          "answers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answers"
+          },
+          "kind": {
+            "enum": [
+              "decision",
+              "answers"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "targetHash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targethash"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "NativeDecision",
+        "type": "object"
+      },
+      "NativeRequestDTO": {
+        "additionalProperties": false,
+        "description": "Browser-safe, owner-authenticated view of a pending native request.",
+        "properties": {
+          "consumed": {
+            "title": "Consumed",
+            "type": "boolean"
+          },
+          "expired": {
+            "title": "Expired",
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "target": {
+            "additionalProperties": true,
+            "title": "Target",
+            "type": "object"
+          },
+          "targetHash": {
+            "title": "Targethash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "runId",
+          "method",
+          "target",
+          "targetHash",
+          "expiresAt",
+          "consumed",
+          "expired"
+        ],
+        "title": "NativeRequestDTO",
+        "type": "object"
+      },
       "NoteListResponse": {
         "description": "Paginated list of notes.",
         "properties": {
@@ -7701,6 +9187,63 @@
           "has_prev"
         ],
         "title": "PaginationInfo",
+        "type": "object"
+      },
+      "PendingReviewResponse": {
+        "additionalProperties": false,
+        "description": "Owned pending review state, optionally including bounded stage output.",
+        "properties": {
+          "accepted_review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageReviewResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "descriptor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDescriptor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "stage_output": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Output"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewValidationVocabulary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "pending"
+        ],
+        "title": "PendingReviewResponse",
         "type": "object"
       },
       "PermissionCategoryResponse": {
@@ -9544,6 +11087,62 @@
         "title": "PublicationRetractionStatus",
         "type": "string"
       },
+      "PublishVersionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Id"
+          },
+          "expected_parent_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Version Id"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ArtifactProvenance"
+          },
+          "publication_id": {
+            "format": "uuid",
+            "title": "Publication Id",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "upload_id": {
+            "format": "uuid",
+            "title": "Upload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publication_id",
+          "upload_id",
+          "title",
+          "provenance"
+        ],
+        "title": "PublishVersionRequest",
+        "type": "object"
+      },
       "QualityAlertResponse": {
         "description": "Quality alert response",
         "properties": {
@@ -10038,6 +11637,264 @@
         ],
         "title": "RelationshipType",
         "type": "string"
+      },
+      "ReportCandidatesResponse": {
+        "description": "Read-only suggestions; titles and years never equate reports.",
+        "properties": {
+          "conflicts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Conflicts",
+            "type": "array"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "suggested": {
+            "items": {
+              "$ref": "#/components/schemas/ReportSuggestion"
+            },
+            "title": "Suggested",
+            "type": "array"
+          }
+        },
+        "required": [
+          "report_id",
+          "suggested",
+          "conflicts"
+        ],
+        "title": "ReportCandidatesResponse",
+        "type": "object"
+      },
+      "ReportMergeRequest": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "merged_report_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Merged Report Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "surviving_report_id": {
+            "format": "uuid",
+            "title": "Surviving Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surviving_report_id",
+          "merged_report_ids",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ReportMergeRequest",
+        "type": "object"
+      },
+      "ReportObservationResponse": {
+        "properties": {
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "match_method": {
+            "title": "Match Method",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "run_id",
+          "match_method",
+          "evidence"
+        ],
+        "title": "ReportObservationResponse",
+        "type": "object"
+      },
+      "ReportResponse": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "identifiers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Identifiers",
+            "type": "object"
+          },
+          "imported_records": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ImportedRecordObservation"
+            },
+            "title": "Imported Records",
+            "type": "array"
+          },
+          "merged_into_report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Into Report Id"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/ReportObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "study_link_rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Link Rationale"
+          },
+          "study_link_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "proposed",
+                  "confirmed",
+                  "disputed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Link Status"
+          },
+          "title_snapshot": {
+            "title": "Title Snapshot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title_snapshot",
+          "identifiers",
+          "observations"
+        ],
+        "title": "ReportResponse",
+        "type": "object"
+      },
+      "ReportSplitRequest": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "import_record_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Import Record Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "source_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ReportSplitRequest",
+        "type": "object"
+      },
+      "ReportSuggestion": {
+        "properties": {
+          "reason": {
+            "const": "title_year",
+            "title": "Reason",
+            "type": "string"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "reason"
+        ],
+        "title": "ReportSuggestion",
+        "type": "object"
       },
       "ResearchProjectRole": {
         "enum": [
@@ -10652,6 +12509,40 @@
         "title": "ResearchStatus",
         "type": "string"
       },
+      "ReserveArtifactUploadRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_size": {
+            "minimum": 1.0,
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "mime_type": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "publication_id": {
+            "format": "uuid",
+            "title": "Publication Id",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publication_id",
+          "byte_size",
+          "mime_type",
+          "sha256"
+        ],
+        "title": "ReserveArtifactUploadRequest",
+        "type": "object"
+      },
       "RetrievedContext": {
         "description": "Retrieved document context",
         "properties": {
@@ -10721,6 +12612,130 @@
           }
         },
         "title": "RetryProcessingRequest",
+        "type": "object"
+      },
+      "ReviewDecision": {
+        "description": "Top-level reviewer disposition for a persisted stage output.",
+        "enum": [
+          "approve",
+          "decline"
+        ],
+        "title": "ReviewDecision",
+        "type": "string"
+      },
+      "ReviewDescriptor": {
+        "additionalProperties": false,
+        "description": "Content-free durable descriptor for the current review gate.",
+        "properties": {
+          "contract_version": {
+            "minimum": 1.0,
+            "title": "Contract Version",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "output_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Output Hash",
+            "type": "string"
+          },
+          "review_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Id"
+          },
+          "review_kind": {
+            "$ref": "#/components/schemas/ReviewKind"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "stage_type": {
+            "enum": [
+              "screen",
+              "extract",
+              "export"
+            ],
+            "title": "Stage Type",
+            "type": "string"
+          },
+          "status": {
+            "default": "pending",
+            "enum": [
+              "pending",
+              "approved"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "step_index": {
+            "minimum": 0.0,
+            "title": "Step Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "step_index",
+          "stage_type",
+          "review_kind",
+          "contract_version",
+          "output_hash"
+        ],
+        "title": "ReviewDescriptor",
+        "type": "object"
+      },
+      "ReviewKind": {
+        "description": "Durable review gates supported by the Daily Research Brief contract.",
+        "enum": [
+          "screening",
+          "extraction",
+          "final"
+        ],
+        "title": "ReviewKind",
+        "type": "string"
+      },
+      "ReviewValidationVocabulary": {
+        "additionalProperties": false,
+        "description": "Bounded decision vocabulary used to render a pending gate.",
+        "properties": {
+          "item_decisions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Item Decisions",
+            "type": "array"
+          },
+          "reason_required_for": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1,
+            "title": "Reason Required For",
+            "type": "array"
+          }
+        },
+        "title": "ReviewValidationVocabulary",
         "type": "object"
       },
       "RewriteRequest": {
@@ -11067,6 +13082,16 @@
               }
             ],
             "title": "Protocol Version Id"
+          },
+          "scope_confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DailyBriefScopeConfirmation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "RunCreate",
@@ -11122,6 +13147,34 @@
             "title": "Id",
             "type": "string"
           },
+          "output_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Hash"
+          },
+          "pause_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "user_paused",
+                  "review_required",
+                  "verification_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pause Reason"
+          },
           "project_id": {
             "format": "uuid",
             "title": "Project Id",
@@ -11144,6 +13197,16 @@
             "title": "Research Engine Project Id",
             "type": "string"
           },
+          "review_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "started_at": {
             "anyOf": [
               {
@@ -11158,6 +13221,17 @@
           },
           "status": {
             "$ref": "#/components/schemas/RunStatus"
+          },
+          "step_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Index"
           },
           "total_tokens": {
             "default": 0,
@@ -11181,6 +13255,31 @@
           "updated_at"
         ],
         "title": "RunResponse",
+        "type": "object"
+      },
+      "RunResumeRequest": {
+        "additionalProperties": false,
+        "description": "Bounded authorization supplied only for exceptional run continuation.",
+        "properties": {
+          "continue_unverified": {
+            "default": false,
+            "title": "Continue Unverified",
+            "type": "boolean"
+          },
+          "output_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Hash"
+          }
+        },
+        "title": "RunResumeRequest",
         "type": "object"
       },
       "RunStatus": {
@@ -11257,6 +13356,73 @@
           "message"
         ],
         "title": "ScanFindingResponse",
+        "type": "object"
+      },
+      "ScreeningItemDecision": {
+        "additionalProperties": false,
+        "description": "A review decision for exactly one persisted screening source part.",
+        "properties": {
+          "decision": {
+            "enum": [
+              "include",
+              "exclude",
+              "unresolved"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "part_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Part Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "source_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "part_id",
+          "decision"
+        ],
+        "title": "ScreeningItemDecision",
+        "type": "object"
+      },
+      "ScreeningReviewDecisionPayload": {
+        "additionalProperties": false,
+        "description": "Exact-set screening decisions submitted for one stage output.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScreeningItemDecision"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ScreeningReviewDecisionPayload",
         "type": "object"
       },
       "SearchAnalytics": {
@@ -12665,6 +14831,144 @@
         "title": "SortOrder",
         "type": "string"
       },
+      "StageReviewRequest": {
+        "additionalProperties": false,
+        "description": "Strict exact-hash decision for one persisted review gate.",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ReviewDecision"
+          },
+          "decision_payload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreeningReviewDecisionPayload"
+              },
+              {
+                "$ref": "#/components/schemas/ExtractionReviewDecisionPayload"
+              },
+              {
+                "$ref": "#/components/schemas/FinalReviewDecisionPayload"
+              }
+            ],
+            "title": "Decision Payload"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "output_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Output Hash",
+            "type": "string"
+          },
+          "review_kind": {
+            "$ref": "#/components/schemas/ReviewKind"
+          }
+        },
+        "required": [
+          "review_kind",
+          "output_hash",
+          "decision",
+          "decision_payload"
+        ],
+        "title": "StageReviewRequest",
+        "type": "object"
+      },
+      "StageReviewResponse": {
+        "additionalProperties": false,
+        "description": "The immutable accepted ledger row plus replay metadata.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ReviewDecision"
+          },
+          "decision_payload": {
+            "additionalProperties": true,
+            "title": "Decision Payload",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "output_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Output Hash",
+            "type": "string"
+          },
+          "replay": {
+            "default": false,
+            "title": "Replay",
+            "type": "boolean"
+          },
+          "review_kind": {
+            "$ref": "#/components/schemas/ReviewKind"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "stage_type": {
+            "enum": [
+              "screen",
+              "extract",
+              "export"
+            ],
+            "title": "Stage Type",
+            "type": "string"
+          },
+          "step_index": {
+            "minimum": 0.0,
+            "title": "Step Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "step_index",
+          "stage_type",
+          "review_kind",
+          "reviewer_id",
+          "output_hash",
+          "decision",
+          "decision_payload",
+          "created_at"
+        ],
+        "title": "StageReviewResponse",
+        "type": "object"
+      },
       "Stance": {
         "description": "Stance classification options",
         "enum": [
@@ -13072,6 +15376,50 @@
         "title": "StreamConfirmRequest",
         "type": "object"
       },
+      "StudyLinkRequest": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "proposed",
+              "confirmed",
+              "disputed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          }
+        },
+        "required": [
+          "status",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "StudyLinkRequest",
+        "type": "object"
+      },
       "StyleOption": {
         "description": "Writing style options.",
         "enum": [
@@ -13239,6 +15587,22 @@
           "relevance_score"
         ],
         "title": "TextSnippet",
+        "type": "object"
+      },
+      "ThreadArtifactDTO": {
+        "properties": {
+          "reference": {
+            "$ref": "#/components/schemas/ArtifactReferenceDTO"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ArtifactVersionDTO"
+          }
+        },
+        "required": [
+          "version",
+          "reference"
+        ],
+        "title": "ThreadArtifactDTO",
         "type": "object"
       },
       "ThreadCreate": {
@@ -14008,6 +16372,88 @@
         "title": "ToneOption",
         "type": "string"
       },
+      "ToolDescriptorDTO": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "input_schema"
+        ],
+        "title": "ToolDescriptorDTO",
+        "type": "object"
+      },
+      "ToolInvocation": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "invocation_id": {
+            "format": "uuid",
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "tool_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "invocation_id"
+        ],
+        "title": "ToolInvocation",
+        "type": "object"
+      },
+      "ToolResult": {
+        "properties": {
+          "content": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Content",
+            "type": "array"
+          },
+          "is_error": {
+            "title": "Is Error",
+            "type": "boolean"
+          },
+          "source_refs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Source Refs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "content",
+          "is_error",
+          "source_refs"
+        ],
+        "title": "ToolResult",
+        "type": "object"
+      },
       "TriggerExtractionRequest": {
         "description": "Request to trigger extraction on selected documents.",
         "properties": {
@@ -14607,6 +17053,62 @@
           "worker_details"
         ],
         "title": "WorkerStatsResponse",
+        "type": "object"
+      },
+      "WorkspaceBindingCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "workspace_id",
+          "project_id"
+        ],
+        "title": "WorkspaceBindingCreate",
+        "type": "object"
+      },
+      "WorkspaceBindingDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "workspace_id",
+          "project_id"
+        ],
+        "title": "WorkspaceBindingDTO",
         "type": "object"
       },
       "WorkspaceCreate": {
@@ -15949,6 +18451,16 @@
         "title": "ThreadStatus",
         "type": "string"
       },
+      "src__schemas__research_engine__ExportFormat": {
+        "description": "Portable formats supported by the audited research export endpoint.",
+        "enum": [
+          "markdown",
+          "json",
+          "csv"
+        ],
+        "title": "ExportFormat",
+        "type": "string"
+      },
       "src__schemas__research_engine__ProjectCreate": {
         "description": "Schema for creating a research project.",
         "properties": {
@@ -16088,6 +18600,17 @@
         ],
         "title": "ProjectResponse",
         "type": "object"
+      },
+      "src__shared__export_schemas__ExportFormat": {
+        "description": "Supported export formats.",
+        "enum": [
+          "markdown",
+          "pdf",
+          "json",
+          "html"
+        ],
+        "title": "ExportFormat",
+        "type": "string"
       },
       "src__shared__research_schemas__CitationCreate": {
         "description": "Create a new citation",
@@ -20296,6 +22819,289 @@
         "summary": "Get Api Key Usage",
         "tags": [
           "api-keys"
+        ]
+      }
+    },
+    "/api/v1/artifacts/threads/{thread_id}": {
+      "get": {
+        "operationId": "thread_artifacts_api_v1_artifacts_threads__thread_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ThreadArtifactDTO"
+                  },
+                  "title": "Response Thread Artifacts Api V1 Artifacts Threads  Thread Id  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Thread Artifacts",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/uploads": {
+      "post": {
+        "operationId": "reserve_api_v1_artifacts_uploads_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReserveArtifactUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactUploadDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reserve",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/uploads/{upload_id}/content": {
+      "put": {
+        "operationId": "upload_content_api_v1_artifacts_uploads__upload_id__content_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Content",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/versions": {
+      "post": {
+        "operationId": "publish_api_v1_artifacts_versions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactVersionDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Publish",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/versions/{version_id}/content": {
+      "get": {
+        "operationId": "version_content_api_v1_artifacts_versions__version_id__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Version Content",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/versions": {
+      "get": {
+        "operationId": "artifact_versions_api_v1_artifacts__artifact_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactVersionDTO"
+                  },
+                  "title": "Response Artifact Versions Api V1 Artifacts  Artifact Id  Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Artifact Versions",
+        "tags": [
+          "artifacts"
         ]
       }
     },
@@ -25947,7 +28753,7 @@
             "name": "format",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ExportFormat",
+              "$ref": "#/components/schemas/src__shared__export_schemas__ExportFormat",
               "default": "markdown"
             }
           }
@@ -26007,7 +28813,7 @@
             "name": "format",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ExportFormat",
+              "$ref": "#/components/schemas/src__shared__export_schemas__ExportFormat",
               "default": "markdown",
               "description": "Export format"
             }
@@ -26142,7 +28948,7 @@
             "name": "format",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ExportFormat",
+              "$ref": "#/components/schemas/src__shared__export_schemas__ExportFormat",
               "default": "markdown"
             }
           },
@@ -26821,6 +29627,654 @@
         "summary": "Reprocess File",
         "tags": [
           "files"
+        ]
+      }
+    },
+    "/api/v1/harness/requests/{request_id}": {
+      "get": {
+        "operationId": "read_native_request_api_v1_harness_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRequestDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Native Request",
+        "tags": [
+          "harness"
+        ]
+      }
+    },
+    "/api/v1/harness/requests/{request_id}/decision": {
+      "post": {
+        "operationId": "decide_native_request_api_v1_harness_requests__request_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Native Request",
+        "tags": [
+          "harness"
+        ]
+      }
+    },
+    "/api/v1/integrations/devices": {
+      "get": {
+        "operationId": "get_devices_api_v1_integrations_devices_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceDTO"
+                  },
+                  "title": "Response Get Devices Api V1 Integrations Devices Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Devices",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "post": {
+        "operationId": "create_device_api_v1_integrations_devices_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Device",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/devices/{device_id}/workspaces": {
+      "get": {
+        "operationId": "get_workspace_bindings_api_v1_integrations_devices__device_id__workspaces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceBindingDTO"
+                  },
+                  "title": "Response Get Workspace Bindings Api V1 Integrations Devices  Device Id  Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Workspace Bindings",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "post": {
+        "operationId": "create_workspace_binding_api_v1_integrations_devices__device_id__workspaces_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceBindingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceBindingDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Workspace Binding",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests": {
+      "post": {
+        "operationId": "create_grant_request_api_v1_integrations_grant_requests_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantRequestDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Grant Request",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests/{request_id}": {
+      "get": {
+        "operationId": "get_grant_request_api_v1_integrations_grant_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantRequestDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Grant Request",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests/{request_id}/decision": {
+      "post": {
+        "operationId": "decide_grant_request_api_v1_integrations_grant_requests__request_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantRequestDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Grant Request",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests/{request_id}/exchange": {
+      "post": {
+        "operationId": "exchange_grant_request_api_v1_integrations_grant_requests__request_id__exchange_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Exchange Grant Request",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grants/{grant_id}": {
+      "delete": {
+        "operationId": "delete_grant_api_v1_integrations_grants__grant_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Grant",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grants/{grant_id}/renew": {
+      "post": {
+        "operationId": "renew_grant_api_v1_integrations_grants__grant_id__renew_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Renew Grant",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/tools": {
+      "get": {
+        "operationId": "list_tools_api_v1_integrations_tools_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ToolDescriptorDTO"
+                  },
+                  "title": "Response List Tools Api V1 Integrations Tools Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tools",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/tools/read": {
+      "post": {
+        "operationId": "read_tool_api_v1_integrations_tools_read_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Tool",
+        "tags": [
+          "integrations",
+          "integrations"
         ]
       }
     },
@@ -30252,7 +33706,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DraftTaskStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -30308,7 +33764,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DraftTaskStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -32575,6 +36033,49 @@
         ]
       }
     },
+    "/api/v1/research-engine/blueprints/templates/{slug}": {
+      "get": {
+        "description": "Return the complete, validated server-owned template contract.",
+        "operationId": "get_template_detail_api_v1_research_engine_blueprints_templates__slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintTemplateDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Template Detail",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
     "/api/v1/research-engine/blueprints/{blueprint_id}": {
       "get": {
         "description": "Get a single blueprint with ownership verification in one query.",
@@ -32685,6 +36186,32 @@
           }
         ],
         "summary": "Start Run",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/capabilities": {
+      "get": {
+        "description": "Return the safe projection of canonical research connectors.",
+        "operationId": "list_connector_capabilities_api_v1_research_engine_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectorCapabilityResponse"
+                  },
+                  "title": "Response List Connector Capabilities Api V1 Research Engine Capabilities Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Connector Capabilities",
         "tags": [
           "research-engine"
         ]
@@ -32976,6 +36503,369 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{project_id}/citation-chases": {
+      "post": {
+        "description": "OpenAlex citation chase; the service checks EDIT before and after I/O.",
+        "operationId": "chase_citations_route_api_v1_research_engine_projects__project_id__citation_chases_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CitationChaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptResponse"
+                }
+              }
+            },
+            "description": "Replayed receipt"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Chase Citations Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/corpus/coverage": {
+      "post": {
+        "operationId": "corpus_coverage_route_api_v1_research_engine_projects__project_id__corpus_coverage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoverageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Corpus Coverage Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/corpus/export": {
+      "get": {
+        "operationId": "export_corpus_route_api_v1_research_engine_projects__project_id__corpus_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "enum": [
+                "json",
+                "zip"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {},
+              "application/zip": {}
+            },
+            "description": "Versioned corpus package download"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Corpus Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/imports": {
+      "get": {
+        "operationId": "list_imports_route_api_v1_research_engine_projects__project_id__imports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ImportReceiptResponse"
+                  },
+                  "title": "Response List Imports Route Api V1 Research Engine Projects  Project Id  Imports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Imports Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      },
+      "post": {
+        "description": "Import one exported result file (RIS, CSV, NBIB) as an immutable receipt.",
+        "operationId": "import_search_results_route_api_v1_research_engine_projects__project_id__imports_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptResponse"
+                }
+              }
+            },
+            "description": "Replayed receipt"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Search Results Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/imports/{receipt_id}": {
+      "get": {
+        "operationId": "get_import_route_api_v1_research_engine_projects__project_id__imports__receipt_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "receipt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Import Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}/protocols": {
       "get": {
         "operationId": "list_protocols_api_v1_research_engine_projects__project_id__protocols_get",
@@ -33189,6 +37079,362 @@
         "summary": "Create Question Route",
         "tags": [
           "research-engine-protocols"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/reports": {
+      "get": {
+        "operationId": "list_reports_route_api_v1_research_engine_projects__project_id__reports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReportResponse"
+                  },
+                  "title": "Response List Reports Route Api V1 Research Engine Projects  Project Id  Reports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Reports Route",
+        "tags": [
+          "research-engine-identities"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/reports/history": {
+      "get": {
+        "operationId": "report_history_route_api_v1_research_engine_projects__project_id__reports_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IdentityEventResponse"
+                  },
+                  "title": "Response Report History Route Api V1 Research Engine Projects  Project Id  Reports History Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report History Route",
+        "tags": [
+          "research-engine-identities"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/reports/merge": {
+      "post": {
+        "operationId": "merge_reports_route_api_v1_research_engine_projects__project_id__reports_merge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Merge Reports Route",
+        "tags": [
+          "research-engine-identities"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/reports/{report_id}/candidates": {
+      "get": {
+        "operationId": "report_candidates_route_api_v1_research_engine_projects__project_id__reports__report_id__candidates_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportCandidatesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Candidates Route",
+        "tags": [
+          "research-engine-identities"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/reports/{report_id}/split": {
+      "post": {
+        "operationId": "split_report_route_api_v1_research_engine_projects__project_id__reports__report_id__split_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportSplitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Split Report Route",
+        "tags": [
+          "research-engine-identities"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/reports/{report_id}/study-link": {
+      "post": {
+        "operationId": "link_study_route_api_v1_research_engine_projects__project_id__reports__report_id__study_link_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudyLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Link Study Route",
+        "tags": [
+          "research-engine-identities"
         ]
       }
     },
@@ -33856,9 +38102,65 @@
         ]
       }
     },
+    "/api/v1/research-engine/runs/{run_id}/export": {
+      "get": {
+        "description": "Download an owner-scoped artifact for a completed research run.",
+        "operationId": "export_run_api_v1_research_engine_runs__run_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/src__schemas__research_engine__ExportFormat",
+              "default": "markdown"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Run",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
     "/api/v1/research-engine/runs/{run_id}/manifest": {
       "get": {
-        "description": "Get reproducibility manifest for a completed run.",
+        "description": "Get the current manifest, including durable in-flight search receipts.",
         "operationId": "get_manifest_api_v1_research_engine_runs__run_id__manifest_get",
         "parameters": [
           {
@@ -33954,7 +38256,7 @@
     },
     "/api/v1/research-engine/runs/{run_id}/resume": {
       "post": {
-        "description": "Resume a paused run.",
+        "description": "Authorize a paused run to be claimed exactly once by its stream.",
         "operationId": "resume_run_api_v1_research_engine_runs__run_id__resume_post",
         "parameters": [
           {
@@ -33968,6 +38270,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunResumeRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -33996,6 +38315,123 @@
           }
         ],
         "summary": "Resume Run",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/runs/{run_id}/reviews/pending": {
+      "get": {
+        "description": "Return the current owned review gate and its bounded persisted output.",
+        "operationId": "get_pending_review_api_v1_research_engine_runs__run_id__reviews_pending_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Pending Review",
+        "tags": [
+          "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/runs/{run_id}/reviews/{step_index}": {
+      "post": {
+        "description": "Append one review bound to the current persisted stage envelope.",
+        "operationId": "submit_review_api_v1_research_engine_runs__run_id__reviews__step_index__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "step_index",
+            "required": true,
+            "schema": {
+              "title": "Step Index",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StageReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StageReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Submit Review",
         "tags": [
           "research-engine"
         ]

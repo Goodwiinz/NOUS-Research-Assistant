@@ -125,11 +125,19 @@ async def _get_run(session_factory, job_id):
 async def test_dispatch_commits_row_before_enqueue(session_factory):
     """Flush-before-external: .delay() exploding must still leave the durable
     row (proving the commit happened first) and mark the job failed."""
+    from src.services.agent import job_store
+
     user = _user()
     job_id = str(uuid.uuid4())
     boom = MagicMock(side_effect=RuntimeError("broker down"))
     p_db, p_set_job, p_task, task = _patched(session_factory, delay=boom)
-    with p_db, p_set_job as set_job_mock, p_task:
+    async_set_job = AsyncMock(wraps=job_store.set_job)
+    with (
+        p_db,
+        p_set_job as set_job_mock,
+        p_task,
+        patch("src.api.agent.execute._set_job_async", new=async_set_job),
+    ):
         outcome, returned_id = await _celery_dispatch(
             job_id, {"status": JobStatus.RUNNING}, _request(uuid.uuid4()), user
         )
@@ -140,9 +148,14 @@ async def test_dispatch_commits_row_before_enqueue(session_factory):
     run = await _get_run(session_factory, job_id)
     assert run is not None  # the row was durable before the publish attempt
     assert run.status == "failed"  # record_job_status marked the orphan
-    # The job store saw the initial write and then the failed overwrite.
-    statuses = [c.args[1]["status"] for c in set_job_mock.call_args_list]
-    assert statuses == [JobStatus.QUEUED, JobStatus.FAILED]
+    # The queued projection is live-only; failure is an awaited strict write.
+    assert [c.args[1]["status"] for c in set_job_mock.call_args_list] == [
+        JobStatus.QUEUED
+    ]
+    async_set_job.assert_awaited_once()
+    failed_payload = async_set_job.await_args.args[1]
+    assert failed_payload["status"] is JobStatus.FAILED
+    assert async_set_job.await_args.kwargs["require_durable_decision"] is True
 
 
 @pytest.mark.asyncio
@@ -280,6 +293,9 @@ class TestExecuteEndpointRouting:
         )
         db = MagicMock()
         db.get = AsyncMock(return_value=None)
+        db.execute = AsyncMock(
+            return_value=SimpleNamespace(scalar_one_or_none=lambda: None)
+        )
         db.commit = AsyncMock()
         resolve_thread = AsyncMock(return_value=resolved_thread or (None, ""))
         with (

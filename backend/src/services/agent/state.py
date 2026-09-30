@@ -3,7 +3,7 @@
 from typing import Annotated, Any, Literal
 
 from langgraph.graph import add_messages
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 THREAD_PERSISTENCE_DURABLE = "durable"
 THREAD_PERSISTENCE_EPHEMERAL = "ephemeral"
@@ -60,8 +60,15 @@ class AgentState(TypedDict):
     model: str  # Per-request Azure deployment override; "" ⇒ server default
     use_rag: bool  # Request-level retrieval contract; False skips rag_node reads
     runtime_snapshot_id: str  # Durable frozen skill/tool metadata for this turn
+    runtime_tool_names: (
+        list  # Frozen registry membership; current flags may only remove
+    )
+    tool_registry_hash: str
+    tool_registry_version: str
+    runtime_projection_unavailable: bool
     project_skill_catalog: list  # Compact model-safe skill metadata only
     loaded_skill_versions: list  # Snapshot-audited versions loaded this turn
+    capability_limitation: dict  # Deterministic terminal boundary for unsupported work
     # Reflection result of the latest LLM response; cleared at the start of
     # each turn so a stale value from turn N cannot trigger a spurious
     # revision at the start of turn N+1. Stored as ``Any`` to avoid a
@@ -77,3 +84,11 @@ class AgentState(TypedDict):
     # Azure p95) and route straight to force_synthesis_node to produce
     # the final answer from the cached results already in state.
     tools_all_deduped: bool
+    # Versioned turn identity for durable tool operations. These fields are
+    # checkpointed in preprocessing before any mutation can reach tool_node.
+    tool_operation_protocol_version: NotRequired[int]
+    tool_operation_turn_id: NotRequired[str]
+    # Optional so historical checkpoints deserialize unchanged. The ledger is
+    # bounded, checkpoint-safe observed identity evidence, never authorization.
+    identity_ledger: NotRequired[dict[str, Any]]
+    identity_current_references: NotRequired[list[str]]
