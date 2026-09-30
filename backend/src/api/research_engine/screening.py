@@ -152,4 +152,4 @@ async def screening_history_route(
     context = await resolve_project(
         db, project_id, cast(UUID, current_user.id), ResearchAction.VIEW
     )
-    return await history(db, context, queue_id)
+    return await history(db, context, queue_id, cast(UUID, current_user.id))

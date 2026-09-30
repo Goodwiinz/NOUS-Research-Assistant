@@ -6,6 +6,14 @@ route owns the one transaction. Callers pass a ``ProjectContext`` from
 each mutation takes the queue's ``research_screening`` stream lock, replays an
 identical retry, validates, inserts, and appends exactly one ledger event.
 AI output only ever lands in ``screening_suggestions``.
+
+GOO-302 (blind dual review): a report is revealed in a queue iff it has a
+``screening_resolutions`` row. That row is written in the same transaction as
+the submission that brings its fresh observations up to the mode's required
+count, and another reviewer's observation is visible only if it is an input
+of such a row (``visible_observation_ids``, the one predicate for every read
+path). Adjudication and reopen are adjudicator ledger events that insert a new
+chain tip; no observation or resolution is ever updated.
 """
 
 from datetime import datetime, timezone
@@ -39,30 +47,37 @@ from src.models.screening import (
     ScreeningAssignment,
     ScreeningObservation,
     ScreeningQueue,
+    ScreeningResolution,
     ScreeningSuggestion,
 )
 from src.models.user import User
 from src.schemas.research_engine import (
-    IdentityEventResponse,
     MyScreeningQueueInfo,
     MyScreeningQueueItem,
     MyScreeningQueueResponse,
+    ScreeningAdjudicateRequest,
     ScreeningAssignmentCreate,
     ScreeningAssignmentResponse,
+    ScreeningConflictResponse,
     ScreeningCounts,
+    ScreeningEventResponse,
     ScreeningObservationCreate,
     ScreeningObservationResponse,
     ScreeningQueueCreate,
     ScreeningQueueResponse,
+    ScreeningReopenRequest,
+    ScreeningResolutionResponse,
     ScreeningRevokeRequest,
 )
 from src.services.research_decisions import (
     DecisionIdempotencyConflict,
+    DecisionReplayError,
     append_decision,
     decision_request_fingerprint,
     lock_aggregate_stream,
     replay_decisions,
 )
+from src.services.research_decisions.ledger import replay_screening_resolutions
 from src.services.research_engine import screening_rules
 from src.services.research_engine.corpus_service import raw_allowed, visible_parsed
 from src.services.research_engine.identity_service import (
@@ -85,6 +100,15 @@ PROTOCOL_CHANGED = "Protocol version changed; reconcile queue"
 CRITERIA_STALE = "Screening criteria changed; reload the queue"
 REPORT_MERGED = "Report merged; reconcile queue"
 OBSERVATION_EXISTS = "Observation exists; supersede the current observation"
+# GOO-302 reveal / adjudication.
+REPORT_RESOLVED = "Report resolved; reopen to change"
+INPUTS_STALE = "Adjudication inputs are stale"
+NOT_IN_CONFLICT = "Report is not in conflict"
+NOT_RESOLVED = "Report is not resolved"
+RESOLUTION_STALE = "Resolution changed; reload the queue"
+SELF_ADJUDICATION = "Adjudicator reviewed this report"
+_RESOLVED_BASES = ("single", "agreement", "adjudicated")
+_OBSERVATION_EVENTS = ("screening.observed", "screening.superseded")
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -196,14 +220,14 @@ async def _append(
     payload: dict[str, Any],
     idempotency_key: str,
     fingerprint: str,
-) -> None:
+) -> ResearchDecisionEvent:
     payload = {
         "collection_id": str(context.collection.id),
         "queue_id": str(queue_id),
         **payload,
     }
     try:
-        await append_decision(
+        result = await append_decision(
             db,
             collection_id=cast(UUID, context.collection.id),
             aggregate_type=AGGREGATE_TYPE,
@@ -223,6 +247,7 @@ async def _append(
         )
     except DecisionIdempotencyConflict as exc:
         raise _conflict("Idempotency conflict") from exc
+    return result.event
 
 
 async def _lock(
@@ -244,6 +269,126 @@ def _current_observations() -> Any:
     )
 
 
+def _resolution_tips() -> Any:
+    """Resolutions no later row supersedes: each report's current resolution."""
+    later = aliased(ScreeningResolution)
+    return select(ScreeningResolution).where(
+        ~exists().where(later.supersedes_resolution_id == ScreeningResolution.id)
+    )
+
+
+async def _tips(db: AsyncSession, queue_id: UUID) -> dict[UUID, Any]:
+    """report_id -> current resolution, for the revealed reports of a queue."""
+    rows = await db.execute(
+        _resolution_tips().where(ScreeningResolution.queue_id == queue_id)
+    )
+    return {cast(UUID, row.report_id): row for row in rows.scalars()}
+
+
+async def _tip(db: AsyncSession, queue_id: UUID, report_id: UUID) -> Any:
+    return (
+        await db.execute(
+            _resolution_tips().where(
+                ScreeningResolution.queue_id == queue_id,
+                ScreeningResolution.report_id == report_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _revealed_ids(
+    db: AsyncSession, queue_id: UUID, report_id: UUID | None = None
+) -> set[UUID]:
+    """Every observation id named as an input of any resolution row."""
+    query = select(ScreeningResolution.input_observation_ids).where(
+        ScreeningResolution.queue_id == queue_id
+    )
+    if report_id is not None:
+        query = query.where(ScreeningResolution.report_id == report_id)
+    return {
+        UUID(str(value))
+        for inputs in (await db.execute(query)).scalars()
+        for value in inputs
+    }
+
+
+async def visible_observation_ids(
+    db: AsyncSession, queue_id: UUID, viewer_id: UUID
+) -> set[UUID]:
+    """THE reveal predicate: the viewer's own observations plus every input of
+    a resolution row in this queue. Every read path that could expose another
+    reviewer's decision (mine, history, conflicts, and anything added later)
+    filters through this set."""
+    own = (
+        await db.execute(
+            select(ScreeningObservation.id).where(
+                ScreeningObservation.queue_id == queue_id,
+                ScreeningObservation.reviewer_id == viewer_id,
+            )
+        )
+    ).scalars()
+    return {cast(UUID, value) for value in own} | await _revealed_ids(db, queue_id)
+
+
+def _resolution_response(row: Any) -> ScreeningResolutionResponse:
+    response: ScreeningResolutionResponse = ScreeningResolutionResponse.model_validate(
+        row
+    )
+    return response
+
+
+async def _derive_and_record(
+    db: AsyncSession, queue: Any, report_id: UUID, event: ResearchDecisionEvent
+) -> Any:
+    """Derive (``screening_rules.derive``) and insert the report's resolution
+    once its fresh observations reach the required count; None otherwise.
+
+    Runs under the queue's stream lock right after the triggering observation
+    and its event, so exactly one submission reveals a report.
+    """
+    consumed = await _revealed_ids(db, queue.id, report_id)
+    fresh = [
+        screening_rules.Obs(
+            cast(UUID, row.id),
+            cast(UUID, row.reviewer_id),
+            cast(str, row.decision),
+            cast(str | None, row.exclusion_reason),
+        )
+        for row in (
+            await db.execute(
+                _current_observations().where(
+                    ScreeningObservation.queue_id == queue.id,
+                    ScreeningObservation.report_id == report_id,
+                )
+            )
+        ).scalars()
+        if row.id not in consumed
+    ]
+    mode = screening_rules.reviewer_mode(
+        (await _version(db, queue.protocol_version_id)).snapshot
+    )
+    derived = screening_rules.derive(mode, fresh)
+    if derived is None:
+        return None
+    tip = await _tip(db, queue.id, report_id)
+    event_id = cast(UUID, event.id)
+    row = ScreeningResolution(
+        id=screening_rules.auto_resolution_id(event_id),
+        queue_id=queue.id,
+        report_id=report_id,
+        basis=derived.basis,
+        outcome=derived.outcome,
+        exclusion_reason=derived.exclusion_reason,
+        input_observation_ids=derived.input_observation_ids,
+        criteria_hash=queue.criteria_hash,
+        supersedes_resolution_id=None if tip is None else tip.id,
+        event_id=event_id,
+    )
+    db.add(row)
+    await _flush_unique(db, REPORT_RESOLVED)
+    return row
+
+
 async def _queue_response(
     db: AsyncSession, queue: Any, *, suggestions_skipped: int | None = None
 ) -> ScreeningQueueResponse:
@@ -252,6 +397,7 @@ async def _queue_response(
         return int((await db.execute(query)).scalar_one())
 
     current = _current_observations().where(ScreeningObservation.queue_id == queue.id)
+    tips = (await _tips(db, queue.id)).values()
     return ScreeningQueueResponse(
         id=queue.id,
         stage=queue.stage,
@@ -278,6 +424,8 @@ async def _queue_response(
         ),
         suggestions_skipped=suggestions_skipped,
         stale=await _stale(db, queue),
+        resolved_count=sum(tip.basis in _RESOLVED_BASES for tip in tips),
+        conflict_count=sum(tip.basis == "conflict" for tip in tips),
     )
 
 
@@ -676,7 +824,7 @@ async def revoke(
 async def list_queues(
     db: AsyncSession, context: ProjectContext
 ) -> list[ScreeningQueueResponse]:
-    """Queues with counts only; decision breakdowns belong to GOO-302."""
+    """Queues with counts only; resolved/conflict counts cover revealed rows."""
     queues = (
         (
             await db.execute(
@@ -706,7 +854,8 @@ async def _active_assignment(db: AsyncSession, queue_id: UUID, user_id: UUID) ->
 async def my_queue(
     db: AsyncSession, context: ProjectContext, queue_id: UUID, user_id: UUID
 ) -> MyScreeningQueueResponse:
-    """The caller's own view: corpus plus only their own current observations."""
+    """The caller's own view: corpus, own current observations, and peers'
+    current observations only where ``visible_observation_ids`` allows."""
     _require_role(context, ResearchProjectRole.REVIEWER)
     queue = await _queue(db, context, queue_id)
     assignment = await _active_assignment(db, queue_id, user_id)
@@ -774,19 +923,24 @@ async def my_queue(
         abstract = visible_parsed(parsed or {}, raw_allowed(receipt)).get("abstract")
         if isinstance(abstract, str) and abstract:
             abstracts.setdefault(report_id, abstract)
-    own = {
-        cast(UUID, row.report_id): ScreeningObservationResponse.model_validate(row)
-        for row in (
-            await db.execute(
-                _current_observations().where(
-                    ScreeningObservation.queue_id == queue_id,
-                    ScreeningObservation.reviewer_id == user_id,
-                )
-            )
+    visible = await visible_observation_ids(db, queue_id, user_id)
+    own: dict[UUID, ScreeningObservationResponse] = {}
+    others: dict[UUID, list[ScreeningObservationResponse]] = {}
+    for row in (
+        await db.execute(
+            _current_observations()
+            .where(ScreeningObservation.queue_id == queue_id)
+            .order_by(ScreeningObservation.created_at, ScreeningObservation.id)
         )
-        .scalars()
-        .all()
-    }
+    ).scalars():
+        report_id = cast(UUID, row.report_id)
+        if row.reviewer_id == user_id:
+            own[report_id] = ScreeningObservationResponse.model_validate(row)
+        elif screening_rules.visible(row.reviewer_id, row.id, user_id, visible):
+            others.setdefault(report_id, []).append(
+                ScreeningObservationResponse.model_validate(row)
+            )
+    tips = await _tips(db, queue_id)
     version = await _version(db, queue.protocol_version_id)
     items = [
         MyScreeningQueueItem(
@@ -795,6 +949,11 @@ async def my_queue(
             identifiers=identifiers[report_id],
             abstract=abstracts.get(report_id),
             observation=own.get(report_id),
+            reveal_state="revealed" if report_id in tips else "hidden",
+            others=others.get(report_id, []),
+            resolution=(
+                _resolution_response(tips[report_id]) if report_id in tips else None
+            ),
         )
         for report_id in report_ids
     ]
@@ -811,19 +970,31 @@ async def my_queue(
         assignment_id=assignment.id,
         items=items,
         counts=ScreeningCounts(
-            total=len(items), screened=screened, remaining=len(items) - screened
+            total=len(items),
+            screened=screened,
+            remaining=len(items) - screened,
+            revealed=len(tips),
+            conflicts=sum(tip.basis == "conflict" for tip in tips.values()),
         ),
     )
 
 
 async def _observation_response(
-    db: AsyncSession, observation_id: UUID
+    db: AsyncSession, observation_id: UUID, event_id: UUID
 ) -> ScreeningObservationResponse:
+    """The observation, plus the resolution its event revealed (if any)."""
     row = await db.get(ScreeningObservation, observation_id)
     assert isinstance(row, ScreeningObservation)
     response: ScreeningObservationResponse = (
         ScreeningObservationResponse.model_validate(row)
     )
+    resolution = (
+        await db.execute(
+            select(ScreeningResolution).where(ScreeningResolution.event_id == event_id)
+        )
+    ).scalar_one_or_none()
+    if resolution is not None:
+        response.resolution = _resolution_response(resolution)
     return response
 
 
@@ -842,7 +1013,9 @@ async def submit(
     replayed = await _replayed_event(db, stream, data.idempotency_key, fingerprint)
     if replayed is not None:
         return await _observation_response(
-            db, UUID(cast(dict[str, Any], replayed.payload)["observation_id"])
+            db,
+            UUID(cast(dict[str, Any], replayed.payload)["observation_id"]),
+            cast(UUID, replayed.id),
         )
     assignment = await _assignment(db, queue_id, data.assignment_id)
     if assignment is None or assignment.reviewer_id != actor_user_id:
@@ -869,7 +1042,11 @@ async def submit(
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    # GOO-302 slot: 409 "Report resolved; reopen to change" goes here.
+    # Step 4a (GOO-302): reveal is irreversible; changing a revealed vote
+    # needs an adjudicator's recorded reopen first.
+    tip = await _tip(db, queue_id, data.report_id)
+    if tip is not None and tip.basis != "reopened":
+        raise _conflict(REPORT_RESOLVED)
     current = (
         await db.execute(
             _current_observations().where(
@@ -905,7 +1082,7 @@ async def submit(
     }
     if current_id is not None:
         payload["superseded_observation_id"] = str(current_id)
-    await _append(
+    event = await _append(
         db,
         context,
         queue_id=queue_id,
@@ -919,18 +1096,22 @@ async def submit(
         idempotency_key=data.idempotency_key,
         fingerprint=fingerprint,
     )
-    return await _observation_response(db, cast(UUID, observation.id))
+    await _derive_and_record(db, queue, data.report_id, event)
+    return await _observation_response(
+        db, cast(UUID, observation.id), cast(UUID, event.id)
+    )
 
 
 async def history(
-    db: AsyncSession, context: ProjectContext, queue_id: UUID
-) -> list[IdentityEventResponse]:
-    """Replay-validated screening events for one queue, in order (SUPERVISOR).
+    db: AsyncSession, context: ProjectContext, queue_id: UUID, user_id: UUID
+) -> list[ScreeningEventResponse]:
+    """Replay-validated screening events for one queue, in order (VIEW).
 
-    Events carry every reviewer's decision, so until GOO-302 adds per-viewer
-    redaction (``visible_observation_ids``) only supervisors may read them.
+    Every automatic resolution row is re-derived from the events; drift raises
+    ``DecisionReplayError``. An observation event the caller cannot see (per
+    ``visible_observation_ids``) loses its decision, exclusion reason and note
+    and is marked ``redacted``; no hash fields are exposed.
     """
-    _require_role(context, ResearchProjectRole.SUPERVISOR)
     await _queue(db, context, queue_id)
     events = await replay_decisions(
         db,
@@ -938,7 +1119,299 @@ async def history(
         aggregate_type=AGGREGATE_TYPE,
         aggregate_id=queue_id,
     )
+    await _check_resolutions(db, queue_id, events)
+    visible = await visible_observation_ids(db, queue_id, user_id)
+    responses: list[ScreeningEventResponse] = []
+    for event in events:
+        response = ScreeningEventResponse.model_validate(event, from_attributes=True)
+        payload = response.payload
+        if event.event_type in _OBSERVATION_EVENTS and (
+            UUID(str(payload["observation_id"])) not in visible
+        ):
+            response.payload = {
+                key: value
+                for key, value in payload.items()
+                if key not in ("decision", "exclusion_reason")
+            }
+            response.reason = None
+            response.redacted = True
+        responses.append(response)
+    return responses
+
+
+async def _check_resolutions(
+    db: AsyncSession, queue_id: UUID, events: Sequence[ResearchDecisionEvent]
+) -> None:
+    """Stored resolution rows must equal the ones replay derives from events."""
+
+    def key(row: Any) -> tuple[Any, ...]:
+        return (
+            str(row.id),
+            str(row.event_id),
+            str(row.report_id),
+            row.basis,
+            row.outcome,
+            row.exclusion_reason,
+            sorted(str(i) for i in row.input_observation_ids),
+            (
+                None
+                if row.supersedes_resolution_id is None
+                else str(row.supersedes_resolution_id)
+            ),
+        )
+
+    stored = (
+        await db.execute(
+            select(ScreeningResolution).where(ScreeningResolution.queue_id == queue_id)
+        )
+    ).scalars()
+    replayed = replay_screening_resolutions(events, queue_id)
+    if sorted(map(key, stored)) != sorted(map(key, replayed)):
+        raise DecisionReplayError("screening resolution does not match inputs")
+
+
+async def conflicts(
+    db: AsyncSession, context: ProjectContext, queue_id: UUID, user_id: UUID
+) -> list[ScreeningConflictResponse]:
+    """Revealed conflicts awaiting a human adjudicator (VIEW + ADJUDICATOR)."""
+    _require_role(context, ResearchProjectRole.ADJUDICATOR)
+    queue = await _queue(db, context, queue_id)
+    tips = {
+        report_id: tip
+        for report_id, tip in (await _tips(db, queue_id)).items()
+        if tip.basis == "conflict"
+    }
+    if not tips:
+        return []
+    visible = await visible_observation_ids(db, queue_id, user_id)
+    inputs = {UUID(str(i)) for tip in tips.values() for i in tip.input_observation_ids}
+    observations = {
+        cast(UUID, row.id): row
+        for row in (
+            await db.execute(
+                select(ScreeningObservation).where(
+                    ScreeningObservation.id.in_(inputs & visible)
+                )
+            )
+        ).scalars()
+    }
+    titles = dict(
+        (
+            await db.execute(
+                select(ResearchReport.id, ResearchReport.title_snapshot).where(
+                    ResearchReport.id.in_(list(tips)),
+                    ResearchReport.collection_id == queue.collection_id,
+                )
+            )
+        ).all()
+    )
     return [
-        IdentityEventResponse.model_validate(event, from_attributes=True)
-        for event in events
+        ScreeningConflictResponse(
+            report_id=report_id,
+            title_snapshot=titles.get(report_id, ""),
+            resolution=_resolution_response(tips[report_id]),
+            observations=[
+                ScreeningObservationResponse.model_validate(observations[oid])
+                for oid in map(UUID, map(str, tips[report_id].input_observation_ids))
+                if oid in observations
+            ],
+        )
+        for report_id in (UUID(value) for value in queue.report_ids)
+        if report_id in tips
     ]
+
+
+async def _resolution_by_id(db: AsyncSession, resolution_id: UUID) -> Any:
+    row = await db.get(ScreeningResolution, resolution_id)
+    assert isinstance(row, ScreeningResolution)
+    return row
+
+
+async def _adjudicator_target(
+    db: AsyncSession, context: ProjectContext, queue_id: UUID
+) -> tuple[Any, ResearchDecisionStream]:
+    """ADJUDICATOR role, the queue (404), then its stream lock."""
+    _require_role(context, ResearchProjectRole.ADJUDICATOR)
+    queue = await _queue(db, context, queue_id)
+    return queue, await _lock(db, context, queue_id)
+
+
+async def _current_report(db: AsyncSession, queue: Any, report_id: UUID) -> None:
+    """GOO-301's queue -> protocol staleness, then the report in this corpus."""
+    stale = await _stale(db, queue)
+    if stale is not None:
+        raise _conflict(stale)
+    if str(report_id) not in queue.report_ids:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+
+async def adjudicate(
+    db: AsyncSession,
+    context: ProjectContext,
+    queue_id: UUID,
+    report_id: UUID,
+    actor_user_id: UUID,
+    data: ScreeningAdjudicateRequest,
+) -> ScreeningResolutionResponse:
+    """Resolve the exact conflict tip the adjudicator saw (ADJUDICATE)."""
+    queue, stream = await _adjudicator_target(db, context, queue_id)
+    fingerprint = _fingerprint(
+        "adjudicate", queue_id, actor_user_id, data, report_id=str(report_id)
+    )
+    replayed = await _replayed_event(db, stream, data.idempotency_key, fingerprint)
+    if replayed is not None:
+        return _resolution_response(
+            await _resolution_by_id(
+                db, UUID(cast(dict[str, Any], replayed.payload)["resolution_id"])
+            )
+        )
+    await _current_report(db, queue, report_id)
+    if data.criteria_hash != queue.criteria_hash:
+        raise _conflict(CRITERIA_STALE)
+    tip = await _tip(db, queue_id, report_id)
+    inputs = sorted(str(i) for i in data.input_observation_ids)
+    current = {
+        str(row.id)
+        for row in (
+            await db.execute(
+                _current_observations().where(
+                    ScreeningObservation.queue_id == queue_id,
+                    ScreeningObservation.id.in_(data.input_observation_ids),
+                )
+            )
+        ).scalars()
+    }
+    if (
+        tip is None
+        or tip.id != data.resolution_id
+        or inputs != sorted(str(i) for i in tip.input_observation_ids)
+        or set(inputs) != current
+    ):
+        raise _conflict(INPUTS_STALE)
+    if tip.basis != "conflict":
+        raise _conflict(NOT_IN_CONFLICT)
+    reviewed = (
+        await db.execute(
+            select(ScreeningObservation.id).where(
+                ScreeningObservation.id.in_(data.input_observation_ids),
+                ScreeningObservation.reviewer_id == actor_user_id,
+            )
+        )
+    ).first()
+    if reviewed is not None:
+        raise HTTPException(status_code=403, detail=SELF_ADJUDICATION)
+    reasons = screening_rules.exclusion_reasons(
+        (await _version(db, queue.protocol_version_id)).snapshot
+    )
+    try:
+        screening_rules.validate_observation(
+            queue.stage, data.decision, data.exclusion_reason, reasons
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    resolution_id = uuid4()
+    event = await _append(
+        db,
+        context,
+        queue_id=queue_id,
+        event_type="screening.adjudicated",
+        actor_user_id=actor_user_id,
+        actor_role="adjudicator",
+        reason=data.rationale,
+        payload={
+            "report_id": str(report_id),
+            "resolution_id": str(resolution_id),
+            "conflict_resolution_id": str(tip.id),
+            "input_observation_ids": inputs,
+            "criteria_hash": queue.criteria_hash,
+            "decision": data.decision,
+            "exclusion_reason": data.exclusion_reason,
+        },
+        idempotency_key=data.idempotency_key,
+        fingerprint=fingerprint,
+    )
+    return await _insert_resolution(
+        db,
+        ScreeningResolution(
+            id=resolution_id,
+            queue_id=queue_id,
+            report_id=report_id,
+            basis="adjudicated",
+            outcome=data.decision,
+            exclusion_reason=data.exclusion_reason,
+            input_observation_ids=inputs,
+            criteria_hash=queue.criteria_hash,
+            supersedes_resolution_id=tip.id,
+            event_id=event.id,
+        ),
+    )
+
+
+async def _insert_resolution(
+    db: AsyncSession, row: ScreeningResolution
+) -> ScreeningResolutionResponse:
+    db.add(row)
+    await _flush_unique(db, RESOLUTION_STALE)
+    await db.refresh(row)
+    return _resolution_response(row)
+
+
+async def reopen(
+    db: AsyncSession,
+    context: ProjectContext,
+    queue_id: UUID,
+    report_id: UUID,
+    actor_user_id: UUID,
+    data: ScreeningReopenRequest,
+) -> ScreeningResolutionResponse:
+    """Reopen a resolved report (ADJUDICATE); each reviewer must then submit a
+    fresh observation before it can resolve again."""
+    queue, stream = await _adjudicator_target(db, context, queue_id)
+    fingerprint = _fingerprint(
+        "reopen", queue_id, actor_user_id, data, report_id=str(report_id)
+    )
+    replayed = await _replayed_event(db, stream, data.idempotency_key, fingerprint)
+    if replayed is not None:
+        return _resolution_response(
+            await _resolution_by_id(
+                db, UUID(cast(dict[str, Any], replayed.payload)["resolution_id"])
+            )
+        )
+    await _current_report(db, queue, report_id)
+    tip = await _tip(db, queue_id, report_id)
+    if tip is None or tip.basis == "reopened":
+        raise _conflict(NOT_RESOLVED)
+    if tip.id != data.resolution_id:
+        raise _conflict(RESOLUTION_STALE)
+    resolution_id = uuid4()
+    event = await _append(
+        db,
+        context,
+        queue_id=queue_id,
+        event_type="screening.reopened",
+        actor_user_id=actor_user_id,
+        actor_role="adjudicator",
+        reason=data.rationale,
+        payload={
+            "report_id": str(report_id),
+            "resolution_id": str(resolution_id),
+            "reopened_resolution_id": str(tip.id),
+        },
+        idempotency_key=data.idempotency_key,
+        fingerprint=fingerprint,
+    )
+    return await _insert_resolution(
+        db,
+        ScreeningResolution(
+            id=resolution_id,
+            queue_id=queue_id,
+            report_id=report_id,
+            basis="reopened",
+            outcome=None,
+            exclusion_reason=None,
+            input_observation_ids=[],
+            criteria_hash=queue.criteria_hash,
+            supersedes_resolution_id=tip.id,
+            event_id=event.id,
+        ),
+    )

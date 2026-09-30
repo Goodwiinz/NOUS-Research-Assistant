@@ -513,6 +513,9 @@ class ScreeningQueueResponse(BaseModel):
     # Set only on the create response that imported them.
     suggestions_skipped: Optional[int] = None
     stale: Optional[str] = None
+    # GOO-302: counted from revealed (resolution tip) rows only.
+    resolved_count: int = 0
+    conflict_count: int = 0
 
 
 class ScreeningAssignmentResponse(BaseModel):
@@ -525,6 +528,25 @@ class ScreeningAssignmentResponse(BaseModel):
     created_at: datetime
     revoked_at: Optional[datetime] = None
     revoked_by_id: Optional[UUID] = None
+
+
+ScreeningBasis = Literal["single", "agreement", "conflict", "adjudicated", "reopened"]
+
+
+class ScreeningResolutionResponse(BaseModel):
+    """A derived or adjudicated outcome; never an editable field (GOO-302)."""
+
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    report_id: UUID
+    basis: ScreeningBasis
+    outcome: Optional[ScreeningDecisionValue] = None
+    exclusion_reason: Optional[str] = None
+    input_observation_ids: List[UUID]
+    criteria_hash: str
+    supersedes_resolution_id: Optional[UUID] = None
+    created_at: datetime
 
 
 class ScreeningObservationResponse(BaseModel):
@@ -540,6 +562,8 @@ class ScreeningObservationResponse(BaseModel):
     note: Optional[str] = None
     supersedes_observation_id: Optional[UUID] = None
     created_at: datetime
+    # Set only on the submit response whose observation revealed the report.
+    resolution: Optional[ScreeningResolutionResponse] = None
 
 
 class MyScreeningQueueInfo(BaseModel):
@@ -556,14 +580,21 @@ class MyScreeningQueueItem(BaseModel):
     title_snapshot: str
     identifiers: Dict[str, List[str]]
     abstract: Optional[str] = None
-    # The caller's own current observation only; peers stay hidden (GOO-302).
+    # The caller's own current observation.
     observation: Optional[ScreeningObservationResponse] = None
+    # GOO-302: "revealed" iff the report has a resolution in this queue. Peers'
+    # current observations appear in ``others`` only once revealed.
+    reveal_state: Literal["hidden", "revealed"] = "hidden"
+    others: List[ScreeningObservationResponse] = Field(default_factory=list)
+    resolution: Optional[ScreeningResolutionResponse] = None
 
 
 class ScreeningCounts(BaseModel):
     total: int
     screened: int
     remaining: int
+    revealed: int = 0
+    conflicts: int = 0
 
 
 class MyScreeningQueueResponse(BaseModel):
@@ -571,6 +602,37 @@ class MyScreeningQueueResponse(BaseModel):
     assignment_id: UUID
     items: List[MyScreeningQueueItem]
     counts: ScreeningCounts
+
+
+class ScreeningConflictResponse(BaseModel):
+    report_id: UUID
+    title_snapshot: str
+    resolution: ScreeningResolutionResponse
+    observations: List[ScreeningObservationResponse]
+
+
+class ScreeningAdjudicateRequest(BaseModel):
+    """Resolve the exact conflict tip the adjudicator saw (stale inputs: 409)."""
+
+    resolution_id: UUID
+    input_observation_ids: List[UUID] = Field(..., min_length=1, max_length=10)
+    criteria_hash: str = Field(..., min_length=64, max_length=64)
+    decision: ScreeningDecisionValue
+    exclusion_reason: Optional[str] = Field(None, min_length=1, max_length=200)
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: _IdempotencyKey
+
+
+class ScreeningReopenRequest(BaseModel):
+    resolution_id: UUID
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: _IdempotencyKey
+
+
+class ScreeningEventResponse(IdentityEventResponse):
+    """A screening event; a peer's hidden decision is ``redacted`` (GOO-302)."""
+
+    redacted: bool = False
 
 
 # --- Search import / corpus (GOO-300) --------------------------------------

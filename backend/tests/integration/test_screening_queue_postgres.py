@@ -379,18 +379,12 @@ async def test_commit_reopen_and_event_state_atomicity(
         assert [r.id for r in rows if r.supersedes_observation_id] == [changed.id]
         original = next(r for r in rows if r.id == first.id)
         assert (original.decision, original.note) == ("include", None)
-        # History is supervisor-only until GOO-302 redacts peers' decisions.
+        # GOO-302: any VIEW member reads history, redacted per viewer; r1 is
+        # revealed (both dual observations are in), R's superseded row is not.
         context = await resolve_project(
             db, world.collection, world.ids["V"], ResearchAction.VIEW
         )
-        assert await _status(screening_service.history(db, context, queue.id)) == (
-            403,
-            "supervisor role required",
-        )
-        context = await resolve_project(
-            db, world.collection, world.ids["O"], ResearchAction.VIEW
-        )
-        history = await screening_service.history(db, context, queue.id)
+        history = await screening_service.history(db, context, queue.id, world.ids["V"])
     assert [e.event_type for e in history] == [
         "screening.queue_created",
         "screening.assigned",
@@ -401,6 +395,8 @@ async def test_commit_reopen_and_event_state_atomicity(
     ]
     assert [e.seq for e in history] == list(range(1, 7))
     assert history[0].payload["reviewer_mode"] == "dual_independent"
+    assert [e.redacted for e in history[3:]] == [True, False, False]
+    assert "decision" not in history[3].payload
 
     # Atomicity: the ledger append fails after the observation flush.
     async def exploding_append(*_args: Any, **_kwargs: Any) -> None:

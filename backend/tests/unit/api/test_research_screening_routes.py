@@ -279,27 +279,30 @@ def test_foreign_queue_is_a_stable_404(
     harness.db.commit.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    ("role", "status"),
-    [(ResearchProjectRole.REVIEWER, 403), (ResearchProjectRole.SUPERVISOR, 200)],
-)
-def test_history_is_supervisor_only_until_goo302_redaction(
+@pytest.mark.parametrize("role", [None, ResearchProjectRole.REVIEWER])
+def test_history_is_view_and_redacted_for_the_caller(
     harness: _Harness,
     monkeypatch: pytest.MonkeyPatch,
-    role: ResearchProjectRole,
-    status: int,
+    role: ResearchProjectRole | None,
 ) -> None:
-    """The real service gate: a reviewer must not read peers' decisions."""
-    harness.roles.add(role)
+    """GOO-302: any VIEW member reads history; the service redacts what the
+    caller cannot see, so the route must pass the caller's own id."""
+    if role is not None:
+        harness.roles.add(role)
     monkeypatch.setattr(screening_service, "_queue", AsyncMock())
     monkeypatch.setattr(
         screening_service, "replay_decisions", AsyncMock(return_value=[])
     )
+    monkeypatch.setattr(screening_service, "_check_resolutions", AsyncMock())
+    visible = AsyncMock(return_value=set())
+    monkeypatch.setattr(screening_service, "visible_observation_ids", visible)
 
     response = harness.client.get(
         f"{BASE}/{uuid4()}/screening/queues/{uuid4()}/history"
     )
 
-    assert response.status_code == status, response.text
+    assert response.status_code == 200, response.text
     assert harness.actions == [ResearchAction.VIEW]
+    assert visible.await_args is not None
+    assert visible.await_args.args[2] == harness.user.id
     harness.db.commit.assert_not_awaited()
