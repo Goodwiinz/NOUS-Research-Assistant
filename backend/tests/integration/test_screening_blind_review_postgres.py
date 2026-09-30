@@ -403,8 +403,39 @@ async def test_adjudication_stale_input_and_races(
         world,
         "R",
         queue,
-        _body(queue, mine, r2, "c2", supersedes_observation_id=first.id),
+        _body(
+            queue,
+            mine,
+            r2,
+            "c2",
+            note=SENTINEL,
+            supersedes_observation_id=first.id,
+        ),
     )
+    # After the reopen the new cycle is blind again: R's new observation (with
+    # a sentinel note) is hidden from R2 and V until the report re-reveals.
+    for user in ("R2", "V"):
+        events = await _read(
+            factory,
+            world,
+            user,
+            lambda db, ctx: screening_service.history(
+                db, ctx, queue.id, world.ids[user]
+            ),
+        )
+        assert SENTINEL not in _dump(events)
+        [new] = [e for e in events if e.payload.get("observation_id") == str(third.id)]
+        assert new.redacted and "decision" not in new.payload
+    view = await _read(
+        factory,
+        world,
+        "R2",
+        lambda db, ctx: screening_service.my_queue(db, ctx, queue.id, world.ids["R2"]),
+    )
+    assert SENTINEL not in _dump(view) and str(third.id) not in _dump(view)
+    item = next(i for i in view.items if i.report_id == r2)
+    assert item.others == [] and item.reveal_state == "hidden"
+    assert item.resolution is not None and item.resolution.basis == "reopened"
     fourth = await _submit(
         factory,
         world,

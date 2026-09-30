@@ -137,5 +137,5 @@ def test_no_agent_tool_writes_screening_decisions() -> None:
     """GOO-302: screening observations, adjudications and reopens are human
     ledger events; no agent tool may import the screening service."""
     agent = BACKEND_DIR / "src" / "services" / "agent"
-    assert agent.is_dir()
+    assert agent.is_dir() and any(agent.rglob("*.py"))
     assert not any("screening_service" in p.read_text() for p in agent.rglob("*.py"))

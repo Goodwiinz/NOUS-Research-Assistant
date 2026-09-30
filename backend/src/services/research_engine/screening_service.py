@@ -958,7 +958,13 @@ async def my_queue(
             identifiers=identifiers[report_id],
             abstract=abstracts.get(report_id),
             observation=own.get(report_id),
-            reveal_state="revealed" if report_id in tips else "hidden",
+            # A reopened report starts a new blind cycle: hidden again, while
+            # ``resolution`` still shows the reopen.
+            reveal_state=(
+                "revealed"
+                if report_id in tips and tips[report_id].basis != "reopened"
+                else "hidden"
+            ),
             others=others.get(report_id, []),
             resolution=(
                 _resolution_response(tips[report_id]) if report_id in tips else None
@@ -982,7 +988,7 @@ async def my_queue(
             total=len(items),
             screened=screened,
             remaining=len(items) - screened,
-            revealed=len(tips),
+            revealed=sum(tip.basis != "reopened" for tip in tips.values()),
             conflicts=sum(tip.basis == "conflict" for tip in tips.values()),
         ),
     )
@@ -1211,8 +1217,9 @@ async def conflicts(
             )
         ).scalars()
     }
-    titles = dict(
-        (
+    titles: dict[UUID, str] = {
+        report_id: title
+        for report_id, title in (
             await db.execute(
                 select(ResearchReport.id, ResearchReport.title_snapshot).where(
                     ResearchReport.id.in_(list(tips)),
@@ -1220,7 +1227,7 @@ async def conflicts(
                 )
             )
         ).all()
-    )
+    }
     identifiers = await _identifiers(db, list(tips))
     reasons = screening_rules.exclusion_reasons(
         (await _version(db, queue.protocol_version_id)).snapshot
@@ -1314,11 +1321,22 @@ async def adjudicate(
     if tip.basis != "conflict":
         raise _conflict(NOT_IN_CONFLICT)
     # Any observation of this report by the actor, in any cycle (superseded or
-    # consumed by an earlier resolution too), not only the current inputs.
+    # consumed by an earlier resolution too) and in any queue this one
+    # reconciles, not only the current inputs.
+    queue_ids, prior = [queue_id], queue.supersedes_queue_id
+    while prior is not None:
+        queue_ids.append(prior)
+        prior = (
+            await db.execute(
+                select(ScreeningQueue.supersedes_queue_id).where(
+                    ScreeningQueue.id == prior
+                )
+            )
+        ).scalar_one()
     reviewed = (
         await db.execute(
             select(ScreeningObservation.id).where(
-                ScreeningObservation.queue_id == queue_id,
+                ScreeningObservation.queue_id.in_(queue_ids),
                 ScreeningObservation.report_id == report_id,
                 ScreeningObservation.reviewer_id == actor_user_id,
             )

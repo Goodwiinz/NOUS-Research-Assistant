@@ -174,12 +174,12 @@ function ConflictRow({
   };
   // One idempotency key per click; see ScreeningQueuePanel.
   const adjudicate = useMutation({
-    mutationFn: (key: string) =>
+    mutationFn: ({ key, chosen }: { key: string; chosen: ScreeningDecision }) =>
       adjudicateScreening(projectId, queue.id, conflict.report_id, {
         resolution_id: conflict.resolution.id,
         input_observation_ids: conflict.resolution.input_observation_ids,
         criteria_hash: conflict.resolution.criteria_hash,
-        decision: decision ?? 'uncertain',
+        decision: chosen,
         exclusion_reason: needsReason ? reason : null,
         rationale: rationale.trim(),
         idempotency_key: key,
@@ -293,8 +293,9 @@ function ConflictRow({
             locked || !decision || !hasRationale || (needsReason && !reason)
           }
           onClick={() => {
+            if (!decision) return;
             reset();
-            adjudicate.mutate(crypto.randomUUID());
+            adjudicate.mutate({ key: crypto.randomUUID(), chosen: decision });
           }}
           className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
         >

@@ -128,7 +128,12 @@ describe('ScreeningConflictsPanel', () => {
   });
 
   it('renders nothing for a non-adjudicator (owners and supervisors too)', () => {
-    renderPanel([role('me', 'supervisor'), role('me', 'reviewer')]);
+    // Someone else is the adjudicator; the panel must match on the caller's id.
+    renderPanel([
+      role('me', 'supervisor'),
+      role('me', 'reviewer'),
+      role('other', 'adjudicator'),
+    ]);
 
     expect(screen.queryByText('Screening conflicts')).not.toBeInTheDocument();
     expect(listScreeningQueues).not.toHaveBeenCalled();

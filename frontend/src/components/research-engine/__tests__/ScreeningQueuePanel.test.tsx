@@ -654,6 +654,32 @@ describe('ScreeningQueuePanel', () => {
   });
 
   it('a hidden row says so and shows no peer decision', async () => {
+    // Even if a peer and a resolution leak onto a hidden row, the client
+    // must not render them before reveal.
+    const view = mine();
+    view.items[0] = {
+      ...view.items[0],
+      others: [
+        {
+          id: 'obs-peer',
+          queue_id: 'queue-1',
+          report_id: 'report-1',
+          reviewer_id: 'peer',
+          assignment_id: 'assignment-2',
+          decision: 'exclude',
+          created_at: '2026-09-29T00:00:00Z',
+        },
+      ],
+      resolution: {
+        id: 'res-1',
+        report_id: 'report-1',
+        basis: 'conflict',
+        input_observation_ids: ['obs-1', 'obs-peer'],
+        criteria_hash: HASH,
+        created_at: '2026-09-29T00:00:00Z',
+      },
+    };
+    vi.mocked(getMyScreeningQueue).mockResolvedValue(view);
     renderPanel([role('me', 'reviewer')]);
 
     expect(await screen.findByText('Alpha trial')).toBeInTheDocument();
@@ -722,7 +748,8 @@ describe('ScreeningQueuePanel', () => {
       const view = mine();
       view.items[0] = {
         ...view.items[0],
-        reveal_state: 'revealed',
+        // The server hides a reopened report again (new blind cycle).
+        reveal_state: basis === 'reopened' ? 'hidden' : 'revealed',
         resolution: {
           id: 'res-1',
           report_id: 'report-1',
@@ -738,6 +765,11 @@ describe('ScreeningQueuePanel', () => {
       renderPanel([role('me', 'reviewer')]);
 
       expect(await screen.findByText(label)).toBeInTheDocument();
+      expect(
+        screen.queryAllByText(
+          "Other reviewers' decisions are hidden until reveal."
+        )
+      ).toHaveLength(basis === 'reopened' ? 2 : 1);
       expect(
         screen.getByRole('button', { name: 'Include Alpha trial' })
       ).toHaveProperty('disabled', basis !== 'reopened');
