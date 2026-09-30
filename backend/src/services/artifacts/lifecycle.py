@@ -6,10 +6,10 @@ only an announcement, suppressed when the run is closed or unbound.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,24 +30,60 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+STALE_CLAIM = timedelta(minutes=5)
+
+
 async def drain_artifact_outbox(db: AsyncSession, *, limit: int = 100) -> int:
     """Deliver pending announcements. Returns how many events were appended.
 
-    Each row commits on its own so one failure cannot roll back its siblings;
-    the row's status is the delivery receipt, so a repeated drain is a no-op.
+    Each row is claimed with a conditional UPDATE and committed before any
+    delivery work, so a second worker that selects the same batch after our
+    per-row commit released the FOR UPDATE lock cannot deliver it twice. A
+    claim older than STALE_CLAIM (worker died mid-row) becomes eligible again.
     """
-    rows = (
+    now = _now()
+    candidates = (
         await db.scalars(
-            select(ArtifactLifecycleOutbox)
-            .where(ArtifactLifecycleOutbox.status == "pending")
+            select(ArtifactLifecycleOutbox.id)
+            .where(
+                or_(
+                    ArtifactLifecycleOutbox.status == "pending",
+                    and_(
+                        ArtifactLifecycleOutbox.status == "processing",
+                        ArtifactLifecycleOutbox.updated_at < now - STALE_CLAIM,
+                    ),
+                )
+            )
             .order_by(ArtifactLifecycleOutbox.created_at)
             .limit(limit)
-            .with_for_update(skip_locked=True)
         )
     ).all()
     delivered = 0
-    for row in rows:
-        row.attempts += 1
+    for row_id in candidates:
+        claimed = await db.execute(
+            update(ArtifactLifecycleOutbox)
+            .where(
+                ArtifactLifecycleOutbox.id == row_id,
+                or_(
+                    ArtifactLifecycleOutbox.status == "pending",
+                    and_(
+                        ArtifactLifecycleOutbox.status == "processing",
+                        ArtifactLifecycleOutbox.updated_at < now - STALE_CLAIM,
+                    ),
+                ),
+            )
+            .values(
+                status="processing",
+                attempts=ArtifactLifecycleOutbox.attempts + 1,
+                updated_at=now,
+            )
+        )
+        await db.commit()
+        if cast(CursorResult[Any], claimed).rowcount != 1:
+            continue  # another worker claimed it
+        row = await db.get(ArtifactLifecycleOutbox, row_id, populate_existing=True)
+        if row is None:
+            continue
         if row.run_id is None or await has_terminal_event(db, row.run_id):
             # Closed ledger: suppress only the announcement; the row stays queryable.
             row.status = "skipped"
@@ -71,9 +107,15 @@ async def drain_artifact_outbox(db: AsyncSession, *, limit: int = 100) -> int:
                 row.status = "skipped"
             except Exception as error:  # noqa: BLE001 - keep draining other rows
                 logger.warning("artifact announcement failed", exc_info=error)
+                await db.rollback()
+                row = await db.get(
+                    ArtifactLifecycleOutbox, row_id, populate_existing=True
+                )
+                if row is None:
+                    continue
                 row.last_error = str(error)[:200]
-                if row.attempts >= MAX_ATTEMPTS:
-                    row.status = "skipped"
+                # Bounded retry: back to pending until MAX_ATTEMPTS, then skipped.
+                row.status = "skipped" if row.attempts >= MAX_ATTEMPTS else "pending"
         await db.commit()
     return delivered
 

@@ -92,7 +92,10 @@ class S3ArtifactStorage:
         return await asyncio.to_thread(self.helper.object_exists, key)
 
     async def delete(self, key: str) -> None:
-        await asyncio.to_thread(self.helper.delete_file, key)
+        # The helper swallows errors into a False return; surface it so the
+        # sweeper keeps the key and retries instead of orphaning the blob.
+        if not await asyncio.to_thread(self.helper.delete_file, key):
+            raise RuntimeError("object delete failed")
 
 
 class SupabaseArtifactStorage:
@@ -117,7 +120,8 @@ class SupabaseArtifactStorage:
         return await asyncio.to_thread(self.helper.object_exists, self.bucket, key)
 
     async def delete(self, key: str) -> None:
-        await asyncio.to_thread(self.helper.delete_file, self.bucket, key)
+        if not await asyncio.to_thread(self.helper.delete_file, self.bucket, key):
+            raise RuntimeError("object delete failed")
 
 
 def get_artifact_storage() -> ArtifactStorage:

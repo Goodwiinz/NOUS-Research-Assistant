@@ -381,3 +381,142 @@ async def test_run_bound_to_another_org_is_refused(db: AsyncSession) -> None:
     assert (
         await db.scalar(select(func.count()).select_from(ArtifactLifecycleOutbox)) == 0
     )
+
+
+async def test_drain_claims_rows_so_a_second_worker_cannot_redeliver(
+    db: AsyncSession,
+) -> None:
+    version = await _publish(db, _context(RUN_OPEN))
+    # Worker A claimed the row moments ago and is still delivering it.
+    await db.execute(
+        update(ArtifactLifecycleOutbox)
+        .where(ArtifactLifecycleOutbox.version_id == version.version_id)
+        .values(status="processing", updated_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
+    assert await drain_artifact_outbox(db) == 0
+    assert await _events(db, RUN_OPEN) == []
+    # Worker A died: a stale claim becomes eligible again, exactly once.
+    await db.execute(
+        update(ArtifactLifecycleOutbox)
+        .where(ArtifactLifecycleOutbox.version_id == version.version_id)
+        .values(
+            updated_at=datetime.now(timezone.utc)
+            - lifecycle.STALE_CLAIM
+            - timedelta(seconds=1)
+        )
+    )
+    await db.commit()
+    assert await drain_artifact_outbox(db) == 1
+    assert await drain_artifact_outbox(db) == 0
+    assert len(await _events(db, RUN_OPEN)) == 1
+    row = await db.scalar(select(ArtifactLifecycleOutbox))
+    assert row is not None and row.status == "delivered" and row.attempts == 1
+
+
+async def test_transient_delivery_failure_returns_the_row_to_pending(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _publish(db, _context(RUN_OPEN))
+    calls = {"n": 0}
+    real_append = lifecycle.append_event
+
+    async def flaky(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("ledger hiccup")
+        return await real_append(*args, **kwargs)
+
+    monkeypatch.setattr(lifecycle, "append_event", flaky)
+    assert await drain_artifact_outbox(db) == 0
+    row = await db.scalar(select(ArtifactLifecycleOutbox))
+    assert (
+        row is not None
+        and row.status == "pending"
+        and row.last_error == "ledger hiccup"
+    )
+    assert await drain_artifact_outbox(db) == 1
+    row = await db.scalar(select(ArtifactLifecycleOutbox))
+    assert row is not None and row.status == "delivered" and row.last_error is None
+
+
+async def test_store_loses_to_a_sweep_that_expired_it_mid_flight(
+    db: AsyncSession, storage: MemoryArtifactStorage
+) -> None:
+    context = _context(None)
+    reserve = ReserveArtifactUploadRequest(
+        publication_id=uuid4(),
+        byte_size=len(CONTENT),
+        mime_type="text/markdown",
+        sha256=DIGEST,
+    )
+    upload = await reserve_upload(db, context, reserve)
+    real_put = storage.put
+
+    async def sweep_during_write(key: str, content: bytes, mime_type: str) -> None:
+        await real_put(key, content, mime_type)
+        async with async_sessionmaker(db.bind, expire_on_commit=False)() as other:  # type: ignore[arg-type]
+            await other.execute(
+                update(ArtifactUpload)
+                .where(ArtifactUpload.id == upload.upload_id)
+                .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+            )
+            await other.commit()
+            assert await sweep_artifact_uploads(other) == 1
+
+    storage.put = sweep_during_write  # type: ignore[method-assign]
+    with pytest.raises(service.ArtifactConflict):
+        await store_upload(db, context, upload.upload_id, CONTENT)
+    assert storage.objects == {}  # the losing write cleaned up its blob
+    row = await db.get(ArtifactUpload, upload.upload_id, populate_existing=True)
+    assert row is not None and row.is_deleted is True and row.storage_key is None
+
+
+async def test_failed_object_delete_keeps_the_key_for_retry(
+    db: AsyncSession, storage: MemoryArtifactStorage
+) -> None:
+    from src.services.artifacts.storage import S3ArtifactStorage
+
+    class FalseHelper:
+        def delete_file(self, key: str) -> bool:
+            return False  # the S3 helper swallows errors into False
+
+    s3 = S3ArtifactStorage.__new__(S3ArtifactStorage)
+    s3.helper = FalseHelper()  # type: ignore[assignment]
+    with pytest.raises(RuntimeError):
+        await s3.delete("artifacts/x")
+    # And the sweeper leaves storage_key in place when delete raises.
+    context = _context(None)
+    reserve = ReserveArtifactUploadRequest(
+        publication_id=uuid4(),
+        byte_size=len(CONTENT),
+        mime_type="text/plain",
+        sha256=DIGEST,
+    )
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    await db.execute(
+        update(ArtifactUpload)
+        .where(ArtifactUpload.id == upload.upload_id)
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    )
+    await db.commit()
+
+    async def boom(key: str) -> None:
+        raise RuntimeError("object delete failed")
+
+    storage.delete = boom  # type: ignore[method-assign]
+    assert await sweep_artifact_uploads(db) == 1
+    row = await db.get(ArtifactUpload, upload.upload_id, populate_existing=True)
+    assert row is not None and row.is_deleted is True and row.storage_key is not None
+
+
+def test_sweeper_task_honors_the_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.core.config import settings
+    from src.tasks import artifact_tasks
+
+    monkeypatch.setattr(settings, "SWEEPERS_ENABLED", False)
+    monkeypatch.setattr(artifact_tasks, "run_async", lambda coro: (coro.close(), 99)[1])
+    assert artifact_tasks.sweep_artifact_uploads() == 0
+    monkeypatch.setattr(settings, "SWEEPERS_ENABLED", True)
+    assert artifact_tasks.sweep_artifact_uploads() == 99

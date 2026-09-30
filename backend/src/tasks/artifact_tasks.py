@@ -27,4 +27,9 @@ def drain_artifacts() -> int:
 
 @celery_app.task(name="src.tasks.artifact_tasks.sweep_artifact_uploads")
 def sweep_artifact_uploads() -> int:
+    """Beat entry point; flag-gated like the other sweepers."""
+    from src.core.config import settings
+
+    if not settings.SWEEPERS_ENABLED:
+        return 0
     return run_async(_sweep())

@@ -278,8 +278,24 @@ async def store_upload(
     except Exception as error:  # noqa: BLE001 - storage backends raise arbitrary errors
         logger.warning("artifact upload storage failed", exc_info=error)
         raise ArtifactStorageUnavailable() from error
-    upload.storage_key = key
-    upload.stored_at = _now()
+    # The reservation may have been swept while the object write was in
+    # flight; only a live, unfinalized row may record the bytes.
+    stored = await db.execute(
+        update(ArtifactUpload)
+        .where(
+            ArtifactUpload.id == upload.id,
+            ArtifactUpload.is_deleted.is_(False),
+            ArtifactUpload.version_id.is_(None),
+        )
+        .values(storage_key=key, stored_at=_now())
+    )
+    if cast(CursorResult[Any], stored).rowcount != 1:
+        await db.rollback()
+        try:
+            await get_artifact_storage().delete(key)
+        except Exception as error:  # noqa: BLE001 - orphaned blob, logged
+            logger.warning("artifact upload cleanup failed", exc_info=error)
+        raise ArtifactConflict()
     await db.commit()
 
 
