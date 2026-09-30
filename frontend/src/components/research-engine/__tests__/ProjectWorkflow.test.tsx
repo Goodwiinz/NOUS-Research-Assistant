@@ -56,6 +56,19 @@ vi.mock('../ScreeningQueuePanel', () => ({
     </div>
   ),
 }));
+vi.mock('../ScreeningConflictsPanel', () => ({
+  ScreeningConflictsPanel: ({
+    projectId,
+    readOnly,
+  }: {
+    projectId: string;
+    readOnly?: boolean;
+  }) => (
+    <div>
+      Conflicts for {projectId} {readOnly ? '(read only)' : '(active)'}
+    </div>
+  ),
+}));
 vi.mock('@/services/researchEngineService', () => ({
   createProject: vi.fn(),
   listProjectRoles: vi.fn(),
@@ -72,6 +85,9 @@ vi.mock('@/services/researchEngineService', () => ({
   getMyScreeningQueue: vi.fn(),
   submitScreeningObservation: vi.fn(),
   listScreeningHistory: vi.fn(),
+  listScreeningConflicts: vi.fn(),
+  adjudicateScreening: vi.fn(),
+  reopenScreening: vi.fn(),
 }));
 describe('ProjectWorkflow', () => {
   beforeEach(() => {
@@ -235,6 +251,9 @@ describe('ProjectWorkflow', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText('Screening for collection-3 (read only)')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Conflicts for collection-3 (read only)')
     ).toBeInTheDocument();
   });
 });

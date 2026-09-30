@@ -4,6 +4,9 @@ A queue freezes a report corpus at one approved protocol version, criterion
 version and stage. Observations are insert-only: a change supersedes the
 current row through ``supersedes_observation_id``. AI output lives only in
 ``screening_suggestions`` and can never become an observation.
+
+GOO-302 adds ``screening_resolutions``: an insert-only chain per
+``(queue, report)`` whose tip is the report's current resolution.
 """
 
 import uuid
@@ -28,6 +31,7 @@ _STAGE_CHECK = "stage IN ('title_abstract','full_text')"
 _DECISION_CHECK = "decision IN ('include','exclude','uncertain')"
 _ACTIVE_ASSIGNMENT = "revoked_at IS NULL"
 _INITIAL_OBSERVATION = "supersedes_observation_id IS NULL"
+_INITIAL_RESOLUTION = "supersedes_resolution_id IS NULL"
 
 
 def _fk(target: str, *, nullable: bool = False) -> Column:
@@ -152,4 +156,62 @@ class ScreeningSuggestion(Base):
         UniqueConstraint(
             "queue_id", "step_id", "source_id", name="uq_screening_suggestion_source"
         ),
+    )
+
+
+class ScreeningResolution(Base):
+    """Insert-only derived or adjudicated outcome for one report in a queue.
+
+    ``screening_rules.derive`` is the only producer of an automatic row and no
+    code path updates one; the ledger replay re-derives them to catch drift.
+    """
+
+    # ponytail: insert-only by service contract + replay check; add a DB
+    # trigger if a second writer ever appears.
+
+    __tablename__ = "screening_resolutions"
+
+    id: Column = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    queue_id = _fk("screening_queues")
+    report_id = _fk("research_reports")
+    basis = Column(String(16), nullable=False)
+    outcome = Column(String(16), nullable=True)
+    exclusion_reason = Column(String(200), nullable=True)
+    # Exact inputs; an observation id is its version (observations are immutable).
+    input_observation_ids = Column(JSONB, nullable=False)
+    criteria_hash = Column(String(64), nullable=False)
+    supersedes_resolution_id: Column = _fk("screening_resolutions", nullable=True)
+    # Provenance: the observed/superseded/adjudicated/reopened event.
+    event_id = _fk("research_decision_events")
+    created_at = _created_at()
+
+    __table_args__ = (
+        CheckConstraint(
+            "basis IN ('single','agreement','conflict','adjudicated','reopened')",
+            name="ck_screening_resolution_basis",
+        ),
+        CheckConstraint(
+            "outcome IS NULL OR " + _DECISION_CHECK.replace("decision", "outcome"),
+            name="ck_screening_resolution_outcome",
+        ),
+        CheckConstraint(
+            "(basis IN ('single','agreement','adjudicated')) = (outcome IS NOT NULL)",
+            name="ck_screening_resolution_outcome_basis",
+        ),
+        CheckConstraint(
+            "exclusion_reason IS NULL OR COALESCE(outcome, '') = 'exclude'",
+            name="ck_screening_resolution_reason",
+        ),
+        UniqueConstraint(
+            "supersedes_resolution_id", name="uq_screening_resolution_supersedes"
+        ),
+        Index(
+            "uq_screening_resolution_initial",
+            "queue_id",
+            "report_id",
+            unique=True,
+            postgresql_where=text(_INITIAL_RESOLUTION),
+            sqlite_where=text(_INITIAL_RESOLUTION),
+        ),
+        Index("idx_screening_resolution_report", "queue_id", "report_id"),
     )

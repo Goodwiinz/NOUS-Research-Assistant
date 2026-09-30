@@ -75,6 +75,7 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    "screening_resolutions",  # GOO-302: references the screening tables
     "screening_suggestions",
     "screening_observations",
     "screening_assignments",
@@ -99,6 +100,7 @@ def _upgrade(connection: Connection) -> None:
         "c9d2e4f6a8b1_create_report_identities.py",
         "d4e6f8a0b2c3_create_search_imports.py",
         "e1f3a5c7d9b2_create_screening_queues.py",
+        "f3b5d7e9a1c4_create_screening_resolutions.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename
@@ -337,13 +339,7 @@ async def test_commit_reopen_and_event_state_atomicity(
     mine_r = await _assign(factory, world, queue.id, "R")
     mine_r2 = await _assign(factory, world, queue.id, "R2")
     first = await _submit(factory, world, "R", queue, _body(queue, mine_r, r1, "r-1"))
-    await _submit(
-        factory,
-        world,
-        "R2",
-        queue,
-        _body(queue, mine_r2, r1, "r2-1", decision="exclude"),
-    )
+    # GOO-302: R supersedes before R2's observation reveals (and resolves) r1.
     changed = await _submit(
         factory,
         world,
@@ -358,6 +354,13 @@ async def test_commit_reopen_and_event_state_atomicity(
             note="needs full text",
             supersedes_observation_id=first.id,
         ),
+    )
+    await _submit(
+        factory,
+        world,
+        "R2",
+        queue,
+        _body(queue, mine_r2, r1, "r2-1", decision="exclude"),
     )
 
     async with factory() as db:  # a fresh session reloads committed state
@@ -376,28 +379,24 @@ async def test_commit_reopen_and_event_state_atomicity(
         assert [r.id for r in rows if r.supersedes_observation_id] == [changed.id]
         original = next(r for r in rows if r.id == first.id)
         assert (original.decision, original.note) == ("include", None)
-        # History is supervisor-only until GOO-302 redacts peers' decisions.
+        # GOO-302: any VIEW member reads history, redacted per viewer; r1 is
+        # revealed (both dual observations are in), R's superseded row is not.
         context = await resolve_project(
             db, world.collection, world.ids["V"], ResearchAction.VIEW
         )
-        assert await _status(screening_service.history(db, context, queue.id)) == (
-            403,
-            "supervisor role required",
-        )
-        context = await resolve_project(
-            db, world.collection, world.ids["O"], ResearchAction.VIEW
-        )
-        history = await screening_service.history(db, context, queue.id)
+        history = await screening_service.history(db, context, queue.id, world.ids["V"])
     assert [e.event_type for e in history] == [
         "screening.queue_created",
         "screening.assigned",
         "screening.assigned",
         "screening.observed",
-        "screening.observed",
         "screening.superseded",
+        "screening.observed",
     ]
     assert [e.seq for e in history] == list(range(1, 7))
     assert history[0].payload["reviewer_mode"] == "dual_independent"
+    assert [e.redacted for e in history[3:]] == [True, False, False]
+    assert "decision" not in history[3].payload
 
     # Atomicity: the ledger append fails after the observation flush.
     async def exploding_append(*_args: Any, **_kwargs: Any) -> None:

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { useState, type ReactElement } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { APIErrorClass } from '@/types/api';
@@ -17,6 +17,7 @@ import {
   type MyScreeningQueue,
   type ProjectRoleAssignment,
   type ScreeningDecision,
+  type ScreeningResolution,
 } from '@/services/researchEngineService';
 
 interface ScreeningQueuePanelProps {
@@ -24,12 +25,6 @@ interface ScreeningQueuePanelProps {
   approvedProtocolVersionId?: string;
   roles: ProjectRoleAssignment[];
   readOnly?: boolean;
-  /**
-   * GOO-302 slot: per-report reveal/agreement/conflict state. Until a report is
-   * revealed a reviewer sees only their own observation, so GOO-301 renders
-   * nothing here.
-   */
-  renderRevealState?: (item: MyScreeningItem) => ReactNode;
 }
 
 const DECISIONS: { value: ScreeningDecision; label: string }[] = [
@@ -55,6 +50,58 @@ function activeAssignments(events: IdentityEvent[]): Map<string, string> {
   return active;
 }
 
+/** The resolution badge text: never an editable value, only the server's. */
+function resolutionLabel(resolution: ScreeningResolution): string {
+  const { basis, outcome, exclusion_reason: reason } = resolution;
+  const decided = `${outcome ?? ''}${reason ? ` — ${reason}` : ''}`;
+  if (basis === 'single') return `Decided: ${decided}`;
+  if (basis === 'agreement') return `Agreed: ${decided}`;
+  if (basis === 'adjudicated') return `Adjudicated: ${decided}`;
+  if (basis === 'reopened') return 'Reopened';
+  return 'Conflict';
+}
+
+/** GOO-302 reveal state: peers' decisions appear only once the server reveals. */
+function RevealState({ item }: { item: MyScreeningItem }): ReactElement {
+  if (item.reveal_state !== 'revealed' || !item.resolution) {
+    // A reopen starts a new blind cycle: hidden again, the reopen still shown.
+    return (
+      <div className="space-y-1 text-xs">
+        {item.resolution?.basis === 'reopened' && (
+          <span className="inline-block rounded bg-muted px-2 py-0.5 font-medium text-foreground">
+            Reopened
+          </span>
+        )}
+        <p className="text-muted-foreground">
+          Other reviewers&apos; decisions are hidden until reveal.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1 text-xs">
+      <span className="inline-block rounded bg-muted px-2 py-0.5 font-medium text-foreground">
+        {resolutionLabel(item.resolution)}
+      </span>
+      {(item.others ?? []).length > 0 && (
+        <ul
+          aria-label={`Other reviewers' decisions for ${item.title_snapshot}`}
+          className="text-muted-foreground"
+        >
+          {(item.others ?? []).map((other) => (
+            <li key={other.id}>
+              {`Reviewer ${other.reviewer_id}: ${other.decision}`}
+              {other.exclusion_reason ? ` (${other.exclusion_reason})` : ''}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const RESOLVED_TITLE = 'Resolved — an adjudicator must reopen';
+
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : 'Screening request failed.';
 
@@ -63,7 +110,6 @@ export function ScreeningQueuePanel({
   approvedProtocolVersionId,
   roles,
   readOnly = false,
-  renderRevealState,
 }: ScreeningQueuePanelProps): ReactElement {
   const queryClient = useQueryClient();
   const queryKey = ['screening-queues', projectId] as const;
@@ -207,7 +253,8 @@ export function ScreeningQueuePanel({
       <h2 className="font-medium text-foreground">Screening queues</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         Each queue freezes the reports at one approved protocol version.
-        Reviewers screen independently and only see their own decisions.
+        Reviewers screen independently and only see their own decisions until a
+        report is revealed.
       </p>
 
       {queues.isLoading ? (
@@ -376,7 +423,11 @@ export function ScreeningQueuePanel({
                 const current = item.observation;
                 const fullText = view.queue.stage === 'full_text';
                 const reason = reasons[item.report_id] ?? '';
-                const locked = readOnly || Boolean(stale) || busy;
+                // Reveal is irreversible: a resolved report needs a reopen.
+                const resolved =
+                  Boolean(item.resolution) &&
+                  item.resolution?.basis !== 'reopened';
+                const locked = readOnly || Boolean(stale) || busy || resolved;
                 return (
                   <li key={item.report_id} className="space-y-2 py-3 text-sm">
                     <div className="font-medium text-foreground">{title}</div>
@@ -402,7 +453,7 @@ export function ScreeningQueuePanel({
                           : ''}
                       </p>
                     )}
-                    {renderRevealState?.(item)}
+                    <RevealState item={item} />
                     {fullText && (
                       <select
                         aria-label={`Exclusion reason for ${title}`}
@@ -443,6 +494,7 @@ export function ScreeningQueuePanel({
                         <button
                           key={value}
                           type="button"
+                          title={resolved ? RESOLVED_TITLE : undefined}
                           aria-label={`${current ? 'Change to ' : ''}${label} ${title}`}
                           disabled={
                             locked ||

@@ -1,4 +1,4 @@
-"""GOO-301 screening service on SQLite (PostgreSQL race proof lives in
+"""GOO-301/302 screening service on SQLite (PostgreSQL race proofs live in
 ``tests/integration/test_screening_queue_postgres.py``)."""
 
 from collections.abc import AsyncIterator
@@ -35,15 +35,19 @@ from src.models.screening import (
     ScreeningAssignment,
     ScreeningObservation,
     ScreeningQueue,
+    ScreeningResolution,
     ScreeningSuggestion,
 )
 from src.schemas.research_engine import (
+    ScreeningAdjudicateRequest,
     ScreeningAssignmentCreate,
     ScreeningDecisionValue,
     ScreeningObservationCreate,
     ScreeningQueueCreate,
+    ScreeningReopenRequest,
     ScreeningRevokeRequest,
 )
+from src.services.research_decisions import DecisionReplayError
 from src.services.research_engine import screening_service
 from src.services.research_engine.project_access import ProjectContext
 
@@ -74,6 +78,7 @@ _TABLES = (
     ScreeningAssignment,
     ScreeningObservation,
     ScreeningSuggestion,
+    ScreeningResolution,
 )
 # Only the columns the service reads: the real User model encrypts its PII
 # columns, which needs key material unit tests do not have.
@@ -415,7 +420,13 @@ async def test_ai_suggestions_never_become_observations(db: AsyncSession) -> Non
     first = mine.items[0]
     assert (first.title_snapshot, first.abstract) == ("Alpha", "abstract 0")
     assert first.identifiers == {"doi": ["10.1000/alpha"]}
-    assert mine.counts.model_dump() == {"total": 3, "screened": 0, "remaining": 3}
+    assert mine.counts.model_dump() == {
+        "total": 3,
+        "screened": 0,
+        "remaining": 3,
+        "revealed": 0,
+        "conflicts": 0,
+    }
 
     non_screen = uuid4()
     db.add(ResearchStep(id=non_screen, run_id=run_id, step_index=1, step_type="search"))
@@ -489,7 +500,9 @@ async def test_assignment_revisions(db: AsyncSession) -> None:
     renewed = await _assign(db, project, queue.id, project.reviewer, "renew")
     assert renewed.id != assignment.id
     await _submit(db, project, queue, renewed.id, project.reports[0], "k")
-    history = await screening_service.history(db, _supervisor(project), queue.id)
+    history = await screening_service.history(
+        db, _supervisor(project), queue.id, project.supervisor
+    )
     assert [e.event_type for e in history] == [
         "screening.queue_created",
         "screening.assigned",
@@ -615,7 +628,14 @@ async def test_changed_decision_supersedes_and_keeps_history(db: AsyncSession) -
         (first.id, "include", None),
         (second.id, "uncertain", first.id),
     ]
-    history = await screening_service.history(db, _supervisor(project), queue.id)
+    history = await screening_service.history(
+        db, _supervisor(project), queue.id, project.supervisor
+    )
+    # GOO-302: supervising grants no decisions; unrevealed ones are redacted.
+    assert history[-1].redacted and history[-1].reason is None
+    history = await screening_service.history(
+        db, _reviewer(project), queue.id, project.reviewer
+    )
     assert [e.event_type for e in history][-2:] == [
         "screening.observed",
         "screening.superseded",
@@ -628,7 +648,13 @@ async def test_changed_decision_supersedes_and_keeps_history(db: AsyncSession) -
     )
     assert mine.items[0].observation is not None
     assert mine.items[0].observation.id == second.id
-    assert mine.counts.model_dump() == {"total": 3, "screened": 1, "remaining": 2}
+    assert mine.counts.model_dump() == {
+        "total": 3,
+        "screened": 1,
+        "remaining": 2,
+        "revealed": 0,
+        "conflicts": 0,
+    }
 
     listed = await screening_service.list_queues(db, _reviewer(project))
     assert [(q.id, q.assignment_count, q.observation_count) for q in listed] == [
@@ -700,7 +726,7 @@ async def test_foreign_queue_and_protocol_are_404(db: AsyncSession) -> None:
     project, other = await _seed(db), await _seed(db)
     queue = await _queue(db, project)
     await _raises(
-        screening_service.history(db, _supervisor(other), queue.id),
+        screening_service.history(db, _supervisor(other), queue.id, other.supervisor),
         404,
         "Screening queue not found",
     )
@@ -936,21 +962,6 @@ async def test_create_key_reused_for_another_queue_is_409(db: AsyncSession) -> N
     assert await _count(db, ScreeningQueue) == 1
 
 
-@pytest.mark.asyncio
-async def test_history_is_supervisor_only_until_goo302_redaction(
-    db: AsyncSession,
-) -> None:
-    """Events carry every reviewer's decision; a reviewer must not read peers'."""
-    project = await _seed(db)
-    queue = await _queue(db, project)
-    await _raises(
-        screening_service.history(db, _reviewer(project), queue.id),
-        403,
-        "supervisor role required",
-    )
-    assert len(await screening_service.history(db, _supervisor(project), queue.id))
-
-
 class _Orig(Exception):
     def __init__(self, sqlstate: str) -> None:
         super().__init__("constraint violated")
@@ -1024,3 +1035,647 @@ async def test_imported_abstract_respects_redistribution(
     )
 
     assert mine.items[0].abstract == ("Licensed abstract text." if shown else None)
+
+
+# --- GOO-302: blind reveal, derived resolutions and adjudication ------------
+
+
+def _adjudicator(project: _Project) -> ProjectContext:
+    return _context(project, ResearchProjectRole.ADJUDICATOR)
+
+
+class _Dual(SimpleNamespace):
+    project: _Project
+    queue: Any
+    a: Any  # reviewer's assignment
+    a2: Any  # reviewer2's assignment
+
+
+async def _dual(db: AsyncSession, stage: str = "title_abstract") -> _Dual:
+    project = await _seed(db)
+    queue = await _queue(
+        db,
+        project,
+        stage=stage,
+        report_ids=project.reports if stage == "full_text" else None,
+    )
+    return _Dual(
+        project=project,
+        queue=queue,
+        a=await _assign(db, project, queue.id, project.reviewer),
+        a2=await _assign(db, project, queue.id, project.reviewer2),
+    )
+
+
+async def _vote(
+    db: AsyncSession,
+    dual: _Dual,
+    who: str,
+    report: UUID,
+    key: str,
+    decision: ScreeningDecisionValue = "include",
+    **fields: Any,
+) -> Any:
+    first = who == "r"
+    return await _submit(
+        db,
+        dual.project,
+        dual.queue,
+        (dual.a if first else dual.a2).id,
+        report,
+        key,
+        decision,
+        reviewer=dual.project.reviewer if first else dual.project.reviewer2,
+        **fields,
+    )
+
+
+def _adjudicate_body(
+    conflict: Any, key: str, decision: ScreeningDecisionValue = "exclude", **fields: Any
+) -> ScreeningAdjudicateRequest:
+    return ScreeningAdjudicateRequest(
+        resolution_id=fields.pop("resolution_id", conflict.resolution.id),
+        input_observation_ids=fields.pop(
+            "input_observation_ids", conflict.resolution.input_observation_ids
+        ),
+        criteria_hash=conflict.resolution.criteria_hash,
+        decision=decision,
+        rationale="protocol 3.2 excludes it",
+        idempotency_key=key,
+        **fields,
+    )
+
+
+async def _conflicts(db: AsyncSession, dual: _Dual) -> list[Any]:
+    return await screening_service.conflicts(
+        db, _adjudicator(dual.project), dual.queue.id, dual.project.supervisor
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_reveal_peer_observation_absent_from_mine_and_history(
+    db: AsyncSession,
+) -> None:
+    dual = await _dual(db)
+    project, report = dual.project, dual.project.reports[0]
+    peer = await _vote(db, dual, "r2", report, "p1", "exclude", note="R2-SENTINEL-7f3")
+    assert peer.resolution is None
+    await _vote(db, dual, "r", project.reports[1], "own")
+
+    mine = await screening_service.my_queue(
+        db, _reviewer(project), dual.queue.id, project.reviewer
+    )
+    body = mine.model_dump_json()
+    assert "R2-SENTINEL-7f3" not in body and str(peer.id) not in body
+    item = mine.items[0]
+    assert (item.reveal_state, item.others, item.resolution) == ("hidden", [], None)
+
+    for viewer, context in (
+        (project.reviewer, _reviewer(project)),
+        (project.owner, _context(project)),  # a role-less VIEW member
+    ):
+        history = await screening_service.history(db, context, dual.queue.id, viewer)
+        body = "".join(event.model_dump_json() for event in history)
+        assert "R2-SENTINEL-7f3" not in body
+        [hidden] = [
+            e for e in history if e.payload.get("observation_id") == str(peer.id)
+        ]
+        assert hidden.redacted and hidden.reason is None
+        assert "decision" not in hidden.payload
+        assert "exclusion_reason" not in hidden.payload
+        own = [
+            e
+            for e in history
+            if "observation_id" in e.payload and e.payload["reviewer_id"] == str(viewer)
+        ]
+        assert all(not e.redacted and "decision" in e.payload for e in own)
+    # The author still sees their own note.
+    history = await screening_service.history(
+        db, _reviewer(project), dual.queue.id, project.reviewer2
+    )
+    assert any(e.reason == "R2-SENTINEL-7f3" for e in history)
+    listed = await screening_service.list_queues(db, _reviewer(project))
+    assert (listed[0].resolved_count, listed[0].conflict_count) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_second_dual_submission_creates_one_resolution_and_reveals(
+    db: AsyncSession,
+) -> None:
+    dual = await _dual(db)
+    project, report = dual.project, dual.project.reports[0]
+    first = await _vote(db, dual, "r", report, "k1", note="looks relevant")
+    second = await _vote(db, dual, "r2", report, "k2", "exclude")
+    resolution = second.resolution
+    assert resolution is not None
+    assert (resolution.basis, resolution.outcome) == ("conflict", None)
+    assert resolution.input_observation_ids == sorted([first.id, second.id], key=str)
+    assert await _count(db, ScreeningResolution) == 1
+    event_id = (
+        await db.execute(
+            select(ResearchDecisionEvent.id).where(
+                ResearchDecisionEvent.idempotency_key == "k2"
+            )
+        )
+    ).scalar_one()
+    row = await db.get(ScreeningResolution, resolution.id)
+    assert row is not None and row.event_id == event_id
+    # An identical retry replays the same resolution; nothing new is written.
+    retry = await _vote(db, dual, "r2", report, "k2", "exclude")
+    assert retry.resolution is not None and retry.resolution.id == resolution.id
+    assert await _count(db, ScreeningResolution) == 1
+
+    mine = await screening_service.my_queue(
+        db, _reviewer(project), dual.queue.id, project.reviewer
+    )
+    item = mine.items[0]
+    assert item.reveal_state == "revealed"
+    assert [o.id for o in item.others] == [second.id]
+    assert item.resolution is not None and item.resolution.id == resolution.id
+    assert (mine.counts.revealed, mine.counts.conflicts) == (1, 1)
+    history = await screening_service.history(
+        db, _context(project), dual.queue.id, project.owner
+    )
+    assert not any(e.redacted for e in history)
+    assert any(e.reason == "looks relevant" for e in history)
+    listed = await screening_service.list_queues(db, _reviewer(project))
+    assert (listed[0].resolved_count, listed[0].conflict_count) == (0, 1)
+
+    # Agreement on another report resolves with the shared decision.
+    await _vote(db, dual, "r", project.reports[1], "k3")
+    agreed = await _vote(db, dual, "r2", project.reports[1], "k4")
+    assert agreed.resolution is not None
+    assert (agreed.resolution.basis, agreed.resolution.outcome) == (
+        "agreement",
+        "include",
+    )
+    listed = await screening_service.list_queues(db, _reviewer(project))
+    assert (listed[0].resolved_count, listed[0].conflict_count) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_submit_after_resolution_409_until_reopen(db: AsyncSession) -> None:
+    dual = await _dual(db)
+    project, report = dual.project, dual.project.reports[0]
+    first = await _vote(db, dual, "r", report, "k1")
+    second = await _vote(db, dual, "r2", report, "k2")
+    await _raises(
+        _vote(
+            db, dual, "r", report, "k3", "exclude", supersedes_observation_id=first.id
+        ),
+        409,
+        "Report resolved; reopen to change",
+    )
+    assert second.resolution is not None
+    await _raises(
+        screening_service.reopen(
+            db,
+            _reviewer(project),
+            dual.queue.id,
+            report,
+            project.reviewer,
+            ScreeningReopenRequest(
+                resolution_id=second.resolution.id, rationale="x", idempotency_key="o"
+            ),
+        ),
+        403,
+        "adjudicator role required",
+    )
+    reopened = await screening_service.reopen(
+        db,
+        _adjudicator(project),
+        dual.queue.id,
+        report,
+        project.supervisor,
+        ScreeningReopenRequest(
+            resolution_id=second.resolution.id,
+            rationale="new evidence",
+            idempotency_key="reopen",
+        ),
+    )
+    assert (reopened.basis, reopened.input_observation_ids) == ("reopened", [])
+    assert reopened.supersedes_resolution_id == second.resolution.id
+    await _raises(
+        screening_service.reopen(
+            db,
+            _adjudicator(project),
+            dual.queue.id,
+            report,
+            project.supervisor,
+            ScreeningReopenRequest(
+                resolution_id=reopened.id, rationale="again", idempotency_key="o2"
+            ),
+        ),
+        409,
+        "Report is not resolved",
+    )
+    changed = await _vote(
+        db, dual, "r", report, "k3", "exclude", supersedes_observation_id=first.id
+    )
+    assert changed.resolution is None
+    # Reopen and observations are ledger events; nothing was edited in place.
+    rows = (await db.execute(select(ScreeningObservation))).scalars().all()
+    assert {(r.id, r.decision) for r in rows} >= {
+        (first.id, "include"),
+        (second.id, "include"),
+    }
+    history = await screening_service.history(
+        db, _supervisor(project), dual.queue.id, project.supervisor
+    )
+    assert [e.event_type for e in history][-2:] == [
+        "screening.reopened",
+        "screening.superseded",
+    ]
+    assert history[-2].reason == "new evidence"
+
+
+@pytest.mark.asyncio
+async def test_reopen_requires_fresh_observations_from_both(db: AsyncSession) -> None:
+    dual = await _dual(db)
+    project, report = dual.project, dual.project.reports[0]
+    first = await _vote(db, dual, "r", report, "k1")
+    second = await _vote(db, dual, "r2", report, "k2")
+    assert second.resolution is not None
+    await screening_service.reopen(
+        db,
+        _adjudicator(project),
+        dual.queue.id,
+        report,
+        project.supervisor,
+        ScreeningReopenRequest(
+            resolution_id=second.resolution.id, rationale="recheck", idempotency_key="o"
+        ),
+    )
+    reopened = await screening_service.my_queue(
+        db, _reviewer(project), dual.queue.id, project.reviewer
+    )
+    # A reopen starts a new blind cycle: hidden again, the reopen still shown.
+    item = reopened.items[0]
+    assert item.reveal_state == "hidden"
+    assert item.resolution is not None and item.resolution.basis == "reopened"
+    assert (reopened.counts.revealed, reopened.counts.conflicts) == (0, 0)
+    again = await _vote(
+        db, dual, "r", report, "k3", "exclude", supersedes_observation_id=first.id
+    )
+    assert again.resolution is None  # r2's old input is not fresh
+    mine = await screening_service.my_queue(
+        db, _reviewer(project), dual.queue.id, project.reviewer2
+    )
+    # r's new observation is not an input yet: hidden from r2.
+    assert str(again.id) not in mine.model_dump_json()
+    fresh = await _vote(
+        db, dual, "r2", report, "k4", "exclude", supersedes_observation_id=second.id
+    )
+    assert fresh.resolution is not None
+    assert fresh.resolution.basis == "agreement"
+    assert fresh.resolution.input_observation_ids == sorted(
+        [again.id, fresh.id], key=str
+    )
+    assert await _count(db, ScreeningResolution) == 3
+    history = await screening_service.history(
+        db, _supervisor(project), dual.queue.id, project.supervisor
+    )
+    assert history[-1].event_type == "screening.superseded"
+
+
+async def _conflict(db: AsyncSession, dual: _Dual) -> Any:
+    report = dual.project.reports[0]
+    await _vote(db, dual, "r", report, "c1")
+    await _vote(db, dual, "r2", report, "c2", "exclude")
+    [conflict] = await _conflicts(db, dual)
+    return conflict
+
+
+@pytest.mark.asyncio
+async def test_adjudicate_stale_inputs_409(db: AsyncSession) -> None:
+    dual = await _dual(db)
+    project, report = dual.project, dual.project.reports[0]
+    conflict = await _conflict(db, dual)
+    assert conflict.report_id == report and conflict.title_snapshot == "Alpha"
+    assert conflict.identifiers == {"doi": ["10.1000/alpha"]}
+    assert conflict.exclusion_reasons == REASONS
+    assert {o.id for o in conflict.observations} == set(
+        conflict.resolution.input_observation_ids
+    )
+
+    async def adjudicate(body: ScreeningAdjudicateRequest) -> Any:
+        return await screening_service.adjudicate(
+            db, _adjudicator(project), dual.queue.id, report, project.supervisor, body
+        )
+
+    events = await _count(db, ResearchDecisionEvent)
+    for stale in (
+        {"resolution_id": uuid4()},
+        {"input_observation_ids": conflict.resolution.input_observation_ids[:1]},
+    ):
+        await _raises(
+            adjudicate(_adjudicate_body(conflict, "s", **stale)),
+            409,
+            "Adjudication inputs are stale",
+        )
+    await _raises(
+        adjudicate(
+            _adjudicate_body(conflict, "c").model_copy(
+                update={"criteria_hash": "0" * 64}
+            )
+        ),
+        409,
+        "Screening criteria changed; reload the queue",
+    )
+    await _raises(
+        adjudicate(_adjudicate_body(conflict, "r", exclusion_reason="wrong design")),
+        422,
+    )
+    assert await _count(db, ResearchDecisionEvent) == events
+    assert await _count(db, ScreeningResolution) == 1
+
+    before = {
+        (r.id, r.decision, r.note)
+        for r in (await db.execute(select(ScreeningObservation))).scalars()
+    }
+    done = await adjudicate(_adjudicate_body(conflict, "ok"))
+    assert (done.basis, done.outcome) == ("adjudicated", "exclude")
+    assert done.supersedes_resolution_id == conflict.resolution.id
+    assert done.input_observation_ids == conflict.resolution.input_observation_ids
+    assert (await adjudicate(_adjudicate_body(conflict, "ok"))).id == done.id
+    after = {
+        (r.id, r.decision, r.note)
+        for r in (await db.execute(select(ScreeningObservation))).scalars()
+    }
+    assert after == before
+    await _raises(
+        adjudicate(_adjudicate_body(conflict, "again", resolution_id=done.id)),
+        409,
+        "Report is not in conflict",
+    )
+    assert await _conflicts(db, dual) == []
+    history = await screening_service.history(
+        db, _supervisor(project), dual.queue.id, project.supervisor
+    )
+    assert history[-1].event_type == "screening.adjudicated"
+    assert history[-1].reason == "protocol 3.2 excludes it"
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_who_reviewed_is_403(db: AsyncSession) -> None:
+    dual = await _dual(db)
+    project = dual.project
+    conflict = await _conflict(db, dual)
+    await _raises(
+        screening_service.adjudicate(
+            db,
+            _adjudicator(project),
+            dual.queue.id,
+            conflict.report_id,
+            project.reviewer2,
+            _adjudicate_body(conflict, "self"),
+        ),
+        403,
+        "Adjudicator reviewed this report",
+    )
+    assert await _count(db, ScreeningResolution) == 1
+
+
+@pytest.mark.asyncio
+async def test_owner_without_role_cannot_list_conflicts(db: AsyncSession) -> None:
+    dual = await _dual(db)
+    project = dual.project
+    conflict = await _conflict(db, dual)
+    for context in (_context(project), _supervisor(project), _reviewer(project)):
+        await _raises(
+            screening_service.conflicts(db, context, dual.queue.id, project.owner),
+            403,
+            "adjudicator role required",
+        )
+        await _raises(
+            screening_service.adjudicate(
+                db,
+                context,
+                dual.queue.id,
+                conflict.report_id,
+                project.owner,
+                _adjudicate_body(conflict, "own"),
+            ),
+            403,
+            "adjudicator role required",
+        )
+    other = await _seed(db)
+    await _raises(
+        screening_service.conflicts(
+            db, _adjudicator(other), dual.queue.id, other.supervisor
+        ),
+        404,
+        "Screening queue not found",
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_mode_resolves_immediately(db: AsyncSession) -> None:
+    project = await _seed(db, {**SNAPSHOT, "reviewer_mode": {"mode": "single"}})
+    queue = await _queue(db, project)
+    assignment = await _assign(db, project, queue.id, project.reviewer)
+    report = project.reports[0]
+    done = await _submit(db, project, queue, assignment.id, report, "k1", "exclude")
+    assert done.resolution is not None
+    assert (done.resolution.basis, done.resolution.outcome) == ("single", "exclude")
+    await _raises(
+        _submit(
+            db,
+            project,
+            queue,
+            assignment.id,
+            report,
+            "k2",
+            supersedes_observation_id=done.id,
+        ),
+        409,
+        "Report resolved; reopen to change",
+    )
+    unsure = await _submit(
+        db, project, queue, assignment.id, project.reports[1], "k3", "uncertain"
+    )
+    assert unsure.resolution is not None
+    assert (unsure.resolution.basis, unsure.resolution.outcome) == ("conflict", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drift",
+    [{"basis": "agreement", "outcome": "include"}, {"criteria_hash": "0" * 64}],
+)
+async def test_history_rejects_a_resolution_that_drifted_from_its_inputs(
+    db: AsyncSession, drift: dict[str, str]
+) -> None:
+    dual = await _dual(db)
+    project, report = dual.project, dual.project.reports[0]
+    await _vote(db, dual, "r", report, "k1")
+    await _vote(db, dual, "r2", report, "k2", "exclude")
+    await db.execute(update(ScreeningResolution).values(**drift))
+    with pytest.raises(DecisionReplayError, match="does not match inputs"):
+        await screening_service.history(
+            db, _supervisor(project), dual.queue.id, project.supervisor
+        )
+
+
+@pytest.mark.asyncio
+async def test_reopen_with_a_stale_resolution_id_is_409(db: AsyncSession) -> None:
+    dual = await _dual(db)
+    project = dual.project
+    conflict = await _conflict(db, dual)
+    await _raises(
+        screening_service.reopen(
+            db,
+            _adjudicator(project),
+            dual.queue.id,
+            conflict.report_id,
+            project.supervisor,
+            ScreeningReopenRequest(
+                resolution_id=uuid4(), rationale="x", idempotency_key="stale"
+            ),
+        ),
+        409,
+        "Resolution changed; reload the queue",
+    )
+    assert await _count(db, ScreeningResolution) == 1
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_who_reviewed_an_earlier_cycle_is_403(
+    db: AsyncSession,
+) -> None:
+    """The supervisor reviews cycle 1, is not an input of cycle 2, and still
+    may not adjudicate that report (any observation, any cycle)."""
+    dual = await _dual(db)
+    project, report = dual.project, dual.project.reports[0]
+    db.add(
+        ResearchProjectRoleAssignment(
+            collection_id=project.collection_id,
+            user_id=project.supervisor,
+            role=ResearchProjectRole.REVIEWER,
+            assigned_by_id=project.owner,
+        )
+    )
+    await db.flush()
+    third = await _assign(db, project, dual.queue.id, project.supervisor)
+    both = _context(
+        project, ResearchProjectRole.REVIEWER, ResearchProjectRole.ADJUDICATOR
+    )
+    await screening_service.submit(
+        db,
+        both,
+        dual.queue.id,
+        project.supervisor,
+        ScreeningObservationCreate(
+            report_id=report,
+            assignment_id=third.id,
+            criteria_hash=dual.queue.criteria_hash,
+            decision="include",
+            idempotency_key="s1",
+        ),
+    )
+    first = await _vote(db, dual, "r", report, "k1", "exclude")
+    assert first.resolution is not None and first.resolution.basis == "conflict"
+    await screening_service.reopen(
+        db,
+        _adjudicator(project),
+        dual.queue.id,
+        report,
+        project.owner,
+        ScreeningReopenRequest(
+            resolution_id=first.resolution.id, rationale="r", idempotency_key="o"
+        ),
+    )
+    await _vote(db, dual, "r", report, "k2", supersedes_observation_id=first.id)
+    await _vote(db, dual, "r2", report, "k3", "exclude")
+    [conflict] = await _conflicts(db, dual)
+    assert not any(o.reviewer_id == project.supervisor for o in conflict.observations)
+    await _raises(
+        screening_service.adjudicate(
+            db,
+            both,
+            dual.queue.id,
+            report,
+            project.supervisor,
+            _adjudicate_body(conflict, "self"),
+        ),
+        403,
+        "Adjudicator reviewed this report",
+    )
+    history = await screening_service.history(
+        db, _supervisor(project), dual.queue.id, project.supervisor
+    )
+    assert history[-1].event_type == "screening.observed"
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_who_reviewed_in_a_reconciled_queue_is_403(
+    db: AsyncSession,
+) -> None:
+    """The self-check follows ``supersedes_queue_id``: reviewing a report in
+    the queue this one reconciles also disqualifies the adjudicator."""
+    project = await _seed(db)
+    report = project.reports[0]
+    db.add(
+        ResearchProjectRoleAssignment(
+            collection_id=project.collection_id,
+            user_id=project.supervisor,
+            role=ResearchProjectRole.REVIEWER,
+            assigned_by_id=project.owner,
+        )
+    )
+    await db.flush()
+    old = await _queue(db, project)
+    old_assignment = await _assign(db, project, old.id, project.supervisor)
+    both = _context(
+        project, ResearchProjectRole.REVIEWER, ResearchProjectRole.ADJUDICATOR
+    )
+    await screening_service.submit(
+        db,
+        both,
+        old.id,
+        project.supervisor,
+        ScreeningObservationCreate(
+            report_id=report,
+            assignment_id=old_assignment.id,
+            criteria_hash=old.criteria_hash,
+            decision="include",
+            idempotency_key="old",
+        ),
+    )
+    amended = await _version(
+        db, project.protocol_id, 2, {**SNAPSHOT, "eligibility": {"population": "all"}}
+    )
+    await _approve(db, project.protocol_id, amended)
+    new = await _queue(
+        db, project, "q2", protocol_version_id=amended, supersedes_queue_id=old.id
+    )
+    dual = _Dual(
+        project=project,
+        queue=new,
+        a=await _assign(db, project, new.id, project.reviewer),
+        a2=await _assign(db, project, new.id, project.reviewer2),
+    )
+    await _vote(db, dual, "r", report, "n1")
+    await _vote(db, dual, "r2", report, "n2", "exclude")
+    [conflict] = await _conflicts(db, dual)
+    await _raises(
+        screening_service.adjudicate(
+            db,
+            both,
+            new.id,
+            report,
+            project.supervisor,
+            _adjudicate_body(conflict, "x"),
+        ),
+        403,
+        "Adjudicator reviewed this report",
+    )
+    done = await screening_service.adjudicate(
+        db,
+        _adjudicator(project),
+        new.id,
+        report,
+        project.owner,
+        _adjudicate_body(conflict, "y"),
+    )
+    assert done.basis == "adjudicated"

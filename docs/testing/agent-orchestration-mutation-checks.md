@@ -1320,6 +1320,79 @@ with `pass` during fix-up `e864f9131`, and each mutant failed exactly that
 test.
 
 
+## GOO-302 blind dual review and adjudication — 2026-09-29
+
+Three guards were mutation-verified against
+`backend/tests/integration/test_screening_blind_review_postgres.py` on a
+disposable local PostgreSQL 14 database (schema-per-test; the screening
+tables are rebuilt through revisions `e1f3a5c7d9b2` then `f3b5d7e9a1c4`).
+Pre-mutation SHA-256:
+
+- `backend/src/services/research_engine/project_access.py`
+  `41e1b0635bf311534cee68bef1601d4ec3d78fa4c3f24b6f82b34f4fcff44d33`
+- `backend/src/services/research_decisions/ledger.py`
+  `c08d08ad5b0ea7fefb25a3d993e47d28a5fd7de30f05f3cdf7d00bf1cedffcd0`
+- `backend/src/services/research_engine/screening_service.py`
+  `1f1b65817e47c2559bd723550bdbb648cedef99dfbb2baa27e88546bbcf7b94d`
+
+Each mutant was applied with a scripted string replacement, run, then restored
+from a copy of the pre-mutation file. `git diff --quiet` succeeded on the
+restored files, and the same command passed again (`1 passed`). No mutant was
+committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_screening_blind_review_postgres.py -k <selector>
+```
+
+| Guard (line) | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| GOO-301 lock order: Collection `UPDATE` (`project_access.py:173`) and stream `FOR UPDATE` (`ledger.py:490`) | both `.with_for_update(...)` lines deleted | `simultaneous` | `assert 'FOR UPDATE OF collections' in 'INSERT INTO research_decision_streams ... ON CONFLICT ... DO NOTHING'`: session 2 no longer waits in `resolve_project` before reading screening state. |
+| Stale-input comparison in `adjudicate` (`screening_service.py:1286`) | condition prefixed with `False and` | `stale` | `DID NOT RAISE HTTPException`: the pre-reopen tip and its superseded input ids were adjudicated. |
+| Per-viewer redaction in `history` (`screening_service.py:1137`) | raw payload and note put back after `redacted = True` | `redaction` | `assert 'R2-SENTINEL-7f3' not in ...`: a reviewer read a peer's hidden note. |
+
+**Why the lock-order test asserts where session 2 waits.** With only the two
+`FOR UPDATE` clauses removed, session 2 still blocks: the ledger's stream
+upsert (`INSERT ... ON CONFLICT DO NOTHING`) waits on the stream row that
+session 1 already updated (`next_seq`). Because that wait also happens before
+`_derive_and_record`, and each READ COMMITTED statement takes a fresh
+snapshot, the mutant still produced exactly one resolution. A test that only
+counted resolutions would therefore survive the plan's mutant. The test now
+also reads `pg_stat_activity.query` for the waiting backend and requires the
+Collection `FOR UPDATE`, which is the documented lock order (Workspace
+`SHARE` -> Collection `UPDATE` -> stream).
+
+The post-lock role reload in `resolve_project` (the role-revocation race in
+`-k stale`) is already mutation-verified in
+`test_research_authorization_concurrency.py` and is not repeated here.
+
+### GOO-302 review round — additional guards (2026-09-29)
+
+Same procedure (apply, run, restore from a copy, `cmp -s`, rerun). Pre-mutation
+`screening_service.py` SHA-256 for the last three rows:
+`01c5cfb94718602b27bb59585d88dc6505db329515e2911864a8e6145579e93c`. Unit
+selectors run `backend/tests/unit/services/test_screening_service.py` or
+`test_research_decision_ledger.py`; PG selectors run
+`test_screening_blind_review_postgres.py`.
+
+| Guard | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| Replay: reopen of a reopened tip (`ledger.replay_screening_resolutions`) | `or tip.basis == "reopened"` deleted | unit `-k double_reopen` | `DID NOT RAISE DecisionReplayError` |
+| Replay: adjudication needs a conflict tip | `tip.basis != "conflict"` dropped | unit `-k non_conflict_tip` | `DID NOT RAISE DecisionReplayError` |
+| Replay: adjudication criteria equal the queue's | condition replaced with `False` | unit `-k other_criteria` | `DID NOT RAISE DecisionReplayError` |
+| Replay: any-cycle self-check | reverted to "actor authored an input" | unit ledger `-k earlier_cycle` | `DID NOT RAISE DecisionReplayError` |
+| Service: reopen names the current tip | `RESOLUTION_STALE` check replaced with `pass` | unit `-k stale_resolution_id` | `DID NOT RAISE HTTPException` |
+| Service: any-cycle self-check | query narrowed to the request's input ids | unit service `-k earlier_cycle` | `DID NOT RAISE HTTPException` |
+| Service: drift key includes `criteria_hash` | `row.criteria_hash` removed from the key | unit `-k drifted` | `DID NOT RAISE DecisionReplayError` (criteria case) |
+| Service: step 4a resolved-report 409 | check replaced with `pass` | unit `-k "after_resolution or single_mode"` | `DID NOT RAISE HTTPException` (2 tests) |
+| Service: `my_queue` peers filtered by `visible_observation_ids` | `visible` replaced by "every observation of a report that has a tip" | PG `-k stale` | `'R2-SENTINEL-7f3'` found in R2's `my_queue` after the reopen |
+| Service: self-check follows `supersedes_queue_id` | chain walk disabled (`prior = None`) | unit `-k reconciled_queue` | `DID NOT RAISE HTTPException` |
+| Service: reopened report is `hidden` in `my_queue` | `basis != "reopened"` dropped | unit `-k fresh_observations_from_both` | `assert 'revealed' == 'hidden'` |
+| Frontend: resolved rows lock decisions (`ScreeningQueuePanel`) | `resolved` removed from `locked` | vitest `ScreeningQueuePanel.test.tsx` | 3 failed |
+| Frontend: stale 409 maps to the reload alert (`ScreeningConflictsPanel`) | `return STALE` → `return error.message` | vitest `ScreeningConflictsPanel.test.tsx` | 1 failed |
+| Frontend: a failed adjudication refetches conflicts | `onError: refresh` removed | vitest `ScreeningConflictsPanel.test.tsx` | 1 failed |
+
 ## GOO-299 review follow-ups — 2026-09-29
 
 Guards added after the #1752 review, mutation-verified with the same

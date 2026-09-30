@@ -140,6 +140,7 @@ from .screening import (
     ScreeningAssignment,
     ScreeningObservation,
     ScreeningQueue,
+    ScreeningResolution,
     ScreeningSuggestion,
 )
 
@@ -306,6 +307,7 @@ __all__ = [
     "ScreeningAssignment",
     "ScreeningObservation",
     "ScreeningSuggestion",
+    "ScreeningResolution",
     # Research Pipeline
     "ResearchPipeline",
     # Evaluation models
