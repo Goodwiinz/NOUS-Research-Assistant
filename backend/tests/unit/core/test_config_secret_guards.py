@@ -6,8 +6,13 @@ constants. The five throwaway env names keep the local fallbacks so local
 dev and CI keep working unchanged.
 """
 
+from typing import TYPE_CHECKING, Any
+
 import pytest
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from src.core.config import Settings
 
 # Single source of truth for every parametrization in this module: the
 # recognised environment names split into strict (shared/deployed/unknown)
@@ -42,7 +47,7 @@ def _error_fields(exc: ValidationError) -> set:
     return {tuple(err.get("loc", ())) for err in exc.errors()}
 
 
-def _cfg(**kw):
+def _cfg(**kw: Any) -> "Settings":
     """Build Settings hermetically.
 
     NOTE: fields not passed here still fall through to OS-env passthrough
@@ -57,13 +62,18 @@ def _cfg(**kw):
     from src.core.config import Settings
 
     env = kw.pop("env")
-    return Settings(
-        _env_file=None,
-        ENVIRONMENT=env,
-        DATABASE_URL=kw.pop("DATABASE_URL", "postgresql://u:p@db.example.com:5432/db"),
-        SUPABASE_DB_URL=kw.pop("SUPABASE_DB_URL", ""),
+    # ``_env_file`` is a pydantic-settings init kwarg that mypy (no pydantic
+    # plugin) can't see on the Settings signature, so pass it via the dict.
+    overrides: dict[str, Any] = {
+        "_env_file": None,
+        "ENVIRONMENT": env,
+        "DATABASE_URL": kw.pop(
+            "DATABASE_URL", "postgresql://u:p@db.example.com:5432/db"
+        ),
+        "SUPABASE_DB_URL": kw.pop("SUPABASE_DB_URL", ""),
         **kw,
-    )
+    }
+    return Settings(**overrides)
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +83,7 @@ def _cfg(**kw):
 
 
 @pytest.mark.parametrize("env", STRICT_ENVS)
-def test_strict_envs_reject_weak_jwt_secret(env):
+def test_strict_envs_reject_weak_jwt_secret(env: str) -> None:
     with pytest.raises(ValidationError) as exc_info:
         _cfg(
             env=env,
@@ -85,7 +95,7 @@ def test_strict_envs_reject_weak_jwt_secret(env):
 
 
 @pytest.mark.parametrize("env", STRICT_ENVS)
-def test_strict_envs_reject_weak_neo4j_password(env):
+def test_strict_envs_reject_weak_neo4j_password(env: str) -> None:
     with pytest.raises(ValidationError) as exc_info:
         _cfg(
             env=env,
@@ -97,7 +107,7 @@ def test_strict_envs_reject_weak_neo4j_password(env):
 
 
 @pytest.mark.parametrize("env", STRICT_ENVS)
-def test_strict_envs_reject_weak_secret_key(env):
+def test_strict_envs_reject_weak_secret_key(env: str) -> None:
     with pytest.raises(ValidationError) as exc_info:
         _cfg(
             env=env,
@@ -108,7 +118,7 @@ def test_strict_envs_reject_weak_secret_key(env):
     assert ("SECRET_KEY",) in _error_fields(exc_info.value)
 
 
-def test_vacuous_raises_tripwire_weak_default_secret_key():
+def test_vacuous_raises_tripwire_weak_default_secret_key() -> None:
     """Tripwire for the vacuous-test bug this suite once had.
 
     SECRET_KEY is declared BEFORE JWT_SECRET_KEY/NEO4J_PASSWORD, so with the
@@ -129,7 +139,7 @@ def test_vacuous_raises_tripwire_weak_default_secret_key():
 
 
 @pytest.mark.parametrize("env", ["prod", "staging", "Production"])
-def test_strict_env_happy_path_with_strong_secrets(env):
+def test_strict_env_happy_path_with_strong_secrets(env: str) -> None:
     cfg = _cfg(
         env=env,
         SECRET_KEY=STRONG_SECRET,
@@ -148,19 +158,19 @@ def test_strict_env_happy_path_with_strong_secrets(env):
 
 
 @pytest.mark.parametrize("env", THROWAWAY_ENVS + ["Development", "  ci  "])
-def test_throwaway_envs_get_local_fallback(env):
+def test_throwaway_envs_get_local_fallback(env: str) -> None:
     cfg = _cfg(env=env, JWT_SECRET_KEY="your-secret-key")
     assert cfg.JWT_SECRET_KEY != "your-secret-key"
 
 
 @pytest.mark.parametrize("env", THROWAWAY_ENVS)
-def test_throwaway_env_neo4j_fallback_unchanged(env):
+def test_throwaway_env_neo4j_fallback_unchanged(env: str) -> None:
     cfg = _cfg(env=env, NEO4J_PASSWORD="neo4jpassword")
     assert cfg.NEO4J_PASSWORD == "neo4jpassword"
 
 
 @pytest.mark.parametrize("env", ["PROD", " Staging ", "Dev"])
-def test_strict_normalization_variants_reject_weak_jwt_secret(env):
+def test_strict_normalization_variants_reject_weak_jwt_secret(env: str) -> None:
     """Case/whitespace spellings of shared envs must NOT get the fallback."""
     with pytest.raises(ValidationError) as exc_info:
         _cfg(
