@@ -1262,6 +1262,8 @@ def _validate_extraction_transitions(
             tips[(document, field)] = accepted
             form_of[accepted] = form
             continue
+        if role != "editor":
+            raise DecisionReplayError("extraction staling requires an editor")
         new_form = _payload_uuid(payload["new_form_version_id"], "new_form_version_id")
         current = set(tips.values())
         for value in payload["accepted_value_ids"]:

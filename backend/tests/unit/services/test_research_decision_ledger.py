@@ -1358,3 +1358,16 @@ def test_extraction_payload_keys_exact() -> None:
         ex.validate("extraction.accepted", ex.accepted(uuid4(), []))
     with pytest.raises(DecisionValidationError, match="rationale"):
         ex.validate("extraction.accepted", ex.accepted(uuid4(), [obs]), reason=None)
+
+
+def test_extraction_replay_rejects_staled_by_non_editor() -> None:
+    ex = _Extraction()
+    obs, accepted = uuid4(), uuid4()
+    base = (
+        ("extraction.observed", "machine", ex.observed(obs)),
+        ("extraction.accepted", "adjudicator", ex.accepted(accepted, [obs])),
+    )
+    ex.replay(*base, ("extraction.staled", "editor", ex.staled(accepted)))
+    for role in ("machine", "reviewer", "adjudicator"):
+        with pytest.raises(DecisionReplayError, match="editor"):
+            ex.replay(*base, ("extraction.staled", role, ex.staled(accepted)))

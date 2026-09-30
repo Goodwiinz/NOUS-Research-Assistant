@@ -87,6 +87,10 @@ def _unprocessable(error: ValueError) -> HTTPException:
     return HTTPException(status_code=422, detail=str(error))
 
 
+def _project(context: ProjectContext) -> UUID:
+    return cast(UUID, context.collection.id)
+
+
 async def _lock(
     db: AsyncSession, collection_id: UUID, matrix_id: UUID
 ) -> ResearchDecisionStream:
@@ -172,7 +176,7 @@ async def _matrix(db: AsyncSession, context: ProjectContext, matrix_id: UUID) ->
         await db.execute(
             select(ExtractionMatrix).where(
                 ExtractionMatrix.id == matrix_id,
-                ExtractionMatrix.project_id == context.collection.id,
+                ExtractionMatrix.project_id == _project(context),
                 ExtractionMatrix.is_deleted.is_(False),
             )
         )
@@ -251,11 +255,11 @@ async def create_version(
         fields = rules.build_fields(cast(UUID, matrix.id), columns)
     except ValueError as error:
         raise _unprocessable(error) from error
-    protocol = await current_protocol_version_id(db, context.collection.id)
+    protocol = await current_protocol_version_id(db, _project(context))
     protocol_version_id = UUID(protocol) if protocol else None
     content_hash = rules.form_hash("authored", protocol_version_id, fields)
     await db.flush()  # a new matrix row must exist before its stream and FK
-    stream = await _lock(db, context.collection.id, matrix.id)
+    stream = await _lock(db, _project(context), matrix.id)
     current = await current_version(db, matrix.id)
     if current is not None and current.content_hash == content_hash:
         await db.commit()
@@ -288,7 +292,7 @@ async def create_version(
         payload = {"new_form_version_id": str(version.id), "accepted_value_ids": staled}
         await _append(
             db,
-            collection_id=context.collection.id,
+            collection_id=_project(context),
             matrix_id=matrix.id,
             event_type="extraction.staled",
             actor_user_id=actor_id,
@@ -444,9 +448,7 @@ async def _document(
 ) -> Any:
     document = (
         await db.execute(
-            project_documents_query(context.collection.id).where(
-                Document.id == document_id
-            )
+            project_documents_query(_project(context)).where(Document.id == document_id)
         )
     ).scalar_one_or_none()
     if document is None:
@@ -503,7 +505,7 @@ async def observe(
     """A reviewer's own observation (REVIEW). Never overwrites anything."""
     _require_role(context, ResearchProjectRole.REVIEWER)
     matrix = await _matrix(db, context, matrix_id)
-    stream = await _lock(db, context.collection.id, matrix_id)
+    stream = await _lock(db, _project(context), matrix_id)
     key = f"observe:{data.idempotency_key}"
     fingerprint = _fingerprint("observe", matrix_id, actor_id, data)
     replay = await _replayed_event(db, stream, key, fingerprint)
@@ -539,7 +541,7 @@ async def observe(
     await db.flush()
     await _append(
         db,
-        collection_id=context.collection.id,
+        collection_id=_project(context),
         matrix_id=matrix.id,
         event_type="extraction.observed",
         actor_user_id=actor_id,
@@ -593,7 +595,7 @@ async def accept_value(
     if ResearchProjectRole.ADJUDICATOR not in context.effective_roles:
         raise HTTPException(status_code=403, detail="adjudicator role required")
     matrix = await _matrix(db, context, matrix_id)
-    stream = await _lock(db, context.collection.id, matrix_id)
+    stream = await _lock(db, _project(context), matrix_id)
     key = f"accept:{data.idempotency_key}"
     fingerprint = _fingerprint("accept", matrix_id, actor_id, data)
     replay = await _replayed_event(db, stream, key, fingerprint)
@@ -663,7 +665,7 @@ async def accept_value(
     await _flush_or_conflict(db, ACCEPTED_STALE)
     await _append(
         db,
-        collection_id=context.collection.id,
+        collection_id=_project(context),
         matrix_id=matrix.id,
         event_type="extraction.accepted",
         actor_user_id=actor_id,
@@ -796,7 +798,7 @@ async def cell_view(
     """Grid cells for the current fields: accepted tip -> latest machine
     observation of the field in any version -> frozen legacy cell."""
     allowed = list(allowed_document_ids)
-    legacy_rows = (
+    legacy_rows: list[Any] = list(
         (
             await db.execute(
                 select(ExtractionCell).where(
@@ -835,7 +837,9 @@ async def cell_view(
     legacy_version = (
         versions[0].id if versions[0].provenance == "legacy_unversioned" else None
     )
-    legacy = {(c.document_id, c.column_name): c for c in legacy_rows}
+    legacy: dict[tuple[Any, str], Any] = {
+        (c.document_id, c.column_name): c for c in legacy_rows
+    }
     field_ids = [UUID(f["field_id"]) for f in current.fields]
     machine: dict[tuple[Any, str], list[rules.Obs]] = {}
     for row in (
@@ -870,7 +874,7 @@ async def cell_view(
             )
     # ponytail: loads text only to hash checksum-less documents; add a stored
     # text hash if that ever gets slow.
-    hashes = {
+    hashes: dict[Any, str] = {
         document.id: document_source_hash(document)
         for document in (
             await db.execute(select(Document).where(Document.id.in_(allowed)))

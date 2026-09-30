@@ -2,6 +2,7 @@
 staleness, read precedence and what an acceptance may say."""
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -283,3 +284,26 @@ def test_unresolved_disagreement_needs_two_differing() -> None:
         rules.check_acceptance(None, "unresolved_disagreement", [a])
     with pytest.raises(ValueError, match="differ"):
         rules.check_acceptance(None, "unresolved_disagreement", [a, a2])
+
+
+def test_migration_copies_match_the_rules() -> None:
+    """a3c5e7f9b1d4 froze copies of FIELD_NAMESPACE and the form hash."""
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).parents[3]
+        / "alembic/versions/a3c5e7f9b1d4_version_extraction_forms.py"
+    )
+    spec = importlib.util.spec_from_file_location("goo304_migration", path)
+    assert spec is not None and spec.loader is not None
+    migration: Any = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert migration._FIELD_NAMESPACE == rules.FIELD_NAMESPACE
+    matrix_id = uuid4()
+    columns = [{"name": "Sample size", "description": "n"}, {"name": "Design"}]
+    legacy = migration._legacy_fields(matrix_id, columns, ["Old col"])
+    assert legacy == rules.build_fields(matrix_id, [*columns, {"name": "Old col"}])
+    assert migration._content_hash(legacy) == rules.form_hash(
+        "legacy_unversioned", None, legacy
+    )
