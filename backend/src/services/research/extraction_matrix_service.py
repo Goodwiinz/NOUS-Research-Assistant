@@ -18,6 +18,7 @@ from src.services.research.extraction_forms_service import (
     append_machine_observations,
     document_source_hash,
 )
+from src.services.research.source_anchors import read_whole_text
 from src.services.research_engine.project_access import lock_active_project
 
 logger = structlog.get_logger()
@@ -262,14 +263,9 @@ class ExtractionMatrixService:
                         continue
 
                     fields = list(version.fields)
-                    if not document.content_text:
-                        parsed: Dict[str, Dict[str, Any]] = {
-                            f["name"]: {"missing": "unavailable_text"} for f in fields
-                        }
-                    else:
-                        prompt = self._build_extraction_prompt(
-                            fields, document.content_text[:12000]
-                        )
+
+                    async def read(chunk: str) -> Dict[str, Dict[str, Any]]:
+                        prompt = self._build_extraction_prompt(fields, chunk)
                         response = await client.chat.completions.create(
                             model=model,
                             messages=[{"role": "user", "content": prompt}],
@@ -277,15 +273,21 @@ class ExtractionMatrixService:
                             max_tokens=2000,
                         )
                         raw_json = response.choices[0].message.content or ""
-                        parsed = self._parse_extraction_result(raw_json, fields)
+                        return self._parse_extraction_result(raw_json, fields)
 
+                    # GOO-305: every window of the retained text (<= 8 calls);
+                    # empty text reads nothing and records unavailable_text.
+                    observations, coverage, _ = await read_whole_text(
+                        document.content_text or "", fields, read
+                    )
                     await lock_active_project(db, matrix.project_id)
                     await append_machine_observations(
                         db,
                         matrix=matrix,
                         version=version,
                         document=document,
-                        parsed=parsed,
+                        observations=observations,
+                        coverage=coverage,
                         actor_id=initiated_by_user_id,
                         run_id=task_id,
                         model=model,
@@ -349,7 +351,9 @@ class ExtractionMatrixService:
             '  - "value": the extracted information in the column\'s type, or null\n'
             '  - "missing": null when a value is given; otherwise "not_reported" '
             '(the document does not report it) or "not_applicable" (it does not apply)\n'
-            '  - "citation": a brief quote or page reference from the source text (string or null)\n\n'
+            '  - "citation": a short quote copied verbatim, character for character, '
+            "from the document text below that supports the answer (string or null); "
+            "never a paraphrase or page reference\n\n"
             "Columns to extract:\n"
             f"{columns_block}\n\n"
             "Document text:\n"

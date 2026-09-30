@@ -1553,3 +1553,40 @@ committed.
   history-failure test; (b) `expect(element).not.toBeInTheDocument()` — the
   unlinked preprint row offered Dispute.
 - **Restored result:** `cmp -s` exit 0; `7 passed`.
+
+## GOO-305 source anchors and matrix reconciliation — 2026-09-30
+
+PostgreSQL proof: `backend/tests/integration/test_extraction_anchor_postgres.py`.
+It runs on GOO-301's `screening_factory` schema, whose chain now ends at
+`b8d0f2a4c6e9` (the anchor columns). The LLM is stubbed per window, so the
+worker's chunk loop runs for real (6 calls for a 60,000-character document).
+Unit selectors run from `backend/`.
+
+Each mutant was applied by a scripted exact-string replacement that asserted
+exactly one match, run with `-x`, and then restored from a copy of the
+pre-mutation file. `filecmp` against that copy and `git diff --quiet` on the
+file both succeeded for every mutant, and every focused command passed again
+afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 (working tree at the time of the run):
+
+- `backend/src/services/research/extraction_forms_service.py`
+  `b8b2023b6baad671510350b58e0aceb04a851e770777b40b01d672777e2f07cf`
+- `backend/src/services/research/source_anchors.py`
+  `db2d19c8498f6b059241ea960ec7f5b6f2f1a25a42270fc3a0e4db01e0daefee`
+
+Commands (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_extraction_anchor_postgres.py -k <selector>
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_extraction_anchors_service.py -k ambiguous
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_extraction_coverage.py -k <selector>
+```
+
+| Guard (line) | Mutation | Command | Observed mutant failure |
+|---|---|---|---|
+| Ambiguous branch in `assert_anchor_acceptable` (`extraction_forms_service.py:849`) | `if status == "ambiguous":` replaced with `if False:` | PG `-k survive_commit`; unit `-k ambiguous` | PG test line 348: the no-start accept is still refused, but as `Anchor unverified; confirm to accept` instead of `Anchor ambiguous; choose an occurrence`. The plan predicted a 201; the generic path refuses instead, so without the branch an ambiguous anchor would be accepted as `accepted_unverified` whenever the flag is sent. Unit: `test_accept_ambiguous_without_start_409` and `test_accept_ambiguous_with_recorded_start_disambiguated` fail on the same detail. |
+| Source-hash comparison in `assert_anchor_acceptable` (`:820`) | condition prefixed with `False and` | PG `-k source_change` | `DID NOT RAISE HTTPException` at test line 465: the accept after the caption append is inserted, and no `staled` event is written. |
+| `project_documents_query` in `_document` (`:581`), used by `list_observations` and the accept guard | replaced with bare `select(Document).where(Document.id == document_id)` | PG `-k authorization` | `DID NOT RAISE HTTPException` at test line 541: the soft-deleted document's evidence (citation included) is served. |
+| `coverage_complete` condition in `aggregate` (`source_anchors.py:192`) | `elif coverage_complete:` replaced with `elif True:` | unit `-k partial_coverage_without_value` | `assert ['not_reported'] == ['unavailable_text']`. |
+| Window loop in `read_whole_text` (`source_anchors.py:211`) | `plan_windows(len(text))` replaced with `[(0, min(len(text), CHUNK_CHARS))]` | unit `-k late_document` | `assert (None == '412')`: the only candidate is `unavailable_text`; nothing is verified at 55,000. |

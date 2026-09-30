@@ -115,6 +115,7 @@ def _upgrade(connection: Connection) -> None:
         "f3b5d7e9a1c4_create_screening_resolutions.py",
         "f2a4c6e8b0d3_create_fulltext_acquisition.py",
         "a3c5e7f9b1d4_version_extraction_forms.py",
+        "b8d0f2a4c6e9_add_extraction_source_anchors.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename
@@ -360,7 +361,7 @@ async def _retrieve(
             FulltextAttemptCreate(
                 outcome="retrieved",
                 attempted_on=date.today(),
-                document_id=document.id,
+                document_id=cast(UUID, document.id),
                 idempotency_key=f"rt-{report}",
             ),
         ),

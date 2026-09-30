@@ -6212,6 +6212,23 @@
       "ExtractionAcceptCreate": {
         "description": "An adjudicator's accepted value; it must equal a cited observation.",
         "properties": {
+          "accept_unverified": {
+            "default": false,
+            "title": "Accept Unverified",
+            "type": "boolean"
+          },
+          "anchor_start": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Start"
+          },
           "document_id": {
             "format": "uuid",
             "title": "Document Id",
@@ -6300,6 +6317,58 @@
             "title": "Accepted By Id",
             "type": "string"
           },
+          "anchor_end_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor End Char"
+          },
+          "anchor_observation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Observation Id"
+          },
+          "anchor_resolution": {
+            "anyOf": [
+              {
+                "enum": [
+                  "verified",
+                  "disambiguated",
+                  "accepted_unverified",
+                  "not_applicable",
+                  "legacy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Resolution"
+          },
+          "anchor_start_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Start Char"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -6348,6 +6417,11 @@
             "title": "Rationale",
             "type": "string"
           },
+          "source_changed": {
+            "default": false,
+            "title": "Source Changed",
+            "type": "boolean"
+          },
           "source_hash": {
             "title": "Source Hash",
             "type": "string"
@@ -6363,6 +6437,17 @@
               }
             ],
             "title": "Supersedes Accepted Value Id"
+          },
+          "text_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Sha256"
           },
           "value": {
             "title": "Value"
@@ -6380,6 +6465,124 @@
           "created_at"
         ],
         "title": "ExtractionAcceptedValueResponse",
+        "type": "object"
+      },
+      "ExtractionAnchor": {
+        "description": "Where an observation's verbatim citation sits in the retained text.",
+        "properties": {
+          "end_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Char"
+          },
+          "occurrence_contexts": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractionAnchorOccurrence"
+            },
+            "title": "Occurrence Contexts",
+            "type": "array"
+          },
+          "occurrences": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Occurrences",
+            "type": "array"
+          },
+          "occurrences_in_text": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurrences In Text"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "start_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Char"
+          },
+          "status": {
+            "enum": [
+              "verified",
+              "ambiguous",
+              "unverified",
+              "location_unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ExtractionAnchor",
+        "type": "object"
+      },
+      "ExtractionAnchorOccurrence": {
+        "description": "One place a repeated citation occurs, sliced server-side (code points).",
+        "properties": {
+          "context_after": {
+            "title": "Context After",
+            "type": "string"
+          },
+          "context_before": {
+            "title": "Context Before",
+            "type": "string"
+          },
+          "end_char": {
+            "title": "End Char",
+            "type": "integer"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "start_char": {
+            "title": "Start Char",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_char",
+          "end_char",
+          "context_before",
+          "context_after"
+        ],
+        "title": "ExtractionAnchorOccurrence",
         "type": "object"
       },
       "ExtractionCellObservationsResponse": {
@@ -6627,6 +6830,18 @@
       "ExtractionObservationCreate": {
         "description": "A reviewer's value (or missingness reason) for one field of one document.",
         "properties": {
+          "anchor_start": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Start"
+          },
           "citation": {
             "anyOf": [
               {
@@ -6696,6 +6911,16 @@
             "title": "Actor User Id",
             "type": "string"
           },
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtractionAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "citation": {
             "anyOf": [
               {
@@ -6706,6 +6931,39 @@
               }
             ],
             "title": "Citation"
+          },
+          "context_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context After"
+          },
+          "context_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Before"
+          },
+          "coverage_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Complete"
           },
           "created_at": {
             "format": "date-time",
@@ -6754,6 +7012,23 @@
             "title": "Id",
             "type": "string"
           },
+          "inspected_coverage": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inspected Coverage"
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
@@ -6769,9 +7044,36 @@
             ],
             "title": "Missingness"
           },
+          "source_changed": {
+            "default": false,
+            "title": "Source Changed",
+            "type": "boolean"
+          },
           "source_hash": {
             "title": "Source Hash",
             "type": "string"
+          },
+          "text_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Length"
+          },
+          "text_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Sha256"
           },
           "validation_state": {
             "title": "Validation State",

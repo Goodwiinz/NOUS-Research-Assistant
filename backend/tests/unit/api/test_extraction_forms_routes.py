@@ -321,4 +321,7 @@ def test_get_matrix_keeps_legacy_keys(harness: _Harness) -> None:
         "missingness": None,
         "validation_state": None,
         "stale": False,
+        # GOO-305: computed, never stored; the legacy 0.8 was never measured.
+        "anchor_status": "legacy_unanchored",
+        "confidence_calibration": "uncalibrated",
     }

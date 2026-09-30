@@ -27,6 +27,11 @@ export interface ExtractionCell {
   missingness?: string | null;
   validation_state?: 'valid' | 'invalid' | null;
   stale?: boolean;
+  // GOO-305: anchor status of the shown value (accepted cells carry their
+  // resolution); legacy confidence is flagged, never shown.
+  anchor_status?: string | null;
+  confidence_calibration?: 'uncalibrated' | null;
+  observed_values?: number;
 }
 
 export interface ExtractionMatrix {

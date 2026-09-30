@@ -556,18 +556,30 @@ export function ExtractionMatrix({
                                 Unvalidated
                               </Badge>
                             )}
-                            {cell?.field_id && (
+                            {(cell?.observed_values ?? 0) > 1 && (
+                              <Badge variant="warning" className={CELL_BADGE}>
+                                {cell?.observed_values} values
+                              </Badge>
+                            )}
+                            {cell?.field_id ? (
                               <CellObservations
+                                projectId={projectId}
                                 matrixId={matrix.id}
                                 documentId={doc.id}
                                 fieldId={cell.field_id}
                                 column={col.name}
+                                citation={cell.citation_snippet}
+                                anchorStatus={cell.anchor_status}
+                                onDecided={() => fetchMatrix(matrix.id)}
+                              />
+                            ) : (
+                              <CellCitation
+                                citation_snippet={
+                                  cell?.citation_snippet ?? null
+                                }
+                                anchorStatus={cell?.anchor_status}
                               />
                             )}
-                            <CellCitation
-                              citation_snippet={cell?.citation_snippet ?? null}
-                              confidence={cell?.confidence ?? null}
-                            />
                           </div>
                         </TableCell>
                       );

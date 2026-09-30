@@ -104,6 +104,8 @@ class ExtractionObservationCreate(BaseModel):
     value: Any = Field(default=None)
     missingness: Optional[HumanMissingness] = Field(default=None)
     citation: Optional[str] = Field(default=None, max_length=2000)
+    # GOO-305: pick one occurrence of a repeated verbatim citation.
+    anchor_start: Optional[int] = Field(default=None, ge=0)
     idempotency_key: str = Field(..., min_length=1, max_length=255)
 
 
@@ -119,6 +121,9 @@ class ExtractionAcceptCreate(BaseModel):
     rationale: str = Field(..., min_length=1, max_length=2000)
     supersedes_accepted_value_id: Optional[UUID] = Field(default=None)
     idempotency_key: str = Field(..., min_length=1, max_length=255)
+    # GOO-305: resolve an ambiguous anchor, or accept an unverified one.
+    anchor_start: Optional[int] = Field(default=None, ge=0)
+    accept_unverified: bool = Field(default=False)
 
 
 class ExtractionFormVersionResponse(BaseModel):
@@ -133,6 +138,34 @@ class ExtractionFormVersionResponse(BaseModel):
     content_hash: str
     created_by_id: Optional[UUID] = Field(default=None)
     created_at: datetime
+
+
+AnchorStatus = Literal["verified", "ambiguous", "unverified", "location_unavailable"]
+AnchorResolution = Literal[
+    "verified", "disambiguated", "accepted_unverified", "not_applicable", "legacy"
+]
+
+
+class ExtractionAnchorOccurrence(BaseModel):
+    """One place a repeated citation occurs, sliced server-side (code points)."""
+
+    start_char: int
+    end_char: int
+    page: Optional[int] = Field(default=None)
+    context_before: str
+    context_after: str
+
+
+class ExtractionAnchor(BaseModel):
+    """Where an observation's verbatim citation sits in the retained text."""
+
+    status: AnchorStatus
+    start_char: Optional[int] = Field(default=None)
+    end_char: Optional[int] = Field(default=None)
+    page: Optional[int] = Field(default=None)
+    occurrences: List[int] = Field(default_factory=list)
+    occurrences_in_text: Optional[int] = Field(default=None)
+    occurrence_contexts: List[ExtractionAnchorOccurrence] = Field(default_factory=list)
 
 
 class ExtractionObservationResponse(BaseModel):
@@ -152,6 +185,16 @@ class ExtractionObservationResponse(BaseModel):
     citation: Optional[str] = Field(default=None)
     source_hash: str
     created_at: datetime
+    # GOO-305: null anchor on missingness rows; context only while the source
+    # is unchanged; coverage only for machine rows.
+    anchor: Optional[ExtractionAnchor] = Field(default=None)
+    context_before: Optional[str] = Field(default=None)
+    context_after: Optional[str] = Field(default=None)
+    text_sha256: Optional[str] = Field(default=None)
+    text_length: Optional[int] = Field(default=None)
+    inspected_coverage: Optional[List[List[int]]] = Field(default=None)
+    coverage_complete: Optional[bool] = Field(default=None)
+    source_changed: bool = Field(default=False)
 
 
 class ExtractionAcceptedValueResponse(BaseModel):
@@ -169,6 +212,13 @@ class ExtractionAcceptedValueResponse(BaseModel):
     source_hash: str
     supersedes_accepted_value_id: Optional[UUID] = Field(default=None)
     created_at: datetime
+    # GOO-305 anchor snapshot; "legacy" for rows accepted before anchors.
+    anchor_observation_id: Optional[UUID] = Field(default=None)
+    anchor_resolution: Optional[AnchorResolution] = Field(default=None)
+    anchor_start_char: Optional[int] = Field(default=None)
+    anchor_end_char: Optional[int] = Field(default=None)
+    text_sha256: Optional[str] = Field(default=None)
+    source_changed: bool = Field(default=False)
 
 
 class ExtractionCellObservationsResponse(BaseModel):
