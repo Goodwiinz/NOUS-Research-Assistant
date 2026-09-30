@@ -139,6 +139,13 @@ from .research_report import (
     ResearchReportObservation,
     ResearchStudy,
 )
+from .research_claim import (
+    ResearchClaim,
+    ResearchClaimAssessment,
+    ResearchClaimEvidenceLink,
+    ResearchClaimStanceObservation,
+    ResearchClaimVersion,
+)
 from .research_run import ResearchRun, RunStatus
 from .research_source import ResearchSource
 from .research_stage_review import ResearchStageReview
@@ -287,6 +294,12 @@ __all__ = [
     "ExtractionFormVersion",
     "ExtractionObservation",
     "ExtractionAcceptedValue",
+    # Versioned claims (GOO-306)
+    "ResearchClaim",
+    "ResearchClaimVersion",
+    "ResearchClaimEvidenceLink",
+    "ResearchClaimStanceObservation",
+    "ResearchClaimAssessment",
     # Integrity Score models
     "IntegrityScore",
     # Research Engine models

@@ -1590,3 +1590,59 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/te
 | `project_documents_query` in `_document` (`:581`), used by `list_observations` and the accept guard | replaced with bare `select(Document).where(Document.id == document_id)` | PG `-k authorization` | `DID NOT RAISE HTTPException` at test line 541: the soft-deleted document's evidence (citation included) is served. |
 | `coverage_complete` condition in `aggregate` (`source_anchors.py:192`) | `elif coverage_complete:` replaced with `elif True:` | unit `-k partial_coverage_without_value` | `assert ['not_reported'] == ['unavailable_text']`. |
 | Window loop in `read_whole_text` (`source_anchors.py:211`) | `plan_windows(len(text))` replaced with `[(0, min(len(text), CHUNK_CHARS))]` | unit `-k late_document` | `assert (None == '412')`: the only candidate is `unavailable_text`; nothing is verified at 55,000. |
+
+## GOO-306 versioned claims (Task 4: service and routes) — 2026-09-30
+
+Unit selectors run from `backend/`. Each mutant was applied by an exact-string
+replacement, run, and then restored from a copy of the pre-mutation file;
+`cmp` against that copy succeeded for every mutant and the full file passed
+again afterwards. No mutant was committed. The PostgreSQL mutants in the plan
+(tip checks, SQLSTATE backstop, accepted-value project check, composite FK)
+belong to the Task 6 proof and are **NOT RUN** here.
+
+Pre-mutation SHA-256 (working tree at the time of the run):
+
+- `backend/src/services/research/claims_service.py`
+  `a71bb0de31a40640da0e1773284a6960b3972cbd778efb9eae46b66314376a02`
+- `backend/src/services/research/draft_generation_service.py`
+  `4bf80b6344f628cf39fb2002709827fb774aa5c9839e021dea7b041ddce3c866`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/api/test_claims_routes.py -k <selector>
+```
+
+| Guard (line) | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| `ADJUDICATOR` check in `assess` (`claims_service.py:870`) | the two-line check deleted | `adjudicator` | `test_assess_requires_adjudicator_owner_403` fails: the route (which does not enforce ADJUDICATE in the harness) reaches the database instead of answering 403. |
+| `_replayed_event` call in `_begin` (`claims_service.py:147`) | replaced with `replay = None` | `replay` | `test_replay_returns_200_same_ids` fails: the retry answers 201 and appends a second `claim.versioned`. |
+| Pinned-claims pre-check in `DraftGenerationService.delete_draft` (`draft_generation_service.py:2216`) | the `raise DraftRetainedError` branch deleted | `delete_draft` | both `test_delete_draft_with_claims_409` (200 instead of 409; the draft is deleted) and `test_delete_draft_service_raises_retained` fail. |
+
+## GOO-306 versioned claims (Task 6: PostgreSQL proof) — 2026-09-30
+
+Run against local PostgreSQL 14 (`RESEARCH_DECISION_DATABASE_URL` pointing at
+a disposable local database; value omitted). Each mutant was applied by an
+exact-string replacement that asserted one match, the proof was run with
+`-x`, and every mutated file was restored from its copy and checked with
+`filecmp` (byte-identical). The proof passed again afterwards. No mutant was
+committed.
+
+Pre-mutation SHA-256:
+
+- `backend/src/services/research/claims_service.py`
+  `b5d09e098268f11210f177aaaffc8f53d5b4fba00decd9311255d2c12db8c154`
+- `backend/src/services/research/extraction_forms_service.py`
+  `ddd392058dffb275fe94cc0b5d39e2efe1140e6ee0a0f4dbb17f7e3c0123fea2`
+- `backend/alembic/versions/c4e6a8b0d2f5_create_research_claims.py`
+  `89e2da155f9160a00a34699a0d236dcf79c2c7f1bcb7f2c37753f6fd639dc109`
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_research_claims_postgres.py
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| `create_version` tip check (`claims_service.py:486`) | `if False:` | Step 4: the stale-`supersedes` post is no longer refused as `Claim version is stale; reload`; it falls through to `No change`, so the assertion fails. The plan predicted an unhandled `IntegrityError`; `create_version` takes `supersedes` from the tip, so the index is never reached. |
+| `assess` tip check (`:920`) plus the unique-violation backstop (`extraction_forms_service.py:399`, the shared `_flush_or_conflict`) | tip check `if False:` and the backstop re-raises every `IntegrityError` | Step 7: the `supersedes=None` post dies with an unhandled `IntegrityError` (`duplicate key ... Key (claim_version_id)=... already exists` on `uq_research_claim_assessments_initial`). |
+| `assess` tip check alone (`:920`) | `if False:` | Survives by design: the unique-index backstop still answers the same 409 `Assessment is stale; reload`. The mutant above proves the backstop is what carries it. |
+| Accepted-value project check in `_extraction_target` (`:556`) | `ExtractionMatrix.project_id == ...` removed | Step 5: `DID NOT RAISE` — P2's accepted value, on document D3 shared by P1 and P2, is linked with 201. |
+| Composite FK `fk_research_claim_links_version` in the migration | the `_composite(...)` entry removed | Step 5: `DID NOT RAISE IntegrityError` — the raw cross-project `INSERT` (P2's `collection_id`, P1's claim version) succeeds. |

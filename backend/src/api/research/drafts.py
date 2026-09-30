@@ -25,6 +25,7 @@ from src.models.user import User
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
     DraftGenerationStatus,
+    DraftRetainedError,
     get_task_result,
     reconcile_task,
 )
@@ -332,7 +333,12 @@ async def delete_draft(
 
     service = DraftGenerationService(db)
 
-    success = await service.delete_draft(project_id, draft_id)
+    try:
+        success = await service.delete_draft(project_id, draft_id)
+    except DraftRetainedError:
+        raise HTTPException(
+            status_code=409, detail="Draft has claims; it is retained as evidence"
+        ) from None
     if not success:
         raise HTTPException(status_code=404, detail="Draft not found")
 
