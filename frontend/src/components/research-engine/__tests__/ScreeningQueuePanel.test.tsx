@@ -501,7 +501,8 @@ describe('ScreeningQueuePanel', () => {
       const view = mine();
       view.items[0] = {
         ...view.items[0],
-        reveal_state: 'revealed',
+        // The server hides a reopened report again (new blind cycle).
+        reveal_state: basis === 'reopened' ? 'hidden' : 'revealed',
         resolution: {
           id: 'res-1',
           report_id: 'report-1',
@@ -517,6 +518,11 @@ describe('ScreeningQueuePanel', () => {
       renderPanel([role('me', 'reviewer')]);
 
       expect(await screen.findByText(label)).toBeInTheDocument();
+      expect(
+        screen.queryAllByText(
+          "Other reviewers' decisions are hidden until reveal."
+        )
+      ).toHaveLength(basis === 'reopened' ? 2 : 1);
       expect(
         screen.getByRole('button', { name: 'Include Alpha trial' })
       ).toHaveProperty('disabled', basis !== 'reopened');

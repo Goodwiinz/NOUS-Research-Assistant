@@ -64,10 +64,18 @@ function resolutionLabel(resolution: ScreeningResolution): string {
 /** GOO-302 reveal state: peers' decisions appear only once the server reveals. */
 function RevealState({ item }: { item: MyScreeningItem }): ReactElement {
   if (item.reveal_state !== 'revealed' || !item.resolution) {
+    // A reopen starts a new blind cycle: hidden again, the reopen still shown.
     return (
-      <p className="text-xs text-muted-foreground">
-        Other reviewers&apos; decisions are hidden until reveal.
-      </p>
+      <div className="space-y-1 text-xs">
+        {item.resolution?.basis === 'reopened' && (
+          <span className="inline-block rounded bg-muted px-2 py-0.5 font-medium text-foreground">
+            Reopened
+          </span>
+        )}
+        <p className="text-muted-foreground">
+          Other reviewers&apos; decisions are hidden until reveal.
+        </p>
+      </div>
     );
   }
   return (
