@@ -19,12 +19,17 @@ from __future__ import annotations
 import re
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import pytest
 from fastapi import FastAPI, Request
+from starlette.responses import Response
 from starlette.testclient import TestClient
 
 from src.core.config import settings
+
+if TYPE_CHECKING:
+    from src.middleware.rate_limiting import ApiRateLimiter
 
 pytestmark = pytest.mark.unit
 
@@ -41,13 +46,13 @@ THREADS_SRC = (
 SEARCH_LIMIT = 60  # per minute, per the bucket table
 
 
-def _memory_limiter():
+def _memory_limiter() -> ApiRateLimiter:
     from src.middleware.rate_limiting import ApiRateLimiter
 
     return ApiRateLimiter(use_redis=False)
 
 
-def _make_app(limiter) -> FastAPI:
+def _make_app(limiter: Any) -> FastAPI:
     """Minimal app exercising the bucket table. The stub user middleware is
     registered after the rate limiter, so it runs first — mirroring
     MultiTenancyMiddleware ordering in main.py."""
@@ -57,30 +62,32 @@ def _make_app(limiter) -> FastAPI:
     app = FastAPI()
 
     @app.get("/api/v1/search")
-    async def search():
+    async def search() -> dict[str, bool]:
         return {"ok": True}
 
     @app.get("/api/v1/documents")
     @app.post("/api/v1/documents")
-    async def documents():
+    async def documents() -> dict[str, bool]:
         return {"ok": True}
 
     @app.get("/api/v1/anything")
-    async def anything():
+    async def anything() -> dict[str, bool]:
         return {"ok": True}
 
     @app.post("/api/v1/arxiv/bulk/start")
-    async def arxiv_start():
+    async def arxiv_start() -> dict[str, bool]:
         return {"ok": True}
 
     @app.post("/api/v1/auth/login")
-    async def login():
+    async def login() -> dict[str, bool]:
         return {"ok": True}
 
     app.add_middleware(ApiRateLimitMiddleware, limiter=limiter)
 
     @app.middleware("http")
-    async def set_user(request: Request, call_next):
+    async def set_user(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         user_id = request.headers.get("x-test-user")
         if user_id:
             request.state.user_id = user_id
@@ -195,11 +202,11 @@ def test_health_and_docs_not_limited() -> None:
     app = _make_app(_memory_limiter())
 
     @app.get("/health")
-    async def health():
+    async def health() -> dict[str, bool]:
         return {"ok": True}
 
     @app.get("/api/v1/health")
-    async def api_health():
+    async def api_health() -> dict[str, bool]:
         return {"ok": True}
 
     client = TestClient(app)
@@ -220,7 +227,10 @@ def test_bucket_keyed_by_user_id_when_set_else_client_host() -> None:
     )
 
     # ...while user B (same client host) still has a full budget...
-    assert client.get("/api/v1/search", headers={"x-test-user": "user-b"}).status_code == 200
+    assert (
+        client.get("/api/v1/search", headers={"x-test-user": "user-b"}).status_code
+        == 200
+    )
 
     # ...and the anonymous fallback key (client host) is its own bucket.
     assert client.get("/api/v1/search").status_code == 200
@@ -368,8 +378,8 @@ def test_analytics_role_tiers_survive_rewrite() -> None:
     """The role-tier analytics numbers (user/analyst/content_manager/admin)
     and heavy/export buckets must be unchanged by the rewrite."""
 
-    from src.models.user import UserRole
     from src.middleware.rate_limiting import ApiRateLimitMiddleware
+    from src.models.user import UserRole
 
     middleware = ApiRateLimitMiddleware(MockApp())
     limits = middleware.analytics_rate_limits

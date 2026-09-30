@@ -33,12 +33,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from src.core.config import settings
-from src.core.rate_limit import (
-    InMemoryRateLimiter as CoreInMemoryRateLimiter,
-)
-from src.core.rate_limit import (
-    RedisRateLimiter as CoreRedisRateLimiter,
-)
+from src.core.rate_limit import InMemoryRateLimiter as CoreInMemoryRateLimiter
+from src.core.rate_limit import RedisRateLimiter as CoreRedisRateLimiter
 from src.middleware.responses import error_response
 from src.models.user import UserRole
 
@@ -154,19 +150,11 @@ class BucketConfig:
 
 API_BUCKETS: Tuple[BucketConfig, ...] = (
     # Bulk ingestion is the heaviest abuse vector — tightest budget first.
-    BucketConfig(
-        name="arxiv", requests=10, window=60, prefix="/api/v1/arxiv"
-    ),
-    BucketConfig(
-        name="agent", requests=60, window=60, prefix="/api/v1/agent"
-    ),
+    BucketConfig(name="arxiv", requests=10, window=60, prefix="/api/v1/arxiv"),
+    BucketConfig(name="agent", requests=60, window=60, prefix="/api/v1/agent"),
     BucketConfig(name="chat", requests=60, window=60, prefix="/api/v1/chat"),
-    BucketConfig(
-        name="research", requests=60, window=60, prefix="/api/v1/research"
-    ),
-    BucketConfig(
-        name="search", requests=60, window=60, prefix="/api/v1/search"
-    ),
+    BucketConfig(name="research", requests=60, window=60, prefix="/api/v1/research"),
+    BucketConfig(name="search", requests=60, window=60, prefix="/api/v1/search"),
     BucketConfig(
         name="connectors", requests=60, window=60, prefix="/api/v1/connectors"
     ),
@@ -264,14 +252,10 @@ class ApiRateLimiter:
                     limit, window_minutes
                 )
             else:
-                self._stores[cache_key] = CoreInMemoryRateLimiter(
-                    limit, window_minutes
-                )
+                self._stores[cache_key] = CoreInMemoryRateLimiter(limit, window_minutes)
         return self._stores[cache_key]
 
-    async def is_allowed(
-        self, key: str, limit: int, window: int
-    ) -> Tuple[bool, Dict]:
+    async def is_allowed(self, key: str, limit: int, window: int) -> Tuple[bool, Dict]:
         """Check-and-record one request. Returns ``(allowed, info)`` where
         ``info`` mirrors the legacy middleware's dict plus a ``degraded``
         flag (True while this decision came from the in-memory fallback)."""
@@ -279,9 +263,7 @@ class ApiRateLimiter:
         now = time.time()
         allowed = await store.is_allowed(key)
 
-        degraded = bool(
-            getattr(store, "_in_fallback_window", lambda: False)()
-        )
+        degraded = bool(getattr(store, "_in_fallback_window", lambda: False)())
 
         retry_after: Optional[int] = None
         current_requests: int
@@ -539,14 +521,10 @@ class ApiRateLimitMiddleware(BaseHTTPMiddleware):
             return degraded_response
 
         if not allowed:
-            logger.warning(
-                f"Rate limit exceeded for analytics request", extra=log_data
-            )
+            logger.warning(f"Rate limit exceeded for analytics request", extra=log_data)
             return self._limited_response(info)
 
-        logger.info(
-            f"Rate limit check passed for analytics request", extra=log_data
-        )
+        logger.info(f"Rate limit check passed for analytics request", extra=log_data)
 
         # Add rate limit headers to response
         response = await call_next(request)
