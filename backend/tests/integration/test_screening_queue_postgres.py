@@ -339,13 +339,7 @@ async def test_commit_reopen_and_event_state_atomicity(
     mine_r = await _assign(factory, world, queue.id, "R")
     mine_r2 = await _assign(factory, world, queue.id, "R2")
     first = await _submit(factory, world, "R", queue, _body(queue, mine_r, r1, "r-1"))
-    await _submit(
-        factory,
-        world,
-        "R2",
-        queue,
-        _body(queue, mine_r2, r1, "r2-1", decision="exclude"),
-    )
+    # GOO-302: R supersedes before R2's observation reveals (and resolves) r1.
     changed = await _submit(
         factory,
         world,
@@ -360,6 +354,13 @@ async def test_commit_reopen_and_event_state_atomicity(
             note="needs full text",
             supersedes_observation_id=first.id,
         ),
+    )
+    await _submit(
+        factory,
+        world,
+        "R2",
+        queue,
+        _body(queue, mine_r2, r1, "r2-1", decision="exclude"),
     )
 
     async with factory() as db:  # a fresh session reloads committed state
@@ -395,8 +396,8 @@ async def test_commit_reopen_and_event_state_atomicity(
         "screening.assigned",
         "screening.assigned",
         "screening.observed",
-        "screening.observed",
         "screening.superseded",
+        "screening.observed",
     ]
     assert [e.seq for e in history] == list(range(1, 7))
     assert history[0].payload["reviewer_mode"] == "dual_independent"
