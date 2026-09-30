@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from src.core.database import get_db
 from src.core.dependencies import is_active_user
 from src.core.encryption import EncryptionError, EncryptionKeyType
+
 # audit I12: the analytics RBAC decorators module (deleted) expected an
 # AnalyticsPermission enum, not a list[str], and crashed (TypeError/500) for
 # every authenticated caller. Use the repo-canonical dependency instead — the

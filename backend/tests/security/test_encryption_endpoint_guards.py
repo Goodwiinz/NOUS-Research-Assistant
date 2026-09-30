@@ -14,6 +14,7 @@ permission exists in SYSTEM_PERMISSIONS (src/models/permission.py).
 import re
 import uuid
 from pathlib import Path
+from typing import Any, Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,14 +34,14 @@ POST_BODY = {
     "profile_data": {"job_title": "Engineer"},
 }
 
-STATUS_PAYLOAD = {
+STATUS_PAYLOAD: dict[str, Any] = {
     "key_management": {},
     "encrypted_resources": {},
     "recent_operations": [],
 }
 
 
-def _fake_user(role: str = "admin"):
+def _fake_user(role: str = "admin") -> MagicMock:
     user = MagicMock()
     user.id = _USER_ID
     user.organization_id = _ORG_ID
@@ -48,17 +49,17 @@ def _fake_user(role: str = "admin"):
     return user
 
 
-def _build_app(authed_user=None):
+def _build_app(authed_user: MagicMock | None = None) -> FastAPI:
     # Reuse the repo's HTTPException handler so status-code/envelope assertions
     # match production behavior ({"error": {...}}), not FastAPI's default.
-    from src.main import http_exception_handler
     from src.core.dependencies import is_active_user
+    from src.main import http_exception_handler
 
     app = FastAPI()
     app.include_router(encryption_router, prefix="/api/v1/security")
-    app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
 
-    def _fake_db():
+    def _fake_db() -> Iterator[MagicMock]:
         yield MagicMock()
 
     app.dependency_overrides[get_db] = _fake_db
@@ -68,7 +69,7 @@ def _build_app(authed_user=None):
     return app
 
 
-def _tenant_ctx():
+def _tenant_ctx() -> tuple[Any, Any]:
     """The guard reads tenant ContextVars set by MultiTenancyMiddleware in the
     real app; the mini test app has no middleware, so patch the accessors."""
     import src.middleware.rbac as rbac_mod
@@ -81,17 +82,17 @@ def _tenant_ctx():
 
 @pytest.mark.unit
 class TestEncryptionEndpointGuards:
-    def test_unauthenticated_get_status_returns_401(self):
+    def test_unauthenticated_get_status_returns_401(self) -> None:
         resp = TestClient(_build_app()).get(f"{API_PREFIX}/status")
         assert resp.status_code == 401
 
-    def test_unauthenticated_post_user_profile_returns_401(self):
+    def test_unauthenticated_post_user_profile_returns_401(self) -> None:
         resp = TestClient(_build_app()).post(
             f"{API_PREFIX}/profiles/user", json=POST_BODY
         )
         assert resp.status_code == 401
 
-    def test_get_status_without_permission_is_403_envelope_not_500(self):
+    def test_get_status_without_permission_is_403_envelope_not_500(self) -> None:
         """The old analytics decorator turned a missing permission into
         TypeError → 500. It must be a repo-envelope 403 instead."""
         svc = MagicMock()
@@ -109,22 +110,20 @@ class TestEncryptionEndpointGuards:
             str(_USER_ID), "system_admin", str(_ORG_ID)
         )
 
-    def test_post_user_profile_without_permission_is_403_envelope_not_500(self):
+    def test_post_user_profile_without_permission_is_403_envelope_not_500(self) -> None:
         svc = MagicMock()
         svc.user_has_permission.return_value = False
         app = _build_app(authed_user=_fake_user())
         ctx = _tenant_ctx()
         with ctx[0], ctx[1], patch("src.middleware.rbac.RBACService", return_value=svc):
-            resp = TestClient(app).post(
-                f"{API_PREFIX}/profiles/user", json=POST_BODY
-            )
+            resp = TestClient(app).post(f"{API_PREFIX}/profiles/user", json=POST_BODY)
         assert resp.status_code == 403
         body = resp.json()
         assert body["error"]["status_code"] == 403
         assert body["error"]["type"] == "http_error"
         assert "system_admin" in body["error"]["message"]
 
-    def test_get_status_with_permission_returns_200(self):
+    def test_get_status_with_permission_returns_200(self) -> None:
         svc = MagicMock()
         svc.user_has_permission.return_value = True
         app = _build_app(authed_user=_fake_user())
@@ -133,18 +132,14 @@ class TestEncryptionEndpointGuards:
             ctx[0],
             ctx[1],
             patch("src.middleware.rbac.RBACService", return_value=svc),
-            patch(
-                "src.api.security.encryption.EncryptionService"
-            ) as enc_svc_cls,
+            patch("src.api.security.encryption.EncryptionService") as enc_svc_cls,
         ):
-            enc_svc_cls.return_value.get_encryption_status.return_value = (
-                STATUS_PAYLOAD
-            )
+            enc_svc_cls.return_value.get_encryption_status.return_value = STATUS_PAYLOAD
             resp = TestClient(app).get(f"{API_PREFIX}/status")
         assert resp.status_code == 200
         assert resp.json()["key_management"] == {}
 
-    def test_post_user_profile_with_permission_returns_200(self):
+    def test_post_user_profile_with_permission_returns_200(self) -> None:
         svc = MagicMock()
         svc.user_has_permission.return_value = True
         profile = MagicMock()
@@ -156,14 +151,10 @@ class TestEncryptionEndpointGuards:
             ctx[0],
             ctx[1],
             patch("src.middleware.rbac.RBACService", return_value=svc),
-            patch(
-                "src.api.security.encryption.EncryptionService"
-            ) as enc_svc_cls,
+            patch("src.api.security.encryption.EncryptionService") as enc_svc_cls,
         ):
             enc_svc_cls.return_value.encrypt_user_profile.return_value = profile
-            resp = TestClient(app).post(
-                f"{API_PREFIX}/profiles/user", json=POST_BODY
-            )
+            resp = TestClient(app).post(f"{API_PREFIX}/profiles/user", json=POST_BODY)
         assert resp.status_code == 200
         assert resp.json()["profile_id"] == "profile-1"
 
@@ -173,7 +164,7 @@ class TestDeletedGuardSources:
     """Tripwire: the analytics RBAC decorator module and the dead symbols of
     middleware/rbac.py were removed in I12 — nothing may import them again."""
 
-    def test_no_module_imports_rbac_decorator(self):
+    def test_no_module_imports_rbac_decorator(self) -> None:
         src_root = Path(__file__).resolve().parents[2] / "src"
         import_line = re.compile(r"^\s*(?:from|import)\s+\S*rbac_decorator\b", re.M)
         offenders = []
@@ -183,7 +174,7 @@ class TestDeletedGuardSources:
                 offenders.append(str(p.relative_to(src_root)))
         assert offenders == []
 
-    def test_middleware_rbac_imports_request_only_the_live_dependency(self):
+    def test_middleware_rbac_imports_request_only_the_live_dependency(self) -> None:
         src_root = Path(__file__).resolve().parents[2] / "src"
         offenders = []
         for p in src_root.rglob("*.py"):
@@ -191,16 +182,12 @@ class TestDeletedGuardSources:
                 stripped = line.strip()
                 if not stripped.startswith("from src.middleware.rbac import"):
                     continue
-                names = {
-                    n.strip() for n in stripped.split("import", 1)[1].split(",")
-                }
+                names = {n.strip() for n in stripped.split("import", 1)[1].split(",")}
                 if names != {"require_permission_dep"}:
-                    offenders.append(
-                        f"{p.relative_to(src_root)}: {stripped}"
-                    )
+                    offenders.append(f"{p.relative_to(src_root)}: {stripped}")
         assert offenders == []
 
-    def test_dead_rbac_symbols_are_gone(self):
+    def test_dead_rbac_symbols_are_gone(self) -> None:
         import src.middleware.rbac as rbac_mod
 
         for dead in (
