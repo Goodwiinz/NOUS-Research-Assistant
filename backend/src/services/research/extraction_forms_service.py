@@ -167,15 +167,16 @@ async def _append(
     idempotency_key: str,
     fingerprint: str,
     version: int = 1,
-) -> None:
-    """Append one event; a reused key with other content is a 409."""
+) -> UUID:
+    """Append one event; a reused key with other content is a 409. Returns
+    the event id (a GOO-307 staling cause)."""
     payload = {
         "collection_id": str(collection_id),
         "matrix_id": str(matrix_id),
         **payload,
     }
     try:
-        await append_decision(
+        result = await append_decision(
             db,
             collection_id=collection_id,
             aggregate_type=AGGREGATE_TYPE,
@@ -195,6 +196,42 @@ async def _append(
         )
     except DecisionIdempotencyConflict as exc:
         raise HTTPException(status_code=409, detail="Idempotency conflict") from exc
+    return cast(UUID, result.event.id)
+
+
+async def _invalidate_releases(
+    db: AsyncSession,
+    *,
+    collection_id: UUID,
+    changed: set[tuple[str, str]],
+    actor_id: UUID,
+    actor_role: str,
+    event_id: UUID | None,
+    kind: str,
+    document_id: UUID | None = None,
+) -> None:
+    """GOO-307: stale the releases built on ``changed``, in this transaction.
+    With ``document_id``, that document's outdated source revisions count as
+    changed too: span links hang off the source itself, so a changed text
+    stales their releases even when no accepted tip was pinned to it."""
+    from src.services.research import draft_release_service  # import cycle
+
+    if document_id is not None:
+        changed = changed | await draft_release_service.source_nodes(
+            db, collection_id, document_id
+        )
+    await draft_release_service.invalidate_dependents(
+        db,
+        collection_id=collection_id,
+        changed=changed,
+        actor_id=actor_id,
+        actor_role=actor_role,
+        cause={
+            "family": AGGREGATE_TYPE,
+            "event_id": None if event_id is None else str(event_id),
+            "kind": kind,
+        },
+    )
 
 
 async def current_version(db: AsyncSession, matrix_id: UUID) -> Any:
@@ -350,7 +387,7 @@ async def create_version(
             "new_source_hash": None,
             "new_text_sha256": None,
         }
-        await _append(
+        event_id = await _append(
             db,
             collection_id=_project(context),
             matrix_id=matrix.id,
@@ -362,6 +399,15 @@ async def create_version(
             idempotency_key=f"staled:{version.id}",
             fingerprint=decision_request_fingerprint(payload),
             version=2,
+        )
+        await _invalidate_releases(
+            db,
+            collection_id=_project(context),
+            changed={("accepted", value) for value in staled},
+            actor_id=actor_id,
+            actor_role="editor",
+            event_id=event_id,
+            kind="extraction.staled",
         )
     await db.commit()
     await db.refresh(version)
@@ -457,6 +503,7 @@ async def _stale_changed_source(
         and str(tip.id) not in already
         and _changed(pins, tip.source_hash, tip.text_sha256)
     )
+    event_id = None
     if staled:
         payload = {
             "new_form_version_id": None,
@@ -466,7 +513,7 @@ async def _stale_changed_source(
             "new_source_hash": pins[0],
             "new_text_sha256": pins[1],
         }
-        await _append(
+        event_id = await _append(
             db,
             collection_id=matrix.project_id,
             matrix_id=matrix.id,
@@ -479,6 +526,16 @@ async def _stale_changed_source(
             fingerprint=decision_request_fingerprint(payload),
             version=2,
         )
+    await _invalidate_releases(
+        db,
+        collection_id=matrix.project_id,
+        changed={("accepted", value) for value in staled},
+        actor_id=actor_id,
+        actor_role=actor_role,
+        event_id=event_id,
+        kind="source_changed",
+        document_id=document.id,
+    )
     return staled
 
 
@@ -977,7 +1034,7 @@ async def accept_value(
     )
     db.add(row)
     await _flush_or_conflict(db, ACCEPTED_STALE)
-    await _append(
+    event_id = await _append(
         db,
         collection_id=_project(context),
         matrix_id=matrix.id,
@@ -1010,6 +1067,16 @@ async def accept_value(
         fingerprint=fingerprint,
         version=2,
     )
+    if data.supersedes_accepted_value_id is not None:
+        await _invalidate_releases(
+            db,
+            collection_id=_project(context),
+            changed={("accepted", str(data.supersedes_accepted_value_id))},
+            actor_id=actor_id,
+            actor_role="adjudicator",
+            event_id=event_id,
+            kind="extraction.accepted",
+        )
     await db.commit()
     await db.refresh(row)
     return _accepted(row)

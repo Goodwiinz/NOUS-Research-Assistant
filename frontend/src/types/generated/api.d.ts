@@ -3847,6 +3847,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Action */
+        post: operations["create_action_api_v1_integrations_actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/actions/{invocation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Action */
+        get: operations["read_action_api_v1_integrations_actions__invocation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/actions/{invocation_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide */
+        post: operations["decide_api_v1_integrations_actions__invocation_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/connections": {
         parameters: {
             query?: never;
@@ -5426,6 +5477,49 @@ export interface paths {
          * @description Export draft to LaTeX (.tex + .bib) or Markdown.
          */
         post: operations["export_draft_api_v1_projects__project_id__drafts__draft_id__export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote Draft
+         * @description Promote this exact version to verified (adjudicator or supervisor).
+         *
+         *     201 new, 200 replayed; 409 blocked (every blocker listed), content
+         *     changed or stale; 403 without the role.
+         */
+        post: operations["promote_draft_api_v1_projects__project_id__drafts__draft_id__versions__version__promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Draft Release
+         * @description Release status, every blocker and the invalidation report (VIEW).
+         */
+        get: operations["get_draft_release_api_v1_projects__project_id__drafts__draft_id__versions__version__release_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9752,6 +9846,27 @@ export interface components {
             /** Rate Limit Per Hour */
             rate_limit_per_hour: number;
         };
+        /** ActionDecision */
+        ActionDecision: {
+            /** Approved */
+            approved: boolean;
+        };
+        /** ActionStatus */
+        ActionStatus: {
+            /**
+             * Invocation Id
+             * Format: uuid
+             */
+            invocation_id: string;
+            result?: components["schemas"]["ToolResult"] | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "awaiting_approval" | "approved" | "executing" | "succeeded" | "failed" | "outcome_unknown";
+            /** Tool Name */
+            tool_name: string;
+        };
         /** AgentExecuteRequest */
         AgentExecuteRequest: {
             /**
@@ -12364,6 +12479,71 @@ export interface components {
          * @enum {string}
          */
         DocumentType: "text" | "image" | "audio" | "video" | "pdf" | "spreadsheet" | "presentation" | "multimodal";
+        /**
+         * DraftPromoteRequest
+         * @description Promote the exact version whose content hashes to ``content_hash``.
+         */
+        DraftPromoteRequest: {
+            /** Content Hash */
+            content_hash: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Rationale */
+            rationale?: string | null;
+        };
+        /**
+         * DraftReleaseResponse
+         * @description A promotion of one exact draft version; stale rows are kept.
+         */
+        DraftReleaseResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /** Assessment Ids */
+            assessment_ids: string[];
+            /** Claim Version Ids */
+            claim_version_ids: string[];
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Draft Version */
+            draft_version: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Interpretation Claim Version Ids */
+            interpretation_claim_version_ids: string[];
+            /** Policy Version */
+            policy_version: number;
+            /**
+             * Promoted By Id
+             * Format: uuid
+             */
+            promoted_by_id: string;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /** Rationale */
+            rationale?: string | null;
+            /** Stale At */
+            stale_at?: string | null;
+            /** Stale Event Id */
+            stale_event_id?: string | null;
+        };
         /** DraftReviewListResponse */
         DraftReviewListResponse: {
             /** Reviews */
@@ -15826,6 +16006,68 @@ export interface components {
          * @enum {string}
          */
         RelationshipType: "WORKS_FOR" | "KNOWS" | "RELATED_TO" | "LOCATED_IN" | "PART_OF" | "MENTIONED_IN" | "APPEARS_WITH" | "CREATED_BY" | "OWNS" | "MANAGES" | "COLLABORATES_WITH" | "REPORTS_TO" | "MEMBER_OF" | "ATTENDED" | "SPOKE_AT" | "PUBLISHED_BY" | "CITED" | "REFERENCES" | "CUSTOM";
+        /**
+         * ReleaseBlocker
+         * @description One reason a draft version cannot be promoted (GOO-307).
+         */
+        ReleaseBlocker: {
+            /** Claim Version Id */
+            claim_version_id?: string | null;
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** End */
+            end: number;
+            /** Start */
+            start: number;
+            /** Text */
+            text: string;
+        };
+        /**
+         * ReleaseCheckResponse
+         * @description A draft version's release status, blockers and invalidation report.
+         */
+        ReleaseCheckResponse: {
+            /** Blockers */
+            blockers: components["schemas"]["ReleaseBlocker"][];
+            /** Content Hash */
+            content_hash: string;
+            /** Dimensions */
+            dimensions: {
+                [key: string]: unknown;
+            };
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Draft Version */
+            draft_version: number;
+            invalidation?: components["schemas"]["ReleaseInvalidation"] | null;
+            release?: components["schemas"]["DraftReleaseResponse"] | null;
+            /**
+             * Release Status
+             * @enum {string}
+             */
+            release_status: "candidate" | "verified" | "stale";
+        };
+        /**
+         * ReleaseInvalidation
+         * @description Why the latest release is stale: persisted, or derived on read.
+         */
+        ReleaseInvalidation: {
+            /** Assessment Ids */
+            assessment_ids: string[];
+            /** Cause */
+            cause: {
+                [key: string]: unknown;
+            };
+            /** Changed Nodes */
+            changed_nodes: string[];
+            /** Stale At */
+            stale_at?: string | null;
+        };
         /**
          * ReportCandidatesResponse
          * @description Read-only suggestions; titles and years never equate reports.
@@ -25773,6 +26015,105 @@ export interface operations {
             };
         };
     };
+    create_action_api_v1_integrations_actions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolInvocation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_action_api_v1_integrations_actions__invocation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invocation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_api_v1_integrations_actions__invocation_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invocation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActionDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_connections_api_v1_integrations_connections_get: {
         parameters: {
             query?: never;
@@ -28530,6 +28871,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_draft_api_v1_projects__project_id__drafts__draft_id__versions__version__promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                draft_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftPromoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftReleaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_draft_release_api_v1_projects__project_id__drafts__draft_id__versions__version__release_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                draft_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseCheckResponse"];
                 };
             };
             /** @description Validation Error */

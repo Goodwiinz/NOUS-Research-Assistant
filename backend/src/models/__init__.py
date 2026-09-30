@@ -74,6 +74,7 @@ from .extraction_matrix import (
 )
 from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
+from .draft_release import DraftRelease
 from .draft_task_result import DraftTaskResult
 from .generated_draft import GeneratedDraft
 from .message_attachment import MessageAttachment
@@ -238,6 +239,7 @@ __all__ = [
     "ProjectSkillChangeRequest",
     "ProjectSkillVersionScan",
     "GeneratedDraft",
+    "DraftRelease",
     "DraftTaskResult",
     "DraftCitation",
     "DraftReview",
@@ -370,6 +372,7 @@ from .artifact import (
 from .bridge_device import BridgeDevice, WorkspaceBinding
 from .harness_session import HarnessNativeRequest, HarnessSession
 from .integration_grant import IntegrationGrant, IntegrationGrantRequest
+from .tool_action import IntegrationToolAction
 
 __all__ += [
     "HarnessSession",
@@ -377,6 +380,7 @@ __all__ += [
     "WorkspaceBinding",
     "IntegrationGrant",
     "IntegrationGrantRequest",
+    "IntegrationToolAction",
     "Artifact",
     "ArtifactVersion",
     "ArtifactUpload",
