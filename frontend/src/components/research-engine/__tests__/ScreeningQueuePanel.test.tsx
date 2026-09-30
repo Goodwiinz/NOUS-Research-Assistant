@@ -66,6 +66,7 @@ const mine = (
       title_snapshot: 'Alpha trial',
       identifiers: { doi: ['10.1000/alpha'] },
       abstract: 'Adults with a condition.',
+      reveal_state: 'hidden',
       observation: observed
         ? {
             id: 'obs-1',
@@ -83,6 +84,7 @@ const mine = (
       title_snapshot: 'Beta cohort',
       identifiers: {},
       abstract: null,
+      reveal_state: 'hidden',
     },
   ],
   counts: { total: 2, screened: observed ? 1 : 0, remaining: observed ? 1 : 2 },
@@ -429,4 +431,95 @@ describe('ScreeningQueuePanel', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('backend down');
   });
+
+  it('a hidden row says so and shows no peer decision', async () => {
+    renderPanel([role('me', 'reviewer')]);
+
+    expect(await screen.findByText('Alpha trial')).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Other reviewers' decisions are hidden until reveal.")
+    ).toHaveLength(2);
+    expect(screen.queryByText(/Reviewer peer/)).not.toBeInTheDocument();
+  });
+
+  it('a revealed row shows peers and the badge, and locks until reopened', async () => {
+    const view = mine({}, true);
+    view.items[0] = {
+      ...view.items[0],
+      reveal_state: 'revealed',
+      others: [
+        {
+          id: 'obs-peer',
+          queue_id: 'queue-1',
+          report_id: 'report-1',
+          reviewer_id: 'peer',
+          assignment_id: 'assignment-2',
+          decision: 'exclude',
+          created_at: '2026-09-29T00:00:00Z',
+        },
+      ],
+      resolution: {
+        id: 'res-1',
+        report_id: 'report-1',
+        basis: 'conflict',
+        input_observation_ids: ['obs-1', 'obs-peer'],
+        criteria_hash: HASH,
+        created_at: '2026-09-29T00:00:00Z',
+      },
+    };
+    vi.mocked(getMyScreeningQueue).mockResolvedValue(view);
+    renderPanel([role('me', 'reviewer')]);
+
+    expect(await screen.findByText('Conflict')).toBeInTheDocument();
+    expect(screen.getByText('Reviewer peer: exclude')).toBeInTheDocument();
+    const change = screen.getByRole('button', {
+      name: 'Change to Exclude Alpha trial',
+    });
+    expect(change).toBeDisabled();
+    expect(change).toHaveAttribute(
+      'title',
+      'Resolved — an adjudicator must reopen'
+    );
+    // The unrevealed row stays open.
+    expect(
+      screen.getByRole('button', { name: 'Include Beta cohort' })
+    ).toBeEnabled();
+  });
+
+  it.each([
+    ['agreement', 'include', null, 'Agreed: include'],
+    [
+      'adjudicated',
+      'exclude',
+      'wrong design',
+      'Adjudicated: exclude — wrong design',
+    ],
+    ['reopened', null, null, 'Reopened'],
+  ] as const)(
+    'labels a %s resolution',
+    async (basis, outcome, reason, label) => {
+      const view = mine();
+      view.items[0] = {
+        ...view.items[0],
+        reveal_state: 'revealed',
+        resolution: {
+          id: 'res-1',
+          report_id: 'report-1',
+          basis,
+          outcome,
+          exclusion_reason: reason,
+          input_observation_ids: [],
+          criteria_hash: HASH,
+          created_at: '2026-09-29T00:00:00Z',
+        },
+      };
+      vi.mocked(getMyScreeningQueue).mockResolvedValue(view);
+      renderPanel([role('me', 'reviewer')]);
+
+      expect(await screen.findByText(label)).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Include Alpha trial' })
+      ).toHaveProperty('disabled', basis !== 'reopened');
+    }
+  );
 });

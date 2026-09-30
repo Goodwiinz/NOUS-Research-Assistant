@@ -853,6 +853,25 @@ async def _active_assignment(db: AsyncSession, queue_id: UUID, user_id: UUID) ->
     ).scalar_one_or_none()
 
 
+async def _identifiers(
+    db: AsyncSession, report_ids: Sequence[UUID]
+) -> dict[UUID, dict[str, list[str]]]:
+    identifiers: dict[UUID, dict[str, list[str]]] = {i: {} for i in report_ids}
+    for report_id, kind, value in (
+        await db.execute(
+            select(
+                ResearchReportIdentifier.report_id,
+                ResearchReportIdentifier.kind,
+                ResearchReportIdentifier.value,
+            )
+            .where(ResearchReportIdentifier.report_id.in_(report_ids))
+            .order_by(ResearchReportIdentifier.kind, ResearchReportIdentifier.value)
+        )
+    ).all():
+        identifiers[report_id].setdefault(kind, []).append(value)
+    return identifiers
+
+
 async def my_queue(
     db: AsyncSession, context: ProjectContext, queue_id: UUID, user_id: UUID
 ) -> MyScreeningQueueResponse:
@@ -875,19 +894,7 @@ async def my_queue(
             )
         ).all()
     }
-    identifiers: dict[UUID, dict[str, list[str]]] = {i: {} for i in report_ids}
-    for report_id, kind, value in (
-        await db.execute(
-            select(
-                ResearchReportIdentifier.report_id,
-                ResearchReportIdentifier.kind,
-                ResearchReportIdentifier.value,
-            )
-            .where(ResearchReportIdentifier.report_id.in_(report_ids))
-            .order_by(ResearchReportIdentifier.kind, ResearchReportIdentifier.value)
-        )
-    ).all():
-        identifiers[report_id].setdefault(kind, []).append(value)
+    identifiers = await _identifiers(db, report_ids)
     abstracts: dict[UUID, str] = {}
     for report_id, abstract in (
         await db.execute(
@@ -1166,6 +1173,7 @@ async def _check_resolutions(
                 if row.supersedes_resolution_id is None
                 else str(row.supersedes_resolution_id)
             ),
+            row.criteria_hash,
         )
 
     stored = (
@@ -1213,10 +1221,16 @@ async def conflicts(
             )
         ).all()
     )
+    identifiers = await _identifiers(db, list(tips))
+    reasons = screening_rules.exclusion_reasons(
+        (await _version(db, queue.protocol_version_id)).snapshot
+    )
     return [
         ScreeningConflictResponse(
             report_id=report_id,
             title_snapshot=titles.get(report_id, ""),
+            identifiers=identifiers[report_id],
+            exclusion_reasons=reasons,
             resolution=_resolution_response(tips[report_id]),
             observations=[
                 ScreeningObservationResponse.model_validate(observations[oid])
@@ -1293,15 +1307,19 @@ async def adjudicate(
         tip is None
         or tip.id != data.resolution_id
         or inputs != sorted(str(i) for i in tip.input_observation_ids)
+        # Defense only: step 4a in submit makes a superseded input unreachable.
         or set(inputs) != current
     ):
         raise _conflict(INPUTS_STALE)
     if tip.basis != "conflict":
         raise _conflict(NOT_IN_CONFLICT)
+    # Any observation of this report by the actor, in any cycle (superseded or
+    # consumed by an earlier resolution too), not only the current inputs.
     reviewed = (
         await db.execute(
             select(ScreeningObservation.id).where(
-                ScreeningObservation.id.in_(data.input_observation_ids),
+                ScreeningObservation.queue_id == queue_id,
+                ScreeningObservation.report_id == report_id,
                 ScreeningObservation.reviewer_id == actor_user_id,
             )
         )

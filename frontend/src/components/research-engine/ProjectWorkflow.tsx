@@ -15,6 +15,7 @@ import { BlueprintEditor } from './BlueprintEditor';
 import { CorpusPanel } from './CorpusPanel';
 import { ProtocolPanel } from './ProtocolPanel';
 import { ReportIdentityPanel } from './ReportIdentityPanel';
+import { ScreeningConflictsPanel } from './ScreeningConflictsPanel';
 import { ScreeningQueuePanel } from './ScreeningQueuePanel';
 
 interface ProjectWorkflowProps {
@@ -153,6 +154,11 @@ export function ProjectWorkflow({
       <ScreeningQueuePanel
         projectId={project.id}
         approvedProtocolVersionId={approvedProtocolVersionId}
+        roles={roles.data ?? []}
+        readOnly={archived}
+      />
+      <ScreeningConflictsPanel
+        projectId={project.id}
         roles={roles.data ?? []}
         readOnly={archived}
       />

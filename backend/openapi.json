@@ -8526,9 +8526,35 @@
               }
             ]
           },
+          "others": {
+            "items": {
+              "$ref": "#/components/schemas/ScreeningObservationResponse"
+            },
+            "title": "Others",
+            "type": "array"
+          },
           "report_id": {
             "format": "uuid",
             "title": "Report Id",
+            "type": "string"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreeningResolutionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reveal_state": {
+            "default": "hidden",
+            "enum": [
+              "hidden",
+              "revealed"
+            ],
+            "title": "Reveal State",
             "type": "string"
           },
           "title_snapshot": {
@@ -13086,6 +13112,76 @@
         "title": "ScanFindingResponse",
         "type": "object"
       },
+      "ScreeningAdjudicateRequest": {
+        "description": "Resolve the exact conflict tip the adjudicator saw (stale inputs: 409).",
+        "properties": {
+          "criteria_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "include",
+              "exclude",
+              "uncertain"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "input_observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Input Observation Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "resolution_id": {
+            "format": "uuid",
+            "title": "Resolution Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resolution_id",
+          "input_observation_ids",
+          "criteria_hash",
+          "decision",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ScreeningAdjudicateRequest",
+        "type": "object"
+      },
       "ScreeningAssignmentCreate": {
         "properties": {
           "idempotency_key": {
@@ -13169,10 +13265,70 @@
         "title": "ScreeningAssignmentResponse",
         "type": "object"
       },
+      "ScreeningConflictResponse": {
+        "properties": {
+          "exclusion_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusion Reasons",
+            "type": "array"
+          },
+          "identifiers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Identifiers",
+            "type": "object"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/ScreeningObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/ScreeningResolutionResponse"
+          },
+          "title_snapshot": {
+            "title": "Title Snapshot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "title_snapshot",
+          "identifiers",
+          "exclusion_reasons",
+          "resolution",
+          "observations"
+        ],
+        "title": "ScreeningConflictResponse",
+        "type": "object"
+      },
       "ScreeningCounts": {
         "properties": {
+          "conflicts": {
+            "default": 0,
+            "title": "Conflicts",
+            "type": "integer"
+          },
           "remaining": {
             "title": "Remaining",
+            "type": "integer"
+          },
+          "revealed": {
+            "default": 0,
+            "title": "Revealed",
             "type": "integer"
           },
           "screened": {
@@ -13190,6 +13346,64 @@
           "remaining"
         ],
         "title": "ScreeningCounts",
+        "type": "object"
+      },
+      "ScreeningEventResponse": {
+        "description": "A screening event; a peer's hidden decision is ``redacted`` (GOO-302).",
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "actor_user_id": {
+            "format": "uuid",
+            "title": "Actor User Id",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "redacted": {
+            "default": false,
+            "title": "Redacted",
+            "type": "boolean"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "event_type",
+          "actor_user_id",
+          "actor_role",
+          "payload",
+          "occurred_at"
+        ],
+        "title": "ScreeningEventResponse",
         "type": "object"
       },
       "ScreeningItemDecision": {
@@ -13378,6 +13592,16 @@
             "title": "Report Id",
             "type": "string"
           },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreeningResolutionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reviewer_id": {
             "format": "uuid",
             "title": "Reviewer Id",
@@ -13486,6 +13710,11 @@
             "title": "Assignment Count",
             "type": "integer"
           },
+          "conflict_count": {
+            "default": 0,
+            "title": "Conflict Count",
+            "type": "integer"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -13516,6 +13745,11 @@
           },
           "report_count": {
             "title": "Report Count",
+            "type": "integer"
+          },
+          "resolved_count": {
+            "default": 0,
+            "title": "Resolved Count",
             "type": "integer"
           },
           "reviewer_mode": {
@@ -13583,6 +13817,126 @@
           "suggestion_count"
         ],
         "title": "ScreeningQueueResponse",
+        "type": "object"
+      },
+      "ScreeningReopenRequest": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "resolution_id": {
+            "format": "uuid",
+            "title": "Resolution Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resolution_id",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ScreeningReopenRequest",
+        "type": "object"
+      },
+      "ScreeningResolutionResponse": {
+        "description": "A derived or adjudicated outcome; never an editable field (GOO-302).",
+        "properties": {
+          "basis": {
+            "enum": [
+              "single",
+              "agreement",
+              "conflict",
+              "adjudicated",
+              "reopened"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "criteria_hash": {
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Input Observation Ids",
+            "type": "array"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "include",
+                  "exclude",
+                  "uncertain"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "supersedes_resolution_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Resolution Id"
+          }
+        },
+        "required": [
+          "id",
+          "report_id",
+          "basis",
+          "input_observation_ids",
+          "criteria_hash",
+          "created_at"
+        ],
+        "title": "ScreeningResolutionResponse",
         "type": "object"
       },
       "ScreeningReviewDecisionPayload": {
@@ -37758,6 +38112,68 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/conflicts": {
+      "get": {
+        "operationId": "screening_conflicts_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__conflicts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScreeningConflictResponse"
+                  },
+                  "title": "Response Screening Conflicts Route Api V1 Research Engine Projects  Project Id  Screening Queues  Queue Id  Conflicts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Screening Conflicts Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/history": {
       "get": {
         "operationId": "screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get",
@@ -37789,7 +38205,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/IdentityEventResponse"
+                    "$ref": "#/components/schemas/ScreeningEventResponse"
                   },
                   "title": "Response Screening History Route Api V1 Research Engine Projects  Project Id  Screening Queues  Queue Id  History Get",
                   "type": "array"
@@ -37941,6 +38357,162 @@
           }
         ],
         "summary": "Submit Screening Observation Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/adjudicate": {
+      "post": {
+        "operationId": "adjudicate_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__adjudicate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningAdjudicateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningResolutionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Adjudicate Screening Report Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/reopen": {
+      "post": {
+        "operationId": "reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningReopenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningResolutionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reopen Screening Report Route",
         "tags": [
           "research-engine-screening"
         ]

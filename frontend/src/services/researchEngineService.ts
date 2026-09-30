@@ -8,12 +8,17 @@ import type {
 } from '@/types/api/research-identity-contract';
 import type {
   ApiMyScreeningQueue,
+  ApiScreeningAdjudicateRequest,
   ApiScreeningAssignment,
   ApiScreeningAssignmentCreate,
+  ApiScreeningConflict,
+  ApiScreeningEvent,
   ApiScreeningObservation,
   ApiScreeningObservationCreate,
   ApiScreeningQueue,
   ApiScreeningQueueCreate,
+  ApiScreeningReopenRequest,
+  ApiScreeningResolution,
   ApiScreeningRevokeRequest,
 } from '@/types/api/research-screening-contract';
 import type {
@@ -251,8 +256,12 @@ export const mergeReports = (
 export type {
   ApiMyScreeningItem as MyScreeningItem,
   ApiMyScreeningQueue as MyScreeningQueue,
+  ApiScreeningConflict as ScreeningConflict,
   ApiScreeningDecision as ScreeningDecision,
+  ApiScreeningEvent as ScreeningEvent,
+  ApiScreeningObservation as ScreeningObservation,
   ApiScreeningQueue as ScreeningQueue,
+  ApiScreeningResolution as ScreeningResolution,
 } from '@/types/api/research-screening-contract';
 
 const screening = (projectId: string): string =>
@@ -309,8 +318,39 @@ export const submitScreeningObservation = (
 export const listScreeningHistory = (
   projectId: string,
   queueId: string
-): Promise<ApiIdentityEvent[]> =>
-  api.get<ApiIdentityEvent[]>(`${screening(projectId)}/${queueId}/history`);
+): Promise<ApiScreeningEvent[]> =>
+  api.get<ApiScreeningEvent[]>(`${screening(projectId)}/${queueId}/history`);
+
+// GOO-302: adjudicator reads and events.
+export const listScreeningConflicts = (
+  projectId: string,
+  queueId: string
+): Promise<ApiScreeningConflict[]> =>
+  api.get<ApiScreeningConflict[]>(
+    `${screening(projectId)}/${queueId}/conflicts`
+  );
+
+export const adjudicateScreening = (
+  projectId: string,
+  queueId: string,
+  reportId: string,
+  data: ApiScreeningAdjudicateRequest
+): Promise<ApiScreeningResolution> =>
+  api.post<ApiScreeningResolution>(
+    `${screening(projectId)}/${queueId}/reports/${reportId}/adjudicate`,
+    data
+  );
+
+export const reopenScreening = (
+  projectId: string,
+  queueId: string,
+  reportId: string,
+  data: ApiScreeningReopenRequest
+): Promise<ApiScreeningResolution> =>
+  api.post<ApiScreeningResolution>(
+    `${screening(projectId)}/${queueId}/reports/${reportId}/reopen`,
+    data
+  );
 
 // --- Search import / citation chase / corpus export (GOO-300) --------------
 

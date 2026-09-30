@@ -607,6 +607,9 @@ class MyScreeningQueueResponse(BaseModel):
 class ScreeningConflictResponse(BaseModel):
     report_id: UUID
     title_snapshot: str
+    identifiers: Dict[str, List[str]]
+    # The queue's pinned protocol reasons, for a full-text exclusion ruling.
+    exclusion_reasons: List[str]
     resolution: ScreeningResolutionResponse
     observations: List[ScreeningObservationResponse]
 

@@ -858,6 +858,7 @@ class ReplayedResolution:
     exclusion_reason: str | None
     input_observation_ids: list[str]  # sorted
     supersedes_resolution_id: UUID | None
+    criteria_hash: str
 
 
 def replay_screening_resolutions(
@@ -880,6 +881,8 @@ def replay_screening_resolutions(
     seen: dict[UUID, screening_rules.Obs] = {}  # observation -> as derive sees it
     consumed: set[str] = set()  # observation ids already input to a resolution
     tips: dict[UUID, ReplayedResolution] = {}  # report -> current resolution
+    # report -> every reviewer who ever observed it (any cycle, superseded too)
+    reviewed: dict[UUID, set[UUID]] = {}
     resolutions: list[ReplayedResolution] = []
 
     def criteria(decision: Any, reason: Any) -> None:
@@ -930,7 +933,15 @@ def replay_screening_resolutions(
                     raise DecisionReplayError("screening report is not resolved")
                 resolve(
                     ReplayedResolution(
-                        new_id, event.id, report, "reopened", None, None, [], tip.id
+                        new_id,
+                        event.id,
+                        report,
+                        "reopened",
+                        None,
+                        None,
+                        [],
+                        tip.id,
+                        created["criteria_hash"],
                     )
                 )
                 continue
@@ -945,7 +956,7 @@ def replay_screening_resolutions(
                 or inputs != tip.input_observation_ids
             ):
                 raise DecisionReplayError("screening adjudication inputs are stale")
-            if any(seen[UUID(i)].reviewer_id == event.actor_user_id for i in inputs):
+            if event.actor_user_id in reviewed.get(report, set()):
                 raise DecisionReplayError("screening adjudicator reviewed this report")
             if payload["criteria_hash"] != created["criteria_hash"]:
                 raise DecisionReplayError("screening adjudication criteria changed")
@@ -960,6 +971,7 @@ def replay_screening_resolutions(
                     payload["exclusion_reason"],
                     inputs,
                     tip.id,
+                    payload["criteria_hash"],
                 )
             )
             continue
@@ -994,6 +1006,7 @@ def replay_screening_resolutions(
             raise DecisionReplayError("contradictory screening supersession")
         observation = _payload_uuid(payload["observation_id"], "observation_id")
         current[key] = observation
+        reviewed.setdefault(report, set()).add(reviewer)
         seen[observation] = screening_rules.Obs(
             observation, reviewer, payload["decision"], payload["exclusion_reason"]
         )
@@ -1016,6 +1029,7 @@ def replay_screening_resolutions(
                     derived.exclusion_reason,
                     derived.input_observation_ids,
                     None if tip is None else tip.id,
+                    created["criteria_hash"],
                 )
             )
     return resolutions
