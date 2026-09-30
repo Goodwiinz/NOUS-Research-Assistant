@@ -29,6 +29,7 @@ def _snapshot_db(count: int) -> tuple[MagicMock, list[SimpleNamespace]]:
     db.execute = AsyncMock(return_value=query_result)
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
+    db.flush = AsyncMock()
     return db, rows
 
 

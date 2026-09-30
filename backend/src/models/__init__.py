@@ -68,6 +68,7 @@ from .entity import Entity, EntityType, ExtractionMethod, entity_relationships
 from .extraction_matrix import ExtractionCell, ExtractionMatrix
 from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
+from .draft_task_result import DraftTaskResult
 from .generated_draft import GeneratedDraft
 from .message_attachment import MessageAttachment
 from .organization import Organization, StorageTier
@@ -122,8 +123,15 @@ from .research_protocol import (
     ResearchQuestion,
     ResearchQuestionVersion,
 )
+from .research_import import ResearchImportReceipt, ResearchImportRecord
 from .research_project import ResearchProject
 from .research_project_role import ResearchProjectRole, ResearchProjectRoleAssignment
+from .research_report import (
+    ResearchReport,
+    ResearchReportIdentifier,
+    ResearchReportObservation,
+    ResearchStudy,
+)
 from .research_run import ResearchRun, RunStatus
 from .research_source import ResearchSource
 from .research_stage_review import ResearchStageReview
@@ -209,6 +217,7 @@ __all__ = [
     "ProjectSkillChangeRequest",
     "ProjectSkillVersionScan",
     "GeneratedDraft",
+    "DraftTaskResult",
     "DraftCitation",
     "DraftReview",
     "ProjectThread",
@@ -281,6 +290,12 @@ __all__ = [
     "ExecutionMode",
     "ResearchSource",
     "ResearchStageReview",
+    "ResearchImportReceipt",
+    "ResearchImportRecord",
+    "ResearchReport",
+    "ResearchReportIdentifier",
+    "ResearchReportObservation",
+    "ResearchStudy",
     # Research Pipeline
     "ResearchPipeline",
     # Evaluation models

@@ -1,4 +1,8 @@
-"""Caller-owned append and replay operations for protocol decisions.
+"""Caller-owned append and replay operations for research decisions.
+
+Each aggregate family (``research_protocol``, ``research_identity``) registers
+its subject type, payload vocabulary, value validation and replay transition
+rules in ``_FAMILIES``.
 
 Idempotency is scoped to one aggregate stream. Protocol approval derives one
 stable subkey per emitted event (for example ``<request>:superseded`` and
@@ -43,6 +47,36 @@ _EVENT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     ),
 }
 
+_IDENTITY_AGGREGATE = "research_identity"
+_IDENTITY_SUBJECT = "research_report"
+STUDY_LINK_STATUSES = frozenset({"proposed", "confirmed", "disputed"})
+_IDENTITY_MOVE_KEYS = frozenset(
+    {"collection_id", "moved_source_ids", "moved_identifiers", "protocol_version_id"}
+)
+_IDENTITY_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("identity.report_merged", 1): _IDENTITY_MOVE_KEYS
+    | {"surviving_report_id", "merged_report_ids"},
+    ("identity.report_split", 1): _IDENTITY_MOVE_KEYS
+    | {"source_report_id", "new_report_id"},
+    # Schema 2 (GOO-300): the move also names re-pointed imported records.
+    ("identity.report_merged", 2): _IDENTITY_MOVE_KEYS
+    | {"surviving_report_id", "merged_report_ids", "moved_import_record_ids"},
+    ("identity.report_split", 2): _IDENTITY_MOVE_KEYS
+    | {"source_report_id", "new_report_id", "moved_import_record_ids"},
+    ("identity.study_linked", 1): frozenset(
+        {
+            "collection_id",
+            "report_id",
+            "study_id",
+            "status",
+            "prior_study_id",
+            "prior_status",
+            "match_evidence",
+            "protocol_version_id",
+        }
+    ),
+}
+
 
 class ResearchDecisionError(RuntimeError):
     """Base error for the retained decision ledger."""
@@ -74,6 +108,17 @@ def decision_request_fingerprint(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class _Family:
+    subject_type: str
+    payload_keys: dict[tuple[str, int], frozenset[str]]
+    # (event_type, payload, aggregate_id, subject_version_id, subject_id)
+    validate_payload: Callable[[str, Mapping[str, Any], UUID, UUID | None, UUID], None]
+    validate_transitions: Callable[[Sequence[ResearchDecisionEvent], UUID], None]
+    # False: subject_hash is the request fingerprint of the stored payload.
+    requires_subject_version: bool
+
+
 def _validate_event(
     *,
     aggregate_type: str,
@@ -87,20 +132,32 @@ def _validate_event(
     payload: Mapping[str, Any],
     request_fingerprint: str,
 ) -> None:
-    required = _EVENT_PAYLOAD_KEYS.get((event_type, event_schema_version))
-    if required is None:
+    key = (event_type, event_schema_version)
+    if not any(key in family.payload_keys for family in _FAMILIES.values()):
         raise DecisionValidationError(
             f"unsupported decision event {event_type!r} schema {event_schema_version}"
         )
-    if aggregate_type != _PROTOCOL_AGGREGATE or subject_type != _PROTOCOL_SUBJECT:
+    family = _FAMILIES.get(aggregate_type)
+    if (
+        family is None
+        or key not in family.payload_keys
+        or subject_type != family.subject_type
+    ):
         raise DecisionValidationError("decision aggregate or subject type is invalid")
-    if subject_version_id is None or subject_id != subject_version_id:
-        raise DecisionValidationError("protocol event must identify its exact version")
-    if set(payload) != required:
+    if family.requires_subject_version:
+        if subject_version_id is None or subject_id != subject_version_id:
+            raise DecisionValidationError(
+                "protocol event must identify its exact version"
+            )
+    elif subject_version_id is not None:
+        raise DecisionValidationError("identity event must not carry a subject version")
+    if set(payload) != family.payload_keys[key]:
         raise DecisionValidationError(
             "decision payload does not match its event schema"
         )
-    if str(payload["protocol_id"]) != str(aggregate_id):
+    if aggregate_type == _PROTOCOL_AGGREGATE and str(payload["protocol_id"]) != str(
+        aggregate_id
+    ):
         raise DecisionValidationError("decision payload belongs to another protocol")
     if not _SHA256_RE.fullmatch(subject_hash):
         raise DecisionValidationError("subject_hash must be a lowercase SHA-256 digest")
@@ -108,7 +165,15 @@ def _validate_event(
         raise DecisionValidationError(
             "request_fingerprint must be a lowercase SHA-256 digest"
         )
-    _validate_protocol_payload(event_type, payload, subject_version_id)
+    family.validate_payload(
+        event_type, payload, aggregate_id, subject_version_id, subject_id
+    )
+    if not family.requires_subject_version and (
+        subject_hash != decision_request_fingerprint(payload)
+    ):
+        # Replay re-derives this hash from the stored payload; reject a
+        # mismatch at append time instead of poisoning history forever.
+        raise DecisionValidationError("subject_hash must fingerprint the payload")
 
 
 def _validated_payload_uuid(value: Any, field: str) -> UUID:
@@ -123,7 +188,11 @@ def _validated_payload_uuid(value: Any, field: str) -> UUID:
 
 
 def _validate_protocol_payload(
-    event_type: str, payload: Mapping[str, Any], subject_version_id: UUID
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
 ) -> None:
     _validated_payload_uuid(payload["protocol_id"], "protocol_id")
     if event_type == "protocol.superseded":
@@ -157,6 +226,84 @@ def _validate_protocol_payload(
         )
     if payload["canonicalization_version"] != _PROTOCOL_CANONICALIZATION:
         raise DecisionValidationError("canonicalization_version is unsupported")
+
+
+def _validated_uuid_list(value: Any, field: str) -> list[UUID]:
+    if not isinstance(value, list):
+        raise DecisionValidationError(f"decision payload {field} must be a list")
+    return [_validated_payload_uuid(item, field) for item in value]
+
+
+def _validated_optional_uuid(value: Any, field: str) -> UUID | None:
+    return None if value is None else _validated_payload_uuid(value, field)
+
+
+def _validate_identity_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    _validated_optional_uuid(payload["protocol_version_id"], "protocol_version_id")
+    if event_type == "identity.study_linked":
+        subject = _validated_payload_uuid(payload["report_id"], "report_id")
+        _validated_payload_uuid(payload["study_id"], "study_id")
+        prior = _validated_optional_uuid(payload["prior_study_id"], "prior_study_id")
+        status = payload["status"]
+        if not isinstance(status, str) or status not in STUDY_LINK_STATUSES:
+            raise DecisionValidationError("study link status is invalid")
+        prior_status = payload["prior_status"]
+        if prior_status is not None and (
+            not isinstance(prior_status, str) or prior_status not in STUDY_LINK_STATUSES
+        ):
+            raise DecisionValidationError("prior study link status is invalid")
+        if (prior is None) != (prior_status is None):
+            raise DecisionValidationError("prior study link is incomplete")
+        if not isinstance(payload["match_evidence"], Mapping):
+            raise DecisionValidationError("match_evidence must be an object")
+    else:
+        _validated_uuid_list(payload["moved_source_ids"], "moved_source_ids")
+        if "moved_import_record_ids" in payload:
+            _validated_uuid_list(
+                payload["moved_import_record_ids"], "moved_import_record_ids"
+            )
+        moved_identifiers = payload["moved_identifiers"]
+        if not isinstance(moved_identifiers, list) or not all(
+            isinstance(item, Mapping)
+            and set(item) == {"kind", "value"}
+            and isinstance(item["kind"], str)
+            and isinstance(item["value"], str)
+            for item in moved_identifiers
+        ):
+            raise DecisionValidationError(
+                "decision payload moved_identifiers must be kind/value pairs"
+            )
+        if event_type == "identity.report_merged":
+            subject = _validated_payload_uuid(
+                payload["surviving_report_id"], "surviving_report_id"
+            )
+            merged = _validated_uuid_list(
+                payload["merged_report_ids"], "merged_report_ids"
+            )
+            if not merged:
+                raise DecisionValidationError("merge must name at least one report")
+            if subject in merged:
+                raise DecisionValidationError("report cannot merge into itself")
+        else:
+            subject = _validated_payload_uuid(
+                payload["source_report_id"], "source_report_id"
+            )
+            if _validated_payload_uuid(payload["new_report_id"], "new_report_id") == (
+                subject
+            ):
+                raise DecisionValidationError("split must create a new report")
+    if subject != subject_id:
+        raise DecisionValidationError("identity event subject is not its report")
 
 
 async def _locked_stream(
@@ -197,6 +344,11 @@ async def _locked_stream(
     if stream is None or cast(UUID, stream.collection_id) != collection_id:
         raise DecisionValidationError("decision stream collection mismatch")
     return stream
+
+
+# Public name: services take the aggregate lock before mutating state that the
+# appended event will describe (e.g. the per-project research_identity stream).
+lock_aggregate_stream = _locked_stream
 
 
 async def append_decision(
@@ -299,9 +451,14 @@ async def replay_decisions(
     collection_id: UUID,
     aggregate_type: str,
     aggregate_id: UUID,
-    subject_version_hash: Callable[[UUID], Awaitable[str | None]],
+    subject_version_hash: Callable[[UUID], Awaitable[str | None]] | None = None,
 ) -> Sequence[ResearchDecisionEvent]:
-    """Read and structurally validate complete ordered aggregate history."""
+    """Read and structurally validate complete ordered aggregate history.
+
+    ``subject_version_hash`` is required for families whose events name a
+    subject version (protocols); identity events verify ``subject_hash``
+    against the stored payload instead.
+    """
     stream = cast(
         ResearchDecisionStream | None,
         (
@@ -322,6 +479,11 @@ async def replay_decisions(
         return ()
     if cast(UUID, stream.collection_id) != collection_id:
         raise DecisionReplayError("decision stream collection mismatch")
+    family = _FAMILIES.get(aggregate_type)
+    if family is None:
+        raise DecisionReplayError("decision aggregate or subject type is invalid")
+    if family.requires_subject_version and subject_version_hash is None:
+        raise ValueError("subject_version_hash is required for this aggregate")
     events = list(
         (
             await db.execute(
@@ -351,13 +513,19 @@ async def replay_decisions(
             )
         except DecisionValidationError as error:
             raise DecisionReplayError(str(error)) from error
-        version_id = cast(UUID, event.subject_version_id)
-        stored_hash = await subject_version_hash(version_id)
-        if stored_hash is None:
-            raise DecisionReplayError("decision subject version is missing")
+        if not family.requires_subject_version:
+            stored_hash: str | None = decision_request_fingerprint(
+                cast(dict[str, Any], event.payload)
+            )
+        else:
+            assert subject_version_hash is not None  # checked above
+            version_id = cast(UUID, event.subject_version_id)
+            stored_hash = await subject_version_hash(version_id)
+            if stored_hash is None:
+                raise DecisionReplayError("decision subject version is missing")
         if stored_hash != event.subject_hash:
             raise DecisionReplayError("decision subject hash no longer matches")
-    _validate_protocol_transitions(events, aggregate_id)
+    family.validate_transitions(events, aggregate_id)
     if cast(int, stream.next_seq) != len(events) + 1:
         raise DecisionReplayError("decision stream high-water mark is invalid")
     return events
@@ -409,3 +577,68 @@ def _validate_protocol_transitions(
             pending = None
     if pending is not None:
         raise DecisionReplayError("protocol supersession has no matching approval")
+
+
+def _validate_identity_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Study links chain through prior state; merged reports are terminal.
+
+    A merge carries the first loser's study link onto a survivor without one,
+    exactly as the identity service applies it.
+    """
+    links: dict[UUID, tuple[UUID | None, str | None]] = {}
+    terminal: set[UUID] = set()
+
+    def live(value: Any, field: str) -> UUID:
+        report = _payload_uuid(value, field)
+        if report in terminal:
+            raise DecisionReplayError("merged report is terminal")
+        return report
+
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.event_type == "identity.study_linked":
+            report = live(payload["report_id"], "report_id")
+            prior_value = payload["prior_study_id"]
+            prior = (
+                None
+                if prior_value is None
+                else _payload_uuid(prior_value, "prior_study_id")
+            )
+            if (prior, payload["prior_status"]) != links.get(report, (None, None)):
+                raise DecisionReplayError("contradictory study link")
+            links[report] = (
+                _payload_uuid(payload["study_id"], "study_id"),
+                cast(str, payload["status"]),
+            )
+        elif event.event_type == "identity.report_merged":
+            survivor = live(payload["surviving_report_id"], "surviving_report_id")
+            for value in payload["merged_report_ids"]:
+                loser = live(value, "merged_report_ids")
+                if survivor not in links and loser in links:
+                    links[survivor] = links[loser]
+                terminal.add(loser)
+        elif event.event_type == "identity.report_split":
+            live(payload["source_report_id"], "source_report_id")
+            live(payload["new_report_id"], "new_report_id")
+
+
+_FAMILIES: dict[str, _Family] = {
+    _PROTOCOL_AGGREGATE: _Family(
+        subject_type=_PROTOCOL_SUBJECT,
+        payload_keys=_EVENT_PAYLOAD_KEYS,
+        validate_payload=_validate_protocol_payload,
+        validate_transitions=_validate_protocol_transitions,
+        requires_subject_version=True,
+    ),
+    _IDENTITY_AGGREGATE: _Family(
+        subject_type=_IDENTITY_SUBJECT,
+        payload_keys=_IDENTITY_PAYLOAD_KEYS,
+        validate_payload=_validate_identity_payload,
+        validate_transitions=_validate_identity_transitions,
+        requires_subject_version=False,
+    ),
+}
