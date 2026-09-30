@@ -1,7 +1,7 @@
 """Create project-scoped report/study identity tables (GOO-299).
 
 Revision ID: c9d2e4f6a8b1
-Revises: merge_daily_harness_20260928
+Revises: b7c4e1d9a2f6
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ from alembic import op  # type: ignore[attr-defined]
 from sqlalchemy.dialects import postgresql
 
 revision = "c9d2e4f6a8b1"
-down_revision = "merge_daily_harness_20260928"
+down_revision = "b7c4e1d9a2f6"
 branch_labels = None
 depends_on = None
 
