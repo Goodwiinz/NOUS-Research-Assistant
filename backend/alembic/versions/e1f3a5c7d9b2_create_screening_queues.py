@@ -9,7 +9,7 @@ from alembic import op  # type: ignore[attr-defined]
 from sqlalchemy.dialects import postgresql
 
 revision = "e1f3a5c7d9b2"
-down_revision = "d4e6f8a0b2c3"
+down_revision = "aw02_artifact_lifecycle"
 branch_labels = None
 depends_on = None
 

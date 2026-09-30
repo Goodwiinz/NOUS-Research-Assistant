@@ -12,6 +12,7 @@ export type Artifact =
   | { kind: 'external'; id: string; title: string; source?: string }
   | { kind: 'note'; projectId: string; id: string; title: string }
   | { kind: 'draft'; projectId: string; id: string; title: string }
+  | { kind: 'generated'; artifactId: string; versionId: string; title: string }
   | {
       kind: 'citations';
       citations: Citation[];
