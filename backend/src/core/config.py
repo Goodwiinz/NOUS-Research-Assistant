@@ -1001,6 +1001,10 @@ class Settings(BaseSettings):
         env_file = "../.env"
         case_sensitive = True
         extra = "ignore"
+        # Fail-closed secret guards crash the boot: keep the rejected value
+        # (a real-but-short secret) out of the ValidationError text that
+        # lands in pod logs / Sentry.
+        hide_input_in_errors = True
 
 
 # Create settings instance

@@ -229,3 +229,18 @@ def test_throwaway_env_keeps_debug_and_localhost_database() -> None:
         DATABASE_URL="postgresql://u:p@localhost:5432/db",
     )
     assert cfg.DEBUG is True
+
+
+@pytest.mark.parametrize("field", ["SECRET_KEY", "JWT_SECRET_KEY"])
+def test_rejected_secret_value_not_echoed_in_validation_error(field: str) -> None:
+    """A rejected (too-short) real secret must not land in crash logs.
+
+    pydantic echoes ``input_value=...`` in ValidationError text by default,
+    which a fail-closed boot prints straight into pod logs / Sentry.
+    """
+    short_secret = "RealButShortSecretValue123"
+    secrets = {**_STRONG_SECRETS, field: short_secret}
+    with pytest.raises(ValidationError) as exc_info:
+        _cfg(env="prod", **secrets)
+    assert (field,) in _error_fields(exc_info.value)
+    assert short_secret not in str(exc_info.value)
