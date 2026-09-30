@@ -24,6 +24,8 @@ import {
   type Draft,
   type GenerationStatus,
 } from '@/services/projectService';
+import { useDraftReviews } from '@/hooks/useDraftReviews';
+import { DraftReviewSummary } from '@/components/research/DraftReviewSummary';
 
 interface DraftStepProps {
   projectId: string;
@@ -52,6 +54,8 @@ export const DraftStep: React.FC<DraftStepProps> = ({
   const [generationStatus, setGenerationStatus] =
     useState<GenerationStatus | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const draftReviews = useDraftReviews(projectId);
+  const latestReview = draftReviews.data?.reviews[0] ?? null;
 
   const loadDrafts = useCallback(
     async (preferredVersion?: number) => {
@@ -91,7 +95,7 @@ export const DraftStep: React.FC<DraftStepProps> = ({
   );
 
   useEffect(() => {
-    void loadDrafts();
+    void Promise.resolve().then(() => loadDrafts());
   }, [loadDrafts]);
 
   const hasDraft = currentDraft !== null;
@@ -149,104 +153,116 @@ export const DraftStep: React.FC<DraftStepProps> = ({
 
       {/* Main content: draft generator/viewer + optional chat panel */}
       {!generationTaskId && (
-        <div
-          className={`grid gap-4 ${chatOpen ? 'grid-cols-1 lg:grid-cols-3' : 'grid-cols-1'}`}
-        >
-          <div className={chatOpen ? 'lg:col-span-2' : ''}>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <div className="lg:col-span-1">
-                <DraftGenerator
-                  loading={draftsLoading}
-                  documentCount={documentCount}
-                  onGenerate={async (config) => {
-                    setDraftsLoading(true);
-                    try {
-                      const result = await projectService.generateDraft(
-                        projectId,
-                        config.themes,
-                        {
-                          style: config.style,
-                          maxSections: config.maxSections,
-                          includeAbstract: config.includeAbstract,
-                        }
-                      );
-                      setGenerationTaskId(result.task_id);
-                      const pollStatus = async () => {
-                        try {
-                          const status =
-                            await projectService.getGenerationStatus(
-                              projectId,
-                              result.task_id
-                            );
-                          setGenerationStatus(status);
-                          if (
-                            !['completed', 'failed', 'cancelled'].includes(
-                              status.status
-                            )
-                          ) {
-                            setTimeout(pollStatus, 1000);
+        <>
+          {latestReview && <DraftReviewSummary review={latestReview} />}
+          <div
+            className={`grid gap-4 ${chatOpen ? 'grid-cols-1 lg:grid-cols-3' : 'grid-cols-1'}`}
+          >
+            <div className={chatOpen ? 'lg:col-span-2' : ''}>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="lg:col-span-1">
+                  <DraftGenerator
+                    loading={draftsLoading}
+                    documentCount={documentCount}
+                    onGenerate={async (config) => {
+                      setDraftsLoading(true);
+                      try {
+                        const result = await projectService.generateDraft(
+                          projectId,
+                          config.themes,
+                          {
+                            style: config.style,
+                            maxSections: config.maxSections,
+                            includeAbstract: config.includeAbstract,
                           }
-                        } catch (err) {
-                          console.error('Poll error:', err);
-                        }
-                      };
-                      pollStatus();
-                    } catch (err) {
-                      console.error('Generation failed:', err);
-                    } finally {
-                      setDraftsLoading(false);
-                    }
-                  }}
-                />
-              </div>
-              <div className="lg:col-span-2">
-                {currentDraft ? (
-                  <DraftViewer
-                    draft={currentDraft}
-                    versions={draftVersions.map((v) => ({
-                      version: v.version,
-                      created_at: v.created_at,
-                    }))}
-                    onVersionChange={(version) => {
-                      void loadDrafts(version);
+                        );
+                        setGenerationTaskId(result.task_id);
+                        const pollStatus = async (): Promise<void> => {
+                          try {
+                            const status =
+                              await projectService.getGenerationStatus(
+                                projectId,
+                                result.task_id
+                              );
+                            setGenerationStatus(status);
+                            if (
+                              ![
+                                'completed',
+                                'failed',
+                                'cancelled',
+                                'interrupted',
+                              ].includes(status.status)
+                            ) {
+                              setTimeout(pollStatus, 1000);
+                            } else {
+                              await draftReviews.refetch();
+                              if (status.status !== 'completed') {
+                                setGenerationTaskId(null);
+                                setGenerationStatus(null);
+                              }
+                            }
+                          } catch (err) {
+                            console.error('Poll error:', err);
+                          }
+                        };
+                        pollStatus();
+                      } catch (err) {
+                        console.error('Generation failed:', err);
+                      } finally {
+                        setDraftsLoading(false);
+                      }
                     }}
                   />
-                ) : (
-                  <div className="bg-card border border-dashed border-border rounded-lg p-12 text-center">
-                    <Sparkles className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
-                    <p className="text-muted-foreground">
-                      No draft generated yet
-                    </p>
-                    <p className="text-sm text-muted-foreground/70 mt-2">
-                      Configure themes and generate a literature review draft
-                    </p>
-                  </div>
-                )}
+                </div>
+                <div className="lg:col-span-2">
+                  {currentDraft ? (
+                    <DraftViewer
+                      draft={currentDraft}
+                      versions={draftVersions.map((v) => ({
+                        version: v.version,
+                        created_at: v.created_at,
+                      }))}
+                      onVersionChange={(version) => {
+                        void loadDrafts(version);
+                      }}
+                    />
+                  ) : (
+                    <div className="bg-card border border-dashed border-border rounded-lg p-12 text-center">
+                      <Sparkles className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
+                      <p className="text-muted-foreground">
+                        No draft generated yet
+                      </p>
+                      <p className="text-sm text-muted-foreground/70 mt-2">
+                        Configure themes and generate a literature review draft
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Collapsible chat side panel */}
-          {chatOpen && (
-            <div className="lg:col-span-1 bg-card border border-border rounded-lg overflow-hidden">
-              <div className="p-2 border-b border-border flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">
-                  RAG chat
-                </span>
-                <button
-                  onClick={() => setChatOpen(false)}
-                  className="p-1 text-muted-foreground hover:text-foreground"
-                  aria-label="Close chat panel"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+            {/* Collapsible chat side panel */}
+            {chatOpen && (
+              <div className="lg:col-span-1 bg-card border border-border rounded-lg overflow-hidden">
+                <div className="p-2 border-b border-border flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">
+                    RAG chat
+                  </span>
+                  <button
+                    onClick={() => setChatOpen(false)}
+                    className="p-1 text-muted-foreground hover:text-foreground"
+                    aria-label="Close chat panel"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="h-[500px]">
+                  <ProjectChatTab projectId={projectId} />
+                </div>
               </div>
-              <div className="h-[500px]">
-                <ProjectChatTab projectId={projectId} />
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </>
       )}
 
       <div className="flex items-center justify-between pt-4 border-t border-border">

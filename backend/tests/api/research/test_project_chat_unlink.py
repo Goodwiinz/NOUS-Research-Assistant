@@ -65,13 +65,20 @@ class TestUnlinkThreadRowLock:
 
         link_result = MagicMock()
         link_result.scalar_one_or_none.return_value = mock_project_thread
+        workspace_access_result = MagicMock()
+        workspace_access_result.scalars.return_value.all.return_value = [uuid4()]
         thread_result = MagicMock()
         thread_result.scalar_one_or_none.return_value = mock_thread
         remaining_result = MagicMock()
         remaining_result.scalars.return_value.first.return_value = None
 
         statements = []
-        canned_results = [link_result, thread_result, remaining_result]
+        canned_results = [
+            link_result,
+            workspace_access_result,
+            thread_result,
+            remaining_result,
+        ]
 
         db = AsyncMock(spec=AsyncSession)
 

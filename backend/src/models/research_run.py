@@ -28,6 +28,18 @@ class ResearchRun(BaseModel):
 
     blueprint_id = Column(GUID(), ForeignKey("research_blueprints.id"), nullable=False)
     blueprint_version = Column(Integer, nullable=False)
+    protocol_version_id = Column(
+        GUID(),
+        ForeignKey("research_protocol_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    effective_plan_hash = Column(String(64), nullable=True)
+    conformance_status = Column(
+        String(32),
+        nullable=False,
+        default="legacy_unbound",
+        server_default="legacy_unbound",
+    )
     status = Column(String(50), nullable=False, default="pending")
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -39,6 +51,8 @@ class ResearchRun(BaseModel):
             kwargs["status"] = "pending"
         if "total_tokens" not in kwargs:
             kwargs["total_tokens"] = 0
+        if "conformance_status" not in kwargs:
+            kwargs["conformance_status"] = "legacy_unbound"
         super().__init__(**kwargs)
 
     # Relationships
@@ -52,4 +66,8 @@ class ResearchRun(BaseModel):
         "ResearchSource",
         back_populates="run",
         cascade="all, delete-orphan",
+    )
+    reviews = relationship(
+        "ResearchStageReview",
+        back_populates="run",
     )

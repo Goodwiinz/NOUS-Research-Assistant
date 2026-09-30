@@ -92,6 +92,8 @@ ARXIV_XML_RESPONSE = """\
 class TestArxivConnector:
     @pytest.mark.asyncio
     async def test_search_parses_xml(self):
+        from src.services.arxiv import arxiv_service
+
         mock_response = MagicMock()
         mock_response.text = ARXIV_XML_RESPONSE
         mock_response.raise_for_status = MagicMock()
@@ -106,8 +108,9 @@ class TestArxivConnector:
                 "src.services.research_engine.connectors.arxiv_connector.httpx.AsyncClient",
                 return_value=mock_client,
             ),
-            patch(
-                "src.services.arxiv.arxiv_service._acquire_arxiv_rate_slot",
+            patch.object(
+                arxiv_service,
+                "_acquire_arxiv_rate_slot",
                 AsyncMock(return_value=0.0),
             ),
         ):
@@ -280,3 +283,32 @@ class TestRagStoreConnector:
         connector = RagStoreConnector(search_fn=mock_search_fn)
         results = await connector.search("nothing", max_results=10)
         assert results == []
+
+    @pytest.mark.asyncio
+    async def test_search_trace_uses_total_count_fallback(self):
+        from uuid import uuid4
+
+        from src.services.research_engine.connectors.base import SearchTrace
+
+        mock_search_fn = AsyncMock(
+            return_value={
+                "results": [
+                    {"id": "doc-1", "title": "Local document", "content": "Text"}
+                ],
+                "total": 0,
+                "total_count": 3,
+                "has_more": True,
+            }
+        )
+        trace = SearchTrace(
+            execution_id=str(uuid4()), provider="rag_store", requested_limit=1
+        )
+
+        results = await RagStoreConnector(search_fn=mock_search_fn).search(
+            "local query", max_results=1, search_trace=trace
+        )
+
+        assert results[0].external_id == "doc-1"
+        assert len(trace.pages) == 1
+        assert trace.pages[0]["response"]["total_available"] == 3
+        assert trace.pages[0]["response"]["has_more"] is True

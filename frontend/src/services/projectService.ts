@@ -5,6 +5,7 @@
 
 import { api } from '@/services/api-client';
 import { API_CONFIG } from '@/types/api';
+import type { components } from '@/types/generated/api';
 
 // Types
 export interface Project {
@@ -25,6 +26,10 @@ export interface Project {
   citation_count?: number;
   note_count?: number;
   draft_count?: number;
+  research_engine_project_id?: string | null;
+  can_edit?: boolean;
+  can_manage?: boolean;
+  workspace_archived?: boolean;
 }
 
 export interface ProjectCreate {
@@ -117,6 +122,23 @@ export interface ProjectListResponse {
   has_prev?: boolean;
   skip?: number;
   limit?: number;
+}
+
+export async function listWorkflowLinkOptions(): Promise<Project[]> {
+  const projects: Project[] = [];
+  const limit = 100;
+  for (let skip = 0; ; skip += limit) {
+    const page = await projectService.listProjects({ skip, limit });
+    projects.push(...page.projects);
+    if (!page.has_next && page.projects.length < limit) break;
+  }
+  return projects.filter(
+    (project) =>
+      project.can_manage === true &&
+      project.workspace_archived !== true &&
+      project.research_status !== 'archived' &&
+      !project.research_engine_project_id
+  );
 }
 
 export interface ProjectDocumentListResponse {
@@ -461,6 +483,12 @@ export const projectService = {
     );
   },
 
+  async listDraftReviews(projectId: string): Promise<DraftReviewListResponse> {
+    return api.get<DraftReviewListResponse>(
+      `/projects/${projectId}/drafts/reviews`
+    );
+  },
+
   /**
    * Get the current draft
    */
@@ -613,17 +641,42 @@ export interface DraftGenerationResponse {
   message: string;
 }
 
-export interface GenerationStatus {
-  task_id?: string;
-  status: string;
-  progress: number;
-  current_step: string;
-  started_at: string;
-  updated_at?: string;
-  estimated_remaining?: number;
-  draft_id?: string;
-  duration?: number;
-}
+type GeneratedDraftReview = components['schemas']['DraftReviewResponse'];
+type GeneratedDraftReviewPayload = components['schemas']['DraftReviewPayload'];
+export type DraftReview = Omit<GeneratedDraftReview, 'outcome' | 'review'> & {
+  outcome: 'passed' | 'blocked';
+  review: Omit<
+    GeneratedDraftReviewPayload,
+    'uncited_assertions' | 'verdicts'
+  > & {
+    uncited_assertions?: Array<{ text?: string }>;
+    verdicts?: Array<{
+      verdict?: string;
+      evidence?: string;
+      checks?: {
+        identity?: { status?: string; available?: boolean };
+        support?: { status?: string; available?: boolean };
+        publication?: {
+          status?: string;
+          available?: boolean;
+          performed?: boolean;
+          observation_status?: string;
+          observations?: Array<{
+            field?: string;
+            value?: unknown;
+            source?: string;
+          }>;
+        };
+      };
+    }>;
+  };
+};
+export type DraftReviewListResponse = Omit<
+  components['schemas']['DraftReviewListResponse'],
+  'reviews'
+> & { reviews: DraftReview[] };
+
+export type GenerationStatus = components['schemas']['DraftTaskStatusResponse'];
 
 export interface DraftCitation {
   id: string;

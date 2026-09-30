@@ -9,6 +9,7 @@ export interface ProjectListProps {
   viewMode: 'grid' | 'list';
   onViewModeChange: (viewMode: 'grid' | 'list') => void;
   onOpenProject: (projectId: string) => void;
+  onOpenWorkflow?: (projectId: string) => void;
   onDeleteProject?: (projectId: string) => void;
   onArchiveProject?: (projectId: string) => void;
   onRestoreProject?: (projectId: string) => void;
@@ -19,6 +20,7 @@ export function ProjectList({
   viewMode,
   onViewModeChange,
   onOpenProject,
+  onOpenWorkflow,
   onDeleteProject,
   onArchiveProject,
   onRestoreProject,
@@ -69,6 +71,7 @@ export function ProjectList({
               key={project.id}
               project={project}
               onOpen={onOpenProject}
+              onOpenWorkflow={onOpenWorkflow}
               onDelete={onDeleteProject}
               onArchive={onArchiveProject}
               onRestore={onRestoreProject}
@@ -82,6 +85,7 @@ export function ProjectList({
               key={project.id}
               project={project}
               onOpen={onOpenProject}
+              onOpenWorkflow={onOpenWorkflow}
               onDelete={onDeleteProject}
               onArchive={onArchiveProject}
               compact

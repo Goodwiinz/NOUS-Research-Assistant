@@ -96,6 +96,8 @@ export default function ProjectsPage() {
   const debouncedSearch = useDebounce(searchQuery, 300);
 
   useEffect(() => {
+    // This hydration guard intentionally flips only after the client mounts.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
 
@@ -308,10 +310,10 @@ export default function ProjectsPage() {
             onClick={() => setTagFilter('')}
             aria-pressed={tagFilter === ''}
             className={`px-3 py-2 min-h-[36px] border rounded-full text-xs transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring ${
-                tagFilter === ''
-                  ? 'bg-primary/10 border-primary/40 text-primary'
-                  : 'bg-card border-border text-muted-foreground hover:text-foreground hover:border-(--nous-helios)'
-              }`}
+              tagFilter === ''
+                ? 'bg-primary/10 border-primary/40 text-primary'
+                : 'bg-card border-border text-muted-foreground hover:text-foreground hover:border-(--nous-helios)'
+            }`}
           >
             All
           </button>
@@ -405,6 +407,9 @@ export default function ProjectsPage() {
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
+          onOpenWorkflow={(projectId) =>
+            router.push(`/projects/${projectId}?tab=workflow`)
+          }
           onDeleteProject={(projectId) => {
             void handleDeleteProject(projectId);
           }}

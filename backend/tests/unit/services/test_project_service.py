@@ -1,6 +1,7 @@
 """Unit tests for ProjectService."""
 
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -8,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.research.project_service import ProjectService
+from src.services.research_engine.project_access import ResearchAction
 from src.shared.research_schemas import ProjectCreate, ProjectUpdate, ResearchStatus
 
 
@@ -30,9 +32,6 @@ async def test_list_projects_returns_filtered_paginated_result(
     workspace_id = uuid4()
     user_id = uuid4()
 
-    workspace_result = MagicMock()
-    workspace_result.all.return_value = [(workspace_id,)]
-
     count_result = MagicMock()
     count_result.scalar.return_value = 2
 
@@ -40,15 +39,21 @@ async def test_list_projects_returns_filtered_paginated_result(
     project_b = MagicMock()
     projects_result = MagicMock()
     projects_result.scalars.return_value.all.return_value = [project_a, project_b]
+    mappings_result = MagicMock()
+    mappings_result.all.return_value = []
 
-    mock_db.execute.side_effect = [workspace_result, count_result, projects_result]
+    mock_db.execute.side_effect = [count_result, projects_result, mappings_result]
 
-    result = await service.list_projects(
-        user_id=user_id,
-        project_status="active",
-        skip=0,
-        limit=10,
-    )
+    with patch(
+        "src.services.research.project_service.accessible_research_workspace_ids",
+        new=AsyncMock(return_value=[workspace_id]),
+    ) as accessible:
+        result = await service.list_projects(
+            user_id=user_id,
+            project_status="active",
+            skip=0,
+            limit=10,
+        )
 
     assert result["total"] == 2
     assert result["page"] == 1
@@ -56,6 +61,7 @@ async def test_list_projects_returns_filtered_paginated_result(
     assert len(result["projects"]) == 2
     assert result["has_next"] is False
     assert result["has_prev"] is False
+    accessible.assert_awaited_once_with(mock_db, user_id)
 
 
 @pytest.mark.asyncio
@@ -64,18 +70,20 @@ async def test_create_project_enforces_private_true(mock_db: AsyncMock) -> None:
     workspace_id = uuid4()
     user_id = uuid4()
 
-    workspace_result = MagicMock()
-    workspace_result.scalar_one_or_none.return_value = object()
     count_result = MagicMock()
     count_result.scalar.return_value = 0
-    mock_db.execute.side_effect = [workspace_result, count_result]
+    mock_db.execute.return_value = count_result
 
     payload = ProjectCreate(
         workspace_id=workspace_id,
         name="ML Healthcare",
     )
 
-    await service.create_project(user_id=user_id, project_data=payload)
+    with patch(
+        "src.services.research.project_service.require_research_workspace",
+        new=AsyncMock(),
+    ) as require_workspace:
+        await service.create_project(user_id=user_id, project_data=payload)
 
     created_project = mock_db.add.call_args[0][0]
     assert created_project.name == "ML Healthcare"
@@ -85,23 +93,28 @@ async def test_create_project_enforces_private_true(mock_db: AsyncMock) -> None:
     assert created_project.research_status == "active"
     mock_db.commit.assert_awaited_once()
     mock_db.refresh.assert_awaited_once()
+    require_workspace.assert_awaited_once_with(
+        mock_db, workspace_id, user_id, ResearchAction.EDIT
+    )
 
 
 @pytest.mark.asyncio
 async def test_create_project_rejects_workspace_quota(mock_db: AsyncMock) -> None:
     service = ProjectService(mock_db)
     workspace_id = uuid4()
-    workspace_result = MagicMock()
-    workspace_result.scalar_one_or_none.return_value = object()
     count_result = MagicMock()
     count_result.scalar.return_value = 200
-    mock_db.execute.side_effect = [workspace_result, count_result]
+    mock_db.execute.return_value = count_result
 
-    with pytest.raises(HTTPException) as exc_info:
-        await service.create_project(
-            user_id=uuid4(),
-            project_data=ProjectCreate(workspace_id=workspace_id, name="Too many"),
-        )
+    with patch(
+        "src.services.research.project_service.require_research_workspace",
+        new=AsyncMock(),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await service.create_project(
+                user_id=uuid4(),
+                project_data=ProjectCreate(workspace_id=workspace_id, name="Too many"),
+            )
 
     assert exc_info.value.status_code == 402
     mock_db.add.assert_not_called()
@@ -119,20 +132,25 @@ async def test_update_project_rejects_invalid_status_transition(
     project = MagicMock()
     project.research_status = "completed"
 
-    project_result = MagicMock()
-    project_result.scalar_one_or_none.return_value = project
-    mock_db.execute.return_value = project_result
-
-    with pytest.raises(HTTPException) as exc_info:
-        await service.update_project(
-            user_id=user_id,
-            project_id=project_id,
-            project_data=ProjectUpdate(research_status=ResearchStatus.ACTIVE),
-        )
+    workspace = MagicMock(is_archived=False)
+    workspace.can_user_edit.return_value = True
+    workspace.can_user_admin.return_value = False
+    context = SimpleNamespace(collection=project, engine=None, workspace=workspace)
+    with patch(
+        "src.services.research.project_service.resolve_project",
+        new=AsyncMock(return_value=context),
+    ) as resolve:
+        with pytest.raises(HTTPException) as exc_info:
+            await service.update_project(
+                user_id=user_id,
+                project_id=project_id,
+                project_data=ProjectUpdate(research_status=ResearchStatus.ACTIVE),
+            )
 
     assert exc_info.value.status_code == 400
     assert "Invalid status transition" in exc_info.value.detail
     mock_db.commit.assert_not_awaited()
+    resolve.assert_awaited_once_with(mock_db, project_id, user_id, ResearchAction.EDIT)
 
 
 @pytest.mark.asyncio
@@ -146,21 +164,31 @@ async def test_update_project_allows_valid_status_transition(
     project = MagicMock()
     project.research_status = "active"
 
-    project_result = MagicMock()
-    project_result.scalar_one_or_none.return_value = project
-    mock_db.execute.return_value = project_result
-
-    updated_project = await service.update_project(
-        user_id=user_id,
-        project_id=project_id,
-        project_data=ProjectUpdate(research_status=ResearchStatus.PAUSED),
-    )
+    workspace = MagicMock(is_archived=False)
+    workspace.can_user_edit.return_value = True
+    workspace.can_user_admin.return_value = False
+    context = SimpleNamespace(collection=project, engine=None, workspace=workspace)
+    with patch(
+        "src.services.research.project_service.resolve_project",
+        new=AsyncMock(return_value=context),
+    ) as resolve:
+        updated_project = await service.update_project(
+            user_id=user_id,
+            project_id=project_id,
+            project_data=ProjectUpdate(research_status=ResearchStatus.PAUSED),
+        )
 
     assert updated_project is project
     assert project.research_status == "paused"
     assert project.is_private is True
     mock_db.commit.assert_awaited_once()
-    mock_db.refresh.assert_awaited_once_with(project)
+    assert mock_db.refresh.await_count == 2
+    assert mock_db.refresh.await_args_list[0].args == (project,)
+    assert mock_db.refresh.await_args_list[0].kwargs == {
+        "attribute_names": ["documents"]
+    }
+    assert mock_db.refresh.await_args_list[1].args == (project,)
+    resolve.assert_awaited_once_with(mock_db, project_id, user_id, ResearchAction.EDIT)
 
 
 @pytest.mark.asyncio
@@ -183,14 +211,21 @@ async def test_delete_project_soft_deletes_instead_of_hard_delete(
     project = Collection()
     project.is_deleted = False
 
-    project_result = MagicMock()
-    project_result.scalar_one_or_none.return_value = project
-    mock_db.execute.return_value = project_result
-
-    await service.delete_project(user_id=user_id, project_id=project_id)
+    workspace = MagicMock(is_archived=False)
+    workspace.can_user_edit.return_value = True
+    workspace.can_user_admin.return_value = True
+    context = SimpleNamespace(collection=project, engine=None, workspace=workspace)
+    with patch(
+        "src.services.research.project_service.resolve_project",
+        new=AsyncMock(return_value=context),
+    ) as resolve:
+        await service.delete_project(user_id=user_id, project_id=project_id)
 
     assert project.is_deleted is True
     assert project.deleted_at is not None
     mock_db.delete.assert_not_awaited()
     mock_db.delete.assert_not_called()
     mock_db.commit.assert_awaited_once()
+    resolve.assert_awaited_once_with(
+        mock_db, project_id, user_id, ResearchAction.MANAGE
+    )

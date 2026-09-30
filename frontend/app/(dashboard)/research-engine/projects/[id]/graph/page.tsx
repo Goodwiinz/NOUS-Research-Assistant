@@ -1,7 +1,7 @@
 'use client';
 
 import { use } from 'react';
-import { EvidenceMap } from '@/components/research-engine/EvidenceMap';
+import { LegacyProjectRedirect } from '@/components/research-engine/LegacyProjectRedirect';
 
 interface GraphPageProps {
   params: Promise<{ id: string }>;
@@ -12,7 +12,7 @@ export default function GraphPage({ params }: GraphPageProps) {
 
   return (
     <div className="container mx-auto max-w-7xl p-6">
-      <EvidenceMap projectId={id} />
+      <LegacyProjectRedirect engineProjectId={id} />
     </div>
   );
 }

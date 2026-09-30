@@ -10,6 +10,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from src.models.document import Document
+from src.models.draft_review import DraftReview
 from src.services.research.citation_extraction_service import CitationExtractionService
 from src.services.research.citation_verification_service import _LLMVerdict
 from src.services.research.draft_generation_service import (
@@ -21,6 +22,22 @@ from src.shared.research_schemas import CitationCreate
 
 _MODULE = "src.services.research.draft_generation_service"
 _VERIFIER_MODULE = "src.services.research.citation_verification_service"
+
+
+@pytest.fixture(autouse=True)
+def _task_result_row_is_running():
+    # GOO-297 binds the draft via finish_task inside the draft transaction and
+    # records failures in its own session; the mocked session only scripts
+    # the draft windows. The retained row has its own tests
+    # (test_draft_task_results.py).
+    async def _cache_only_fail(self, task_id, state, step, _error_code):
+        await self._set_status(task_id, state, 0, step)
+
+    with (
+        patch(f"{_MODULE}.finish_task", new=AsyncMock(return_value=True)),
+        patch(f"{_MODULE}.DraftGenerationService._fail_task", new=_cache_only_fail),
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +78,15 @@ def _make_bg_session(documents, add_sink: list):
     update_result = MagicMock()
 
     session.execute = AsyncMock(
-        side_effect=[docs_result, lock_result, version_result, update_result]
+        side_effect=[
+            docs_result,
+            docs_result,
+            lock_result,
+            lock_result,
+            docs_result,
+            version_result,
+            update_result,
+        ]
     )
     session.add = MagicMock(side_effect=add_sink.append)
     session.flush = AsyncMock()
@@ -305,8 +330,10 @@ async def test_end_to_end_identifier_hijacking_forces_major_despite_llm_exact():
     # mismatch short-circuits straight to MAJOR.
     structured.ainvoke.assert_not_awaited()
 
-    assert add_sink == []
-    assert bg_session.commit.await_count == 0
+    assert len(add_sink) == 1
+    assert isinstance(add_sink[0], DraftReview)
+    assert add_sink[0].outcome == "blocked"
+    assert bg_session.commit.await_count == 1
     status = DraftGenerationService.get_status("task-hijack")
     assert status["status"] == DraftGenerationStatus.FAILED
     assert "major" in status["current_step"]
@@ -344,3 +371,86 @@ def test_review_gate_rejects_passing_verdict_without_grounded_evidence():
 
     with pytest.raises(ValueError, match="grounded evidence"):
         DraftGenerationService._require_passing_citation_review(review, [1])
+
+
+@pytest.mark.parametrize(
+    "coverage",
+    [{"complete": True}, {"complete": True, "factual_classification_complete": True}],
+)
+def test_review_gate_rejects_uncited_factual_assertions(coverage):
+    review = {
+        "docs_skipped": 0,
+        "coverage": coverage,
+        "uncited_assertions": [
+            {
+                "text": "The trial enrolled 900 participants.",
+                "citation_indices": [],
+                "support_status": "uncited",
+            }
+        ],
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "exact",
+                "evidence": "The supported result.",
+                "location": "document summary",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="uncited factual assertion"):
+        DraftGenerationService._require_passing_citation_review(review, [1])
+
+
+def test_review_gate_keeps_heuristic_uncited_assertions_as_observations():
+    # GOO-328: CitationVerificationService always reports
+    # factual_classification_complete=False, so its heuristic uncited flags
+    # must not block the fallback draft from persisting.
+    uncited = [
+        {
+            "text": "Prior work has explored this area.",
+            "citation_indices": [],
+            "support_status": "uncited",
+        }
+    ]
+    review = {
+        "docs_skipped": 0,
+        "coverage": {
+            "complete": True,
+            "factual_classification_complete": False,
+            "classification": "conservative_prose_heuristic",
+        },
+        "uncited_assertions": uncited,
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "exact",
+                "evidence": "The supported result.",
+                "location": "document summary",
+            }
+        ],
+    }
+
+    DraftGenerationService._require_passing_citation_review(review, [1])
+    assert review["uncited_assertions"] == uncited
+
+
+def test_minor_evidence_is_persisted_as_not_fully_verified():
+    citations = [{"citation_index": 1}]
+    review = {
+        "verdicts": [
+            {
+                "doc_index": 1,
+                "verdict": "minor",
+                "evidence": "The effect was smaller than stated.",
+                "location": "Page 9",
+                "page_number": 9,
+            }
+        ]
+    }
+
+    DraftGenerationService._apply_review_evidence(citations, review)
+
+    assert citations[0]["snippet"] == "The effect was smaller than stated."
+    assert "review=minor" in citations[0]["context"]
+    assert "fully_verified=False" in citations[0]["context"]

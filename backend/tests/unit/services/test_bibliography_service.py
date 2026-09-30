@@ -125,6 +125,11 @@ class TestFormatBibtex:
 
         assert "abstract" in result.lower()
 
+    def test_explicit_keys_are_preserved(self) -> None:
+        result = BibliographyService.format_bibtex([_make_citation()], keys=["doc7"])
+
+        assert "@misc{doc7," in result
+
 
 # ===========================================================================
 # IEEE formatter

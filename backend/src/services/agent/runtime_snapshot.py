@@ -59,8 +59,13 @@ def runtime_state_fields(
     return {
         "current_project_id": str(project_id or ""),
         "runtime_snapshot_id": snapshot.id or "",
+        "runtime_tool_names": list(snapshot.tool_names),
+        "tool_registry_hash": snapshot.tool_registry_hash,
+        "tool_registry_version": snapshot.tool_registry_version,
+        "runtime_projection_unavailable": False,
         "project_skill_catalog": list(snapshot.project_skill_catalog),
         "loaded_skill_versions": [],
+        "capability_limitation": {},
     }
 
 
@@ -298,6 +303,128 @@ async def create_runtime_snapshot(
     )
 
 
+async def hydrate_runtime_state_from_snapshot(
+    session: AsyncSession,
+    values: dict[str, Any],
+    *,
+    user_id: UUID | str,
+    thread_id: UUID | str | None = None,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    """Hydrate a pre-projection checkpoint from its authorized durable row.
+
+    Only state that predates ``runtime_tool_names`` uses this path. Snapshot
+    metadata is compared with the current code-owned registry; no live project
+    skill pointers or caller-provided tool names are consulted.
+    """
+    snapshot_id = str(values.get("runtime_snapshot_id") or "")
+    if not snapshot_id or (
+        isinstance(values.get("runtime_tool_names"), list)
+        and values.get("tool_registry_hash")
+        and values.get("tool_registry_version")
+    ):
+        return {}
+
+    actor_id = _as_uuid(user_id)
+    snapshot_uuid = _as_uuid(snapshot_id)
+    current_project_id = _as_uuid(
+        values.get("current_project_id")
+        or (values.get("page_context") or {}).get("project_id")
+    )
+    expected_thread_id = _as_uuid(thread_id or values.get("thread_id"))
+    expected_job_id = str(job_id or values.get("job_id") or "")
+    failure = {
+        "runtime_tool_names": [],
+        "runtime_projection_unavailable": True,
+        "project_skill_catalog": [],
+        "capability_limitation": {
+            "branch": "runtime",
+            "unavailable_tools": [],
+            "reason": "The saved tool runtime for this confirmation is unavailable.",
+        },
+    }
+    if actor_id is None or snapshot_uuid is None:
+        return failure
+
+    snapshot = await session.get(AgentRuntimeSnapshot, snapshot_uuid)
+    now = datetime.now(timezone.utc)
+    if (
+        snapshot is None
+        or snapshot.user_id != actor_id
+        or (
+            snapshot.expires_at is not None
+            and snapshot.expires_at.replace(tzinfo=timezone.utc) <= now
+        )
+        or snapshot.project_id != current_project_id
+    ):
+        return failure
+
+    row_thread_id = _as_uuid(snapshot.thread_id)
+    row_job_id = str(snapshot.job_id or "")
+    identity_matches = False
+    if expected_thread_id is not None and row_thread_id is not None:
+        if row_thread_id != expected_thread_id:
+            return failure
+        identity_matches = True
+    if expected_job_id and row_job_id:
+        if row_job_id != expected_job_id:
+            return failure
+        identity_matches = True
+    if (
+        not identity_matches
+        and row_thread_id is None
+        and not row_job_id
+        and values.get("thread_persistence") == "ephemeral"
+        and not values.get("thread_id")
+        and expected_thread_id is None
+        and not expected_job_id
+    ):
+        identity_matches = True
+    # A threadless durable run must be anchored by its exact job id. A
+    # thread-bound snapshot must match the thread if no matching job is given.
+    if not identity_matches:
+        return failure
+
+    metadata = TOOL_REGISTRY.metadata_snapshot()
+    tool_metadata = snapshot.tool_metadata
+    descriptors = (
+        tool_metadata.get("descriptors") if isinstance(tool_metadata, dict) else None
+    )
+    catalog = (
+        snapshot.skill_catalog if isinstance(snapshot.skill_catalog, list) else None
+    )
+    expected_conditions = {"project_skill_catalog"} if catalog else set()
+    expected_descriptors = TOOL_REGISTRY.frozen_descriptor_metadata(
+        conditions=expected_conditions
+    )
+    if (
+        snapshot.tool_registry_hash != metadata["hash"]
+        or snapshot.tool_registry_version != metadata["version"]
+        or not isinstance(descriptors, list)
+        or descriptors != expected_descriptors
+        or catalog is None
+        or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not isinstance(item.get("version_id"), str)
+            or not isinstance(item.get("content_hash"), str)
+            for item in catalog
+        )
+    ):
+        return failure
+
+    frozen_names = [item["name"] for item in descriptors if isinstance(item, dict)]
+    if len(frozen_names) != len(set(frozen_names)):
+        return failure
+    return {
+        "runtime_tool_names": frozen_names,
+        "tool_registry_hash": metadata["hash"],
+        "tool_registry_version": metadata["version"],
+        "runtime_projection_unavailable": False,
+        "project_skill_catalog": _state_catalog(catalog),
+    }
+
+
 def _snapshot_error(error_type: str, error: str) -> dict[str, str]:
     """Keep loader failures structured for the model and tool audit trail."""
     record_project_skill_event("loader", "rejected")
@@ -307,6 +434,42 @@ def _snapshot_error(error_type: str, error: str) -> dict[str, str]:
 def _estimated_instruction_tokens(instructions: str) -> int:
     """Match the conservative catalog scanner approximation without model I/O."""
     return (len(instructions) + 3) // 4
+
+
+def _snapshot_has_frozen_loader(snapshot: AgentRuntimeSnapshot) -> bool:
+    """Check the durable snapshot itself authorizes conditional skill loading."""
+    catalog = snapshot.skill_catalog
+    if not isinstance(catalog, list) or not catalog:
+        return False
+    if any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("name"), str)
+        or not isinstance(item.get("version_id"), str)
+        or not isinstance(item.get("content_hash"), str)
+        for item in catalog
+    ):
+        return False
+
+    registry_metadata = TOOL_REGISTRY.metadata_snapshot()
+    conditions = {"project_skill_catalog"}
+    descriptors = (
+        snapshot.tool_metadata.get("descriptors")
+        if isinstance(snapshot.tool_metadata, dict)
+        else None
+    )
+    expected_descriptors = TOOL_REGISTRY.frozen_descriptor_metadata(
+        conditions=conditions
+    )
+    return (
+        snapshot.tool_registry_hash == registry_metadata["hash"]
+        and snapshot.tool_registry_version == registry_metadata["version"]
+        and isinstance(descriptors, list)
+        and descriptors == expected_descriptors
+        and any(
+            isinstance(item, dict) and item.get("name") == "load_project_skill"
+            for item in descriptors
+        )
+    )
 
 
 async def load_project_skill_from_snapshot(
@@ -375,6 +538,12 @@ async def load_project_skill_from_snapshot(
         return _snapshot_error(
             "skill_not_in_snapshot",
             "That skill is not available in this run's snapshot.",
+        )
+
+    if not _snapshot_has_frozen_loader(snapshot):
+        return _snapshot_error(
+            "tool_not_in_snapshot",
+            "Project skill loading was not enabled in this run's frozen tool snapshot.",
         )
 
     prior_loads = list(snapshot.loaded_skill_versions or [])

@@ -198,7 +198,7 @@ describe('useDocuments', () => {
       });
 
       expect(mockGet).toHaveBeenCalledWith(
-        expect.stringContaining('/documents/?')
+        expect.stringContaining('/documents?')
       );
       const calledUrl = mockGet.mock.calls[0][0] as string;
       expect(calledUrl).toContain('page=1');
@@ -640,7 +640,7 @@ describe('useDocuments', () => {
 
       await waitFor(() => {
         expect(mockGet).toHaveBeenCalledWith(
-          expect.stringContaining('/documents/?')
+          expect.stringContaining('/documents?')
         );
       });
     });

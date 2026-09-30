@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactElement, type ReactNode } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -9,19 +9,18 @@ import {
   Trash2,
   Search,
   FileText,
-  Brain,
   Layers,
-  Filter,
   Zap,
 } from 'lucide-react';
 import type { BlueprintStepDef } from '@/services/researchEngineService';
 
-const STEP_TYPE_ICONS: Record<string, React.ReactNode> = {
+const STEP_TYPE_ICONS: Record<string, ReactNode> = {
   search: <Search aria-hidden="true" className="h-4 w-4" />,
+  screen: <Search aria-hidden="true" className="h-4 w-4" />,
   extract: <FileText aria-hidden="true" className="h-4 w-4" />,
-  analyze: <Brain aria-hidden="true" className="h-4 w-4" />,
   synthesize: <Layers aria-hidden="true" className="h-4 w-4" />,
-  filter: <Filter aria-hidden="true" className="h-4 w-4" />,
+  verify: <Zap aria-hidden="true" className="h-4 w-4" />,
+  export: <FileText aria-hidden="true" className="h-4 w-4" />,
 };
 
 const MODEL_OPTIONS = [
@@ -49,10 +48,10 @@ export function StepCard({
   onMoveUp,
   onMoveDown,
   onRemove,
-}: StepCardProps) {
+}: StepCardProps): ReactElement {
   const [expanded, setExpanded] = useState(false);
   const [paramsText, setParamsText] = useState(
-    JSON.stringify(step.parameters, null, 2)
+    JSON.stringify(step.parameters ?? {}, null, 2)
   );
   const [paramsError, setParamsError] = useState<string | null>(null);
 
@@ -67,7 +66,7 @@ export function StepCard({
       ? 'bg-primary/10 text-primary border-primary/30'
       : 'bg-muted text-muted-foreground border-border';
 
-  const handleParamsChange = (value: string) => {
+  const handleParamsChange = (value: string): void => {
     setParamsText(value);
     try {
       const parsed = JSON.parse(value) as Record<string, unknown>;
@@ -78,12 +77,12 @@ export function StepCard({
     }
   };
 
-  const handleModeToggle = () => {
+  const handleModeToggle = (): void => {
     const newMode =
       step.mode === 'deterministic' ? 'exploratory' : 'deterministic';
     const updates: Partial<BlueprintStepDef> = { mode: newMode };
     if (newMode === 'deterministic') {
-      updates.temperature = undefined;
+      updates.temperature = 0;
     }
     onChange({ ...step, ...updates });
   };
@@ -161,14 +160,20 @@ export function StepCard({
             <select
               id={`step-${index}-type`}
               value={step.type}
-              onChange={(e) => onChange({ ...step, type: e.target.value })}
+              onChange={(e) =>
+                onChange({
+                  ...step,
+                  type: e.target.value as BlueprintStepDef['type'],
+                })
+              }
               className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm text-foreground focus:outline-hidden focus:border-primary focus-visible:ring-2 focus-visible:ring-ring transition-colors"
             >
               <option value="search">Search</option>
+              <option value="screen">Screen</option>
               <option value="extract">Extract</option>
-              <option value="analyze">Analyze</option>
               <option value="synthesize">Synthesize</option>
-              <option value="filter">Filter</option>
+              <option value="verify">Verify</option>
+              <option value="export">Export</option>
             </select>
           </div>
 

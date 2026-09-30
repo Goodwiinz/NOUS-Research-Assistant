@@ -126,17 +126,12 @@ class TestListProjectsSearchEscaping:
         captured: list[str] = []
 
         async def _execute(stmt: Any, *a: Any, **kw: Any) -> Any:
-            captured.append(str(stmt.compile(compile_kwargs={"literal_binds": True})))
-            call_num = len(captured)
+            sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            captured.append(sql)
             result = MagicMock()
-            if call_num == 1:
-                # _get_workspace_ids_for_user
-                result.all = MagicMock(return_value=[(workspace_id,)])
-            elif call_num == 2:
-                # count_query
+            if "count(" in sql.lower():
                 result.scalar = MagicMock(return_value=0)
             else:
-                # page query
                 result.scalars = MagicMock(
                     return_value=MagicMock(all=MagicMock(return_value=[]))
                 )
@@ -147,27 +142,39 @@ class TestListProjectsSearchEscaping:
         return db, captured
 
     async def test_search_wildcards_are_escaped(self) -> None:
+        from unittest.mock import patch
+
         from src.services.research.project_service import ProjectService
 
         db, captured = self._capture_db(uuid4())
         service = ProjectService(db)
 
-        await service.list_projects(user_id=uuid4(), search="50%_done")
+        with patch(
+            "src.services.research.project_service.accessible_research_workspace_ids",
+            new=AsyncMock(return_value=[uuid4()]),
+        ):
+            await service.list_projects(user_id=uuid4(), search="50%_done")
 
         # Both the count and page queries share ``filters`` — assert both to
         # guard against the escaping being applied to only one of them.
-        assert len(captured) == 3, captured
-        assert all("50\\%\\_done" in sql for sql in captured[1:]), captured
+        assert len(captured) == 2, captured
+        assert all("50\\%\\_done" in sql for sql in captured), captured
 
     async def test_plain_search_term_is_unaffected(self) -> None:
         """Control: a search with no LIKE metacharacters compiles to the same
         substring match as before escaping was added — the fix must not
         narrow ordinary searches."""
+        from unittest.mock import patch
+
         from src.services.research.project_service import ProjectService
 
         db, captured = self._capture_db(uuid4())
         service = ProjectService(db)
 
-        await service.list_projects(user_id=uuid4(), search="hello")
+        with patch(
+            "src.services.research.project_service.accessible_research_workspace_ids",
+            new=AsyncMock(return_value=[uuid4()]),
+        ):
+            await service.list_projects(user_id=uuid4(), search="hello")
 
-        assert all("%hello%" in sql for sql in captured[1:]), captured
+        assert all("%hello%" in sql for sql in captured), captured

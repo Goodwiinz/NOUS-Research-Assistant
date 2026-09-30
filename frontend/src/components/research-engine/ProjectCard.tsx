@@ -1,6 +1,6 @@
 'use client';
 
-import { Calendar, FolderKanban } from 'lucide-react';
+import { Calendar, ExternalLink, FolderKanban } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import type { ResearchProject } from '@/store/research-engine-store';
 
@@ -71,6 +71,19 @@ export function ProjectCard({ project }: ProjectCardProps) {
           <Calendar aria-hidden="true" className="h-3 w-3" />
           <span>Created {createdDate}</span>
         </div>
+      )}
+      {project.collection_id && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            router.push(`/projects/${project.collection_id}`);
+          }}
+          className="mt-3 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          <ExternalLink aria-hidden="true" className="h-3 w-3" />
+          Open project workspace
+        </button>
       )}
     </div>
   );

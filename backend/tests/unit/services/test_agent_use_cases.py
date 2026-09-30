@@ -329,7 +329,12 @@ class TestProjectContextAutoFill:
             "configurable": {
                 "user_id": str(uuid4()),
                 "organization_id": str(uuid4()),
+                "thread_id": str(uuid4()),
             }
+        }
+        operation_context = {
+            "tool_operation_protocol_version": 1,
+            "tool_operation_turn_id": str(uuid4()),
         }
 
         with patch(
@@ -337,7 +342,12 @@ class TestProjectContextAutoFill:
             new_callable=AsyncMock,
             return_value={"status": "success"},
         ) as mock_exec:
-            await _execute_single_tool(tool_call, config, page_context)
+            await _execute_single_tool(
+                tool_call,
+                config,
+                page_context,
+                operation_context=operation_context,
+            )
 
         # Verify project_id was injected into the tool args
         call_kwargs = mock_exec.call_args
@@ -362,7 +372,12 @@ class TestProjectContextAutoFill:
             "configurable": {
                 "user_id": str(uuid4()),
                 "organization_id": str(uuid4()),
+                "thread_id": str(uuid4()),
             }
+        }
+        operation_context = {
+            "tool_operation_protocol_version": 1,
+            "tool_operation_turn_id": str(uuid4()),
         }
 
         with patch(
@@ -370,7 +385,12 @@ class TestProjectContextAutoFill:
             new_callable=AsyncMock,
             return_value={"status": "success"},
         ) as mock_exec:
-            await _execute_single_tool(tool_call, config, page_context)
+            await _execute_single_tool(
+                tool_call,
+                config,
+                page_context,
+                operation_context=operation_context,
+            )
 
         call_kwargs = mock_exec.call_args
         passed_args = call_kwargs.kwargs.get("args") or call_kwargs[1].get("args")

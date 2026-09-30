@@ -1,0 +1,33 @@
+SOURCE_SHA: b334ec79861b438e8646ff75325cf4f5bdd75a30
+CLASSIFICATION: FAILED/EXCLUDED ENVIRONMENT SETUP
+
+These attempts used the exact browser command later used by the valid passing
+run. They are retained as failed local-environment attempts and are not feature
+evidence or passes. No source bytes changed between these attempts and the valid
+run.
+
+ATTEMPT 1
+EXIT_STATUS: 1
+RAW_CAPTURE_SHA256: 7cb32dd3495e925fda896d24e2e14f8e0e25b72234337fd4b95168e48186fdd2
+RAW_CAPTURE_BYTES: 7734
+RESULT: 1 failed, 9 did not run
+FAILURE:
+  /login returned a stale Next route-cache response, so the login fixture could
+  not find email-input. The API fixture was healthy; this run never reached a
+  Daily Brief scenario.
+
+ATTEMPT 2
+EXIT_STATUS: 1
+RAW_CAPTURE_SHA256: 654fbc5c43812c7d290dcd92877f55df4d28de906c98ce80fc523af10dfd848b
+RAW_CAPTURE_BYTES: 7797
+RESULT: 1 failed, 9 did not run
+FAILURE:
+  After regenerating the login route, the stale Next dev route manifest still
+  omitted the dynamic project/blueprint route. The first scenario therefore
+  could not reach the blueprint template page.
+
+CORRECTION AND VALID RUN
+  The local Next cache was regenerated and dynamic routes were rediscovered,
+  then Next was restarted with the same complete offline-auth environment. Git
+  confirmed no executable source-byte change. The subsequent exact-source run
+  is recorded in exact-source-browser-b334ec798.txt and passed all 10 scenarios.

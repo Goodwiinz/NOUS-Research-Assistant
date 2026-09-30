@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { BlueprintEditor } from '@/components/research-engine/BlueprintEditor';
+import { LegacyProjectRedirect } from '@/components/research-engine/LegacyProjectRedirect';
 
 export default function BlueprintPage() {
   const params = useParams<{ id: string }>();
@@ -9,7 +9,7 @@ export default function BlueprintPage() {
 
   return (
     <div className="container mx-auto max-w-7xl p-6">
-      <BlueprintEditor projectId={projectId} />
+      <LegacyProjectRedirect engineProjectId={projectId} />
     </div>
   );
 }

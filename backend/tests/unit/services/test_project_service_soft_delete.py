@@ -21,6 +21,7 @@ predicate, and only the statement itself proves a predicate is present.
 from __future__ import annotations
 
 from typing import Any, List
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -87,7 +88,11 @@ async def _run_list() -> _DB:
     from src.services.research.project_service import ProjectService
 
     db = _DB(workspace_id=uuid4())
-    await ProjectService(db).list_projects(user_id=uuid4())
+    with patch(
+        "src.services.research.project_service.accessible_research_workspace_ids",
+        new=AsyncMock(return_value=[db._workspace_id]),
+    ):
+        await ProjectService(db).list_projects(user_id=uuid4())
     return db
 
 
@@ -95,8 +100,7 @@ class TestListProjects:
     async def test_list_filters_out_soft_deleted(self) -> None:
         db = await _run_list()
 
-        # statements[0] is the workspace lookup; the rest are count + page.
-        clauses = [db.where(i) for i in range(1, len(db.statements))]
+        clauses = [db.where(i) for i in range(len(db.statements))]
         assert clauses, "no project query was issued"
         for clause in clauses:
             assert "is_deleted is false" in clause, (
@@ -108,7 +112,7 @@ class TestListProjects:
         """A count that ignores the filter over-reports total and has_more."""
         db = await _run_list()
 
-        indexes = range(1, len(db.statements))
+        indexes = range(len(db.statements))
         count = [db.where(i) for i in indexes if "count" in db.sql(i)]
         page = [db.where(i) for i in indexes if "count" not in db.sql(i)]
 
@@ -210,17 +214,27 @@ class TestNoUnfilteredOwnershipQueries:
 
 
 class TestGetProjectForUser:
-    async def test_fetch_excludes_soft_deleted(self) -> None:
-        """update_project and delete_project both route through this."""
+    async def test_fetch_delegates_to_shared_project_boundary(self) -> None:
+        """The shared resolver owns ancestor and soft-delete enforcement."""
         from fastapi import HTTPException
 
         from src.services.research.project_service import ProjectService
+        from src.services.research_engine.project_access import ResearchAction
 
         db = _DB(workspace_id=uuid4())
+        project_id = uuid4()
+        user_id = uuid4()
 
-        with pytest.raises(HTTPException):
-            await ProjectService(db).get_project_for_user(
-                project_id=uuid4(), user_id=uuid4()
-            )
+        with patch(
+            "src.services.research.project_service.resolve_project",
+            new=AsyncMock(
+                side_effect=HTTPException(status_code=404, detail="Project not found")
+            ),
+        ) as resolve:
+            with pytest.raises(HTTPException):
+                await ProjectService(db).get_project_for_user(
+                    project_id=project_id, user_id=user_id
+                )
 
-        assert "is_deleted is false" in db.where(0)
+        resolve.assert_awaited_once_with(db, project_id, user_id, ResearchAction.VIEW)
+        assert not db.statements

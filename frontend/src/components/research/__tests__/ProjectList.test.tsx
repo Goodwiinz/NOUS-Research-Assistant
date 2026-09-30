@@ -14,6 +14,7 @@ const mockProjects: Project[] = [
     project_type: 'research',
     tags: ['ml', 'healthcare'],
     document_count: 3,
+    research_engine_project_id: 'engine-p1',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   },
@@ -65,6 +66,24 @@ describe('ProjectList', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /list/i }));
     expect(onViewModeChange).toHaveBeenCalledWith('list');
+  });
+
+  it('shows one canonical card and opens its workflow with the collection id', () => {
+    const onOpenWorkflow = vi.fn();
+
+    render(
+      <ProjectList
+        projects={[mockProjects[0]]}
+        viewMode="grid"
+        onViewModeChange={vi.fn()}
+        onOpenProject={vi.fn()}
+        onOpenWorkflow={onOpenWorkflow}
+      />
+    );
+
+    expect(screen.getAllByText('ML Healthcare')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Open workflow' }));
+    expect(onOpenWorkflow).toHaveBeenCalledWith('p1');
   });
 
   it('triggers archive and delete actions', async () => {

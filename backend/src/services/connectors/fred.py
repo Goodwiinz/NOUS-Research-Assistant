@@ -69,6 +69,16 @@ def _parse_series(series: Dict[str, Any]) -> ConnectorResult:
 class FREDConnector(ExternalDBConnector):
     """Federal Reserve Economic Data (FRED) search and retrieval."""
 
+    supported_filter_keys = frozenset({"order_by", "frequency"})
+
+    def validate_search_filters(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        validated = super().validate_search_filters(filters)
+        if any(not isinstance(value, str) for value in validated.values()):
+            raise ValueError("FRED filters must be strings")
+        return validated
+
     @property
     def info(self) -> ConnectorInfo:
         return ConnectorInfo(

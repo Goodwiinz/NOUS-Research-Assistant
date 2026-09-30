@@ -25,6 +25,7 @@ from src.shared.enums import TERMINAL_STREAM_EVENTS, AgentStreamEvent
 # backend/tests/contract/<this file> -> parents[2] == backend/
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _STREAMING_PY = _BACKEND_ROOT / "src" / "api" / "agent" / "streaming.py"
+_HARNESS_STREAMING_PY = _BACKEND_ROOT / "src" / "api" / "agent" / "harness_streaming.py"
 
 _ENUM_VALUES = frozenset(e.value for e in AgentStreamEvent)
 _ENUM_MEMBER_NAMES = frozenset(AgentStreamEvent.__members__)
@@ -44,6 +45,7 @@ _EXPECTED_WIRE_VALUES = [
     "heartbeat",
     "status",
     "confirmation",
+    "approval_required",
     "done",
     "error",
 ]
@@ -102,10 +104,25 @@ def _collect_emit_events(source: str) -> tuple[set[str], list[str]]:
     return values, offenders
 
 
+def _collect_referenced_events(source: str) -> set[str]:
+    """Collect enum-backed frame types used by non-emitter bridge adapters."""
+    tree = ast.parse(source)
+    return {
+        AgentStreamEvent[node.attr].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "AgentStreamEvent"
+        and node.attr in _ENUM_MEMBER_NAMES
+    }
+
+
 @pytest.fixture(scope="module")
 def _streaming_emit_events() -> tuple[set[str], list[str]]:
     assert _STREAMING_PY.is_file(), f"cannot locate streaming.py at {_STREAMING_PY}"
-    return _collect_emit_events(_STREAMING_PY.read_text())
+    values, offenders = _collect_emit_events(_STREAMING_PY.read_text())
+    values.update(_collect_referenced_events(_HARNESS_STREAMING_PY.read_text()))
+    return values, offenders
 
 
 @pytest.mark.unit

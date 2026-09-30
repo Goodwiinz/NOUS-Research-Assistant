@@ -126,6 +126,10 @@ export interface AgentStreamCallbacks {
     /** Durable AgentRun id, when the server can correlate the parked turn. */
     runId?: string
   ) => void;
+  /** External Codex requested an exact, one-shot native approval or input. */
+  onApprovalRequired?: (requestId: string) => void;
+  /** The accepted external run is still alive; only its browser observation ended. */
+  onConnectionLost?: () => void;
   onTrace?: (threadId: string) => void;
   /** Keepalive emitted roughly every 15s during silent planner/LLM phases,
    * carrying how long the run has been going. Drives the live elapsed-time
@@ -251,6 +255,7 @@ export const HANDLED_STREAM_EVENTS: ReadonlySet<AgentStreamEvent> = new Set([
   'heartbeat',
   'status',
   'confirmation',
+  'approval_required',
   'usage',
   'done',
   'error',
@@ -405,6 +410,11 @@ async function consumeSse(
             );
           } else {
             callbacks.onConfirmation?.(data.thread_id, data.confirmation);
+          }
+          break;
+        case 'approval_required':
+          if (typeof data.request_id === 'string' && data.request_id) {
+            callbacks.onApprovalRequired?.(data.request_id);
           }
           break;
         case 'usage':
@@ -775,6 +785,9 @@ class AgentChatService {
 
     const terminalSeen = await consumeSse(response, callbacks);
     if (!terminalSeen && !signal?.aborted) {
+      if (request.execution_provider === 'codex') {
+        callbacks.onConnectionLost?.();
+      }
       callbacks.onError?.(INCOMPLETE_STREAM_ERROR);
     }
   }

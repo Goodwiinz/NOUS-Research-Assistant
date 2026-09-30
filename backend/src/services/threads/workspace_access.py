@@ -43,7 +43,7 @@ from sqlalchemy.orm import selectinload
 
 from src.models.chat_message import ChatMessage
 from src.models.citation import Citation
-from src.models.collection import Collection
+from src.models.collection import Collection, CollectionDocument
 from src.models.conversation import Conversation
 from src.models.document import Document
 from src.models.message_attachment import MessageAttachment
@@ -80,6 +80,7 @@ async def get_workspace(
     *,
     load_conversations: bool = True,
     load_collections: bool = True,
+    for_update: bool = False,
 ) -> Optional[Workspace]:
     """Fetch a workspace the caller can access, or ``None``.
 
@@ -107,6 +108,12 @@ async def get_workspace(
             Workspace.is_deleted == False,  # noqa: E712
         )
     )
+    if for_update:
+        # Membership and lifecycle writers coordinate with research approvals.
+        # Refresh the identity map and members after any lock wait.
+        stmt = stmt.with_for_update(of=Workspace).execution_options(
+            populate_existing=True
+        )
     result = await db.execute(stmt)
     workspace: Optional[Workspace] = result.scalars().first()
     if not workspace:
@@ -299,7 +306,9 @@ async def get_collection(
 
     options = [selectinload(Collection.workspace).selectinload(Workspace.members)]
     if load_documents:
-        options.append(selectinload(Collection.documents))
+        options.append(
+            selectinload(Collection.documents).selectinload(CollectionDocument.document)
+        )
 
     stmt = select(Collection).options(*options).where(*conditions)
     result = await db.execute(stmt)

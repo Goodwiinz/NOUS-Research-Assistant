@@ -8,7 +8,8 @@
     "frontend",
     "tests/e2e",
     "terminal",
-    "packages/chat-runtime"
+    "packages/chat-runtime",
+    "packages/harness-bridge"
   ],
   "scripts": {
     "dev": "pnpm --filter multimodal-rag-frontend dev",
