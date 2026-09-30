@@ -430,6 +430,892 @@
         "title": "ApiDocumentStatus",
         "type": "string"
       },
+      "AppraisalAdjudicate": {
+        "properties": {
+          "applicability": {
+            "enum": [
+              "applicable",
+              "not_applicable"
+            ],
+            "title": "Applicability",
+            "type": "string"
+          },
+          "domains": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AppraisalDomain"
+            },
+            "maxProperties": 5,
+            "title": "Domains",
+            "type": "object"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "instrument_key": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Instrument Key",
+            "type": "string"
+          },
+          "instrument_version": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Instrument Version",
+            "type": "string"
+          },
+          "outcome_key": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "overall": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "some_concerns",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "resolves_assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Resolves Assessment Ids",
+            "type": "array"
+          },
+          "study_design": {
+            "enum": [
+              "randomized_parallel_group",
+              "randomized_cluster",
+              "randomized_crossover",
+              "non_randomized_intervention",
+              "cohort",
+              "case_control",
+              "cross_sectional",
+              "other"
+            ],
+            "title": "Study Design",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "supersedes_assessment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Assessment Id"
+          },
+          "timepoint": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Timepoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "instrument_key",
+          "instrument_version",
+          "outcome_key",
+          "timepoint",
+          "study_design",
+          "applicability",
+          "idempotency_key",
+          "resolves_assessment_ids",
+          "rationale"
+        ],
+        "title": "AppraisalAdjudicate",
+        "type": "object"
+      },
+      "AppraisalDomain": {
+        "additionalProperties": false,
+        "description": "One RoB 2 domain; ``None`` means unknown and is never derived.",
+        "properties": {
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/AppraisalEvidenceRef"
+            },
+            "maxItems": 20,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "judgment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "some_concerns",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judgment"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "signals": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "Y",
+                    "PY",
+                    "PN",
+                    "N",
+                    "NI",
+                    "NA"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Signals",
+            "type": "object"
+          }
+        },
+        "title": "AppraisalDomain",
+        "type": "object"
+      },
+      "AppraisalEvidenceOption": {
+        "description": "An accepted-value tip of this unit's documents that a domain may cite.",
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "accepted_value",
+            "default": "accepted_value",
+            "title": "Kind",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "document_id",
+          "field_id"
+        ],
+        "title": "AppraisalEvidenceOption",
+        "type": "object"
+      },
+      "AppraisalEvidenceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "accepted_value",
+              "observation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "AppraisalEvidenceRef",
+        "type": "object"
+      },
+      "AppraisalInstrument": {
+        "properties": {
+          "applies_to": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Applies To",
+            "type": "array"
+          },
+          "designs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Designs",
+            "type": "array"
+          },
+          "domains": {
+            "items": {
+              "$ref": "#/components/schemas/AppraisalInstrumentDomain"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "encoding": {
+            "title": "Encoding",
+            "type": "string"
+          },
+          "judgments": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Judgments",
+            "type": "array"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "licence": {
+            "title": "Licence",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "responses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Responses",
+            "type": "array"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "spec_hash": {
+            "title": "Spec Hash",
+            "type": "string"
+          },
+          "variant": {
+            "title": "Variant",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "version",
+          "spec_hash",
+          "mode",
+          "variant",
+          "domains",
+          "responses",
+          "judgments",
+          "designs",
+          "applies_to",
+          "licence",
+          "encoding",
+          "source"
+        ],
+        "title": "AppraisalInstrument",
+        "type": "object"
+      },
+      "AppraisalInstrumentDomain": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "signals": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "signals"
+        ],
+        "title": "AppraisalInstrumentDomain",
+        "type": "object"
+      },
+      "AppraisalListResponse": {
+        "description": "Status, staleness and visibility are derived on every read.",
+        "properties": {
+          "instrument": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppraisalInstrument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Outcomes",
+            "type": "object"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AppraisalResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "AppraisalListResponse",
+        "type": "object"
+      },
+      "AppraisalResponse": {
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "applicability": {
+            "title": "Applicability",
+            "type": "string"
+          },
+          "assessor_id": {
+            "format": "uuid",
+            "title": "Assessor Id",
+            "type": "string"
+          },
+          "assessor_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessor Name"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "domains": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AppraisalDomain"
+            },
+            "title": "Domains",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_hash": {
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "instrument_key": {
+            "title": "Instrument Key",
+            "type": "string"
+          },
+          "instrument_spec_hash": {
+            "title": "Instrument Spec Hash",
+            "type": "string"
+          },
+          "instrument_version": {
+            "title": "Instrument Version",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "independent",
+              "adjudicated"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "outcome_key": {
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "overall": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "resolves_assessment_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolves Assessment Ids"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "study_design": {
+            "title": "Study Design",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "superseded": {
+            "default": false,
+            "title": "Superseded",
+            "type": "boolean"
+          },
+          "supersedes_assessment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Assessment Id"
+          },
+          "target_key": {
+            "title": "Target Key",
+            "type": "string"
+          },
+          "timepoint": {
+            "title": "Timepoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "protocol_version_id",
+          "instrument_key",
+          "instrument_version",
+          "instrument_spec_hash",
+          "target_key",
+          "outcome_key",
+          "timepoint",
+          "study_design",
+          "applicability",
+          "domains",
+          "kind",
+          "actor_role",
+          "assessor_id",
+          "input_hash",
+          "created_at"
+        ],
+        "title": "AppraisalResponse",
+        "type": "object"
+      },
+      "AppraisalResult": {
+        "properties": {
+          "evidence_options": {
+            "items": {
+              "$ref": "#/components/schemas/AppraisalEvidenceOption"
+            },
+            "title": "Evidence Options",
+            "type": "array"
+          },
+          "mine": {
+            "title": "Mine",
+            "type": "boolean"
+          },
+          "outcome_key": {
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/AppraisalResponse"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "awaiting_independent",
+              "agreed",
+              "conflict",
+              "adjudicated"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "target_key": {
+            "title": "Target Key",
+            "type": "string"
+          },
+          "timepoint": {
+            "title": "Timepoint",
+            "type": "string"
+          },
+          "unresolved_domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved Domains",
+            "type": "array"
+          }
+        },
+        "required": [
+          "target_key",
+          "outcome_key",
+          "timepoint",
+          "status",
+          "unresolved_domains",
+          "stale",
+          "mine",
+          "rows"
+        ],
+        "title": "AppraisalResult",
+        "type": "object"
+      },
+      "AppraisalSubmit": {
+        "properties": {
+          "applicability": {
+            "enum": [
+              "applicable",
+              "not_applicable"
+            ],
+            "title": "Applicability",
+            "type": "string"
+          },
+          "domains": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AppraisalDomain"
+            },
+            "maxProperties": 5,
+            "title": "Domains",
+            "type": "object"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "instrument_key": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Instrument Key",
+            "type": "string"
+          },
+          "instrument_version": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Instrument Version",
+            "type": "string"
+          },
+          "outcome_key": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "overall": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "some_concerns",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "study_design": {
+            "enum": [
+              "randomized_parallel_group",
+              "randomized_cluster",
+              "randomized_crossover",
+              "non_randomized_intervention",
+              "cohort",
+              "case_control",
+              "cross_sectional",
+              "other"
+            ],
+            "title": "Study Design",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "supersedes_assessment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Assessment Id"
+          },
+          "timepoint": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Timepoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "instrument_key",
+          "instrument_version",
+          "outcome_key",
+          "timepoint",
+          "study_design",
+          "applicability",
+          "idempotency_key"
+        ],
+        "title": "AppraisalSubmit",
+        "type": "object"
+      },
       "ApprovalRequest": {
         "properties": {
           "audit_note": {
@@ -40895,6 +41781,212 @@
         "summary": "Get Project",
         "tags": [
           "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/appraisals": {
+      "get": {
+        "operationId": "list_appraisals_route_api_v1_research_engine_projects__project_id__appraisals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppraisalListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Appraisals Route",
+        "tags": [
+          "research-engine-appraisals"
+        ]
+      },
+      "post": {
+        "operationId": "submit_appraisal_route_api_v1_research_engine_projects__project_id__appraisals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppraisalSubmit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppraisalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Submit Appraisal Route",
+        "tags": [
+          "research-engine-appraisals"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/appraisals/adjudications": {
+      "post": {
+        "operationId": "adjudicate_appraisal_route_api_v1_research_engine_projects__project_id__appraisals_adjudications_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppraisalAdjudicate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppraisalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Adjudicate Appraisal Route",
+        "tags": [
+          "research-engine-appraisals"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/appraisals/export": {
+      "get": {
+        "operationId": "export_appraisals_route_api_v1_research_engine_projects__project_id__appraisals_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "nous.academic.appraisal.v1 package (visible rows only)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Appraisals Route",
+        "tags": [
+          "research-engine-appraisals"
         ]
       }
     },

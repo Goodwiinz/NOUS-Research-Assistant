@@ -34,7 +34,12 @@ from src.models.research_protocol import ResearchProtocol, ResearchProtocolVersi
 from src.services.research import claims_service, draft_release_service
 from src.services.research import extraction_forms_service as forms
 from src.services.research.draft_generation_service import DraftGenerationService
-from src.services.research_engine import corpus_export, identity_service, prisma
+from src.services.research_engine import (
+    appraisal_service,
+    corpus_export,
+    identity_service,
+    prisma,
+)
 from src.services.research_engine.contracts import canonical_json_sha256
 from src.services.research_engine.prisma_service import load_inputs
 from src.services.research_engine.project_access import (
@@ -287,12 +292,31 @@ async def _extraction(db: AsyncSession, context: ProjectContext) -> list[Part]:
     return [_sealed_part("extraction.json", EXTRACTION_SCHEMA, matrices, not matrices)]
 
 
+async def _appraisal(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-309's export with no viewer: only revealed results' rows."""
+    package = await appraisal_service.export_package(db, context, viewer_id=None)
+    body = package["body"]
+    return [
+        _sealed_part(
+            "appraisal.json", appraisal_service.EXPORT_SCHEMA, body, not body["results"]
+        )
+    ]
+
+
 async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
     """The builders, in a fixed order (looked up at call time). PRISMA reads
     last: without the caller's snapshot, ``load_inputs`` would open its own
     and expire ``context`` for every builder after it."""
     parts: list[Part] = []
-    for build in (_corpus, _claims, _drafts, _methods, _extraction, _prisma):
+    for build in (
+        _corpus,
+        _claims,
+        _drafts,
+        _methods,
+        _extraction,
+        _appraisal,
+        _prisma,
+    ):
         parts.extend(await build(db, context))
     return parts
 

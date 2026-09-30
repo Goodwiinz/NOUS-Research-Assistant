@@ -6228,6 +6228,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/appraisals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Appraisals Route */
+        get: operations["list_appraisals_route_api_v1_research_engine_projects__project_id__appraisals_get"];
+        put?: never;
+        /** Submit Appraisal Route */
+        post: operations["submit_appraisal_route_api_v1_research_engine_projects__project_id__appraisals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/appraisals/adjudications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adjudicate Appraisal Route */
+        post: operations["adjudicate_appraisal_route_api_v1_research_engine_projects__project_id__appraisals_adjudications_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/appraisals/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Appraisals Route */
+        get: operations["export_appraisals_route_api_v1_research_engine_projects__project_id__appraisals_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/audit-bundle": {
         parameters: {
             query?: never;
@@ -9924,6 +9976,314 @@ export interface components {
          * @enum {string}
          */
         ApiDocumentStatus: "queued" | "processing" | "indexed" | "failed";
+        /** AppraisalAdjudicate */
+        AppraisalAdjudicate: {
+            /**
+             * Applicability
+             * @enum {string}
+             */
+            applicability: "applicable" | "not_applicable";
+            /** Domains */
+            domains?: {
+                [key: string]: components["schemas"]["AppraisalDomain"];
+            };
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Instrument Key */
+            instrument_key: string;
+            /** Instrument Version */
+            instrument_version: string;
+            /** Outcome Key */
+            outcome_key: string;
+            /** Overall */
+            overall?: ("low" | "some_concerns" | "high") | null;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rationale */
+            rationale: string;
+            /** Report Id */
+            report_id?: string | null;
+            /** Resolves Assessment Ids */
+            resolves_assessment_ids: string[];
+            /**
+             * Study Design
+             * @enum {string}
+             */
+            study_design: "randomized_parallel_group" | "randomized_cluster" | "randomized_crossover" | "non_randomized_intervention" | "cohort" | "case_control" | "cross_sectional" | "other";
+            /** Study Id */
+            study_id?: string | null;
+            /** Supersedes Assessment Id */
+            supersedes_assessment_id?: string | null;
+            /** Timepoint */
+            timepoint: string;
+        };
+        /**
+         * AppraisalDomain
+         * @description One RoB 2 domain; ``None`` means unknown and is never derived.
+         */
+        AppraisalDomain: {
+            /** Evidence */
+            evidence?: components["schemas"]["AppraisalEvidenceRef"][];
+            /** Judgment */
+            judgment?: ("low" | "some_concerns" | "high") | null;
+            /** Rationale */
+            rationale?: string | null;
+            /** Signals */
+            signals?: {
+                [key: string]: ("Y" | "PY" | "PN" | "N" | "NI" | "NA") | null;
+            };
+        };
+        /**
+         * AppraisalEvidenceOption
+         * @description An accepted-value tip of this unit's documents that a domain may cite.
+         */
+        AppraisalEvidenceOption: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @default accepted_value
+             * @constant
+             */
+            kind: "accepted_value";
+            /** Missingness */
+            missingness?: string | null;
+            /** Quote */
+            quote?: string | null;
+            /** Value */
+            value?: unknown;
+        };
+        /** AppraisalEvidenceRef */
+        AppraisalEvidenceRef: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "accepted_value" | "observation";
+        };
+        /** AppraisalInstrument */
+        AppraisalInstrument: {
+            /** Applies To */
+            applies_to: string[];
+            /** Designs */
+            designs: string[];
+            /** Domains */
+            domains: components["schemas"]["AppraisalInstrumentDomain"][];
+            /** Encoding */
+            encoding: string;
+            /** Judgments */
+            judgments: string[];
+            /** Key */
+            key: string;
+            /** Licence */
+            licence: string;
+            /** Mode */
+            mode: string;
+            /** Responses */
+            responses: string[];
+            /** Source */
+            source: string;
+            /** Spec Hash */
+            spec_hash: string;
+            /** Variant */
+            variant: string;
+            /** Version */
+            version: string;
+        };
+        /** AppraisalInstrumentDomain */
+        AppraisalInstrumentDomain: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Signals */
+            signals: string[];
+        };
+        /**
+         * AppraisalListResponse
+         * @description Status, staleness and visibility are derived on every read.
+         */
+        AppraisalListResponse: {
+            instrument?: components["schemas"]["AppraisalInstrument"] | null;
+            /** Outcomes */
+            outcomes?: {
+                [key: string]: string[];
+            };
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /** Results */
+            results: components["schemas"]["AppraisalResult"][];
+        };
+        /** AppraisalResponse */
+        AppraisalResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /** Applicability */
+            applicability: string;
+            /**
+             * Assessor Id
+             * Format: uuid
+             */
+            assessor_id: string;
+            /** Assessor Name */
+            assessor_name?: string | null;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Domains */
+            domains: {
+                [key: string]: components["schemas"]["AppraisalDomain"];
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Input Hash */
+            input_hash: string;
+            /** Instrument Key */
+            instrument_key: string;
+            /** Instrument Spec Hash */
+            instrument_spec_hash: string;
+            /** Instrument Version */
+            instrument_version: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "independent" | "adjudicated";
+            /** Outcome Key */
+            outcome_key: string;
+            /** Overall */
+            overall?: string | null;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rationale */
+            rationale?: string | null;
+            /** Report Id */
+            report_id?: string | null;
+            /** Resolves Assessment Ids */
+            resolves_assessment_ids?: string[] | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Study Design */
+            study_design: string;
+            /** Study Id */
+            study_id?: string | null;
+            /**
+             * Superseded
+             * @default false
+             */
+            superseded: boolean;
+            /** Supersedes Assessment Id */
+            supersedes_assessment_id?: string | null;
+            /** Target Key */
+            target_key: string;
+            /** Timepoint */
+            timepoint: string;
+        };
+        /** AppraisalResult */
+        AppraisalResult: {
+            /** Evidence Options */
+            evidence_options?: components["schemas"]["AppraisalEvidenceOption"][];
+            /** Mine */
+            mine: boolean;
+            /** Outcome Key */
+            outcome_key: string;
+            /** Report Id */
+            report_id?: string | null;
+            /** Rows */
+            rows: components["schemas"]["AppraisalResponse"][];
+            /** Stale */
+            stale: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "awaiting_independent" | "agreed" | "conflict" | "adjudicated";
+            /** Study Id */
+            study_id?: string | null;
+            /** Target Key */
+            target_key: string;
+            /** Timepoint */
+            timepoint: string;
+            /** Unresolved Domains */
+            unresolved_domains: string[];
+        };
+        /** AppraisalSubmit */
+        AppraisalSubmit: {
+            /**
+             * Applicability
+             * @enum {string}
+             */
+            applicability: "applicable" | "not_applicable";
+            /** Domains */
+            domains?: {
+                [key: string]: components["schemas"]["AppraisalDomain"];
+            };
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Instrument Key */
+            instrument_key: string;
+            /** Instrument Version */
+            instrument_version: string;
+            /** Outcome Key */
+            outcome_key: string;
+            /** Overall */
+            overall?: ("low" | "some_concerns" | "high") | null;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Report Id */
+            report_id?: string | null;
+            /**
+             * Study Design
+             * @enum {string}
+             */
+            study_design: "randomized_parallel_group" | "randomized_cluster" | "randomized_crossover" | "non_randomized_intervention" | "cohort" | "case_control" | "cross_sectional" | "other";
+            /** Study Id */
+            study_id?: string | null;
+            /** Supersedes Assessment Id */
+            supersedes_assessment_id?: string | null;
+            /** Timepoint */
+            timepoint: string;
+        };
         /** ApprovalRequest */
         ApprovalRequest: {
             /** Audit Note */
@@ -30141,6 +30501,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["src__schemas__research_engine__ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_appraisals_route_api_v1_research_engine_projects__project_id__appraisals_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppraisalListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_appraisal_route_api_v1_research_engine_projects__project_id__appraisals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppraisalSubmit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppraisalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adjudicate_appraisal_route_api_v1_research_engine_projects__project_id__appraisals_adjudications_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppraisalAdjudicate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppraisalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_appraisals_route_api_v1_research_engine_projects__project_id__appraisals_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description nous.academic.appraisal.v1 package (visible rows only) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

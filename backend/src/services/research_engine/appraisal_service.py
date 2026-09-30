@@ -323,13 +323,21 @@ class _State:
         }
 
 
-async def _state(db: AsyncSession, collection_id: UUID, mode: str) -> _State:
-    rows = await _all(
+async def _rows(db: AsyncSession, collection_id: UUID) -> list[Any]:
+    return await _all(
         db,
         select(AppraisalAssessment)
         .where(AppraisalAssessment.collection_id == collection_id)
         .order_by(AppraisalAssessment.created_at, AppraisalAssessment.id),
     )
+
+
+async def _state(db: AsyncSession, collection_id: UUID, mode: str) -> _State:
+    return build_state(mode, await _rows(db, collection_id))
+
+
+def build_state(mode: str, rows: list[Any]) -> _State:
+    """Tips, adjudications and revealed keys of the Collection's rows (pure)."""
     superseded = {
         cast(UUID, r.supersedes_assessment_id)
         for r in rows
