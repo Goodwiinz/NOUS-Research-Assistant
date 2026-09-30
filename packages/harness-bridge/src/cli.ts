@@ -90,9 +90,9 @@ export async function connect(
   const base = apiBase(options.apiUrl);
   if (!uuid(options.projectId) || !options.label.trim())
     throw new Error("project UUID and device label required");
-  // tools:read is opt-in and shown on the browser consent page.
+  // NOUS capabilities are opt-in and each scope is shown on the consent page.
   const scopes = options.tools
-    ? ["harness:execute", "tools:read"]
+    ? ["harness:execute", "tools:read", "artifacts:publish"]
     : ["harness:execute"];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
@@ -293,12 +293,20 @@ export async function runBridge(
     journal.close();
   }
 }
-function mcpSession(stateDir: string, state: LocalState): McpSession {
+function mcpSession(
+  stateDir: string,
+  state: LocalState,
+  outputRoot?: string,
+): McpSession {
   return {
     apiOrigin: apiBase(state.apiUrl),
     credentialHandle: state.credentialHandle,
     // Codex launches the MCP child from the workspace cwd, never from here.
     stateDir: resolve(stateDir),
+    // Publication is bound to a registered root only; never to the cwd.
+    ...(outputRoot && state.scopes?.includes("artifacts:publish")
+      ? { outputRoot }
+      : {}),
   };
 }
 /** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
@@ -320,7 +328,11 @@ export function sessionOptionsFor(
       writableRoots: [workspace.root],
     },
     ...(state.scopes?.includes("tools:read")
-      ? { mcpConfig: buildManagedMcpConfig(mcpSession(stateDir, state)) }
+      ? {
+          mcpConfig: buildManagedMcpConfig(
+            mcpSession(stateDir, state, workspace.root),
+          ),
+        }
       : {}),
   };
 }
@@ -336,7 +348,9 @@ export async function mcpInstallCommand(stateDir: string): Promise<string> {
   const state = value as LocalState;
   if (!state.scopes?.includes("tools:read"))
     throw new Error("reconnect with --tools to authorize NOUS tools");
-  return standaloneInstallCommand(mcpSession(stateDir, state));
+  // Standalone publication uses the first registered workspace root, if any.
+  const root = state.workspaces[0]?.root;
+  return standaloneInstallCommand(mcpSession(stateDir, state, root));
 }
 export function recoverInterrupt(
   stateDir: string,
@@ -360,7 +374,7 @@ export function recoverInterrupt(
 }
 const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools] | workspace add --root PATH [--label NAME] | run
   nous-harness mcp install    Print the Codex command that registers NOUS read tools for a --tools connection.
-  nous-harness mcp --api URL --session HANDLE [--store PATH]    Serve NOUS read tools over stdio (Codex launches this).
+  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.
@@ -418,6 +432,7 @@ async function main(): Promise<void> {
       apiOrigin: apiBase(values.api),
       credentialHandle: values.session,
       stateDir: resolve(stateDir),
+      ...(values.root ? { outputRoot: resolve(values.root) } : {}),
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
