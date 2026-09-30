@@ -15,6 +15,8 @@ import { RewriteDiffView } from './RewriteDiffView';
 import { WriterToolbar } from './WriterToolbar';
 import { InsertPreview } from './InsertPreview';
 import { OutlineDialog } from './OutlineDialog';
+import { DraftReleasePanel, ReleaseBadge } from './DraftReleasePanel';
+import { useDraftRelease } from '@/hooks/useDraftRelease';
 import type {
   RewriteResponse,
   WriteResponse,
@@ -23,6 +25,8 @@ import type {
 
 export interface DraftViewerProps {
   draft: Draft;
+  /** GOO-307: enables the release badge, stale banner and promote action. */
+  projectId?: string;
   versions?: Array<{ version: number; created_at: string }>;
   documentIds?: string[];
   onVersionChange?: (version: number) => void;
@@ -32,6 +36,7 @@ export interface DraftViewerProps {
 
 export const DraftViewer: React.FC<DraftViewerProps> = ({
   draft,
+  projectId,
   versions,
   documentIds,
   onVersionChange,
@@ -53,6 +58,7 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
   } | null>(null);
   const [writeResult, setWriteResult] = useState<WriteResponse | null>(null);
   const [showOutlineDialog, setShowOutlineDialog] = useState(false);
+  const release = useDraftRelease(projectId, draft.id, draft.version);
 
   const handleTextSelect = useCallback((event: React.MouseEvent) => {
     const selection = window.getSelection();
@@ -156,8 +162,17 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
           <div>
             <h3 className="font-semibold text-foreground">{draft.title}</h3>
             <p className="text-xs text-muted-foreground">
-              Version {draft.version} • {draft.word_count} words •{' '}
-              {draft.citation_count} citations
+              Version {draft.version}
+              {projectId && (
+                <ReleaseBadge
+                  status={
+                    release.data?.release_status ??
+                    draft.release_status ??
+                    'candidate'
+                  }
+                />
+              )}{' '}
+              • {draft.word_count} words • {draft.citation_count} citations
             </p>
           </div>
         </div>
@@ -202,6 +217,8 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
           )}
         </div>
       </div>
+
+      {projectId && <DraftReleasePanel projectId={projectId} draft={draft} />}
 
       {/* Themes */}
       {draft.themes && draft.themes.length > 0 && (
