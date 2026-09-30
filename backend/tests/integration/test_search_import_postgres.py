@@ -38,8 +38,12 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.api.research_engine.corpus import (
+    chase_citations_route,
+    corpus_coverage_route,
     export_corpus_route,
+    get_import_route,
     import_search_results_route,
+    list_imports_route,
 )
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
 from src.models.research_import import ResearchImportReceipt, ResearchImportRecord
@@ -54,6 +58,7 @@ from src.models.research_step import ResearchStep
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.research_engine import (
     CitationChaseRequest,
+    CoverageRequest,
     ImportDeclaration,
     ReportMergeRequest,
 )
@@ -631,6 +636,40 @@ async def _route_export(factory: Factory, collection_id: UUID, user_id: UUID) ->
         return int(response.status_code)
 
 
+async def _route_read(
+    factory: Factory, kind: str, collection_id: UUID, user_id: UUID, receipt_id: UUID
+) -> int:
+    user: Any = SimpleNamespace(id=user_id)
+    async with factory() as db:
+        if kind == "list":
+            await list_imports_route(collection_id, current_user=user, db=db)
+        elif kind == "get":
+            await get_import_route(collection_id, receipt_id, current_user=user, db=db)
+        else:
+            await corpus_coverage_route(
+                collection_id, CoverageRequest(known=[]), current_user=user, db=db
+            )
+    return 200
+
+
+async def _route_chase(factory: Factory, collection_id: UUID, user_id: UUID) -> int:
+    async with factory() as db:
+        response = Response()
+        await chase_citations_route(
+            collection_id,
+            CitationChaseRequest(
+                seed_report_id=uuid4(),
+                direction="backward",
+                max_results=5,
+                idempotency_key="tenancy",
+            ),
+            response,
+            current_user=SimpleNamespace(id=user_id),  # type: ignore[arg-type]
+            db=db,
+        )
+        return int(response.status_code)
+
+
 async def _status(call: Any) -> int:
     try:
         return cast(int, await call)
@@ -648,6 +687,21 @@ async def test_tenancy(identity_factory: Factory) -> None:
     assert await _status(_route_export(identity_factory, collection, ids["F"])) == 404
     assert await _status(_route_import(identity_factory, collection, ids["V"])) == 404
     assert await _status(_route_export(identity_factory, collection, ids["V"])) == 200
+    # Every other corpus route: reads need VIEW (V yes, F no); chase needs EDIT.
+    for user, read_status, chase_status in (("F", 404, 404), ("V", 200, 404)):
+        for read in ("list", "get", "coverage"):
+            assert (
+                await _status(
+                    _route_read(
+                        identity_factory, read, collection, ids[user], receipt.id
+                    )
+                )
+                == read_status
+            ), (user, read)
+        assert (
+            await _status(_route_chase(identity_factory, collection, ids[user]))
+            == chase_status
+        ), user
 
     # A foreign project's receipt id is indistinguishable from a missing one.
     other = await _seed(identity_factory)

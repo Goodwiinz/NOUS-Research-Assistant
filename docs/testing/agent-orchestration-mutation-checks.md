@@ -1100,9 +1100,13 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
   body hash drifted from the first.
 - **Restored result:** `1 passed`.
 - **Survivor, recorded honestly:** removing only the `dict(...)` copy (so the
-  loop edits the loaded JSONB dict in place) is *not* detected. Plain JSONB
-  columns do not track in-place edits, nothing is flushed, and the next session
-  reloads the row, so there is no observable write to catch.
+  loop edits the loaded JSONB dict in place) is *not* detected. A plain JSONB
+  column does not track in-place edits, so the object is never marked dirty and
+  nothing is flushed. The session's identity map holds only weak references to
+  clean objects, so once the first export drops its last strong reference the
+  receipt is garbage-collected and the second export's `SELECT` reloads the
+  stored row. Anything that kept a strong reference across both exports (or a
+  `MutableDict` column) would expose the edit; this test does not.
 
 ### Provenance `full_text` strip
 
@@ -1131,3 +1135,17 @@ Each was checked the same way with the unit suites (SQLite):
 - `chase_citations` `into=works` → `into=None`:
   `test_pages_fetched_before_a_failure_are_kept` fails with `accepted_count ==
   0`.
+
+### Chase phase-1 rollback (amendment, same day)
+
+- **Source and guard:** `chase_citations`, line 464, `await db.rollback()`
+  after the phase-1 checks, so no Collection or stream lock is held during the
+  provider call (pre-mutation SHA-256 of `corpus_service.py`
+  `465ada2afdabeba17f8d78fbf2f36779be2ae17d8da7456d4b45dc3b07e27b38`).
+- **Covering test:** `-k concurrent_identical_chases`.
+- **Mutation:** replaced the line with `pass`.
+- **Observed mutant failure:** exit 1; `assert 1 == 2` on `connector.calls`.
+  Chase one kept the Collection lock across the network call, so chase two
+  blocked in phase 1 until the barrier timed out, then replayed chase one's
+  (failed) receipt instead of reaching the provider.
+- **Restored result:** `1 passed`.
