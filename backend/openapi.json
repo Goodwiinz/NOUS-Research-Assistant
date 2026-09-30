@@ -1532,6 +1532,30 @@
         "title": "Body_force_sync_paper_api_v1_arxiv_tracking_force_sync_post",
         "type": "object"
       },
+      "Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post": {
+        "properties": {
+          "declaration": {
+            "title": "Declaration",
+            "type": "string"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "format",
+          "declaration"
+        ],
+        "title": "Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post",
+        "type": "object"
+      },
       "Body_upload_file_api_v1_files_upload_post": {
         "properties": {
           "custom_metadata": {
@@ -2641,6 +2665,43 @@
           }
         },
         "title": "ChatMessageUpdate",
+        "type": "object"
+      },
+      "CitationChaseRequest": {
+        "properties": {
+          "direction": {
+            "enum": [
+              "backward",
+              "forward"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "max_results": {
+            "default": 50,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Max Results",
+            "type": "integer"
+          },
+          "seed_report_id": {
+            "format": "uuid",
+            "title": "Seed Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed_report_id",
+          "direction",
+          "idempotency_key"
+        ],
+        "title": "CitationChaseRequest",
         "type": "object"
       },
       "CitationExtractRequest": {
@@ -3861,6 +3922,103 @@
           }
         },
         "title": "ConversationUpdate",
+        "type": "object"
+      },
+      "CoverageRequest": {
+        "description": "Known records to check, each ``{kind: value}`` (e.g. ``{\"doi\": \"10.1/x\"}``).",
+        "properties": {
+          "known": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "maxItems": 1000,
+            "title": "Known",
+            "type": "array"
+          }
+        },
+        "title": "CoverageRequest",
+        "type": "object"
+      },
+      "CoverageResponse": {
+        "properties": {
+          "citation_chasing": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation Chasing"
+          },
+          "exhaustive": {
+            "const": false,
+            "default": false,
+            "title": "Exhaustive",
+            "type": "boolean"
+          },
+          "found": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Found",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "not_searched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Searched",
+            "type": "array"
+          },
+          "recall": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall"
+          },
+          "searched": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Searched",
+            "type": "array"
+          },
+          "statement": {
+            "default": "Coverage lists what was searched, imported and chased for this project. It is not exhaustive and does not prove that no other relevant records exist.",
+            "title": "Statement",
+            "type": "string"
+          }
+        },
+        "required": [
+          "found",
+          "missing",
+          "searched",
+          "not_searched"
+        ],
+        "title": "CoverageResponse",
         "type": "object"
       },
       "CreateEntityRequest": {
@@ -6713,6 +6871,270 @@
           "occurred_at"
         ],
         "title": "IdentityEventResponse",
+        "type": "object"
+      },
+      "ImportReceiptDetail": {
+        "properties": {
+          "accepted_count": {
+            "title": "Accepted Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "declared": {
+            "additionalProperties": true,
+            "title": "Declared",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "file_import",
+              "citation_chase"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "observed": {
+            "additionalProperties": true,
+            "title": "Observed",
+            "type": "object"
+          },
+          "parsed_count": {
+            "title": "Parsed Count",
+            "type": "integer"
+          },
+          "previous_receipt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Receipt Id"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/ImportRecordResponse"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "rejected_count": {
+            "title": "Rejected Count",
+            "type": "integer"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "version",
+          "declared",
+          "observed",
+          "parsed_count",
+          "accepted_count",
+          "rejected_count",
+          "created_at",
+          "records"
+        ],
+        "title": "ImportReceiptDetail",
+        "type": "object"
+      },
+      "ImportReceiptResponse": {
+        "properties": {
+          "accepted_count": {
+            "title": "Accepted Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "declared": {
+            "additionalProperties": true,
+            "title": "Declared",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "file_import",
+              "citation_chase"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "observed": {
+            "additionalProperties": true,
+            "title": "Observed",
+            "type": "object"
+          },
+          "parsed_count": {
+            "title": "Parsed Count",
+            "type": "integer"
+          },
+          "previous_receipt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Receipt Id"
+          },
+          "rejected_count": {
+            "title": "Rejected Count",
+            "type": "integer"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "version",
+          "declared",
+          "observed",
+          "parsed_count",
+          "accepted_count",
+          "rejected_count",
+          "created_at"
+        ],
+        "title": "ImportReceiptResponse",
+        "type": "object"
+      },
+      "ImportRecordResponse": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "parsed": {
+            "additionalProperties": true,
+            "title": "Parsed",
+            "type": "object"
+          },
+          "raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw"
+          },
+          "record_index": {
+            "title": "Record Index",
+            "type": "integer"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Reason"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "record_index",
+          "status",
+          "parsed"
+        ],
+        "title": "ImportRecordResponse",
+        "type": "object"
+      },
+      "ImportedRecordObservation": {
+        "description": "An externally imported record (GOO-300) attached to this report.",
+        "properties": {
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "import_record_id": {
+            "format": "uuid",
+            "title": "Import Record Id",
+            "type": "string"
+          },
+          "match_method": {
+            "title": "Match Method",
+            "type": "string"
+          },
+          "receipt_id": {
+            "format": "uuid",
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "import_record_id",
+          "receipt_id",
+          "match_method",
+          "evidence"
+        ],
+        "title": "ImportedRecordObservation",
         "type": "object"
       },
       "IntegrityScoreResponse": {
@@ -10841,6 +11263,14 @@
             "title": "Identifiers",
             "type": "object"
           },
+          "imported_records": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ImportedRecordObservation"
+            },
+            "title": "Imported Records",
+            "type": "array"
+          },
           "merged_into_report_id": {
             "anyOf": [
               {
@@ -10921,6 +11351,15 @@
             "title": "Idempotency Key",
             "type": "string"
           },
+          "import_record_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Import Record Ids",
+            "type": "array"
+          },
           "rationale": {
             "maxLength": 10000,
             "minLength": 1,
@@ -10928,17 +11367,16 @@
             "type": "string"
           },
           "source_ids": {
+            "default": [],
             "items": {
               "format": "uuid",
               "type": "string"
             },
-            "minItems": 1,
             "title": "Source Ids",
             "type": "array"
           }
         },
         "required": [
-          "source_ids",
           "rationale",
           "idempotency_key"
         ],
@@ -35232,6 +35670,369 @@
         "summary": "Get Project",
         "tags": [
           "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/citation-chases": {
+      "post": {
+        "description": "OpenAlex citation chase; the service checks EDIT before and after I/O.",
+        "operationId": "chase_citations_route_api_v1_research_engine_projects__project_id__citation_chases_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CitationChaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptResponse"
+                }
+              }
+            },
+            "description": "Replayed receipt"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Chase Citations Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/corpus/coverage": {
+      "post": {
+        "operationId": "corpus_coverage_route_api_v1_research_engine_projects__project_id__corpus_coverage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoverageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Corpus Coverage Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/corpus/export": {
+      "get": {
+        "operationId": "export_corpus_route_api_v1_research_engine_projects__project_id__corpus_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "enum": [
+                "json",
+                "zip"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {},
+              "application/zip": {}
+            },
+            "description": "Versioned corpus package download"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Corpus Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/imports": {
+      "get": {
+        "operationId": "list_imports_route_api_v1_research_engine_projects__project_id__imports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ImportReceiptResponse"
+                  },
+                  "title": "Response List Imports Route Api V1 Research Engine Projects  Project Id  Imports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Imports Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      },
+      "post": {
+        "description": "Import one exported result file (RIS, CSV, NBIB) as an immutable receipt.",
+        "operationId": "import_search_results_route_api_v1_research_engine_projects__project_id__imports_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptResponse"
+                }
+              }
+            },
+            "description": "Replayed receipt"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Search Results Route",
+        "tags": [
+          "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/imports/{receipt_id}": {
+      "get": {
+        "operationId": "get_import_route_api_v1_research_engine_projects__project_id__imports__receipt_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "receipt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReceiptDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Import Route",
+        "tags": [
+          "research-engine-corpus"
         ]
       }
     },
