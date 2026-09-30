@@ -72,7 +72,7 @@ describe('useChatComposerActions', () => {
     });
 
     expect(setInput).toHaveBeenCalledWith('first turn');
-    expect(handleSubmit).toHaveBeenCalledWith('first turn', [], undefined);
+    expect(handleSubmit).toHaveBeenCalledWith('first turn', [], undefined, undefined);
   });
 
   it('retryLast regenerates the most recent assistant turn', async () => {
@@ -85,7 +85,7 @@ describe('useChatComposerActions', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(handleSubmit).toHaveBeenCalledWith('first turn', [], undefined);
+    expect(handleSubmit).toHaveBeenCalledWith('first turn', [], undefined, undefined);
   });
 
   it('handleRegenerate tombstones the replaced turn when it has a client id', async () => {
@@ -115,7 +115,7 @@ describe('useChatComposerActions', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(handleSubmit).toHaveBeenCalledWith('first turn', [], cmid);
+    expect(handleSubmit).toHaveBeenCalledWith('first turn', [], cmid, undefined);
   });
 
   describe('handleEditUserMessage', () => {
