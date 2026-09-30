@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
@@ -48,6 +49,11 @@ function ApprovalContent(): React.JSX.Element {
       <p>
         Only approve a request you started. Check the device, project, and
         permissions below against your terminal.
+      </p>
+      <p>
+        <Link href="/integrations/devices" className="underline">
+          Manage connected devices
+        </Link>
       </p>
       {!requestId && (
         <p role="alert">This approval link is missing its request ID.</p>
