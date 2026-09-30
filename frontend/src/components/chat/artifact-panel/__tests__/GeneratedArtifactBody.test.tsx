@@ -17,11 +17,15 @@ import { useArtifactPanelStore } from '@/store/artifactPanelStore';
 import { render } from '@/test/test-utils';
 import { GeneratedArtifactBody } from '../GeneratedArtifactBody';
 
-const v = (id: string, createdAt: string): ArtifactVersion => ({
+const v = (
+  id: string,
+  createdAt: string,
+  title = 'report.md'
+): ArtifactVersion => ({
   artifactId: 'a1',
   versionId: id,
   parentVersionId: null,
-  title: 'report.md',
+  title,
   mimeType: 'text/plain',
   byteSize: 7,
   sha256: 'x',
@@ -40,7 +44,7 @@ describe('GeneratedArtifactBody', () => {
       })
     );
     vi.mocked(artifactService.listVersions).mockResolvedValue([
-      v('v1', '2026-09-30T00:00:00Z'),
+      v('v1', '2026-09-30T00:00:00Z', 'draft.md'),
       v('v2', '2026-09-30T01:00:00Z'),
     ]);
     vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
@@ -73,8 +77,59 @@ describe('GeneratedArtifactBody', () => {
       kind: 'generated',
       artifactId: 'a1',
       versionId: 'v1',
-      title: 'report.md',
+      title: 'draft.md',
     });
+  });
+
+  it('labels member-published versions neutrally', async () => {
+    vi.mocked(artifactService.listVersions).mockResolvedValue([
+      { ...v('v1', '2026-09-30T00:00:00Z'), producer: 'user' },
+    ]);
+    vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+      new Blob(['body'], { type: 'text/plain' })
+    );
+    render(
+      <GeneratedArtifactBody
+        artifact={{
+          kind: 'generated',
+          artifactId: 'a1',
+          versionId: 'v1',
+          title: 'report.md',
+        }}
+      />
+    );
+    expect(await screen.findByLabelText('Provenance')).toHaveTextContent(
+      'Published by a project member'
+    );
+    expect(screen.getByLabelText('Provenance')).not.toHaveTextContent('by you');
+  });
+
+  it('drops a download failure when another version is selected', async () => {
+    vi.mocked(artifactService.listVersions).mockResolvedValue([
+      v('v1', '2026-09-30T00:00:00Z'),
+      v('v2', '2026-09-30T01:00:00Z'),
+    ]);
+    vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+      new Blob(['body'], { type: 'text/plain' })
+    );
+    vi.mocked(artifactService.downloadVersion).mockRejectedValue(
+      new Error('nope')
+    );
+    const base = {
+      kind: 'generated' as const,
+      artifactId: 'a1',
+      title: 'report.md',
+    };
+    const { user, rerender } = render(
+      <GeneratedArtifactBody artifact={{ ...base, versionId: 'v2' }} />
+    );
+    await screen.findByLabelText('Artifact version');
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Download failed.'
+    );
+    rerender(<GeneratedArtifactBody artifact={{ ...base, versionId: 'v1' }} />);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('refetches instead of showing an older version when the requested one is not cached', async () => {

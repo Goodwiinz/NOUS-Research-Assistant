@@ -2,6 +2,7 @@
 
 import { useMemo, type ReactElement } from 'react';
 
+import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
 import { useThreadArtifacts } from '@/hooks/chat/useThreadArtifacts';
 import type { ThreadArtifact } from '@/services/artifactService';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
@@ -16,34 +17,53 @@ import { formatBytes } from '../artifact-panel/ArtifactPreview';
  * assistant message so late publications stay discoverable without a stream.
  */
 export function GeneratedArtifactCards({
-  messageId,
+  message,
+  isLatestAssistant = false,
 }: {
-  messageId: string | undefined;
+  message: Pick<ChatPageMessage, 'id'> | undefined;
+  /** Computed by the row wrapper from the runtime thread, so a failed run's
+   * id-less error row can still anchor thread outputs. */
+  isLatestAssistant?: boolean;
 }): ReactElement | null {
+  const messageId = message?.id;
   const threadId = useChatStore((s) => s.currentThreadId);
   // Select the stable list reference; derive with useMemo so the selector
   // never returns a fresh array (which would re-render without end).
   const messages = useChatStore((s) =>
     s.currentThreadId ? s.messages[s.currentThreadId] : undefined
   );
-  const { loadedIds, latestAssistantId } = useMemo(() => {
-    const list = messages ?? [];
-    const ids = list.map((m) => m.id).filter((id): id is string => Boolean(id));
-    let latest: string | null = null;
-    for (let i = list.length - 1; i >= 0; i -= 1) {
-      if (list[i]?.role === 'assistant') {
-        latest = list[i]?.id ?? null;
-        break;
-      }
-    }
-    return { loadedIds: ids, latestAssistantId: latest };
-  }, [messages]);
-  const isLatestAssistantMessage =
-    messageId !== undefined && messageId === latestAssistantId;
-  const { data } = useThreadArtifacts(threadId);
+  const loadedIds = useMemo(
+    () =>
+      (messages ?? [])
+        .map((m) => m.id)
+        .filter((id): id is string => Boolean(id)),
+    [messages]
+  );
+  const isLatestAssistantMessage = message !== undefined && isLatestAssistant;
+  const { data, isError, refetch } = useThreadArtifacts(threadId);
   const openArtifact = useArtifactPanelStore((s) => s.openArtifact);
-  if (!data || data.length === 0 || !messageId) return null;
-  const own = data.filter((a) => a.reference.messageId === messageId);
+  if (!message) return null;
+  if (isError) {
+    // One stable notice on the latest turn only; a silent blank would read
+    // as "no files" and hide the user's outputs.
+    if (!isLatestAssistantMessage) return null;
+    return (
+      <div role="alert" className="mt-2 text-sm">
+        <span>Could not load generated files.</span>{' '}
+        <button
+          type="button"
+          className="rounded-md border px-2 py-1 text-xs"
+          onClick={() => void refetch()}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (!data || data.length === 0) return null;
+  const own = messageId
+    ? data.filter((a) => a.reference.messageId === messageId)
+    : [];
   // No message yet, or a message this view has not loaded (older history,
   // failed run): keep the file discoverable under the latest assistant turn.
   const orphans = isLatestAssistantMessage

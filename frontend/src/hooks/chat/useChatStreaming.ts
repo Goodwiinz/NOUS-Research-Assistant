@@ -1233,9 +1233,9 @@ export function useChatStreaming(
                 streamingProgress: [...turnProgress],
               });
             },
-            onArtifactVersion: () => {
+            onArtifactVersion: (ref) => {
               if (currentThreadId)
-                void invalidateThreadArtifacts(currentThreadId);
+                void invalidateThreadArtifacts(currentThreadId, ref);
             },
             onRunId: (runId) => {
               if (!currentThreadId || streamOwnerRef.current !== streamOwner) {

@@ -40,9 +40,10 @@ const item = (
   },
 });
 
-function seedThread(
-  messages: Array<{ id: string; role: 'user' | 'assistant' }>
-): void {
+type Row = { id: string; role: 'user' | 'assistant' };
+const row = (id: string, role: Row['role']): Row => ({ id, role });
+
+function seedThread(messages: Row[]): void {
   act(() =>
     useChatStore.setState((s) => ({
       ...s,
@@ -61,11 +62,12 @@ describe('GeneratedArtifactCards', () => {
         pinned: false,
       })
     );
-    seedThread([
-      { id: 'm1', role: 'assistant' },
-      { id: 'u2', role: 'user' },
-      { id: 'm3', role: 'assistant' },
-    ]);
+    const rows = [
+      row('m1', 'assistant'),
+      row('u2', 'user'),
+      row('m3', 'assistant'),
+    ];
+    seedThread(rows);
     vi.mocked(artifactService.listThreadArtifacts).mockResolvedValue([
       item('v1', 'm1', 'first.md'),
       item('v2', null, 'late.png'),
@@ -73,7 +75,7 @@ describe('GeneratedArtifactCards', () => {
       item('v4', 'm-not-loaded', 'older.csv'),
     ]);
     const { user, rerender } = render(
-      <GeneratedArtifactCards messageId="m1" />
+      <GeneratedArtifactCards message={rows[0]} />
     );
     expect(
       await screen.findByRole('button', { name: /Open first\.md/ })
@@ -81,7 +83,7 @@ describe('GeneratedArtifactCards', () => {
     expect(screen.queryByRole('button', { name: /Open late\.png/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Open third\.md/ })).toBeNull();
 
-    rerender(<GeneratedArtifactCards messageId="m3" />);
+    rerender(<GeneratedArtifactCards message={rows[2]} isLatestAssistant />);
     expect(
       await screen.findByRole('button', { name: /Open third\.md/ })
     ).toBeInTheDocument();
@@ -101,11 +103,48 @@ describe('GeneratedArtifactCards', () => {
   });
 
   it('renders nothing for an unpersisted message or an empty thread', async () => {
-    seedThread([{ id: 'm1', role: 'assistant' }]);
+    const rows = [row('m1', 'assistant')];
+    seedThread(rows);
     vi.mocked(artifactService.listThreadArtifacts).mockResolvedValue([]);
     const { container } = render(
-      <GeneratedArtifactCards messageId={undefined} />
+      <GeneratedArtifactCards message={undefined} />
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('attaches thread outputs to a failed (id-less) latest assistant row', async () => {
+    const rows = [row('m1', 'assistant'), row('u2', 'user')];
+    seedThread(rows);
+    vi.mocked(artifactService.listThreadArtifacts).mockResolvedValue([
+      item('v2', null, 'late.png'),
+    ]);
+    const { rerender } = render(
+      <GeneratedArtifactCards message={{ id: undefined }} isLatestAssistant />
+    );
+    expect(
+      await screen.findByRole('button', { name: /Open late\.png/ })
+    ).toBeInTheDocument();
+    rerender(<GeneratedArtifactCards message={rows[0]} />);
+    expect(screen.queryByRole('button', { name: /Open late\.png/ })).toBeNull();
+  });
+
+  it('surfaces a list failure with retry on the latest assistant row only', async () => {
+    const rows = [row('m1', 'assistant'), row('m3', 'assistant')];
+    seedThread(rows);
+    vi.mocked(artifactService.listThreadArtifacts)
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce([item('v3', 'm3', 'third.md')]);
+    const { user, rerender } = render(
+      <GeneratedArtifactCards message={rows[1]} isLatestAssistant />
+    );
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/Could not load generated files/);
+    rerender(<GeneratedArtifactCards message={rows[0]} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    rerender(<GeneratedArtifactCards message={rows[1]} isLatestAssistant />);
+    await user.click(screen.getByRole('button', { name: /Retry/ }));
+    expect(
+      await screen.findByRole('button', { name: /Open third\.md/ })
+    ).toBeInTheDocument();
   });
 });
