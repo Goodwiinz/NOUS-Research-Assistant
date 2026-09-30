@@ -1740,3 +1740,44 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider evals/academic-journey
 | UTF-16 to code-point conversion (`DraftClaimsPanel.tsx:202`) | `start_char: codePoints(content, start)` replaced with `start_char: start` | `selection offsets are code points` fails: the posted `start_char` is 9, where 8 was expected (the leading "📊" is two UTF-16 units). |
 | Collector `SHA256SUMS` recomputation (`collect.py:89`) | the comparison replaced with `if False:` | `test_tampered_bundle_member_rejected` fails because the message changes to `bundle member claims.json does not match the manifest`. The tampered bundle is still refused, by the manifest's own `sha256` check and then by the body hash. The plan predicted acceptance, but these are defence in depth, and the test pins the `SHA256SUMS` check specifically. |
 | Collector refusal on missing evidence (`collect.py:409`) | the `is_file()` check replaced with `if False:` | Both `test_refuses_trial_without_bundle_or_trace` cases fail. The missing bundle surfaces as an unhandled `FileNotFoundError`. The missing trace is refused later, with a different message (`cannot read retained artifact`). No report is written in either case, but the declared refusal no longer names the missing evidence. |
+
+## GOO-309 study-design appraisal: blind review, adjudication and staleness — 2026-09-30
+
+PostgreSQL proof: `backend/tests/integration/test_appraisal_postgres.py`. It
+ran against local PostgreSQL 14 on GOO-301's `screening_factory` schema, whose
+chain now ends at `e2a4c6b8d0f1` (connection URL from the environment; value
+omitted).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy.
+
+`filecmp` against the copy and `git diff --quiet` on the mutated file both
+succeeded for every mutant, on committed files. The proof (3 tests) and the
+gold test (7 tests) passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/appraisal_service.py`
+  `80c312e586229b9a1186024148ac53d3b4e3255dbe91fb2f9595e150e145f449`
+- `backend/src/services/research_engine/appraisal_rules.py`
+  `bce3798dcec5f49f8368196cb64e27d39fd9d6921db269d25c791e502272c392`
+- `backend/alembic/versions/e2a4c6b8d0f1_create_appraisal_assessments.py`
+  `960b3012ce6ae3f1c60056397803cb0605f98633ef45fb883c59037c7a5a97e5`
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_appraisal_postgres.py -k staleness   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_appraisal_gold.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| The reveal predicate `_visible`, behind `visible_appraisal_ids` and every read (`appraisal_service.py:373`) | `return {every row id}` inserted before the filter | Step 4: B's list for S holds A's unrevealed row (`assert [AppraisalResponse(...)] == []`). |
+| The revealed-edit refusal in `_write` (`:551`) | `if False:` | Step 5: `DID NOT RAISE HTTPException`; A's post-reveal successor is recorded instead of `409 Revealed; changes go through adjudication`. |
+| The `resolves_assessment_ids == tips` check (`:564`) | `if False:` | Step 6: `DID NOT RAISE HTTPException`; J's adjudication naming A's superseded row is recorded instead of `409 Appraisal is stale; reload`. |
+| The self-adjudication check (`:575`) | `if False:` | Step 7: `DID NOT RAISE HTTPException`; J2 adjudicates R3, which J2 assessed. |
+| `graph_part` edge selection (`:433`) | each row walks every row's cited evidence | Step 10: A's R3 row (which cites nothing on D1) is reported stale after the D1 `Blinding` value is superseded. |
+| The insert-only trigger (`e2a4c6b8d0f1…py:166`) | the function body's `RAISE … '55000'` replaced with `RETURN NEW;` (the plan's `DROP TRIGGER` would also break step 2's downgrade/upgrade) | Step 9: `DID NOT RAISE DBAPIError`; the UPDATE succeeds. A first run with an unfiltered UPDATE failed on `ck_appraisal_not_applicable_overall` (SQLSTATE 23514) instead, so step 9 now updates applicable rows only and pins the trigger. |
+| The `overall` null-while-unknown rule (`appraisal_rules.py:197`) | both overall checks replaced by `if floor is not None and _rank(overall) < _rank(floor):` | `test_overall_below_floor_or_over_unknown_is_rejected`: `DID NOT RAISE ValueError`; gold case `d3_unknown` validates with a non-null overall. |
