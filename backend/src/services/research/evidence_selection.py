@@ -202,27 +202,43 @@ _NEGATION_RE = re.compile(
 # PDF extraction artefacts folded before matching, identically on source and
 # quote: soft hyphens vanish and a hyphen before a line break joins the word
 # (``effi-\nciency`` -> ``efficiency``). The verifier sees newlines as spaces,
-# so any whitespace after the hyphen counts. ponytail: a real "well- and"
+# so any whitespace after the hyphen counts. Only letter-hyphen-letter joins,
+# so ``2014-\n2015`` never becomes ``20142015``. ponytail: a real "well- and"
 # also joins, harmlessly, because both sides fold the same way.
-_JOIN_RE = re.compile(r"(?<=\w)-\s+(?=\w)|\u00ad|\s+")
+_JOIN_RE = re.compile(r"(?<=[^\W\d_])-\s+(?=[^\W\d_])|\u00ad\s*|\s+")
+# Inline page anchors the verifier's excerpt carries between passages
+# (``select_relevant_passages``); a quote that copies one is still verbatim.
+_INLINE_PAGE_MARKER_RE = re.compile(r"\[Page\s+\d+\]")
+
+
+def _fold_char(char: str) -> str:
+    """NFKC for one char, except super/subscripts: ``10⁴`` is not ``104``."""
+    if char.isascii() or unicodedata.decomposition(char).startswith(
+        ("<super>", "<sub>")
+    ):
+        return char
+    return unicodedata.normalize("NFKC", char)
 
 
 def _normalize_with_offsets(text: str) -> tuple[str, list[int]]:
     """Normalise ``text`` for verbatim matching, with each output char's source index.
 
-    NFKC (which also folds ligatures such as ``ﬁ``/``ﬂ`` to ``fi``/``fl``),
+    NFKC minus super/subscripts (which folds ligatures such as ``ﬁ``/``ﬂ``),
     quote folding and lowercasing are applied per character so every output
     character maps back to the source character it came from.
     ponytail: per-char Python loop, O(len(text)); fine for paper-sized text.
     """
-    chars: list[str] = []
-    offsets: list[int] = []
-    for index, char in enumerate(text):
-        folded = char if char.isascii() else unicodedata.normalize("NFKC", char)
-        for out in folded.translate(_QUOTE_FOLD).lower():
-            chars.append(out)
-            offsets.append(index)
-    folded_text = "".join(chars)
+    if text.isascii():
+        # ASCII lowercasing is length-preserving and quote folding is a no-op.
+        folded_text, offsets = text.lower(), list(range(len(text)))
+    else:
+        chars: list[str] = []
+        offsets = []
+        for index, char in enumerate(text):
+            for out in _fold_char(char).translate(_QUOTE_FOLD).lower():
+                chars.append(out)
+                offsets.append(index)
+        folded_text = "".join(chars)
     out_chars: list[str] = []
     out_offsets: list[int] = []
     cursor = 0
@@ -310,7 +326,10 @@ def evidence_location(
         needle = _normalize_for_match(span)
         return haystack.find(needle) if needle else -1
 
-    span = _grounded_span(str(evidence), lambda value: find(value) >= 0)
+    # Strip copied page anchors first so their tokens never count toward the
+    # minimum quoted-span length.
+    evidence = _INLINE_PAGE_MARKER_RE.sub(" ", str(evidence))
+    span = _grounded_span(evidence, lambda value: find(value) >= 0)
     start = find(span) if span is not None else -1
     if span is None or start < 0:
         return None, "source excerpt", None

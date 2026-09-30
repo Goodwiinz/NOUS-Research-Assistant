@@ -1,5 +1,6 @@
 import pytest
 
+from src.services.research.citation_verification_service import _sanitize_excerpt
 from src.services.research.draft_generation_service import DraftGenerationService
 from src.services.research.evidence_selection import (
     evidence_location,
@@ -206,7 +207,7 @@ _TWO_PAGE_PAPER = (
 
 
 def test_quote_crossing_a_passage_boundary_is_located_on_its_start_page() -> None:
-    """GOO-321 (D-02): the verifier's excerpt joins passages with spaces, so its
+    """GOO-321 D-02 (GOO-292): the verifier's excerpt joins passages with spaces, so its
     quote can cross a paragraph or page boundary while still being verbatim.
 
     Mutation check (2026-09-30): restoring the pre-fix per-passage search in
@@ -239,12 +240,12 @@ def test_quote_crossing_a_passage_boundary_is_located_on_its_start_page() -> Non
 
 _RAW_PDF_PAPER = (
     "[Page 7]\nThe ﬁnal model improves training eﬃ-\nciency by a factor of "
-    "three over the base­line."
+    "three over the base\u00adline."
 )
 
 
 def test_pdf_ligatures_and_line_break_hyphens_match_repaired_quotes() -> None:
-    """GOO-321 (D-02): a quote with repaired PDF typography is still verbatim.
+    """GOO-321 D-02 (GOO-292): a quote with repaired PDF typography is still verbatim.
 
     Mutation check (2026-09-30): dropping the typographic folding in
     ``_normalize_with_offsets`` (``folded = char`` instead of NFKC, and
@@ -270,3 +271,102 @@ def test_pdf_ligatures_and_line_break_hyphens_match_repaired_quotes() -> None:
     changed = "The final model improves inference efficiency by a factor of three"
     assert evidence_location(_RAW_PDF_PAPER, changed) == _UNGROUNDED
     assert verbatim_evidence(_RAW_PDF_PAPER, changed) is None
+
+
+def test_quote_copied_from_real_excerpt_with_page_anchors_is_located() -> None:
+    """GOO-321 D-02 (GOO-292): the verifier's excerpt keeps ``[Page N]`` anchors
+    between passages, so a faithful cross-passage quote may contain one.
+
+    Mutation check (2026-09-30): removing the ``_INLINE_PAGE_MARKER_RE`` strip
+    at the top of ``evidence_location`` makes this test fail with
+    ``(None, "source excerpt", None)``. Restoring it makes it pass.
+    """
+    excerpt = _sanitize_excerpt(
+        select_relevant_passages(
+            _TWO_PAGE_PAPER,
+            queries=["WMT 2014 English-German byte-pair vocabulary tokens"],
+            max_chars=8000,
+        ),
+        8000,
+    )
+
+    def copied(first: str, last: str) -> str:
+        start = excerpt.index(first)
+        return excerpt[start : excerpt.index(last, start) + len(last)]
+
+    across_paragraph = copied("the WMT 2014", "encoded using")
+    across_page = copied("encoded using", "vocabulary has")
+    assert "[Page 4]" in across_paragraph and "[Page 5]" in across_page
+
+    assert evidence_location(_TWO_PAGE_PAPER, across_paragraph) == (
+        4,
+        "Page 4",
+        "the WMT 2014 English-German dataset. Sentences were encoded using",
+    )
+    assert evidence_location(_TWO_PAGE_PAPER, across_page) == (
+        4,
+        "Page 4",
+        "encoded using byte-pair encoding. The shared vocabulary has",
+    )
+    # Anchor tokens never count toward the four-word minimum.
+    assert evidence_location(_TWO_PAGE_PAPER, "[Page 4] dataset. [Page 5]") == (
+        _UNGROUNDED
+    )
+
+
+def test_superscripts_and_subscripts_are_not_folded_into_digits() -> None:
+    """GOO-321 D-02 (GOO-292): NFKC would turn ``10⁴`` into ``104``, changing
+    the claim; only non-super/subscript compatibility forms are folded.
+
+    Mutation check (2026-09-30): making ``_fold_char`` apply NFKC to every
+    non-ASCII char (dropping the ``<super>``/``<sub>`` exception) makes this
+    test fail (``104 to 105`` located on Page 2). Restoring it makes it pass.
+    """
+    source = (
+        "[Page 2]\nScores rose from 10⁴ to 10⁵ steps with the ﬁnal "
+        "schedule, holding CO₂ at 95%¹ throughout."
+    )
+
+    assert evidence_location(source, "Scores rose from 104 to 105 steps") == (
+        _UNGROUNDED
+    )
+    assert evidence_location(source, "holding CO2 at 95%1 throughout.") == (_UNGROUNDED)
+    assert evidence_location(source, "Scores rose from 10⁴ to 10⁵ steps")[:2] == (
+        2,
+        "Page 2",
+    )
+    assert evidence_location(source, "steps with the final schedule")[:2] == (
+        2,
+        "Page 2",
+    )
+
+
+def test_soft_hyphen_at_line_break_joins_the_word() -> None:
+    """A soft hyphen absorbs the line break after it (``base\u00ad\nline``).
+
+    Mutation check (2026-09-30): dropping the trailing whitespace from the
+    soft-hyphen alternative of ``_JOIN_RE`` makes this test fail with
+    ``(None, "source excerpt") == (3, "Page 3")``. Restoring it makes it pass.
+    """
+    source = "[Page 3]\nWe compare against the strong base\u00ad\nline model."
+
+    assert evidence_location(source, "against the strong baseline model.")[:2] == (
+        3,
+        "Page 3",
+    )
+
+
+def test_digit_hyphen_line_break_is_not_joined() -> None:
+    """``2014-\n2015`` is a range, never the number ``20142015``.
+
+    Mutation check (2026-09-30): widening the de-hyphenation lookarounds in
+    ``_JOIN_RE`` back to any word character makes this test fail
+    (``20142015`` located on Page 6). Restoring letters-only makes it pass.
+    """
+    source = "[Page 6]\nData were collected over 2014-\n2015 in two cohorts."
+
+    assert evidence_location(source, "collected over 20142015 in two") == (_UNGROUNDED)
+    assert evidence_location(source, "collected over 2014- 2015 in two")[:2] == (
+        6,
+        "Page 6",
+    )
