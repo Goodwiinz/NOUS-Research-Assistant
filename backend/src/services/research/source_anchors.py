@@ -8,9 +8,11 @@ Offsets are Python ``str`` indices (code points), ``[start, end)``, into
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence
 
+from src.services.research import extraction_rules as rules
 from src.services.research.evidence_selection import _PAGE_MARKER_RE
 
 AnchorStatus = Literal["verified", "ambiguous", "unverified", "location_unavailable"]
@@ -96,3 +98,131 @@ def verify_anchor(
     if len(starts) == 1:
         return located(starts[0])
     return Anchor("ambiguous", occurrences=tuple(starts), occurrences_in_text=in_text)
+
+
+# ponytail: fixed 8x12k cap; make it a setting only if real matrices hit it.
+CHUNK_CHARS, OVERLAP, MAX_CHUNKS = 12_000, 500, 8
+Range = tuple[int, int]
+
+
+def plan_windows(n: int) -> list[Range]:
+    """Windows reaching the end of any text; evenly spread when over the cap."""
+    if n <= 0:
+        return []
+    if n <= CHUNK_CHARS:
+        return [(0, n)]
+    step = CHUNK_CHARS - OVERLAP
+    k = math.ceil((n - CHUNK_CHARS) / step) + 1
+    if k <= MAX_CHUNKS:
+        return [(i * step, min(i * step + CHUNK_CHARS, n)) for i in range(k)]
+    span = n - CHUNK_CHARS
+    starts = [round(i * span / (MAX_CHUNKS - 1)) for i in range(MAX_CHUNKS)]
+    return [(s, s + CHUNK_CHARS) for s in starts]
+
+
+def merge_ranges(ranges: Sequence[Range]) -> list[Range]:
+    merged: list[Range] = []
+    for lo, hi in sorted(ranges):
+        if merged and lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    return merged
+
+
+@dataclass(frozen=True)
+class Candidate:
+    field_id: str
+    value: Any
+    missingness: str | None
+    validation_state: str
+    citation: str | None
+    anchor: Anchor | None
+
+
+def anchor_candidates(
+    fields: Sequence[Mapping[str, Any]],
+    parsed_chunk: Mapping[str, Mapping[str, Any]],
+    window: Range,
+    text: str,
+) -> list[Candidate]:
+    """One candidate per field from one window's parsed output; a value's
+    citation is verified inside that window, with global offsets."""
+    candidates = []
+    for field in fields:
+        entry = parsed_chunk.get(field["name"]) or {"missing": "extraction_error"}
+        value, missingness, state = rules.normalize(
+            "machine", field, entry.get("value"), entry.get("missing")
+        )
+        citation = entry.get("citation")
+        citation = citation if isinstance(citation, str) else None
+        anchor = None if missingness else verify_anchor(text, citation, window=window)
+        candidates.append(
+            Candidate(field["field_id"], value, missingness, state, citation, anchor)
+        )
+    return candidates
+
+
+def aggregate(
+    field_id: str, candidates: Sequence[Candidate], coverage_complete: bool
+) -> list[Candidate]:
+    """One observation per distinct value; automation never picks a winner.
+
+    Without any value: extraction_error > not_applicable > not_reported (only
+    after reading the whole text) > unavailable_text.
+    """
+    groups: dict[str, list[Candidate]] = {}
+    for candidate in candidates:
+        if candidate.missingness is None:
+            key = str(candidate.value).strip().casefold()
+            groups.setdefault(key, []).append(candidate)
+    if groups:
+        return [
+            next(
+                (c for c in group if c.anchor and c.anchor.status == "verified"),
+                group[0],
+            )
+            for group in groups.values()
+        ]
+    said = {c.missingness for c in candidates}
+    if "extraction_error" in said:
+        missingness = "extraction_error"
+    elif "not_applicable" in said:
+        missingness = "not_applicable"
+    elif coverage_complete:
+        missingness = "not_reported"
+    else:
+        missingness = "unavailable_text"
+    citation = next(
+        (c.citation for c in candidates if c.missingness == missingness), None
+    )
+    return [Candidate(field_id, None, missingness, "valid", citation, None)]
+
+
+async def read_whole_text(
+    text: str,
+    fields: Sequence[Mapping[str, Any]],
+    read: Callable[[str], Awaitable[Mapping[str, Mapping[str, Any]]]],
+) -> tuple[dict[str, list[Candidate]], list[Range], bool]:
+    """Read every window of ``text`` (one ``read`` call each) and aggregate.
+
+    -> (field_id -> observations to write, inspected coverage, complete).
+    """
+    windows = plan_windows(len(text))
+    found: list[Candidate] = []
+    for lo, hi in windows:
+        found += anchor_candidates(fields, await read(text[lo:hi]), (lo, hi), text)
+    coverage = merge_ranges(windows)
+    complete = coverage == [(0, len(text))]
+    return (
+        {
+            f["field_id"]: aggregate(
+                f["field_id"],
+                [c for c in found if c.field_id == f["field_id"]],
+                complete,
+            )
+            for f in fields
+        },
+        coverage,
+        complete,
+    )
