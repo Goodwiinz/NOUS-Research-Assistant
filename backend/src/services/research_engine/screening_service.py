@@ -415,8 +415,11 @@ async def create_queue(
     if prior is not None:
         if prior.request_fingerprint != fingerprint:
             raise _conflict("Idempotency conflict")
+        payload = cast(dict[str, Any], prior.payload)
         return await _queue_response(
-            db, await _queue(db, context, UUID(str(prior.payload["queue_id"])))
+            db,
+            await _queue(db, context, UUID(str(payload["queue_id"]))),
+            suggestions_skipped=payload["suggestions_skipped"],
         )
 
     version = (
@@ -501,6 +504,7 @@ async def create_queue(
                 str(data.supersedes_queue_id) if data.supersedes_queue_id else None
             ),
             "reviewer_mode": mode,
+            "suggestions_skipped": skipped,
         },
         idempotency_key=data.idempotency_key,
         fingerprint=fingerprint,

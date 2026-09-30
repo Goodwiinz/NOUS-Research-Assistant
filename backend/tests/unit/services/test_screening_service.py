@@ -338,6 +338,8 @@ async def test_ai_suggestions_never_become_observations(db: AsyncSession) -> Non
     queue = await _queue(db, project, suggestion_step_id=step_id)
 
     assert (queue.suggestion_count, queue.suggestions_skipped) == (2, 1)
+    replayed = await _queue(db, project, suggestion_step_id=step_id)
+    assert (replayed.id, replayed.suggestions_skipped) == (queue.id, 1)
     suggestions = (
         (
             await db.execute(

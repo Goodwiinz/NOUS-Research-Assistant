@@ -421,6 +421,7 @@ class _Queue:
             exclusion_reasons=["wrong population", "wrong design"],
             supersedes_queue_id=None,
             reviewer_mode="dual_independent",
+            suggestions_skipped=None,
         )
 
     def assignment(self, assignment_id: UUID, reviewer: UUID) -> dict[str, object]:
@@ -462,13 +463,17 @@ class _Queue:
             "request_fingerprint": "b" * 64,
         }
 
-    def replay(self, *events: tuple[str, dict[str, object]]) -> None:
+    def replay(
+        self, *events: tuple[str, dict[str, object]], actor: UUID | None = None
+    ) -> None:
+        """Observations are authored by their reviewer unless ``actor`` overrides."""
+        stored = []
         for event_type, payload in events:
             _validate_event(**self.event(event_type, payload))  # type: ignore[arg-type]
-        _validate_screening_transitions(
-            [_stored(event_type, payload) for event_type, payload in events],
-            self.queue_id,
-        )
+            row = _stored(event_type, payload)
+            row.actor_user_id = actor or UUID(str(payload.get("reviewer_id", uuid4())))
+            stored.append(row)
+        _validate_screening_transitions(stored, self.queue_id)
 
 
 def test_screening_payload_rejects_foreign_queue() -> None:
@@ -608,3 +613,61 @@ def test_screening_replay_accepts_assign_observe_supersede_unassign() -> None:
                 ),
             ),
         )
+
+
+def test_screening_replay_rejects_reassign_while_active() -> None:
+    queue = _Queue()
+    reviewer = uuid4()
+    with pytest.raises(DecisionReplayError, match="contradictory screening assignment"):
+        queue.replay(
+            ("screening.queue_created", queue.created()),
+            ("screening.assigned", queue.assignment(uuid4(), reviewer)),
+            ("screening.assigned", queue.assignment(uuid4(), reviewer)),
+        )
+
+
+def test_screening_replay_rejects_event_from_another_collection() -> None:
+    queue = _Queue()
+    reviewer, assignment = uuid4(), uuid4()
+    foreign = queue.assignment(assignment, reviewer)
+    foreign["collection_id"] = str(uuid4())
+    with pytest.raises(DecisionReplayError, match="another collection"):
+        queue.replay(
+            ("screening.queue_created", queue.created()),
+            ("screening.assigned", foreign),
+        )
+
+
+def test_screening_observation_cannot_supersede_itself() -> None:
+    queue = _Queue()
+    observation = uuid4()
+    payload = queue.observed(
+        observation, uuid4(), uuid4(), queue.reports[0], superseded=observation
+    )
+    with pytest.raises(DecisionValidationError, match="cannot supersede itself"):
+        _validate_event(**queue.event("screening.superseded", payload))  # type: ignore[arg-type]
+
+
+def test_screening_replay_requires_observation_actor_to_be_its_reviewer() -> None:
+    queue = _Queue()
+    reviewer, assignment = uuid4(), uuid4()
+    events = (
+        ("screening.queue_created", queue.created()),
+        ("screening.assigned", queue.assignment(assignment, reviewer)),
+        (
+            "screening.observed",
+            queue.observed(uuid4(), assignment, reviewer, queue.reports[0]),
+        ),
+    )
+    queue.replay(*events)
+    with pytest.raises(DecisionReplayError, match="actor is not its reviewer"):
+        queue.replay(*events, actor=uuid4())
+
+
+@pytest.mark.parametrize("skipped", [-1, True, "2"])
+def test_screening_suggestions_skipped_is_a_count(skipped: object) -> None:
+    queue = _Queue()
+    payload = queue.created()
+    payload["suggestions_skipped"] = skipped
+    with pytest.raises(DecisionValidationError, match="suggestions_skipped"):
+        _validate_event(**queue.event("screening.queue_created", payload))  # type: ignore[arg-type]

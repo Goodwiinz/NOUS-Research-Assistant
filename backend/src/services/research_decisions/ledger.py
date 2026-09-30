@@ -102,6 +102,8 @@ _SCREENING_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
             "exclusion_reasons",
             "supersedes_queue_id",
             "reviewer_mode",
+            # Count of AI suggestion rows not imported (None: no import).
+            "suggestions_skipped",
         }
     ),
     ("screening.assigned", 1): _SCREENING_ASSIGNMENT_KEYS,
@@ -373,6 +375,13 @@ def _validate_screening_payload(
         ):
             raise DecisionValidationError("exclusion_reasons must be a string list")
         _validated_optional_uuid(payload["supersedes_queue_id"], "supersedes_queue_id")
+        skipped = payload["suggestions_skipped"]
+        if skipped is not None and (
+            not isinstance(skipped, int) or isinstance(skipped, bool) or skipped < 0
+        ):
+            raise DecisionValidationError(
+                "suggestions_skipped must be a non-negative integer"
+            )
         return
     _validated_payload_uuid(payload["assignment_id"], "assignment_id")
     _validated_payload_uuid(payload["reviewer_id"], "reviewer_id")
@@ -749,6 +758,8 @@ def _validate_screening_transitions(
         if event.event_type == "screening.unassigned":
             del active[assignment]
             continue
+        if event.actor_user_id != reviewer:
+            raise DecisionReplayError("screening observation actor is not its reviewer")
         report = _payload_uuid(payload["report_id"], "report_id")
         if report not in corpus:
             raise DecisionReplayError("screening observation outside corpus")
