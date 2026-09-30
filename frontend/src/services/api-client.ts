@@ -715,9 +715,8 @@ export class APIClient {
    * storage URL transparently. The caller owns the returned objectUrl and MUST
    * call URL.revokeObjectURL(objectUrl) when done to avoid leaking memory.
    */
-  async fetchObjectUrl(
-    url: string
-  ): Promise<{ objectUrl: string; contentType: string }> {
+  /** Authenticated GET returning the raw body; callers decide how to render. */
+  async fetchBlob(url: string): Promise<Blob> {
     await this.ensureAuth();
 
     const response = await fetch(
@@ -731,10 +730,16 @@ export class APIClient {
       throw await this.handleErrorResponse(response);
     }
 
-    const blob = await response.blob();
+    return response.blob();
+  }
+
+  async fetchObjectUrl(
+    url: string
+  ): Promise<{ objectUrl: string; contentType: string }> {
+    const blob = await this.fetchBlob(url);
     return {
       objectUrl: window.URL.createObjectURL(blob),
-      contentType: response.headers.get('content-type') || blob.type || '',
+      contentType: blob.type || '',
     };
   }
 

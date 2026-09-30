@@ -1,5 +1,6 @@
 'use client';
 
+import { GeneratedArtifactCards } from '@/components/chat/aui/GeneratedArtifactCards';
 import React, {
   createContext,
   useContext,
@@ -858,6 +859,7 @@ export function AuiAssistantMessage({
         {draftTasks.map((task) => (
           <DraftTaskStatus key={`${task.projectId}:${task.taskId}`} {...task} />
         ))}
+        <GeneratedArtifactCards messageId={message?.id} />
         <MessageError />
         {/* Citations footer chips — provenance over assertion */}
         {visibleCitations.length > 0 && (

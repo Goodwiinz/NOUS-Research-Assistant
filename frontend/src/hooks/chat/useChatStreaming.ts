@@ -1,5 +1,6 @@
 'use client';
 
+import { useInvalidateThreadArtifacts } from '@/hooks/chat/useThreadArtifacts';
 import { extractConfirmationPreview } from '@nous/chat-runtime/message';
 
 import type {
@@ -737,6 +738,7 @@ export function useChatStreaming(
 
   const router = useRouter();
   const queryClient = useQueryClient();
+  const invalidateThreadArtifacts = useInvalidateThreadArtifacts();
 
   const finishAuthRecoveryAttempt = useCallback(
     (attempt: StreamAuthRecoveryAttempt | undefined): void => {
@@ -1231,6 +1233,9 @@ export function useChatStreaming(
                 streamingProgress: [...turnProgress],
               });
             },
+            onArtifactVersion: () => {
+              if (currentThreadId) void invalidateThreadArtifacts(currentThreadId);
+            },
             onRunId: (runId) => {
               if (!currentThreadId || streamOwnerRef.current !== streamOwner) {
                 return;
@@ -1458,6 +1463,7 @@ export function useChatStreaming(
             },
             onDone: (payload) => {
               console.log('[Agent] Stream complete');
+              if (currentThreadId) void invalidateThreadArtifacts(currentThreadId);
               finishAuthRecoveryAttempt(authRecoveryAttempt);
               if (payload) {
                 doneIds = payload;
@@ -2805,6 +2811,10 @@ export function useChatStreaming(
                   streamingProgress: [...confirmProgress],
                 });
               },
+              onArtifactVersion: () => {
+                if (confirmationThreadId)
+                  void invalidateThreadArtifacts(confirmationThreadId);
+              },
               onRunId: (runId) => {
                 if (
                   !confirmationThreadId ||
@@ -3017,6 +3027,8 @@ export function useChatStreaming(
               onDone: (payload) => {
                 finishAuthRecoveryAttempt(authRecoveryAttempt);
                 confirmDoneIds = payload ?? {};
+                if (confirmationThreadId)
+                  void invalidateThreadArtifacts(confirmationThreadId);
                 const reasoningSummary =
                   payload?.reasoning_summary ?? confirmReasoning;
                 if (confirmContent.trim() || reasoningSummary.trim()) {
