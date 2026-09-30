@@ -6141,6 +6141,173 @@
         "title": "DocumentType",
         "type": "string"
       },
+      "DraftPromoteRequest": {
+        "description": "Promote the exact version whose content hashes to ``content_hash``.",
+        "properties": {
+          "content_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          }
+        },
+        "required": [
+          "content_hash",
+          "idempotency_key"
+        ],
+        "title": "DraftPromoteRequest",
+        "type": "object"
+      },
+      "DraftReleaseResponse": {
+        "description": "A promotion of one exact draft version; stale rows are kept.",
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Assessment Ids",
+            "type": "array"
+          },
+          "claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Claim Version Ids",
+            "type": "array"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "interpretation_claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Interpretation Claim Version Ids",
+            "type": "array"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "integer"
+          },
+          "promoted_by_id": {
+            "format": "uuid",
+            "title": "Promoted By Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "stale_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale At"
+          },
+          "stale_event_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Event Id"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "draft_id",
+          "draft_version",
+          "content_hash",
+          "claim_version_ids",
+          "assessment_ids",
+          "interpretation_claim_version_ids",
+          "policy_version",
+          "promoted_by_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "DraftReleaseResponse",
+        "type": "object"
+      },
       "DraftReviewListResponse": {
         "properties": {
           "reviews": {
@@ -14013,6 +14180,165 @@
         ],
         "title": "RelationshipType",
         "type": "string"
+      },
+      "ReleaseBlocker": {
+        "description": "One reason a draft version cannot be promoted (GOO-307).",
+        "properties": {
+          "claim_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Version Id"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "end": {
+            "title": "End",
+            "type": "integer"
+          },
+          "start": {
+            "title": "Start",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "start",
+          "end",
+          "text",
+          "detail"
+        ],
+        "title": "ReleaseBlocker",
+        "type": "object"
+      },
+      "ReleaseCheckResponse": {
+        "description": "A draft version's release status, blockers and invalidation report.",
+        "properties": {
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "invalidation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseInvalidation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DraftReleaseResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release_status": {
+            "enum": [
+              "candidate",
+              "verified",
+              "stale"
+            ],
+            "title": "Release Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "draft_version",
+          "release_status",
+          "content_hash",
+          "blockers",
+          "dimensions"
+        ],
+        "title": "ReleaseCheckResponse",
+        "type": "object"
+      },
+      "ReleaseInvalidation": {
+        "description": "Why the latest release is stale: persisted, or derived on read.",
+        "properties": {
+          "assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Assessment Ids",
+            "type": "array"
+          },
+          "cause": {
+            "additionalProperties": true,
+            "title": "Cause",
+            "type": "object"
+          },
+          "changed_nodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Nodes",
+            "type": "array"
+          },
+          "stale_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale At"
+          }
+        },
+        "required": [
+          "cause",
+          "changed_nodes",
+          "assessment_ids"
+        ],
+        "title": "ReleaseInvalidation",
+        "type": "object"
       },
       "ReportCandidatesResponse": {
         "description": "Read-only suggestions; titles and years never equate reports.",
@@ -37878,6 +38204,152 @@
           }
         ],
         "summary": "Export Draft",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/promote": {
+      "post": {
+        "description": "Promote this exact version to verified (adjudicator or supervisor).\n\n201 new, 200 replayed; 409 blocked (every blocker listed), content\nchanged or stale; 403 without the role.",
+        "operationId": "promote_draft_api_v1_projects__project_id__drafts__draft_id__versions__version__promote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftPromoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Promote Draft",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/release": {
+      "get": {
+        "description": "Release status, every blocker and the invalidation report (VIEW).",
+        "operationId": "get_draft_release_api_v1_projects__project_id__drafts__draft_id__versions__version__release_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Draft Release",
         "tags": [
           "drafts"
         ]
