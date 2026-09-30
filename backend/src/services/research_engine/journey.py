@@ -197,7 +197,7 @@ def current_stage(stages: list[Stage]) -> str | None:
 
 
 async def begin_read_snapshot(db: AsyncSession) -> None:
-    """Start one REPEATABLE READ, READ ONLY snapshot for every read after it.
+    """Start one REPEATABLE READ snapshot for every read after it.
 
     Call it before ``resolve_project`` (VIEW takes no locks): the rollback
     ends the request's implicit transaction and expires every ORM object
@@ -208,9 +208,11 @@ async def begin_read_snapshot(db: AsyncSession) -> None:
     await db.rollback()
     if db.get_bind().dialect.name == "postgresql":
         # ponytail: SQLite unit tests share one connection; no torn reads.
-        await db.execute(
-            text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        )
+        # Not READ ONLY: GOO-299's ``replay_decisions`` reads its stream FOR
+        # SHARE. ponytail: an identity decision committed mid-download makes
+        # that lock fail with a serialization error (500); retry on 40001 if
+        # downloads ever race identity work.
+        await db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
 
 
 async def _count(db: AsyncSession, query: Any) -> int:
@@ -405,10 +407,9 @@ async def _write_facts(db: AsyncSession, context: ProjectContext) -> WriteFacts:
 async def facts(db: AsyncSession, context: ProjectContext) -> StageFacts:
     """Count queries over what GOO-299..307 persist (VIEW, no writes)."""
     cid = cast(UUID, context.collection.id)
-    return StageFacts(
-        plan=await _plan_facts(db, cid),
-        discover=await _discover_facts(db, context, cid),
-        select=await _select_facts(db, context),
-        extract=await _extract_facts(db, cid),
-        write=await _write_facts(db, context),
-    )
+    plan = await _plan_facts(db, cid)
+    discover = await _discover_facts(db, context, cid)
+    extract = await _extract_facts(db, cid)
+    write = await _write_facts(db, context)
+    select_ = await _select_facts(db, context)  # PRISMA last (see audit_bundle)
+    return StageFacts(plan, discover, select_, extract, write)
