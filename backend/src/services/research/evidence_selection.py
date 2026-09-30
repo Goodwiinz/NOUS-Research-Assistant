@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 _PAGE_MARKER_RE = re.compile(r"(?m)^\s*\[Page\s+(\d+)\]\s*$")
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?", re.IGNORECASE)
@@ -179,15 +179,22 @@ def select_relevant_passages(
     )[:max_chars]
 
 
-# Verifier models wrap quotes in narrative ("The excerpt states: “…”"). Only
-# the inner span of a quote this long is trusted; shorter quoted fragments are
-# too generic to prove that the evidence came from the source.
+# Verifier models wrap quotes in narrative ("The excerpt states: “…”"). A
+# candidate span must have this many words to ground a verdict: shorter text
+# ("Transformer", "e") is too generic to prove it came from the source.
 _MIN_QUOTED_SPAN_WORDS = 4
 _QUOTED_SPAN_RE = re.compile(r"[\"“«]([^\"“”«»]+)[\"”»]|‘([^‘’]+)’")
-_NARRATIVE_PREFIX_RE = re.compile(r"^[^:\"“”«»]{0,120}:\s*(.+)$", re.S)
 _QUOTE_CHARS = "\"'“”‘’«»`"
 _QUOTE_FOLD = str.maketrans(
     {"“": '"', "”": '"', "«": '"', "»": '"', "‘": "'", "’": "'"}
+)
+# ponytail: keyword heuristic, fail-closed. Narrative that negates or disputes
+# its own quote ("the excerpt does not say “…”") never grounds a verdict; the
+# verbatim ``quote`` field is the primary path, this is only the fallback.
+_NEGATION_RE = re.compile(
+    r"\b(?:not|never|no|none|nor|neither|cannot|without|fails?|lacks?|absent|"
+    r"contradict\w*|contrary|unsupported|refut\w*|dispute\w*)\b|n't\b",
+    re.I,
 )
 
 
@@ -195,64 +202,73 @@ def _normalize_for_match(text: str) -> str:
     return " ".join(text.translate(_QUOTE_FOLD).lower().split())
 
 
-def _quote_candidates(evidence: str) -> list[str]:
-    """Verbatim-quote candidates in evidence, most literal first.
+def _long_enough(text: str) -> bool:
+    return len(text.split()) >= _MIN_QUOTED_SPAN_WORDS
 
-    The whole evidence string (minus surrounding quote marks) comes first so a
-    bare quote keeps its old behaviour. Then each quoted span, then the text
-    after a short narrative prefix such as ``The excerpt explicitly states:``.
-    Spans are returned whole and never split on ellipses: every candidate must
-    still occur verbatim in the source, so paraphrase or fabricated evidence
-    keeps failing.
+
+def _grounded_span(evidence: str, occurs: Callable[[str], bool]) -> str | None:
+    """Return the verbatim span of ``evidence`` that grounds it, else ``None``.
+
+    1. The whole evidence (minus surrounding quote marks) when it is itself a
+       verbatim quote of at least ``_MIN_QUOTED_SPAN_WORDS`` words.
+    2. Otherwise narrative with quoted spans: EVERY quoted span of at least
+       ``_MIN_QUOTED_SPAN_WORDS`` words must occur verbatim, and the narrative
+       around them must not negate them. One real span can therefore never
+       carry a fabricated one, and the returned span, never the narrative, is
+       what callers store.
+    Narrative without quote marks never grounds.
     """
-    candidates = [evidence.strip().strip(_QUOTE_CHARS).strip()]
-    for match in _QUOTED_SPAN_RE.finditer(evidence):
-        span = (match.group(1) or match.group(2) or "").strip()
-        if len(span.split()) >= _MIN_QUOTED_SPAN_WORDS:
-            candidates.append(span)
-    prefixed = _NARRATIVE_PREFIX_RE.match(evidence.strip())
-    if prefixed:
-        tail = prefixed.group(1).strip().strip(_QUOTE_CHARS).strip()
-        if len(tail.split()) >= _MIN_QUOTED_SPAN_WORDS:
-            candidates.append(tail)
-    return [candidate for candidate in candidates if candidate]
+    bare = evidence.strip().strip(_QUOTE_CHARS).strip()
+    if _long_enough(bare) and occurs(bare):
+        return bare
+    spans = [
+        span
+        for match in _QUOTED_SPAN_RE.finditer(evidence)
+        if _long_enough(span := (match.group(1) or match.group(2) or "").strip())
+    ]
+    if not spans:
+        return None
+    narrative = _QUOTED_SPAN_RE.sub(" ", evidence).translate(_QUOTE_FOLD)
+    if _NEGATION_RE.search(narrative):
+        return None
+    if all(occurs(span) for span in spans):
+        return max(spans, key=len)
+    return None
 
 
-def contains_verbatim_quote(source: str | None, evidence: str | None) -> bool:
-    """Whether any verbatim-quote candidate of ``evidence`` occurs in ``source``."""
+def verbatim_evidence(source: str | None, evidence: str | None) -> str | None:
+    """The span of ``evidence`` found verbatim in ``source`` (see ``_grounded_span``)."""
     if not source or not evidence:
-        return False
+        return None
     haystack = _normalize_for_match(str(source))
-    return any(
-        _normalize_for_match(candidate) in haystack
-        for candidate in _quote_candidates(str(evidence))
+    return _grounded_span(
+        str(evidence), lambda span: _normalize_for_match(span) in haystack
     )
 
 
 def evidence_location(
     source: str | None, evidence: str | None
-) -> tuple[int | None, str]:
-    """Return an inspectable page/location for a decisive evidence quote.
+) -> tuple[int | None, str, str | None]:
+    """Locate decisive evidence: ``(page, location, verbatim span)``.
 
-    ``"source excerpt"`` means no verbatim span of ``evidence`` was found in
-    ``source``; the draft persistence gate treats that as ungrounded.
+    ``"source excerpt"`` with a ``None`` span means nothing verbatim was found
+    in ``source``; the draft persistence gate treats that as ungrounded.
     """
     if not source or not evidence:
-        return None, "source excerpt"
-    needles = [
-        needle
-        for needle in (
-            _normalize_for_match(candidate)
-            for candidate in _quote_candidates(str(evidence))
-        )
-        if needle
+        return None, "source excerpt", None
+    passages = [
+        (passage, _normalize_for_match(passage.text))
+        for passage in _passages(str(source))
     ]
-    if not needles:
-        return None, "source excerpt"
-    for passage in _passages(str(source)):
-        text = _normalize_for_match(passage.text)
-        if any(needle in text for needle in needles):
-            if passage.page is not None:
-                return passage.page, f"Page {passage.page}"
-            return None, "legacy unanchored text"
-    return None, "source excerpt"
+
+    def find(span: str) -> _Passage | None:
+        needle = _normalize_for_match(span)
+        return next((p for p, text in passages if needle in text), None)
+
+    span = _grounded_span(str(evidence), lambda value: find(value) is not None)
+    passage = find(span) if span is not None else None
+    if span is None or passage is None:
+        return None, "source excerpt", None
+    if passage.page is not None:
+        return passage.page, f"Page {passage.page}", span
+    return None, "legacy unanchored text", span
