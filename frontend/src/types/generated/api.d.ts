@@ -6884,7 +6884,10 @@ export interface paths {
          * @description Get an extraction matrix with all its cells.
          *
          *     Returns the matrix definition and all extracted cell values,
-         *     organized for rendering as a comparison grid.
+         *     organized for rendering as a comparison grid. Columns are the current form
+         *     version's fields; each cell is the accepted value, else the latest machine
+         *     observation, else the frozen legacy cell (``source``), with ``stale``
+         *     derived at read time.
          */
         get: operations["get_matrix_api_v1_research_matrices__matrix_id__get"];
         put?: never;
@@ -6900,10 +6903,32 @@ export interface paths {
          * Update Matrix
          * @description Update an extraction matrix (rename, add/remove/reorder columns).
          *
-         *     When clear_stale_cells is true and columns changed, cells whose
-         *     column_name no longer matches any column are deleted.
+         *     A column change appends an immutable form version; identical columns
+         *     create nothing. Prior values are never deleted: when clear_stale_cells is
+         *     true and columns changed, stale_document_ids lists the documents holding
+         *     values on removed columns.
          */
         patch: operations["update_matrix_api_v1_research_matrices__matrix_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/research/matrices/{matrix_id}/accepted-values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Extraction Value
+         * @description Accept a value that equals a cited observation (ADJUDICATOR role only).
+         */
+        post: operations["accept_extraction_value_api_v1_research_matrices__matrix_id__accepted_values_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/research/matrices/{matrix_id}/extract": {
@@ -6924,6 +6949,50 @@ export interface paths {
          *     extraction may take time for large document sets.
          */
         post: operations["trigger_extraction_api_v1_research_matrices__matrix_id__extract_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/matrices/{matrix_id}/form-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Form Versions
+         * @description Every immutable form version of a matrix, oldest first.
+         */
+        get: operations["list_form_versions_api_v1_research_matrices__matrix_id__form_versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/matrices/{matrix_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Cell Observations
+         * @description All observations (any form version) and the accepted chain of one cell.
+         */
+        get: operations["list_cell_observations_api_v1_research_matrices__matrix_id__observations_get"];
+        put?: never;
+        /**
+         * Create Observation
+         * @description Record a reviewer's own value or missingness reason (REVIEWER role).
+         */
+        post: operations["create_observation_api_v1_research_matrices__matrix_id__observations_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12152,10 +12221,100 @@ export interface components {
             y2: number;
         };
         /**
+         * ExtractionAcceptCreate
+         * @description An adjudicator's accepted value; it must equal a cited observation.
+         */
+        ExtractionAcceptCreate: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Missingness */
+            missingness?: ("not_reported" | "not_applicable" | "unavailable_text" | "unresolved_disagreement") | null;
+            /** Observation Ids */
+            observation_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /** Supersedes Accepted Value Id */
+            supersedes_accepted_value_id?: string | null;
+            /** Value */
+            value?: unknown;
+        };
+        /** ExtractionAcceptedValueResponse */
+        ExtractionAcceptedValueResponse: {
+            /**
+             * Accepted By Id
+             * Format: uuid
+             */
+            accepted_by_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Missingness */
+            missingness?: string | null;
+            /** Observation Ids */
+            observation_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /** Source Hash */
+            source_hash: string;
+            /** Supersedes Accepted Value Id */
+            supersedes_accepted_value_id?: string | null;
+            /** Value */
+            value?: unknown;
+        };
+        /** ExtractionCellObservationsResponse */
+        ExtractionCellObservationsResponse: {
+            /** Accepted Chain */
+            accepted_chain: components["schemas"]["ExtractionAcceptedValueResponse"][];
+            /** Observations */
+            observations: components["schemas"]["ExtractionObservationResponse"][];
+        };
+        /**
          * ExtractionColumn
          * @description A column definition for the extraction matrix.
          */
         ExtractionColumn: {
+            /**
+             * Categories
+             * @description Allowed values; required for, and only for, categorical
+             */
+            categories?: string[] | null;
             /**
              * Description
              * @description What to extract
@@ -12166,6 +12325,49 @@ export interface components {
              * @description Column header name
              */
             name: string;
+            /** Timepoint */
+            timepoint?: string | null;
+            /**
+             * Type
+             * @description Value type of the extracted field
+             * @default text
+             * @enum {string}
+             */
+            type: "text" | "number" | "boolean" | "categorical";
+            /** Unit */
+            unit?: string | null;
+        };
+        /** ExtractionFormVersionResponse */
+        ExtractionFormVersionResponse: {
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By Id */
+            created_by_id?: string | null;
+            /** Fields */
+            fields: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Matrix Id
+             * Format: uuid
+             */
+            matrix_id: string;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /** Provenance */
+            provenance: string;
+            /** Version No */
+            version_no: number;
         };
         /**
          * ExtractionItemDecision
@@ -12190,6 +12392,84 @@ export interface components {
          * @enum {string}
          */
         ExtractionMethod: "spacy_ner" | "pattern_matching" | "manual" | "llm_extraction" | "rule_based" | "hybrid" | "unknown";
+        /**
+         * ExtractionObservationCreate
+         * @description A reviewer's value (or missingness reason) for one field of one document.
+         */
+        ExtractionObservationCreate: {
+            /** Citation */
+            citation?: string | null;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Missingness */
+            missingness?: ("not_reported" | "not_applicable" | "unavailable_text") | null;
+            /** Value */
+            value?: unknown;
+        };
+        /** ExtractionObservationResponse */
+        ExtractionObservationResponse: {
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            /** Citation */
+            citation?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Extractor Model */
+            extractor_model?: string | null;
+            /** Extractor Run Id */
+            extractor_run_id?: string | null;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Missingness */
+            missingness?: string | null;
+            /** Source Hash */
+            source_hash: string;
+            /** Validation State */
+            validation_state: string;
+            /** Value */
+            value?: unknown;
+        };
         /** ExtractionRequest */
         ExtractionRequest: {
             /**
@@ -17458,7 +17738,7 @@ export interface components {
         UpdateMatrixRequest: {
             /**
              * Clear Stale Cells
-             * @description Delete cells whose column_name no longer matches any column
+             * @description Deprecated: nothing is deleted. When true and columns changed, the response lists documents holding values on removed columns.
              * @default false
              */
             clear_stale_cells: boolean;
@@ -30522,6 +30802,41 @@ export interface operations {
             };
         };
     };
+    accept_extraction_value_api_v1_research_matrices__matrix_id__accepted_values_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                matrix_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtractionAcceptCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionAcceptedValueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     trigger_extraction_api_v1_research_matrices__matrix_id__extract_post: {
         parameters: {
             query?: never;
@@ -30544,6 +30859,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_form_versions_api_v1_research_matrices__matrix_id__form_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                matrix_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionFormVersionResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_cell_observations_api_v1_research_matrices__matrix_id__observations_get: {
+        parameters: {
+            query: {
+                document_id: string;
+                field_id: string;
+            };
+            header?: never;
+            path: {
+                matrix_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionCellObservationsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_observation_api_v1_research_matrices__matrix_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                matrix_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtractionObservationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionObservationResponse"];
                 };
             };
             /** @description Validation Error */

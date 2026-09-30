@@ -36,7 +36,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ColumnEditor } from './ColumnEditor';
+import { Badge } from '@/components/ui/badge';
 import { CellCitation } from './CellCitation';
+import { CellObservations, MISSINGNESS_LABELS } from './CellObservations';
+
+const CELL_BADGE = 'px-1.5 py-0 text-[10px]';
 
 interface ExtractionMatrixProps {
   projectId: string;
@@ -89,6 +93,8 @@ export function ExtractionMatrix({
 
   useEffect(() => {
     if (matrixId) {
+      // Pre-existing fetch-on-mount (not TanStack yet); the loading flip is intended.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchMatrix(matrixId);
     } else {
       setLoading(true);
@@ -380,9 +386,28 @@ export function ExtractionMatrix({
             />
           </div>
         ) : (
-          <h3 className="text-sm font-medium text-foreground">
-            {matrix.name}
-          </h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-medium text-foreground">
+              {matrix.name}
+            </h3>
+            <Badge
+              variant="outline"
+              className={CELL_BADGE}
+              title={
+                matrix.form_version
+                  ? `Form hash ${matrix.form_version.content_hash.slice(0, 12)}…` +
+                    (matrix.form_version.protocol_version_id
+                      ? ` · protocol version ${matrix.form_version.protocol_version_id}`
+                      : '')
+                  : undefined
+              }
+            >
+              {matrix.form_version &&
+              matrix.form_version.provenance !== 'legacy_unversioned'
+                ? `Form v${matrix.form_version.version_no}`
+                : 'Legacy (unversioned)'}
+            </Badge>
+          </div>
         )}
         <div className="flex items-center gap-2">
           {editing ? (
@@ -413,11 +438,7 @@ export function ExtractionMatrix({
             </>
           ) : (
             <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleStartEdit}
-              >
+              <Button variant="outline" size="sm" onClick={handleStartEdit}>
                 <Pencil className="h-3 w-3 mr-1" />
                 Edit
               </Button>
@@ -463,62 +484,98 @@ export function ExtractionMatrix({
       <div className="rounded-lg border border-border overflow-hidden">
         <div className="overflow-x-auto">
           <Table>
-          <TableHeader>
-            <TableRow className="border-border hover:bg-transparent">
-              <TableHead className="text-xs font-medium text-muted-foreground bg-card min-w-[200px]">
-                Document
-              </TableHead>
-              {matrix.columns.map((col) => (
-                <TableHead
-                  key={col.name}
-                  className="text-xs font-medium text-muted-foreground bg-card min-w-[150px]"
-                  title={col.description}
-                >
-                  {col.name}
+            <TableHeader>
+              <TableRow className="border-border hover:bg-transparent">
+                <TableHead className="text-xs font-medium text-muted-foreground bg-card min-w-[200px]">
+                  Document
                 </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {documents.length === 0 ? (
-              <TableRow className="border-border">
-                <TableCell
-                  colSpan={matrix.columns.length + 1}
-                  className="text-center text-sm text-muted-foreground py-8"
-                >
-                  No documents available
-                </TableCell>
+                {matrix.columns.map((col) => (
+                  <TableHead
+                    key={col.name}
+                    className="text-xs font-medium text-muted-foreground bg-card min-w-[150px]"
+                    title={col.description}
+                  >
+                    {col.name}
+                  </TableHead>
+                ))}
               </TableRow>
-            ) : (
-              documents.map((doc, idx) => (
-                <TableRow
-                  key={doc.id}
-                  className={`border-border hover:bg-muted transition-colors ${idx % 2 === 1 ? 'bg-muted/20' : ''}`}
-                >
-                  <TableCell className="text-sm text-foreground font-medium">
-                    {doc.title}
+            </TableHeader>
+            <TableBody>
+              {documents.length === 0 ? (
+                <TableRow className="border-border">
+                  <TableCell
+                    colSpan={matrix.columns.length + 1}
+                    className="text-center text-sm text-muted-foreground py-8"
+                  >
+                    No documents available
                   </TableCell>
-                  {matrix.columns.map((col) => {
-                    const cell = getCellValue(doc.id, col.name);
-                    return (
-                      <TableCell
-                        key={col.name}
-                        className="text-sm text-muted-foreground"
-                      >
-                        <div className="flex items-start gap-1.5">
-                          <span className="flex-1">{cell?.value ?? ''}</span>
-                          <CellCitation
-                            citation_snippet={cell?.citation_snippet ?? null}
-                            confidence={cell?.confidence ?? null}
-                          />
-                        </div>
-                      </TableCell>
-                    );
-                  })}
                 </TableRow>
-              ))
-            )}
-          </TableBody>
+              ) : (
+                documents.map((doc, idx) => (
+                  <TableRow
+                    key={doc.id}
+                    className={`border-border hover:bg-muted transition-colors ${idx % 2 === 1 ? 'bg-muted/20' : ''}`}
+                  >
+                    <TableCell className="text-sm text-foreground font-medium">
+                      {doc.title}
+                    </TableCell>
+                    {matrix.columns.map((col) => {
+                      const cell = getCellValue(doc.id, col.name);
+                      return (
+                        <TableCell
+                          key={col.name}
+                          className="text-sm text-muted-foreground"
+                        >
+                          <div className="flex items-start gap-1.5">
+                            {cell?.missingness ? (
+                              <span className="flex-1 italic text-muted-foreground">
+                                {MISSINGNESS_LABELS[cell.missingness] ??
+                                  cell.missingness}
+                              </span>
+                            ) : (
+                              <span className="flex-1">
+                                {cell?.value ?? ''}
+                              </span>
+                            )}
+                            {cell?.stale && (
+                              <Badge
+                                variant="warning"
+                                className={CELL_BADGE}
+                                aria-label="Stale: the form field or source document changed"
+                              >
+                                Stale
+                              </Badge>
+                            )}
+                            {cell?.source === 'legacy' && (
+                              <Badge variant="info" className={CELL_BADGE}>
+                                Legacy
+                              </Badge>
+                            )}
+                            {cell?.validation_state === 'invalid' && (
+                              <Badge variant="warning" className={CELL_BADGE}>
+                                Unvalidated
+                              </Badge>
+                            )}
+                            {cell?.field_id && (
+                              <CellObservations
+                                matrixId={matrix.id}
+                                documentId={doc.id}
+                                fieldId={cell.field_id}
+                                column={col.name}
+                              />
+                            )}
+                            <CellCitation
+                              citation_snippet={cell?.citation_snippet ?? null}
+                              confidence={cell?.confidence ?? null}
+                            />
+                          </div>
+                        </TableCell>
+                      );
+                    })}
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
           </Table>
         </div>
       </div>

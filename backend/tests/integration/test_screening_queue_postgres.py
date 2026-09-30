@@ -79,6 +79,11 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-304: extraction tables reference documents, users and protocol
+    # versions only; rebuilt by their own migration below.
+    "extraction_accepted_values",
+    "extraction_observations",
+    "extraction_form_versions",
     # GOO-303: the full-text gate reads acquisition, which references reports.
     "research_fulltext_attempts",
     "research_fulltext_requests",
@@ -109,6 +114,7 @@ def _upgrade(connection: Connection) -> None:
         "e1f3a5c7d9b2_create_screening_queues.py",
         "f3b5d7e9a1c4_create_screening_resolutions.py",
         "f2a4c6e8b0d3_create_fulltext_acquisition.py",
+        "a3c5e7f9b1d4_version_extraction_forms.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename

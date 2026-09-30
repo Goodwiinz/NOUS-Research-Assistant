@@ -10,13 +10,13 @@ import { cn } from '@/lib/utils';
 
 interface CellCitationProps {
   citation_snippet: string | null;
-  confidence: number | null;
+  confidence?: number | null;
 }
 
 function getConfidenceColor(confidence: number): string {
   if (confidence > 0.8) return 'bg-sol';
   if (confidence > 0.5) return 'bg-helios';
-  return 'bg-red-500';
+  return 'bg-destructive';
 }
 
 function getConfidenceLabel(confidence: number): string {
@@ -51,7 +51,8 @@ export function CellCitation({
         <p className="text-xs text-muted-foreground italic leading-relaxed mb-3">
           {citation_snippet}
         </p>
-        {confidence !== null && (
+        {/* No stored confidence (machine/accepted cells) means no row, not "Low". */}
+        {confidence != null && (
           <div className="space-y-1">
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-muted-foreground">
@@ -64,7 +65,7 @@ export function CellCitation({
                     ? 'text-sol'
                     : conf > 0.5
                       ? 'text-helios'
-                      : 'text-red-400'
+                      : 'text-destructive'
                 )}
               >
                 {getConfidenceLabel(conf)} ({Math.round(conf * 100)}%)

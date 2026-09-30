@@ -6209,9 +6209,223 @@
         "title": "ExtractRegionRequest",
         "type": "object"
       },
+      "ExtractionAcceptCreate": {
+        "description": "An adjudicator's accepted value; it must equal a cited observation.",
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_reported",
+                  "not_applicable",
+                  "unavailable_text",
+                  "unresolved_disagreement"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Observation Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "supersedes_accepted_value_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Accepted Value Id"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "document_id",
+          "field_id",
+          "form_version_id",
+          "observation_ids",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ExtractionAcceptCreate",
+        "type": "object"
+      },
+      "ExtractionAcceptedValueResponse": {
+        "properties": {
+          "accepted_by_id": {
+            "format": "uuid",
+            "title": "Accepted By Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Observation Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "source_hash": {
+            "title": "Source Hash",
+            "type": "string"
+          },
+          "supersedes_accepted_value_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Accepted Value Id"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "form_version_id",
+          "field_id",
+          "document_id",
+          "observation_ids",
+          "accepted_by_id",
+          "rationale",
+          "source_hash",
+          "created_at"
+        ],
+        "title": "ExtractionAcceptedValueResponse",
+        "type": "object"
+      },
+      "ExtractionCellObservationsResponse": {
+        "properties": {
+          "accepted_chain": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractionAcceptedValueResponse"
+            },
+            "title": "Accepted Chain",
+            "type": "array"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractionObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "observations",
+          "accepted_chain"
+        ],
+        "title": "ExtractionCellObservationsResponse",
+        "type": "object"
+      },
       "ExtractionColumn": {
         "description": "A column definition for the extraction matrix.",
         "properties": {
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Allowed values; required for, and only for, categorical",
+            "title": "Categories"
+          },
           "description": {
             "anyOf": [
               {
@@ -6231,12 +6445,122 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "timepoint": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timepoint"
+          },
+          "type": {
+            "default": "text",
+            "description": "Value type of the extracted field",
+            "enum": [
+              "text",
+              "number",
+              "boolean",
+              "categorical"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
           }
         },
         "required": [
           "name"
         ],
         "title": "ExtractionColumn",
+        "type": "object"
+      },
+      "ExtractionFormVersionResponse": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Id"
+          },
+          "fields": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "matrix_id": {
+            "format": "uuid",
+            "title": "Matrix Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "provenance": {
+            "title": "Provenance",
+            "type": "string"
+          },
+          "version_no": {
+            "title": "Version No",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "matrix_id",
+          "version_no",
+          "provenance",
+          "fields",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "ExtractionFormVersionResponse",
         "type": "object"
       },
       "ExtractionItemDecision": {
@@ -6299,6 +6623,177 @@
         ],
         "title": "ExtractionMethod",
         "type": "string"
+      },
+      "ExtractionObservationCreate": {
+        "description": "A reviewer's value (or missingness reason) for one field of one document.",
+        "properties": {
+          "citation": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_reported",
+                  "not_applicable",
+                  "unavailable_text"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "document_id",
+          "field_id",
+          "form_version_id",
+          "idempotency_key"
+        ],
+        "title": "ExtractionObservationCreate",
+        "type": "object"
+      },
+      "ExtractionObservationResponse": {
+        "properties": {
+          "actor_user_id": {
+            "format": "uuid",
+            "title": "Actor User Id",
+            "type": "string"
+          },
+          "citation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "extractor_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extractor Model"
+          },
+          "extractor_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extractor Run Id"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "source_hash": {
+            "title": "Source Hash",
+            "type": "string"
+          },
+          "validation_state": {
+            "title": "Validation State",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "form_version_id",
+          "field_id",
+          "document_id",
+          "kind",
+          "actor_user_id",
+          "validation_state",
+          "source_hash",
+          "created_at"
+        ],
+        "title": "ExtractionObservationResponse",
+        "type": "object"
       },
       "ExtractionRequest": {
         "properties": {
@@ -18028,7 +18523,7 @@
         "properties": {
           "clear_stale_cells": {
             "default": false,
-            "description": "Delete cells whose column_name no longer matches any column",
+            "description": "Deprecated: nothing is deleted. When true and columns changed, the response lists documents holding values on removed columns.",
             "title": "Clear Stale Cells",
             "type": "boolean"
           },
@@ -41117,7 +41612,7 @@
         ]
       },
       "get": {
-        "description": "Get an extraction matrix with all its cells.\n\nReturns the matrix definition and all extracted cell values,\norganized for rendering as a comparison grid.",
+        "description": "Get an extraction matrix with all its cells.\n\nReturns the matrix definition and all extracted cell values,\norganized for rendering as a comparison grid. Columns are the current form\nversion's fields; each cell is the accepted value, else the latest machine\nobservation, else the frozen legacy cell (``source``), with ``stale``\nderived at read time.",
         "operationId": "get_matrix_api_v1_research_matrices__matrix_id__get",
         "parameters": [
           {
@@ -41162,7 +41657,7 @@
         ]
       },
       "patch": {
-        "description": "Update an extraction matrix (rename, add/remove/reorder columns).\n\nWhen clear_stale_cells is true and columns changed, cells whose\ncolumn_name no longer matches any column are deleted.",
+        "description": "Update an extraction matrix (rename, add/remove/reorder columns).\n\nA column change appends an immutable form version; identical columns\ncreate nothing. Prior values are never deleted: when clear_stale_cells is\ntrue and columns changed, stale_document_ids lists the documents holding\nvalues on removed columns.",
         "operationId": "update_matrix_api_v1_research_matrices__matrix_id__patch",
         "parameters": [
           {
@@ -41212,6 +41707,65 @@
           }
         ],
         "summary": "Update Matrix",
+        "tags": [
+          "extraction-matrix"
+        ]
+      }
+    },
+    "/api/v1/research/matrices/{matrix_id}/accepted-values": {
+      "post": {
+        "description": "Accept a value that equals a cited observation (ADJUDICATOR role only).",
+        "operationId": "accept_extraction_value_api_v1_research_matrices__matrix_id__accepted_values_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractionAcceptCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionAcceptedValueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Accept Extraction Value",
         "tags": [
           "extraction-matrix"
         ]
@@ -41269,6 +41823,185 @@
           }
         ],
         "summary": "Trigger Extraction",
+        "tags": [
+          "extraction-matrix"
+        ]
+      }
+    },
+    "/api/v1/research/matrices/{matrix_id}/form-versions": {
+      "get": {
+        "description": "Every immutable form version of a matrix, oldest first.",
+        "operationId": "list_form_versions_api_v1_research_matrices__matrix_id__form_versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExtractionFormVersionResponse"
+                  },
+                  "title": "Response List Form Versions Api V1 Research Matrices  Matrix Id  Form Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Form Versions",
+        "tags": [
+          "extraction-matrix"
+        ]
+      }
+    },
+    "/api/v1/research/matrices/{matrix_id}/observations": {
+      "get": {
+        "description": "All observations (any form version) and the accepted chain of one cell.",
+        "operationId": "list_cell_observations_api_v1_research_matrices__matrix_id__observations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "field_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Field Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionCellObservationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Cell Observations",
+        "tags": [
+          "extraction-matrix"
+        ]
+      },
+      "post": {
+        "description": "Record a reviewer's own value or missingness reason (REVIEWER role).",
+        "operationId": "create_observation_api_v1_research_matrices__matrix_id__observations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractionObservationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionObservationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Observation",
         "tags": [
           "extraction-matrix"
         ]
