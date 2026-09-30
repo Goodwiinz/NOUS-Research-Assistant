@@ -520,3 +520,49 @@ def test_sweeper_task_honors_the_kill_switch(monkeypatch: pytest.MonkeyPatch) ->
     assert artifact_tasks.sweep_artifact_uploads() == 0
     monkeypatch.setattr(settings, "SWEEPERS_ENABLED", True)
     assert artifact_tasks.sweep_artifact_uploads() == 99
+
+
+async def test_thread_listing_resolves_the_assistant_message_from_the_run(
+    db: AsyncSession,
+) -> None:
+    from src.services.artifacts.service import list_thread_artifacts
+
+    version = await _publish(db, _context(RUN_OPEN))
+    listed = await list_thread_artifacts(
+        db, user_id=USER, organization_id=ORG, thread_id=THREAD
+    )
+    assert (
+        listed[0].reference.message_id is None
+    )  # the assistant row has not landed yet
+    message_id = uuid4()
+    await db.execute(
+        update(AgentRun)
+        .where(AgentRun.job_id == RUN_OPEN)
+        .values(assistant_message_id=message_id)
+    )
+    await db.commit()
+    listed = await list_thread_artifacts(
+        db, user_id=USER, organization_id=ORG, thread_id=THREAD
+    )
+    assert listed[0].reference.message_id == message_id
+    assert listed[0].version.version_id == version.version_id
+
+
+async def test_thread_listing_ignores_a_run_from_another_thread(
+    db: AsyncSession,
+) -> None:
+    from src.services.artifacts.service import list_thread_artifacts
+
+    await _publish(db, _context(RUN_OPEN))
+    # A run row that shares the job id space but belongs to another thread must not
+    # lend its assistant message to this thread's reference.
+    await db.execute(
+        update(AgentRun)
+        .where(AgentRun.job_id == RUN_OPEN)
+        .values(thread_id=uuid4(), assistant_message_id=uuid4())
+    )
+    await db.commit()
+    listed = await list_thread_artifacts(
+        db, user_id=USER, organization_id=ORG, thread_id=THREAD
+    )
+    assert listed[0].reference.message_id is None

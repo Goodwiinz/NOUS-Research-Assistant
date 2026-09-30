@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -490,9 +490,24 @@ async def list_thread_artifacts(
 ) -> list[ThreadArtifactDTO]:
     rows = (
         await db.execute(
-            select(ArtifactVersion, ArtifactReference, Artifact.project_id)
+            select(
+                ArtifactVersion,
+                ArtifactReference,
+                Artifact.project_id,
+                AgentRun.assistant_message_id,
+            )
             .join(ArtifactReference, ArtifactReference.version_id == ArtifactVersion.id)
             .join(Artifact, Artifact.id == ArtifactVersion.artifact_id)
+            # The assistant message often lands after publication; resolve the
+            # association from the durable run identity at read time.
+            .outerjoin(
+                AgentRun,
+                and_(
+                    AgentRun.job_id == ArtifactReference.run_id,
+                    AgentRun.thread_id == ArtifactReference.thread_id,
+                    AgentRun.organization_id == organization_id,
+                ),
+            )
             .join(Collection, Collection.id == Artifact.project_id)
             .join(Workspace, Workspace.id == Collection.workspace_id)
             .join(Thread, Thread.id == ArtifactReference.thread_id)
@@ -514,7 +529,7 @@ async def list_thread_artifacts(
     ).all()
     items: list[ThreadArtifactDTO] = []
     checked: dict[UUID, bool] = {}
-    for version, reference, project_id in rows:
+    for version, reference, project_id, run_message_id in rows:
         if project_id not in checked:
             try:
                 await authorized_project(db, user_id, organization_id, project_id)
@@ -531,7 +546,7 @@ async def list_thread_artifacts(
                     version_id=reference.version_id,
                     run_id=UUID(reference.run_id) if reference.run_id else None,
                     thread_id=reference.thread_id,
-                    message_id=reference.message_id,
+                    message_id=reference.message_id or run_message_id,
                 ),
             )
         )
