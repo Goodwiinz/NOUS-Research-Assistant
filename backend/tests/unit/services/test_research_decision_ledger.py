@@ -14,6 +14,7 @@ from src.services.research_decisions.ledger import (
     _validate_event,
     _validate_extraction_transitions,
     _validate_identity_transitions,
+    _validate_release_transitions,
     _validate_screening_transitions,
     decision_request_fingerprint,
     replay_screening_resolutions,
@@ -1891,3 +1892,137 @@ def test_claims_payload_keys_exact() -> None:
         c.validate(
             "claim.observed", {**c.observed(link, uuid4()), "stance": "unresolved"}
         )
+
+
+class _Release:
+    """Hand-built events for one Collection's research_release stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+
+    def promoted(self, release: UUID, draft: UUID) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "release_id": str(release),
+            "draft_id": str(draft),
+            "draft_version": 1,
+            "content_hash": "a" * 64,
+            "claim_version_ids": [str(uuid4())],
+            "assessment_ids": [str(uuid4())],
+            "interpretation_claim_version_ids": [],
+            "protocol_version_id": None,
+            "policy_version": 1,
+            "dimensions": {"support": {"status": "passed"}},
+        }
+
+    def staled(self, *releases: UUID) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "release_ids": [str(r) for r in releases],
+            "cause": {
+                "family": "research_claims",
+                "event_id": str(uuid4()),
+                "kind": "claim.assessed",
+            },
+            "changed_nodes": [f"assessment:{uuid4()}"],
+            "assessment_ids": [],
+        }
+
+    def validate(self, event_type: str, payload: dict[str, Any], subject: UUID) -> None:
+        _validate_event(
+            aggregate_type="research_release",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="draft_release",
+            subject_id=subject,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+        )
+
+    def replay(self, *events: tuple[str, str, dict[str, Any]]) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_release_transitions(stored, self.collection_id)
+
+
+def test_release_replay_rejects_reviewer_promotion() -> None:
+    r = _Release()
+    promoted = r.promoted(uuid4(), uuid4())
+    for role in ("adjudicator", "supervisor"):
+        r.replay(("release.promoted", role, promoted))
+    for role in ("reviewer", "editor", "machine"):
+        with pytest.raises(DecisionReplayError, match="adjudicator or supervisor"):
+            r.replay(("release.promoted", role, promoted))
+
+
+def test_release_replay_rejects_second_live_release() -> None:
+    r = _Release()
+    draft, first, second = uuid4(), uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="live release"):
+        r.replay(
+            ("release.promoted", "adjudicator", r.promoted(first, draft)),
+            ("release.promoted", "supervisor", r.promoted(second, draft)),
+        )
+    # Re-promotion after staling inserts a new live release.
+    r.replay(
+        ("release.promoted", "adjudicator", r.promoted(first, draft)),
+        ("release.staled", "adjudicator", r.staled(first)),
+        ("release.promoted", "supervisor", r.promoted(second, draft)),
+    )
+    r.replay(
+        ("release.promoted", "adjudicator", r.promoted(first, draft)),
+        ("release.promoted", "adjudicator", r.promoted(second, uuid4())),
+    )
+
+
+def test_release_replay_rejects_double_stale() -> None:
+    r = _Release()
+    release = uuid4()
+    promoted = ("release.promoted", "adjudicator", r.promoted(release, uuid4()))
+    r.replay(promoted, ("release.staled", "editor", r.staled(release)))
+    with pytest.raises(DecisionReplayError, match="non-live"):
+        r.replay(
+            promoted,
+            ("release.staled", "editor", r.staled(release)),
+            ("release.staled", "machine", r.staled(release)),
+        )
+    with pytest.raises(DecisionReplayError, match="non-live"):
+        r.replay(("release.staled", "editor", r.staled(uuid4())))
+
+
+def test_release_payload_keys_exact() -> None:
+    r = _Release()
+    release = uuid4()
+    samples = (
+        ("release.promoted", r.promoted(release, uuid4()), release),
+        ("release.staled", r.staled(release), r.collection_id),
+    )
+    for event_type, payload, subject in samples:
+        r.validate(event_type, payload, subject)
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            r.validate(event_type, {**payload, "extra": 1}, subject)
+        trimmed = dict(payload)
+        trimmed.pop("collection_id")
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            r.validate(event_type, trimmed, subject)
+        with pytest.raises(DecisionValidationError, match="another collection"):
+            r.validate(event_type, {**payload, "collection_id": str(uuid4())}, subject)
+    promoted, staled = samples[0][1], samples[1][1]
+    with pytest.raises(DecisionValidationError, match="subject"):
+        r.validate("release.promoted", promoted, uuid4())
+    with pytest.raises(DecisionValidationError, match="SHA-256"):
+        r.validate("release.promoted", {**promoted, "content_hash": "x"}, release)
+    with pytest.raises(DecisionValidationError, match="cause"):
+        r.validate(
+            "release.staled",
+            {**staled, "cause": {**staled["cause"], "family": "research_protocol"}},
+            r.collection_id,
+        )
+    with pytest.raises(DecisionValidationError, match="release_ids"):
+        r.validate("release.staled", {**staled, "release_ids": []}, r.collection_id)

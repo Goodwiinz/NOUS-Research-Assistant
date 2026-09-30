@@ -2,7 +2,7 @@
 
 Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
-``research_claims``) registers
+``research_claims``, ``research_release``) registers
 its subject type, payload vocabulary, value validation and replay transition
 rules in ``_FAMILIES``.
 
@@ -305,6 +305,35 @@ _CLAIMS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
             "link_ids",
             "stance_observation_ids",
         }
+    ),
+}
+# GOO-307: verified draft releases, one stream per Collection so promotion
+# and cross-draft invalidation share one total order. A promotion's subject is
+# its release; a staling's subject is the Collection.
+_RELEASE_AGGREGATE = "research_release"
+_RELEASE_SUBJECT = "draft_release"
+_RELEASE_PROMOTERS = frozenset({"adjudicator", "supervisor"})
+_RELEASE_CAUSE_FAMILIES = frozenset(
+    {"research_extraction", "research_claims", "research_release"}
+)
+_RELEASE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("release.promoted", 1): frozenset(
+        {
+            "collection_id",
+            "release_id",
+            "draft_id",
+            "draft_version",
+            "content_hash",
+            "claim_version_ids",
+            "assessment_ids",
+            "interpretation_claim_version_ids",
+            "protocol_version_id",
+            "policy_version",
+            "dimensions",
+        }
+    ),
+    ("release.staled", 1): frozenset(
+        {"collection_id", "release_ids", "cause", "changed_nodes", "assessment_ids"}
     ),
 }
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
@@ -959,6 +988,60 @@ def _validate_claims_payload(
             raise DecisionValidationError(f"{key} must be 0-20 unique ids")
     if not payload["link_ids"] and payload["stance"] not in claim_rules.UNCITED_STANCES:
         raise DecisionValidationError("assessed stance must cite a link")
+
+
+def _validate_release_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if event_type == "release.promoted":
+        release = _validated_payload_uuid(payload["release_id"], "release_id")
+        if release != subject_id:
+            raise DecisionValidationError("release event subject is not its release")
+        _validated_payload_uuid(payload["draft_id"], "draft_id")
+        for key in ("draft_version", "policy_version"):
+            if not _is_int(payload[key]) or payload[key] < 1:
+                raise DecisionValidationError(f"{key} must be a positive integer")
+        _validated_sha256(payload["content_hash"], "content_hash")
+        for key in (
+            "claim_version_ids",
+            "assessment_ids",
+            "interpretation_claim_version_ids",
+        ):
+            ids = _validated_uuid_list(payload[key], key)
+            if len(set(ids)) != len(ids):
+                raise DecisionValidationError(f"{key} must be unique")
+        _validated_optional_uuid(payload["protocol_version_id"], "protocol_version_id")
+        if not isinstance(payload["dimensions"], dict):
+            raise DecisionValidationError("dimensions must be an object")
+        return
+    if subject_id != aggregate_id:
+        raise DecisionValidationError("release staling subject is its collection")
+    releases = _validated_uuid_list(payload["release_ids"], "release_ids")
+    if not releases or len(set(releases)) != len(releases):
+        raise DecisionValidationError("release_ids must be 1+ unique ids")
+    _validated_uuid_list(payload["assessment_ids"], "assessment_ids")
+    cause = payload["cause"]
+    if (
+        not isinstance(cause, dict)
+        or set(cause) != {"family", "event_id", "kind"}
+        or cause["family"] not in _RELEASE_CAUSE_FAMILIES
+        or not isinstance(cause["kind"], str)
+    ):
+        raise DecisionValidationError("release staling cause is invalid")
+    _validated_optional_uuid(cause["event_id"], "cause.event_id")
+    nodes = payload["changed_nodes"]
+    if not isinstance(nodes, list) or not nodes:
+        raise DecisionValidationError("changed_nodes must be a non-empty list")
+    if not all(isinstance(n, str) and ":" in n for n in nodes):
+        raise DecisionValidationError("changed_nodes must be kind:id strings")
 
 
 async def _locked_stream(
@@ -1751,6 +1834,33 @@ def _validate_claims_transitions(
         assessment_tip[version] = assessment
 
 
+def _validate_release_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Only an adjudicator or supervisor promotes; one live release per
+    draft; a staling names only live releases promoted earlier."""
+    live_draft: dict[UUID, UUID] = {}  # live release -> its draft
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.event_type == "release.promoted":
+            if event.actor_role not in _RELEASE_PROMOTERS:
+                raise DecisionReplayError(
+                    "release promotion requires an adjudicator or supervisor"
+                )
+            draft = _payload_uuid(payload["draft_id"], "draft_id")
+            if draft in live_draft.values():
+                raise DecisionReplayError("draft already has a live release")
+            live_draft[_payload_uuid(payload["release_id"], "release_id")] = draft
+            continue
+        for value in payload["release_ids"]:
+            release = _payload_uuid(value, "release_ids")
+            if release not in live_draft:
+                raise DecisionReplayError("release staling names a non-live release")
+            del live_draft[release]
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -1819,6 +1929,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_CLAIMS_PAYLOAD_KEYS,
         validate_payload=_validate_claims_payload,
         validate_transitions=_validate_claims_transitions,
+        requires_subject_version=False,
+    ),
+    _RELEASE_AGGREGATE: _Family(
+        subject_type=_RELEASE_SUBJECT,
+        payload_keys=_RELEASE_PAYLOAD_KEYS,
+        validate_payload=_validate_release_payload,
+        validate_transitions=_validate_release_transitions,
         requires_subject_version=False,
     ),
 }
