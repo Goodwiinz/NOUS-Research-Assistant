@@ -203,25 +203,27 @@ export function ReportIdentityPanel({
                               className="rounded-md border border-border bg-background px-2 py-1 text-sm"
                             />
                             <div className="flex gap-2">
-                              {(['confirmed', 'disputed'] as const).map(
-                                (status) => (
-                                  <button
-                                    key={status}
-                                    type="button"
-                                    aria-label={`${status === 'confirmed' ? 'Confirm' : 'Dispute'} ${report.title_snapshot}`}
-                                    disabled={!reason || busy}
-                                    onClick={() => {
-                                      clearErrors();
-                                      link.mutate({ report, status });
-                                    }}
-                                    className="rounded-md border border-border px-2 py-1 text-xs disabled:opacity-50"
-                                  >
-                                    {status === 'confirmed'
-                                      ? 'Confirm'
-                                      : 'Dispute'}
-                                  </button>
-                                )
-                              )}
+                              {/* Dispute needs an existing study; the API rejects it otherwise. */}
+                              {(report.study_id
+                                ? (['confirmed', 'disputed'] as const)
+                                : (['confirmed'] as const)
+                              ).map((status: LinkDecision) => (
+                                <button
+                                  key={status}
+                                  type="button"
+                                  aria-label={`${status === 'confirmed' ? 'Confirm' : 'Dispute'} ${report.title_snapshot}`}
+                                  disabled={!reason || busy}
+                                  onClick={() => {
+                                    clearErrors();
+                                    link.mutate({ report, status });
+                                  }}
+                                  className="rounded-md border border-border px-2 py-1 text-xs disabled:opacity-50"
+                                >
+                                  {status === 'confirmed'
+                                    ? 'Confirm'
+                                    : 'Dispute'}
+                                </button>
+                              ))}
                             </div>
                             <div className="flex gap-2">
                               <select

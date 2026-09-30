@@ -12,6 +12,10 @@ from src.services.research_engine.discovery import extract_identifiers_from_mapp
 
 # Priority order: the first kind that hits an existing report wins.
 IDENTITY_KINDS = ("doi", "pmid", "pmcid", "arxiv_base", "openalex", "semantic_scholar")
+# research_report_identifiers.value is String(512). An identifier that cannot be
+# stored whole is dropped (never truncated), so the in-memory index key and the
+# persisted value are always the same string.
+MAX_IDENTIFIER_LENGTH = 512
 
 
 def report_identifiers(raw: Mapping[str, Any]) -> dict[str, str]:
@@ -19,7 +23,7 @@ def report_identifiers(raw: Mapping[str, Any]) -> dict[str, str]:
     ids = extract_identifiers_from_mapping(raw)
     if "arxiv" in ids:
         ids["arxiv_base"] = re.sub(r"v\d+$", "", ids["arxiv"])
-    return ids
+    return {k: v for k, v in ids.items() if len(v) <= MAX_IDENTIFIER_LENGTH}
 
 
 @dataclass(frozen=True)
