@@ -8,13 +8,16 @@ from uuid import UUID
 
 import openai
 import structlog
-from sqlalchemy import Select, and_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import Select, select
 
 from src.core.database import AsyncSessionLocal
-from src.models.collection import CollectionDocument
 from src.models.document import Document
-from src.models.extraction_matrix import ExtractionCell, ExtractionMatrix
+from src.models.extraction_matrix import ExtractionFormVersion, ExtractionMatrix
+from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
+from src.services.research.extraction_forms_service import (
+    append_machine_observations,
+    document_source_hash,
+)
 from src.services.research_engine.project_access import lock_active_project
 
 logger = structlog.get_logger()
@@ -29,6 +32,26 @@ def _scoped_document_query(doc_id: UUID, project_id: Optional[UUID]) -> Select:
     from src.services.research_engine.project_access import project_documents_query
 
     return project_documents_query(project_id).where(Document.id == doc_id)
+
+
+PREDATES_FORMS = "Extraction task predates form versions; re-run"
+MACHINE_MISSINGNESS = ("not_reported", "not_applicable")
+
+
+def _already_observed_query(matrix_id: UUID, idempotency_key: str) -> Select:
+    """A (task, document) run already recorded in the matrix stream."""
+    return (
+        select(ResearchDecisionEvent.id)
+        .join(
+            ResearchDecisionStream,
+            ResearchDecisionStream.id == ResearchDecisionEvent.stream_id,
+        )
+        .where(
+            ResearchDecisionStream.aggregate_type == "research_extraction",
+            ResearchDecisionStream.aggregate_id == matrix_id,
+            ResearchDecisionEvent.idempotency_key == idempotency_key,
+        )
+    )
 
 
 # In-memory store is an L1 fallback; Redis is the shared status authority when
@@ -147,10 +170,17 @@ class ExtractionMatrixService:
         document_ids: List[UUID],
         columns: List[Dict[str, Any]],
         task_id: str,
+        *,
+        form_version_id: Optional[UUID] = None,
+        initiated_by_user_id: Optional[UUID] = None,
+        source_hashes: Optional[Dict[str, str]] = None,
     ) -> None:
-        """Run extraction in the background using its own DB session.
+        """Append machine observations per document, in its own DB session.
 
-        Updates _extraction_status as it progresses.
+        ``columns`` is ignored: the prompt comes from the pinned form version.
+        A document is recorded once per task id (a Celery retry skips it),
+        only while its source still matches the hash pinned at enqueue, and
+        only under ``lock_active_project``. Nothing here can accept a value.
         """
         await self.set_extraction_status(
             task_id,
@@ -165,6 +195,18 @@ class ExtractionMatrixService:
             },
         )
 
+        async def bump(counter: str) -> None:
+            count = _extraction_status[task_id].get(counter, 0) + 1
+            await self.set_extraction_status(task_id, {counter: count})
+
+        if form_version_id is None or initiated_by_user_id is None:
+            # Filling in an actor or a form would invent provenance.
+            await self.set_extraction_status(
+                task_id, {"status": "failed", "error": PREDATES_FORMS}
+            )
+            return
+        pinned = source_hashes or {}
+
         try:
             client, model = self._get_openai_client()
         except RuntimeError as e:
@@ -173,29 +215,45 @@ class ExtractionMatrixService:
             return
 
         async with AsyncSessionLocal() as db:
-            # Resolve the matrix's project so every document read stays scoped to
-            # it. Callers currently pass project-scoped ids, but scoping here
-            # (join collection_documents on the matrix's project) means a
-            # document_id outside the matrix's project can never be read into a
-            # cell — defense-in-depth mirroring the trigger_extraction endpoint.
-            project_id = (
+            row = (
                 await db.execute(
-                    select(ExtractionMatrix.project_id).where(
+                    select(ExtractionMatrix, ExtractionFormVersion)
+                    .join(
+                        ExtractionFormVersion,
+                        ExtractionFormVersion.matrix_id == ExtractionMatrix.id,
+                    )
+                    .where(
                         ExtractionMatrix.id == matrix_id,
                         ExtractionMatrix.is_deleted.is_(False),
+                        ExtractionFormVersion.id == form_version_id,
                     )
                 )
-            ).scalar_one_or_none()
+            ).first()
 
             for doc_id in document_ids:
                 try:
-                    doc_result = await db.execute(
-                        _scoped_document_query(doc_id, project_id)
-                    )
-                    document = doc_result.scalar_one_or_none()
-                    if not document or not document.content_text:
-                        skipped = _extraction_status[task_id].get("skipped", 0) + 1
-                        await self.set_extraction_status(task_id, {"skipped": skipped})
+                    if row is None:
+                        await bump("skipped")  # matrix deleted since enqueue
+                        continue
+                    matrix, version = row
+                    key = f"{task_id}:{doc_id}"
+                    already = await db.execute(_already_observed_query(matrix_id, key))
+                    if already.first() is not None:
+                        await bump("completed")  # Celery retry: already recorded
+                        continue
+                    # Scoped to the matrix's project: a foreign id is never read.
+                    document = (
+                        await db.execute(
+                            _scoped_document_query(doc_id, matrix.project_id)
+                        )
+                    ).scalar_one_or_none()
+                    expected = pinned.get(str(doc_id))
+                    if (
+                        document is None
+                        or expected is None
+                        or document_source_hash(document) != expected
+                    ):
+                        await bump("skipped")
                         logger.info(
                             "bg_extraction_skip",
                             task_id=task_id,
@@ -203,53 +261,37 @@ class ExtractionMatrixService:
                         )
                         continue
 
-                    doc_text = document.content_text[:12000]
-                    prompt = self._build_extraction_prompt(columns, doc_text)
-
-                    response = await client.chat.completions.create(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.1,
-                        max_tokens=2000,
-                    )
-                    raw_json = response.choices[0].message.content or ""
-                    parsed = self._parse_extraction_result(raw_json, columns)
-
-                    if project_id is None:
-                        raise ValueError("Matrix project not found")
-                    await lock_active_project(db, project_id)
-                    # Upsert cells
-                    for col_name, cell_data in parsed.items():
-                        existing = await db.execute(
-                            select(ExtractionCell).where(
-                                and_(
-                                    ExtractionCell.matrix_id == matrix_id,
-                                    ExtractionCell.document_id == doc_id,
-                                    ExtractionCell.column_name == col_name,
-                                )
-                            )
+                    fields = list(version.fields)
+                    if not document.content_text:
+                        parsed: Dict[str, Dict[str, Any]] = {
+                            f["name"]: {"missing": "unavailable_text"} for f in fields
+                        }
+                    else:
+                        prompt = self._build_extraction_prompt(
+                            fields, document.content_text[:12000]
                         )
-                        existing_cell = existing.scalar_one_or_none()
+                        response = await client.chat.completions.create(
+                            model=model,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.1,
+                            max_tokens=2000,
+                        )
+                        raw_json = response.choices[0].message.content or ""
+                        parsed = self._parse_extraction_result(raw_json, fields)
 
-                        if existing_cell:
-                            existing_cell.value = cell_data.get("value")
-                            existing_cell.citation_snippet = cell_data.get("citation")
-                            existing_cell.confidence = 0.8
-                        else:
-                            db.add(
-                                ExtractionCell(
-                                    matrix_id=matrix_id,
-                                    document_id=doc_id,
-                                    column_name=col_name,
-                                    value=cell_data.get("value"),
-                                    citation_snippet=cell_data.get("citation"),
-                                    confidence=0.8,
-                                )
-                            )
-
+                    await lock_active_project(db, matrix.project_id)
+                    await append_machine_observations(
+                        db,
+                        matrix=matrix,
+                        version=version,
+                        document=document,
+                        parsed=parsed,
+                        actor_id=initiated_by_user_id,
+                        run_id=task_id,
+                        model=model,
+                    )
                     await db.commit()
-                    completed = _extraction_status[task_id].get("completed", 0) + 1
-                    await self.set_extraction_status(task_id, {"completed": completed})
+                    await bump("completed")
 
                 except Exception as e:
                     await db.rollback()
@@ -259,8 +301,7 @@ class ExtractionMatrixService:
                         document_id=str(doc_id),
                         error=str(e),
                     )
-                    failed = _extraction_status[task_id].get("failed", 0) + 1
-                    await self.set_extraction_status(task_id, {"failed": failed})
+                    await bump("failed")
 
         await self.set_extraction_status(task_id, {"status": "completed"})
         logger.info(
@@ -289,7 +330,14 @@ class ExtractionMatrixService:
         for col in columns:
             name = col["name"]
             desc = col.get("description") or "Extract relevant information"
-            column_descriptions.append(f'- "{name}": {desc}')
+            hints = [col.get("type") or "text"]
+            if col.get("unit"):
+                hints.append(f"unit: {col['unit']}")
+            if col.get("timepoint"):
+                hints.append(f"timepoint: {col['timepoint']}")
+            if col.get("categories"):
+                hints.append("one of: " + ", ".join(col["categories"]))
+            column_descriptions.append(f'- "{name}" ({"; ".join(hints)}): {desc}')
 
         columns_block = "\n".join(column_descriptions)
 
@@ -297,8 +345,10 @@ class ExtractionMatrixService:
             "You are a research data extraction assistant. "
             "Extract the following information from the document text below.\n\n"
             "For each column, provide a JSON object with keys matching the column names. "
-            "Each value should be an object with two fields:\n"
-            '  - "value": the extracted information (string or null if not found)\n'
+            "Each value should be an object with three fields:\n"
+            '  - "value": the extracted information in the column\'s type, or null\n'
+            '  - "missing": null when a value is given; otherwise "not_reported" '
+            '(the document does not report it) or "not_applicable" (it does not apply)\n'
             '  - "citation": a brief quote or page reference from the source text (string or null)\n\n'
             "Columns to extract:\n"
             f"{columns_block}\n\n"
@@ -319,8 +369,10 @@ class ExtractionMatrixService:
             columns: List of column definitions to validate against.
 
         Returns:
-            Dict mapping column names to {"value": ..., "citation": ...}.
-            Missing columns are filled with None values.
+            Dict mapping column names to {"value", "missing", "citation"}:
+            exactly one of value / missing is set. A column that is absent or
+            malformed, or a whole unparseable response, is
+            ``missing="extraction_error"`` - never a silent blank.
         """
         result: Dict[str, Dict[str, Any]] = {}
 
@@ -344,14 +396,20 @@ class ExtractionMatrixService:
             )
             parsed = {}
 
+        if not isinstance(parsed, dict):
+            parsed = {}
         for col in columns:
             name = col["name"]
-            if name in parsed and isinstance(parsed[name], dict):
-                result[name] = {
-                    "value": parsed[name].get("value"),
-                    "citation": parsed[name].get("citation"),
-                }
+            entry = parsed.get(name)
+            entry = entry if isinstance(entry, dict) else {}
+            value, missing = entry.get("value"), entry.get("missing")
+            if value is not None and missing is None:
+                result[name] = {"value": value, "missing": None}
+            elif value is None and missing in MACHINE_MISSINGNESS:
+                result[name] = {"value": None, "missing": missing}
             else:
-                result[name] = {"value": None, "citation": None}
+                result[name] = {"value": None, "missing": "extraction_error"}
+            citation = entry.get("citation")
+            result[name]["citation"] = citation if isinstance(citation, str) else None
 
         return result

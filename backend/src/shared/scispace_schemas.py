@@ -3,10 +3,10 @@
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _SAFE_COLUMN_NAME_RE = re.compile(r"^[\w\s\-\(\)\/\.,:]+$")
 
@@ -64,6 +64,95 @@ class TriggerExtractionRequest(BaseModel):
     """Request to trigger extraction on selected documents."""
 
     document_ids: List[UUID] = Field(..., min_length=1, max_length=100)
+
+
+# GOO-304: versioned extraction forms, observations and accepted values.
+
+HumanMissingness = Literal["not_reported", "not_applicable", "unavailable_text"]
+AcceptedMissingness = Literal[
+    "not_reported", "not_applicable", "unavailable_text", "unresolved_disagreement"
+]
+
+
+class ExtractionObservationCreate(BaseModel):
+    """A reviewer's value (or missingness reason) for one field of one document."""
+
+    document_id: UUID
+    field_id: UUID
+    form_version_id: UUID
+    value: Any = Field(default=None)
+    missingness: Optional[HumanMissingness] = Field(default=None)
+    citation: Optional[str] = Field(default=None, max_length=2000)
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+
+
+class ExtractionAcceptCreate(BaseModel):
+    """An adjudicator's accepted value; it must equal a cited observation."""
+
+    document_id: UUID
+    field_id: UUID
+    form_version_id: UUID
+    observation_ids: List[UUID] = Field(..., min_length=1, max_length=20)
+    value: Any = Field(default=None)
+    missingness: Optional[AcceptedMissingness] = Field(default=None)
+    rationale: str = Field(..., min_length=1, max_length=2000)
+    supersedes_accepted_value_id: Optional[UUID] = Field(default=None)
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+
+
+class ExtractionFormVersionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    matrix_id: UUID
+    version_no: int
+    provenance: str
+    fields: List[Dict[str, Any]]
+    protocol_version_id: Optional[UUID] = Field(default=None)
+    content_hash: str
+    created_by_id: Optional[UUID] = Field(default=None)
+    created_at: datetime
+
+
+class ExtractionObservationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    form_version_id: UUID
+    field_id: UUID
+    document_id: UUID
+    kind: str
+    actor_user_id: UUID
+    extractor_run_id: Optional[str] = Field(default=None)
+    extractor_model: Optional[str] = Field(default=None)
+    value: Any = Field(default=None)
+    missingness: Optional[str] = Field(default=None)
+    validation_state: str
+    citation: Optional[str] = Field(default=None)
+    source_hash: str
+    created_at: datetime
+
+
+class ExtractionAcceptedValueResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    form_version_id: UUID
+    field_id: UUID
+    document_id: UUID
+    value: Any = Field(default=None)
+    missingness: Optional[str] = Field(default=None)
+    observation_ids: List[UUID]
+    accepted_by_id: UUID
+    rationale: str
+    source_hash: str
+    supersedes_accepted_value_id: Optional[UUID] = Field(default=None)
+    created_at: datetime
+
+
+class ExtractionCellObservationsResponse(BaseModel):
+    observations: List[ExtractionObservationResponse]
+    accepted_chain: List[ExtractionAcceptedValueResponse]
 
 
 # Feature 3: Tone Engine
