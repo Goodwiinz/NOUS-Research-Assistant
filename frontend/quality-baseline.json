@@ -24,7 +24,7 @@
   ],
   "eslint": {
     "errors": 115,
-    "warnings": 2003,
+    "warnings": 2002,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
         "errors": 1,
@@ -1120,7 +1120,7 @@
       },
       "src/components/research/CellCitation.tsx": {
         "errors": 0,
-        "warnings": 1
+        "warnings": 0
       },
       "src/components/research/ColumnEditor.tsx": {
         "errors": 0,
