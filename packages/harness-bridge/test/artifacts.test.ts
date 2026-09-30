@@ -598,3 +598,30 @@ test("mcp install prints one stdout line, announces the root on stderr, and acce
     ws.cleanup();
   }
 });
+
+
+test("an empty file is refused locally before any reservation", async () => {
+  const ws = workspace();
+  const { client, calls } = fakeClient();
+  try {
+    writeFileSync(join(ws.dir, "empty.md"), "");
+    const publisher = createArtifactPublisher(client, await grantedRoot(ws.dir));
+    await assert.rejects(publisher.publish({ relativePath: "empty.md", title: "e", publicationId: randomUUID() }), { code: "empty" });
+    assert.equal(calls.reserve.length, 0);
+  } finally {
+    ws.cleanup();
+  }
+});
+
+test("large files are read completely even when the OS returns short reads", async () => {
+  const ws = workspace();
+  try {
+    const big = Buffer.alloc(3 * 1024 * 1024, 7);
+    writeFileSync(join(ws.dir, "big3.bin"), big);
+    const bytes = await readSnapshot(await grantedRoot(ws.dir), "big3.bin");
+    assert.equal(bytes.byteLength, big.length);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), createHash("sha256").update(big).digest("hex"));
+  } finally {
+    ws.cleanup();
+  }
+});

@@ -96,6 +96,8 @@ export async function readSnapshot(
   if (before.nlink !== 1) throw unsafe("hard-linked file");
   if (before.size > maxBytes)
     throw new ArtifactPathError("too_large", `file exceeds ${maxBytes} bytes`);
+  if (before.size === 0)
+    throw new ArtifactPathError("empty", "file is empty; nothing to publish");
 
   // macOS rejects O_NOFOLLOW together with O_NOFOLLOW_ANY (EINVAL); the latter
   // already refuses a symlink in the final component too.
@@ -127,13 +129,26 @@ export async function readSnapshot(
           throw unsafe(`cannot verify the descriptor path (/proc: ${errno(error)})`);
         },
       );
-      if (!target.startsWith(root.path + "/"))
-        throw unsafe("descriptor resolved outside the root");
+      // The descriptor must be exactly the canonical path we walked (root is
+      // already realpath'd and the segments contain no `..`): an ancestor
+      // swapped for a symlink to another in-root directory would still be
+      // "under the root" but would not equal it. This also handles a root of
+      // "/" without a "//" prefix.
+      if (target !== fullPath)
+        throw unsafe("descriptor resolved to a different path");
     }
     await hooks.afterOpen?.();
     // Bounded read: exactly the size we validated, never to EOF.
     const buffer = Buffer.alloc(opened.size + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    let bytesRead = 0;
+    for (;;) {
+      // A single read may be short on some filesystems; fill up to size + 1
+      // so growth past the validated size is still detected at EOF.
+      const chunk = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (chunk.bytesRead === 0) break;
+      bytesRead += chunk.bytesRead;
+      if (bytesRead >= buffer.length) break;
+    }
     if (bytesRead !== opened.size) throw unsafe("file changed while reading");
     const after = await handle.stat();
     if (

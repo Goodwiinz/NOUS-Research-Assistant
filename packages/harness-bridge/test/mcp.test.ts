@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { once } from "node:events";
@@ -270,7 +270,29 @@ test("connect --tools requests and persists tools:read; plain connect does not",
   };
   try {
     await connect({ ...base, stateDir: join(dir, "tools"), tools: true });
+    // Reconnecting to add --publish re-registers the existing folders on the new device.
+    const upgradeStore = new CredentialStore(join(dir, "publish"));
+    const keep = mkdtempSync(join(tmpdir(), "nous-keep-"));
+    await upgradeStore.writeLocal("connection", {
+      apiUrl: base.apiUrl,
+      deviceId: "44444444-4444-4444-8444-444444444444",
+      projectId: base.projectId,
+      credentialHandle: "55555555-5555-4555-8555-555555555555",
+      scopes: ["harness:execute", "tools:read"],
+      workspaces: [
+        { id: "66666666-6666-4666-8666-666666666666", root: keep, label: "Kept", projectId: base.projectId },
+        { id: "77777777-7777-4777-8777-777777777777", root: join(keep, "vanished"), label: "Gone", projectId: base.projectId },
+      ],
+    });
     await connect({ ...base, stateDir: join(dir, "publish"), tools: true, publish: true });
+    const registrations = calls.filter((c) => c.url.endsWith("/workspaces"));
+    assert.equal(registrations.length, 1);
+    assert.equal(registrations[0]?.body.label, "Kept");
+    const upgraded = JSON.parse(readFileSync(join(dir, "publish", "connection.json"), "utf8"));
+    assert.equal(upgraded.workspaces.length, 1);
+    assert.equal(upgraded.workspaces[0].root, realpathSync(keep));
+    assert.notEqual(upgraded.workspaces[0].id, "66666666-6666-4666-8666-666666666666");
+    rmSync(keep, { recursive: true, force: true });
     const withPublish = calls.filter((c) => c.url.endsWith("/grant-requests")).at(-1)!;
     assert.deepEqual(withPublish.body.scopes, ["harness:execute", "tools:read", "artifacts:publish"]);
     await assert.rejects(connect({ ...base, stateDir: join(dir, "bad"), publish: true }), /--publish requires --tools/);

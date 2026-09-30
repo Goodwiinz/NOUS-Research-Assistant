@@ -166,14 +166,40 @@ export async function connect(
     accessToken: auth.token,
     grantToken: grant.token,
   });
+  // A reconnect (e.g. to add --publish) must not drop registered folders:
+  // re-register each root with the new device so managed runs and
+  // standalone installs keep working. Roots that vanished are skipped.
+  const previous = await store.readLocal("connection").catch(() => null);
+  const carried: LocalState["workspaces"] = [];
+  if (record(previous) && Array.isArray(previous.workspaces)) {
+    for (const old of previous.workspaces as LocalState["workspaces"]) {
+      if (typeof old?.root !== "string" || typeof old?.label !== "string") continue;
+      const root = await realpath(old.root).catch(() => null);
+      if (root === null) {
+        announce(`Skipped vanished workspace root ${old.root}; register it again if needed.`);
+        continue;
+      }
+      const workspaceId = randomUUID();
+      await request(
+        fetchFn,
+        base,
+        `/integrations/devices/${device.id}/workspaces`,
+        auth.token,
+        { workspace_id: workspaceId, label: old.label, project_id: options.projectId },
+      );
+      carried.push({ id: workspaceId, root, label: old.label, projectId: options.projectId });
+    }
+  }
   await store.writeLocal("connection", {
     apiUrl: base,
     deviceId: device.id,
     projectId: options.projectId,
     credentialHandle,
     scopes,
-    workspaces: [],
+    workspaces: carried,
   } satisfies LocalState);
+  if (carried.length)
+    announce(`Re-registered ${carried.length} workspace root(s) on the new device.`);
   return { deviceId: device.id, credentialHandle };
 }
 export async function addWorkspace(
