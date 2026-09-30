@@ -621,7 +621,7 @@ class ScreeningAdjudicateRequest(BaseModel):
     input_observation_ids: List[UUID] = Field(..., min_length=1, max_length=10)
     criteria_hash: str = Field(..., min_length=64, max_length=64)
     decision: ScreeningDecisionValue
-    exclusion_reason: Optional[str] = Field(None, min_length=1, max_length=200)
+    exclusion_reason: Optional[str] = Field(default=None, min_length=1, max_length=200)
     rationale: str = Field(..., min_length=1, max_length=10_000)
     idempotency_key: _IdempotencyKey
 

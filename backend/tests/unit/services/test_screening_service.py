@@ -1302,6 +1302,14 @@ async def test_reopen_requires_fresh_observations_from_both(db: AsyncSession) ->
             resolution_id=second.resolution.id, rationale="recheck", idempotency_key="o"
         ),
     )
+    reopened = await screening_service.my_queue(
+        db, _reviewer(project), dual.queue.id, project.reviewer
+    )
+    # A reopen starts a new blind cycle: hidden again, the reopen still shown.
+    item = reopened.items[0]
+    assert item.reveal_state == "hidden"
+    assert item.resolution is not None and item.resolution.basis == "reopened"
+    assert (reopened.counts.revealed, reopened.counts.conflicts) == (0, 0)
     again = await _vote(
         db, dual, "r", report, "k3", "exclude", supersedes_observation_id=first.id
     )
@@ -1593,3 +1601,77 @@ async def test_adjudicator_who_reviewed_an_earlier_cycle_is_403(
         db, _supervisor(project), dual.queue.id, project.supervisor
     )
     assert history[-1].event_type == "screening.observed"
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_who_reviewed_in_a_reconciled_queue_is_403(
+    db: AsyncSession,
+) -> None:
+    """The self-check follows ``supersedes_queue_id``: reviewing a report in
+    the queue this one reconciles also disqualifies the adjudicator."""
+    project = await _seed(db)
+    report = project.reports[0]
+    db.add(
+        ResearchProjectRoleAssignment(
+            collection_id=project.collection_id,
+            user_id=project.supervisor,
+            role=ResearchProjectRole.REVIEWER,
+            assigned_by_id=project.owner,
+        )
+    )
+    await db.flush()
+    old = await _queue(db, project)
+    old_assignment = await _assign(db, project, old.id, project.supervisor)
+    both = _context(
+        project, ResearchProjectRole.REVIEWER, ResearchProjectRole.ADJUDICATOR
+    )
+    await screening_service.submit(
+        db,
+        both,
+        old.id,
+        project.supervisor,
+        ScreeningObservationCreate(
+            report_id=report,
+            assignment_id=old_assignment.id,
+            criteria_hash=old.criteria_hash,
+            decision="include",
+            idempotency_key="old",
+        ),
+    )
+    amended = await _version(
+        db, project.protocol_id, 2, {**SNAPSHOT, "eligibility": {"population": "all"}}
+    )
+    await _approve(db, project.protocol_id, amended)
+    new = await _queue(
+        db, project, "q2", protocol_version_id=amended, supersedes_queue_id=old.id
+    )
+    dual = _Dual(
+        project=project,
+        queue=new,
+        a=await _assign(db, project, new.id, project.reviewer),
+        a2=await _assign(db, project, new.id, project.reviewer2),
+    )
+    await _vote(db, dual, "r", report, "n1")
+    await _vote(db, dual, "r2", report, "n2", "exclude")
+    [conflict] = await _conflicts(db, dual)
+    await _raises(
+        screening_service.adjudicate(
+            db,
+            both,
+            new.id,
+            report,
+            project.supervisor,
+            _adjudicate_body(conflict, "x"),
+        ),
+        403,
+        "Adjudicator reviewed this report",
+    )
+    done = await screening_service.adjudicate(
+        db,
+        _adjudicator(project),
+        new.id,
+        report,
+        project.owner,
+        _adjudicate_body(conflict, "y"),
+    )
+    assert done.basis == "adjudicated"
