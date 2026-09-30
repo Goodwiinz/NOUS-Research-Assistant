@@ -2,10 +2,17 @@ import { act, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/artifactService', () => ({
-  artifactService: { listVersions: vi.fn(), fetchVersionBlob: vi.fn(), downloadVersion: vi.fn() },
+  artifactService: {
+    listVersions: vi.fn(),
+    fetchVersionBlob: vi.fn(),
+    downloadVersion: vi.fn(),
+  },
 }));
 
-import { artifactService, type ArtifactVersion } from '@/services/artifactService';
+import {
+  artifactService,
+  type ArtifactVersion,
+} from '@/services/artifactService';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
 import { render } from '@/test/test-utils';
 import { GeneratedArtifactBody } from '../GeneratedArtifactBody';
@@ -25,18 +32,72 @@ const v = (id: string, createdAt: string): ArtifactVersion => ({
 
 describe('GeneratedArtifactBody', () => {
   it('lists versions newest first, shows provenance, and re-targets the panel on switch', async () => {
-    act(() => useArtifactPanelStore.setState({ artifact: null, isOpen: false, pinned: false }));
-    vi.mocked(artifactService.listVersions).mockResolvedValue([v('v1', '2026-09-30T00:00:00Z'), v('v2', '2026-09-30T01:00:00Z')]);
-    vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(new Blob(['body'], { type: 'text/plain' }));
-    const { user } = render(
-      <GeneratedArtifactBody artifact={{ kind: 'generated', artifactId: 'a1', versionId: 'v2', title: 'report.md' }} />
+    act(() =>
+      useArtifactPanelStore.setState({
+        artifact: null,
+        isOpen: false,
+        pinned: false,
+      })
     );
-    const select = (await screen.findByLabelText('Artifact version')) as HTMLSelectElement;
+    vi.mocked(artifactService.listVersions).mockResolvedValue([
+      v('v1', '2026-09-30T00:00:00Z'),
+      v('v2', '2026-09-30T01:00:00Z'),
+    ]);
+    vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+      new Blob(['body'], { type: 'text/plain' })
+    );
+    const { user } = render(
+      <GeneratedArtifactBody
+        artifact={{
+          kind: 'generated',
+          artifactId: 'a1',
+          versionId: 'v2',
+          title: 'report.md',
+        }}
+      />
+    );
+    const select = (await screen.findByLabelText(
+      'Artifact version'
+    )) as HTMLSelectElement;
     expect(select.value).toBe('v2');
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['v2', 'v1']);
-    expect(screen.getByLabelText('Provenance')).toHaveTextContent('v2 · Published by Codex · text/plain · 7 B');
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      'v2',
+      'v1',
+    ]);
+    expect(screen.getByLabelText('Provenance')).toHaveTextContent(
+      'v2 · Published by Codex · text/plain · 7 B'
+    );
     expect(await screen.findByText('body')).toBeInTheDocument();
     await user.selectOptions(select, 'v1');
-    expect(useArtifactPanelStore.getState().artifact).toEqual({ kind: 'generated', artifactId: 'a1', versionId: 'v1', title: 'report.md' });
+    expect(useArtifactPanelStore.getState().artifact).toEqual({
+      kind: 'generated',
+      artifactId: 'a1',
+      versionId: 'v1',
+      title: 'report.md',
+    });
+  });
+
+  it('refetches instead of showing an older version when the requested one is not cached', async () => {
+    vi.mocked(artifactService.listVersions)
+      .mockResolvedValueOnce([v('v1', '2026-09-30T00:00:00Z')])
+      .mockResolvedValueOnce([
+        v('v1', '2026-09-30T00:00:00Z'),
+        v('v9', '2026-09-30T02:00:00Z'),
+      ]);
+    vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+      new Blob(['new'], { type: 'text/plain' })
+    );
+    render(
+      <GeneratedArtifactBody
+        artifact={{
+          kind: 'generated',
+          artifactId: 'a1',
+          versionId: 'v9',
+          title: 'report.md',
+        }}
+      />
+    );
+    expect(await screen.findByText('new')).toBeInTheDocument();
+    expect(artifactService.listVersions).toHaveBeenCalledTimes(2);
   });
 });

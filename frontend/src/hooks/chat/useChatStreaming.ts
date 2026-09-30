@@ -1234,7 +1234,8 @@ export function useChatStreaming(
               });
             },
             onArtifactVersion: () => {
-              if (currentThreadId) void invalidateThreadArtifacts(currentThreadId);
+              if (currentThreadId)
+                void invalidateThreadArtifacts(currentThreadId);
             },
             onRunId: (runId) => {
               if (!currentThreadId || streamOwnerRef.current !== streamOwner) {
@@ -1244,10 +1245,13 @@ export function useChatStreaming(
               useAgentActivityStore.getState().setRunId(currentThreadId, runId);
               const stopPending = isStoppedByUser();
               if (harnessConnection.executionProvider === 'codex') {
-                harnessConnection.receive({
-                  type: stopPending ? 'stopping' : 'accepted',
-                  runId,
-                }, currentThreadId);
+                harnessConnection.receive(
+                  {
+                    type: stopPending ? 'stopping' : 'accepted',
+                    runId,
+                  },
+                  currentThreadId
+                );
               }
               // Stop can race the accepted frame while the server is still
               // opening the response. Once the producer gives us its exact
@@ -1266,7 +1270,10 @@ export function useChatStreaming(
                 void harnessConnection
                   .loadApproval(requestId, currentThreadId)
                   .catch((error) => {
-                    console.error('[Chat] Could not load native request:', error);
+                    console.error(
+                      '[Chat] Could not load native request:',
+                      error
+                    );
                   });
               }
             },
@@ -1463,7 +1470,8 @@ export function useChatStreaming(
             },
             onDone: (payload) => {
               console.log('[Agent] Stream complete');
-              if (currentThreadId) void invalidateThreadArtifacts(currentThreadId);
+              if (currentThreadId)
+                void invalidateThreadArtifacts(currentThreadId);
               finishAuthRecoveryAttempt(authRecoveryAttempt);
               if (payload) {
                 doneIds = payload;
@@ -1854,6 +1862,7 @@ export function useChatStreaming(
       requestDurableStop,
       harnessConnection,
       displayedMessages.length,
+      invalidateThreadArtifacts,
     ]
   );
 
@@ -2811,9 +2820,9 @@ export function useChatStreaming(
                   streamingProgress: [...confirmProgress],
                 });
               },
-              onArtifactVersion: () => {
+              onArtifactVersion: (ref) => {
                 if (confirmationThreadId)
-                  void invalidateThreadArtifacts(confirmationThreadId);
+                  void invalidateThreadArtifacts(confirmationThreadId, ref);
               },
               onRunId: (runId) => {
                 if (
@@ -3256,6 +3265,7 @@ export function useChatStreaming(
       maybeAutoFocusCreatedNote,
       setPendingConfirmation,
       requestDurableStop,
+      invalidateThreadArtifacts,
     ]
   );
 

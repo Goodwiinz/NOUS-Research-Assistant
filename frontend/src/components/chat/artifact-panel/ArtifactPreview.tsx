@@ -1,14 +1,27 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState, type ReactElement } from 'react';
 
 import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
-import { artifactService, type ArtifactVersion } from '@/services/artifactService';
+import {
+  artifactService,
+  type ArtifactVersion,
+} from '@/services/artifactService';
 
 /** Text previews above this size fall back to download to keep the DOM bounded. */
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024;
 
 type PreviewKind = 'markdown' | 'text' | 'image' | 'download';
+
+/**
+ * Published Markdown is untrusted: an image reference would make the viewer's
+ * browser fetch an attacker-chosen URL. Render the alt text instead.
+ */
+const NO_REMOTE_IMAGES: React.ComponentProps<
+  typeof ChatMarkdown
+>['components'] = {
+  img: ({ alt }) => <span>{alt ? `[image: ${alt}]` : '[image]'}</span>,
+};
 
 export function previewKindFor(version: ArtifactVersion): PreviewKind {
   const mime = version.mimeType.toLowerCase();
@@ -25,47 +38,61 @@ export function previewKindFor(version: ArtifactVersion): PreviewKind {
 }
 
 type LoadState =
-  | { status: 'loading' }
-  | { status: 'error' }
-  | { status: 'text'; text: string }
-  | { status: 'image'; objectUrl: string };
+  | { key: string; status: 'error' }
+  | { key: string; status: 'text'; text: string }
+  | { key: string; status: 'image'; objectUrl: string };
 
 /**
  * Read-only preview of one committed version. Bytes are fetched with auth;
  * Markdown renders through ChatMarkdown (no raw HTML), everything else is
  * escaped text or an image. HTML is never executed here (Task 5 sandboxes it).
  */
-export function ArtifactPreview({ version }: { version: ArtifactVersion }) {
+export function ArtifactPreview({
+  version,
+}: {
+  version: ArtifactVersion;
+}): ReactElement {
   const kind = previewKindFor(version);
   const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
+  // One load per (version, attempt); a stale `loaded` for another key renders
+  // as loading, so no synchronous setState is needed when the key changes.
+  const key = `${version.versionId}:${attempt}`;
+  const [loaded, setLoaded] = useState<LoadState | null>(null);
+  const state: LoadState | { status: 'loading' } =
+    loaded && loaded.key === key ? loaded : { status: 'loading' };
 
   useEffect(() => {
     if (kind === 'download') return;
     let cancelled = false;
     let objectUrl: string | null = null;
-    setState({ status: 'loading' });
     artifactService
       .fetchVersionBlob(version.versionId)
       .then(async (blob) => {
         if (cancelled) return;
         if (kind === 'image') {
           objectUrl = window.URL.createObjectURL(blob);
-          setState({ status: 'image', objectUrl });
+          setLoaded({ key, status: 'image', objectUrl });
         } else {
-          setState({ status: 'text', text: await blobToText(blob) });
+          const text = await blobToText(blob);
+          if (!cancelled) setLoaded({ key, status: 'text', text });
         }
       })
       .catch(() => {
-        if (!cancelled) setState({ status: 'error' });
+        if (!cancelled) setLoaded({ key, status: 'error' });
       });
     return () => {
       cancelled = true;
       if (objectUrl) window.URL.revokeObjectURL(objectUrl);
     };
-  }, [kind, version.versionId, attempt]);
+  }, [kind, key, version.versionId]);
 
-  const download = () => void artifactService.downloadVersion(version);
+  const [downloadFailed, setDownloadFailed] = useState(false);
+  const download = (): void => {
+    setDownloadFailed(false);
+    artifactService
+      .downloadVersion(version)
+      .catch(() => setDownloadFailed(true));
+  };
 
   if (kind === 'download') {
     return (
@@ -81,6 +108,11 @@ export function ArtifactPreview({ version }: { version: ArtifactVersion }) {
         >
           Download {version.title}
         </button>
+        {downloadFailed && (
+          <p role="alert" className="mt-2">
+            Download failed.
+          </p>
+        )}
       </div>
     );
   }
@@ -108,6 +140,7 @@ export function ArtifactPreview({ version }: { version: ArtifactVersion }) {
   if (state.status === 'image') {
     return (
       <div className="p-4">
+        {/* eslint-disable-next-line @next/next/no-img-element -- authenticated blob: URL; next/image cannot optimize it */}
         <img
           src={state.objectUrl}
           alt={version.title}
@@ -119,7 +152,7 @@ export function ArtifactPreview({ version }: { version: ArtifactVersion }) {
   if (kind === 'markdown') {
     return (
       <div className="nous-prose p-4">
-        <ChatMarkdown content={state.text} />
+        <ChatMarkdown content={state.text} components={NO_REMOTE_IMAGES} />
       </div>
     );
   }

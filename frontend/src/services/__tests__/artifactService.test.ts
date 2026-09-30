@@ -24,7 +24,13 @@ const wire: ApiThreadArtifact = {
     created_at: '2026-09-30T00:00:00Z',
     provenance: { producer: 'harness', source_ids: ['d1'] },
   },
-  reference: { artifact_id: 'a1', version_id: 'v1', run_id: 'r1', thread_id: 't1', message_id: null },
+  reference: {
+    artifact_id: 'a1',
+    version_id: 'v1',
+    run_id: 'r1',
+    thread_id: 't1',
+    message_id: null,
+  },
 };
 
 describe('artifactService', () => {
@@ -42,7 +48,13 @@ describe('artifactService', () => {
       producer: 'harness',
       sourceIds: ['d1'],
     });
-    expect(item.reference).toEqual({ artifactId: 'a1', versionId: 'v1', runId: 'r1', threadId: 't1', messageId: null });
+    expect(item.reference).toEqual({
+      artifactId: 'a1',
+      versionId: 'v1',
+      runId: 'r1',
+      threadId: 't1',
+      messageId: null,
+    });
   });
 
   it('calls the thread and version routes with encoded ids', async () => {
@@ -53,11 +65,16 @@ describe('artifactService', () => {
     vi.mocked(api.get).mockResolvedValueOnce([wire.version]);
     await artifactService.listVersions('a/1');
     expect(api.get).toHaveBeenCalledWith('/artifacts/a%2F1/versions');
-    expect(artifactVersionContentPath('v1')).toBe('/artifacts/versions/v1/content');
+    expect(artifactVersionContentPath('v1')).toBe(
+      '/artifacts/versions/v1/content'
+    );
   });
 
   it('downloads through the authenticated client with the artifact title', async () => {
     await artifactService.downloadVersion(toThreadArtifact(wire).version);
-    expect(api.download).toHaveBeenCalledWith('/artifacts/versions/v1/content', 'report.md');
+    expect(api.download).toHaveBeenCalledWith(
+      '/artifacts/versions/v1/content',
+      'report.md'
+    );
   });
 });

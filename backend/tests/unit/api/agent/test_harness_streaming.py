@@ -87,6 +87,7 @@ async def test_external_stream_replays_persisted_events_and_stops_on_terminal(
     assert '"version_id": "version-a"' in frames[1]
     assert "id: 5" in frames[1]
     assert "event: done" in frames[2]
+    assert "id: 6" in frames[2]
     assert "id: 5" in frames[1]
     assert reads == [(str(run_id), 3)]
 

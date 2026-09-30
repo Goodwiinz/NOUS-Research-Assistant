@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -500,7 +500,14 @@ async def list_thread_artifacts(
             .join(Artifact, Artifact.id == ArtifactVersion.artifact_id)
             # The assistant message often lands after publication; resolve the
             # association from the durable run identity at read time.
-            .outerjoin(AgentRun, AgentRun.job_id == ArtifactReference.run_id)
+            .outerjoin(
+                AgentRun,
+                and_(
+                    AgentRun.job_id == ArtifactReference.run_id,
+                    AgentRun.thread_id == ArtifactReference.thread_id,
+                    AgentRun.organization_id == organization_id,
+                ),
+            )
             .join(Collection, Collection.id == Artifact.project_id)
             .join(Workspace, Workspace.id == Collection.workspace_id)
             .join(Thread, Thread.id == ArtifactReference.thread_id)
