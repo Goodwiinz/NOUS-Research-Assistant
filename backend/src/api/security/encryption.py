@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from src.core.database import get_db
+from src.core.database import get_db_sync
 from src.core.dependencies import is_active_user
 from src.core.encryption import EncryptionError, EncryptionKeyType
 
@@ -186,7 +186,7 @@ class EncryptionValidationResponse(BaseModel):
 async def encrypt_user_profile(
     request: UserProfileEncryptionRequest,
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
     _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
@@ -238,7 +238,7 @@ async def encrypt_user_profile(
 async def encrypt_organization_profile(
     request: OrganizationProfileEncryptionRequest,
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
     _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
@@ -287,7 +287,7 @@ async def encrypt_organization_profile(
 async def decrypt_data(
     request: DecryptionRequest,
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
     _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
@@ -370,7 +370,7 @@ async def rotate_encryption_key(
     request: KeyRotationRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
     _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
@@ -413,7 +413,7 @@ async def get_encryption_status(
         None, description="Organization scope (admin only)"
     ),
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
     _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
@@ -449,7 +449,7 @@ async def get_encryption_status(
 async def validate_encryption_integrity(
     sample_size: int = Query(10, ge=1, le=100, description="Number of records to test"),
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
     _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
@@ -486,7 +486,7 @@ async def get_encryption_audit_logs(
     operation_type: Optional[str] = Query(None, description="Filter by operation type"),
     resource_type: Optional[str] = Query(None, description="Filter by resource type"),
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
     _: str = Depends(require_permission_dep("system_admin")),
 ):
     """

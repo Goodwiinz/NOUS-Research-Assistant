@@ -160,6 +160,25 @@ class TestEncryptionEndpointGuards:
 
 
 @pytest.mark.unit
+class TestEncryptionRouteWiring:
+    def test_routes_inject_sync_session_not_async_get_db(self) -> None:
+        """EncryptionService and the route bodies use the sync ORM API
+        (.query/.commit/.rollback). Async ``get_db`` yields an AsyncSession
+        with no ``.query`` → 500 for every caller the guard lets through."""
+        from fastapi.routing import APIRoute
+
+        db_deps = {
+            route.path: sub.call
+            for route in encryption_router.routes
+            if isinstance(route, APIRoute)
+            for sub in route.dependant.dependencies
+            if sub.name == "db"
+        }
+        assert len(db_deps) == 7
+        assert {p: c for p, c in db_deps.items() if c is not get_db_sync} == {}
+
+
+@pytest.mark.unit
 class TestDeletedGuardSources:
     """Tripwire: the analytics RBAC decorator module and the dead symbols of
     middleware/rbac.py were removed in I12 — nothing may import them again."""
