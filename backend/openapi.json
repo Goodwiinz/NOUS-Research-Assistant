@@ -3055,6 +3055,365 @@
         "title": "CategoryTrackingRequest",
         "type": "object"
       },
+      "CertaintyCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "appraisal_assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Appraisal Assessment Ids",
+            "type": "array"
+          },
+          "contradiction_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Contradiction Ids",
+            "type": "array"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "very_low",
+                  "low",
+                  "moderate",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "ratings": {
+            "$ref": "#/components/schemas/CertaintyRatings"
+          },
+          "rationale": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "starting_level": {
+            "enum": [
+              "high",
+              "low"
+            ],
+            "title": "Starting Level",
+            "type": "string"
+          },
+          "supersedes_certainty_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Certainty Id"
+          },
+          "table_version_id": {
+            "format": "uuid",
+            "title": "Table Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table_version_id",
+          "starting_level",
+          "ratings",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "CertaintyCreate",
+        "type": "object"
+      },
+      "CertaintyRatings": {
+        "additionalProperties": false,
+        "description": "GRADE's five downgrade domains; ``None`` is unknown, never derived.",
+        "properties": {
+          "imprecision": {
+            "anyOf": [
+              {
+                "enum": [
+                  0,
+                  -1,
+                  -2
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imprecision"
+          },
+          "inconsistency": {
+            "anyOf": [
+              {
+                "enum": [
+                  0,
+                  -1,
+                  -2
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inconsistency"
+          },
+          "indirectness": {
+            "anyOf": [
+              {
+                "enum": [
+                  0,
+                  -1,
+                  -2
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indirectness"
+          },
+          "publication_bias": {
+            "anyOf": [
+              {
+                "enum": [
+                  0,
+                  -1,
+                  -2
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publication Bias"
+          },
+          "risk_of_bias": {
+            "anyOf": [
+              {
+                "enum": [
+                  0,
+                  -1,
+                  -2
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Of Bias"
+          }
+        },
+        "title": "CertaintyRatings",
+        "type": "object"
+      },
+      "CertaintyResponse": {
+        "description": "Certainty only; agreement (contradictions) and model confidence live\nelsewhere. Unresolved contradictions and dissent ride along, always.",
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "appraisal_assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Appraisal Assessment Ids",
+            "type": "array"
+          },
+          "assessed_by_id": {
+            "format": "uuid",
+            "title": "Assessed By Id",
+            "type": "string"
+          },
+          "assessor_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessor Name"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "contradiction_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Contradiction Ids",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dissent": {
+            "items": {
+              "$ref": "#/components/schemas/ContradictionDissent"
+            },
+            "title": "Dissent",
+            "type": "array"
+          },
+          "domains": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "enum": [
+                    0,
+                    -1,
+                    -2
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Domains",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_hash": {
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "very_low",
+                  "low",
+                  "moderate",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "method_key": {
+            "title": "Method Key",
+            "type": "string"
+          },
+          "method_version": {
+            "title": "Method Version",
+            "type": "string"
+          },
+          "outcome_key": {
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "starting_level": {
+            "title": "Starting Level",
+            "type": "string"
+          },
+          "superseded": {
+            "default": false,
+            "title": "Superseded",
+            "type": "boolean"
+          },
+          "supersedes_certainty_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Certainty Id"
+          },
+          "table_version_id": {
+            "format": "uuid",
+            "title": "Table Version Id",
+            "type": "string"
+          },
+          "timepoint": {
+            "title": "Timepoint",
+            "type": "string"
+          },
+          "unresolved_contradictions": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Unresolved Contradictions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "table_version_id",
+          "outcome_key",
+          "timepoint",
+          "method_key",
+          "method_version",
+          "starting_level",
+          "domains",
+          "appraisal_assessment_ids",
+          "contradiction_ids",
+          "rationale",
+          "assessed_by_id",
+          "actor_role",
+          "input_hash",
+          "created_at"
+        ],
+        "title": "CertaintyResponse",
+        "type": "object"
+      },
       "ChangeRequestResponse": {
         "properties": {
           "action": {
@@ -5722,6 +6081,346 @@
         "title": "ConsensusLevel",
         "type": "string"
       },
+      "ContradictionCreate": {
+        "additionalProperties": false,
+        "description": "``opened`` names a table version, a field and 2+ of its cell values;\nevery later row names its group and the chain tip it follows.",
+        "properties": {
+          "accepted_value_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Value Ids"
+          },
+          "contradiction_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contradiction Id"
+          },
+          "explanation": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "field_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Id"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "opened",
+              "resolved",
+              "acknowledged",
+              "dissent"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "previous_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Id"
+          },
+          "stance_classification_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Stance Classification Ids",
+            "type": "array"
+          },
+          "table_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Table Version Id"
+          }
+        },
+        "required": [
+          "kind",
+          "explanation",
+          "idempotency_key"
+        ],
+        "title": "ContradictionCreate",
+        "type": "object"
+      },
+      "ContradictionDissent": {
+        "description": "A dissent row, or a resolution a later one superseded.",
+        "properties": {
+          "actor_id": {
+            "format": "uuid",
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "contradiction_id": {
+            "format": "uuid",
+            "title": "Contradiction Id",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "opened",
+              "resolved",
+              "acknowledged",
+              "dissent"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "superseded": {
+            "title": "Superseded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "contradiction_id",
+          "kind",
+          "actor_id",
+          "actor_role",
+          "explanation",
+          "superseded"
+        ],
+        "title": "ContradictionDissent",
+        "type": "object"
+      },
+      "ContradictionResponse": {
+        "description": "One group: the derived status, every row and the dissent kept visible.",
+        "properties": {
+          "contradiction_id": {
+            "format": "uuid",
+            "title": "Contradiction Id",
+            "type": "string"
+          },
+          "dissent": {
+            "items": {
+              "$ref": "#/components/schemas/ContradictionDissent"
+            },
+            "title": "Dissent",
+            "type": "array"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ContradictionRowResponse"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "unresolved",
+              "resolved",
+              "acknowledged"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "table_version_id": {
+            "format": "uuid",
+            "title": "Table Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contradiction_id",
+          "table_version_id",
+          "field_id",
+          "status",
+          "rows",
+          "dissent"
+        ],
+        "title": "ContradictionResponse",
+        "type": "object"
+      },
+      "ContradictionRowResponse": {
+        "properties": {
+          "accepted_value_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Value Ids"
+          },
+          "actor_id": {
+            "format": "uuid",
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Name"
+          },
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "contradiction_id": {
+            "format": "uuid",
+            "title": "Contradiction Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "opened",
+              "resolved",
+              "acknowledged",
+              "dissent"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "previous_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Id"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion"
+          },
+          "table_version_id": {
+            "format": "uuid",
+            "title": "Table Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "contradiction_id",
+          "table_version_id",
+          "field_id",
+          "kind",
+          "explanation",
+          "actor_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "ContradictionRowResponse",
+        "type": "object"
+      },
       "ConversationCreate": {
         "description": "Create conversation request",
         "properties": {
@@ -7933,6 +8632,125 @@
         "title": "EvidenceBreakdown",
         "type": "object"
       },
+      "EvidenceCell": {
+        "description": "``missing`` (no accepted value) is its own state, never a blank.",
+        "properties": {
+          "missingness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "state": {
+            "enum": [
+              "value",
+              "missingness",
+              "missing",
+              "conflict"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tips": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceTip"
+            },
+            "title": "Tips",
+            "type": "array"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "state",
+          "tips"
+        ],
+        "title": "EvidenceCell",
+        "type": "object"
+      },
+      "EvidenceCertaintyMethod": {
+        "properties": {
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Levels",
+            "type": "array"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "starting_levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Starting Levels",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "version",
+          "domains",
+          "levels",
+          "starting_levels"
+        ],
+        "title": "EvidenceCertaintyMethod",
+        "type": "object"
+      },
+      "EvidenceExcluded": {
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "study_link_unresolved",
+              "no_report_identity"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          }
+        },
+        "required": [
+          "document_id",
+          "reason"
+        ],
+        "title": "EvidenceExcluded",
+        "type": "object"
+      },
       "EvidenceMeter": {
         "description": "Evidence agreement meter summary",
         "properties": {
@@ -8023,6 +8841,505 @@
           "reproducibility_hash"
         ],
         "title": "EvidenceMeter",
+        "type": "object"
+      },
+      "EvidenceOutcome": {
+        "properties": {
+          "certainty": {
+            "items": {
+              "$ref": "#/components/schemas/CertaintyResponse"
+            },
+            "title": "Certainty",
+            "type": "array"
+          },
+          "contradictions": {
+            "items": {
+              "$ref": "#/components/schemas/ContradictionResponse"
+            },
+            "title": "Contradictions",
+            "type": "array"
+          },
+          "outcome_key": {
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceTableResponse"
+            },
+            "title": "Tables",
+            "type": "array"
+          },
+          "timepoint": {
+            "title": "Timepoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome_key",
+          "timepoint",
+          "tables",
+          "contradictions",
+          "certainty"
+        ],
+        "title": "EvidenceOutcome",
+        "type": "object"
+      },
+      "EvidenceOutcomeListResponse": {
+        "description": "Every version, chain and stale flag; staleness is derived on read.",
+        "properties": {
+          "certainty_method": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceCertaintyMethod"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceOutcome"
+            },
+            "title": "Outcomes",
+            "type": "array"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          }
+        },
+        "required": [
+          "outcomes"
+        ],
+        "title": "EvidenceOutcomeListResponse",
+        "type": "object"
+      },
+      "EvidenceRow": {
+        "description": "Exactly one row per analysis unit (``study:<id>`` or ``report:<id>``).",
+        "properties": {
+          "cells": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EvidenceCell"
+            },
+            "title": "Cells",
+            "type": "object"
+          },
+          "report_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Report Ids",
+            "type": "array"
+          },
+          "row_key": {
+            "title": "Row Key",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "row_key",
+          "unit",
+          "report_ids",
+          "cells"
+        ],
+        "title": "EvidenceRow",
+        "type": "object"
+      },
+      "EvidenceTableCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "field_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Field Ids",
+            "type": "array"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "matrix_id": {
+            "format": "uuid",
+            "title": "Matrix Id",
+            "type": "string"
+          },
+          "outcome_key": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "supersedes_table_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Table Id"
+          },
+          "timepoint": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Timepoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome_key",
+          "timepoint",
+          "matrix_id",
+          "field_ids",
+          "idempotency_key"
+        ],
+        "title": "EvidenceTableCreate",
+        "type": "object"
+      },
+      "EvidenceTablePreview": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "differs_from_tip": {
+            "title": "Differs From Tip",
+            "type": "boolean"
+          },
+          "excluded": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceExcluded"
+            },
+            "title": "Excluded",
+            "type": "array"
+          },
+          "field_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Field Ids",
+            "type": "array"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "matrix_id": {
+            "format": "uuid",
+            "title": "Matrix Id",
+            "type": "string"
+          },
+          "outcome_key": {
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "stance_suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/StanceSuggestionGroup"
+            },
+            "title": "Stance Suggestions",
+            "type": "array"
+          },
+          "timepoint": {
+            "title": "Timepoint",
+            "type": "string"
+          },
+          "tip_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tip Id"
+          },
+          "unreviewed_cells": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceUnreviewedCell"
+            },
+            "title": "Unreviewed Cells",
+            "type": "array"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "outcome_key",
+          "timepoint",
+          "matrix_id",
+          "form_version_id",
+          "field_ids",
+          "rows",
+          "excluded",
+          "content_hash",
+          "differs_from_tip",
+          "unreviewed_cells",
+          "stance_suggestions"
+        ],
+        "title": "EvidenceTablePreview",
+        "type": "object"
+      },
+      "EvidenceTableResponse": {
+        "properties": {
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "excluded": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceExcluded"
+            },
+            "title": "Excluded",
+            "type": "array"
+          },
+          "field_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Field Ids",
+            "type": "array"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "matrix_id": {
+            "format": "uuid",
+            "title": "Matrix Id",
+            "type": "string"
+          },
+          "outcome_key": {
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "superseded": {
+            "default": false,
+            "title": "Superseded",
+            "type": "boolean"
+          },
+          "supersedes_table_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Table Id"
+          },
+          "timepoint": {
+            "title": "Timepoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "protocol_version_id",
+          "outcome_key",
+          "timepoint",
+          "matrix_id",
+          "form_version_id",
+          "field_ids",
+          "rows",
+          "excluded",
+          "content_hash",
+          "created_by_id",
+          "created_at"
+        ],
+        "title": "EvidenceTableResponse",
+        "type": "object"
+      },
+      "EvidenceTip": {
+        "description": "One accepted value behind a cell, pinned to its source revision.",
+        "properties": {
+          "accepted_value_id": {
+            "format": "uuid",
+            "title": "Accepted Value Id",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "source_hash": {
+            "title": "Source Hash",
+            "type": "string"
+          },
+          "text_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Sha256"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "accepted_value_id",
+          "document_id",
+          "report_id",
+          "source_hash"
+        ],
+        "title": "EvidenceTip",
+        "type": "object"
+      },
+      "EvidenceUnreviewedCell": {
+        "description": "A machine or legacy matrix cell: shown, never written into a version.",
+        "properties": {
+          "column_name": {
+            "title": "Column Name",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "review_state": {
+            "const": "unreviewed",
+            "default": "unreviewed",
+            "title": "Review State",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "machine",
+              "legacy"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "document_id",
+          "field_id",
+          "column_name",
+          "source"
+        ],
+        "title": "EvidenceUnreviewedCell",
         "type": "object"
       },
       "ExecutionMode": {
@@ -19634,6 +20951,91 @@
           "created_at"
         ],
         "title": "StanceObservationResponse",
+        "type": "object"
+      },
+      "StanceSuggestion": {
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inference_model_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inference Model Version"
+          },
+          "model_version": {
+            "title": "Model Version",
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "stance": {
+            "title": "Stance",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "stance",
+          "confidence",
+          "model_version"
+        ],
+        "title": "StanceSuggestion",
+        "type": "object"
+      },
+      "StanceSuggestionGroup": {
+        "description": "Model output grouped by claim; it never creates or resolves anything.",
+        "properties": {
+          "claim_hash": {
+            "title": "Claim Hash",
+            "type": "string"
+          },
+          "claim_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Text"
+          },
+          "review_state": {
+            "const": "unreviewed_model_suggestion",
+            "title": "Review State",
+            "type": "string"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/StanceSuggestion"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "claim_hash",
+          "review_state",
+          "suggestions"
+        ],
+        "title": "StanceSuggestionGroup",
         "type": "object"
       },
       "StartChatFromProjectRequest": {
@@ -42217,6 +43619,367 @@
         "summary": "Export Corpus Route",
         "tags": [
           "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/evidence": {
+      "get": {
+        "operationId": "list_evidence_route_api_v1_research_engine_projects__project_id__evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceOutcomeListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Evidence Route",
+        "tags": [
+          "research-engine-evidence"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/evidence/certainty": {
+      "post": {
+        "operationId": "assess_certainty_route_api_v1_research_engine_projects__project_id__evidence_certainty_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CertaintyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertaintyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Assess Certainty Route",
+        "tags": [
+          "research-engine-evidence"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/evidence/contradictions": {
+      "post": {
+        "operationId": "record_contradiction_route_api_v1_research_engine_projects__project_id__evidence_contradictions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContradictionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContradictionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Record Contradiction Route",
+        "tags": [
+          "research-engine-evidence"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/evidence/export": {
+      "get": {
+        "operationId": "export_evidence_route_api_v1_research_engine_projects__project_id__evidence_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "nous.academic.evidence.v1 package (every version)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Evidence Route",
+        "tags": [
+          "research-engine-evidence"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/evidence/tables": {
+      "post": {
+        "operationId": "create_evidence_table_route_api_v1_research_engine_projects__project_id__evidence_tables_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceTableCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceTableResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Evidence Table Route",
+        "tags": [
+          "research-engine-evidence"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/evidence/tables/preview": {
+      "get": {
+        "operationId": "preview_evidence_table_route_api_v1_research_engine_projects__project_id__evidence_tables_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outcome_key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Outcome Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timepoint",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Timepoint",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "field_ids",
+            "required": true,
+            "schema": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 50,
+              "minItems": 1,
+              "title": "Field Ids",
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceTablePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Evidence Table Route",
+        "tags": [
+          "research-engine-evidence"
         ]
       }
     },
