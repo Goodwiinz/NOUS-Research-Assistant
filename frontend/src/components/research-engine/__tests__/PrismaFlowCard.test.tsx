@@ -82,14 +82,17 @@ describe('PrismaFlowCard', () => {
     expect(getPrismaFlow).toHaveBeenCalledWith('p1');
   });
 
-  it('downloads the Markdown export', async () => {
+  it('downloads the Markdown and JSON exports', async () => {
     renderCard();
 
     await userEvent.click(
       await screen.findByRole('button', { name: 'Download Markdown' })
     );
-
-    expect(downloadPrismaFlow).toHaveBeenCalledWith('p1', 'md');
+    expect(downloadPrismaFlow).toHaveBeenLastCalledWith('p1', 'md');
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Download JSON' })
+    );
+    expect(downloadPrismaFlow).toHaveBeenLastCalledWith('p1', 'json');
   });
 
   it('has no editable field', async () => {

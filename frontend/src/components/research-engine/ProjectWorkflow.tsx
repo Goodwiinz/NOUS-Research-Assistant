@@ -157,6 +157,7 @@ export function ProjectWorkflow({
         approvedProtocolVersionId={approvedProtocolVersionId}
         roles={roles.data ?? []}
         readOnly={archived}
+        canEdit={canEdit}
       />
       <ScreeningConflictsPanel
         projectId={project.id}
