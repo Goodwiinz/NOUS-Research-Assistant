@@ -467,6 +467,8 @@ def test_academic_wave_migrations_upgrade_downgrade_round_trip(
     assert "research_project_role_assignments" in inspect(connection).get_table_names()
 
 
+# GOO-303: references research_reports, documents and protocol versions.
+_ACQUISITION_TABLES = ("research_fulltext_attempts", "research_fulltext_requests")
 _RESOLUTION_TABLES = ("screening_resolutions",)  # GOO-302: drop first
 _SCREENING_TABLES = (
     "screening_suggestions",
@@ -490,6 +492,7 @@ def test_report_identity_migration_upgrade_downgrade_round_trip(
     connection = pre_wave_connection
     # GOO-301/302 screening tables reference research_reports: drop them first.
     for table in (
+        *_ACQUISITION_TABLES,
         *_RESOLUTION_TABLES,
         *_SCREENING_TABLES,
         *_IMPORT_TABLES,
@@ -627,3 +630,36 @@ def test_screening_resolution_migration_upgrade_downgrade_round_trip(
 
     _run_migration(connection, migration, "downgrade")
     assert not inspect(connection).has_table("screening_resolutions")
+
+
+def test_fulltext_acquisition_migration_upgrade_downgrade_round_trip(
+    pre_wave_connection: Connection,
+) -> None:
+    """GOO-303's tables are created by f2a4c6e8b0d3 itself, with RLS enabled."""
+    connection = pre_wave_connection
+    for table in _ACQUISITION_TABLES:
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    migration = _load_migration("f2a4c6e8b0d3_create_fulltext_acquisition.py")
+    assert migration.down_revision == "f3b5d7e9a1c4"
+
+    _run_migration(connection, migration, "upgrade")
+    inspector = inspect(connection)
+    for table in _ACQUISITION_TABLES:
+        assert inspector.has_table(table)
+        assert connection.execute(
+            text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
+            {"t": table},
+        ).scalar_one()
+    assert {
+        index["name"]: index["dialect_options"].get("postgresql_where")
+        for index in inspector.get_indexes("research_fulltext_attempts")
+        if index["unique"] and index["dialect_options"].get("postgresql_where")
+    } == {"uq_research_fulltext_attempt_head": "(previous_attempt_id IS NULL)"}
+    assert "uq_research_fulltext_request_report" in {
+        c["name"]
+        for c in inspector.get_unique_constraints("research_fulltext_requests")
+    }
+
+    _run_migration(connection, migration, "downgrade")
+    inspector = inspect(connection)
+    assert not any(inspector.has_table(table) for table in _ACQUISITION_TABLES)

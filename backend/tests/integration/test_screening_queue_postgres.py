@@ -75,6 +75,9 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-303: the full-text gate reads acquisition, which references reports.
+    "research_fulltext_attempts",
+    "research_fulltext_requests",
     "screening_resolutions",  # GOO-302: references the screening tables
     "screening_suggestions",
     "screening_observations",
@@ -101,6 +104,7 @@ def _upgrade(connection: Connection) -> None:
         "d4e6f8a0b2c3_create_search_imports.py",
         "e1f3a5c7d9b2_create_screening_queues.py",
         "f3b5d7e9a1c4_create_screening_resolutions.py",
+        "f2a4c6e8b0d3_create_fulltext_acquisition.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename
