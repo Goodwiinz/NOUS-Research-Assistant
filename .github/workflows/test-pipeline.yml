@@ -698,6 +698,14 @@ jobs:
           pnpm --dir ../terminal type-check
           pnpm --dir ../terminal test
           python3 ../terminal/tests/migration-smoke.py
+      - name: Check harness bridge
+        # The local Codex bridge and its NOUS MCP facade live in
+        # packages/harness-bridge; nothing else in the pipeline runs them.
+        # ubuntu also exercises the Linux-only paths (e.g. /proc/self/fd
+        # containment checks) that a macOS developer machine cannot.
+        run: |
+          pnpm --filter @nous/harness-bridge type-check
+          pnpm --filter @nous/harness-bridge test
       # Blocking ratchet: global coverage may never fall below the floors
       # committed in frontend/quality-baseline.json ("coverage" key).
       # Raising or lowering a floor is an intentional, reviewed JSON edit.
