@@ -11,6 +11,7 @@ from src.services.research_decisions.ledger import (
     DecisionValidationError,
     _validate_acquisition_transitions,
     _validate_event,
+    _validate_extraction_transitions,
     _validate_identity_transitions,
     _validate_screening_transitions,
     decision_request_fingerprint,
@@ -1134,3 +1135,226 @@ def test_replay_rejects_adjudicator_who_reviewed_an_earlier_cycle() -> None:
     dual.queue.replay(*events, ("screening.adjudicated", payload))
     with pytest.raises(DecisionReplayError, match="adjudicator reviewed"):
         dual.queue.replay(*events, ("screening.adjudicated", payload, {"actor": r3}))
+
+
+# --- GOO-304: research_extraction family ------------------------------------
+
+
+class _Extraction:
+    """Hand-built extraction events for one matrix stream."""
+
+    def __init__(self) -> None:
+        self.collection_id, self.matrix_id = uuid4(), uuid4()
+        self.version, self.document, self.field = uuid4(), uuid4(), uuid4()
+
+    def observed(
+        self, *obs_ids: UUID, kind: str = "machine", field: UUID | None = None
+    ) -> dict[str, object]:
+        machine = kind == "machine"
+        return {
+            "collection_id": str(self.collection_id),
+            "matrix_id": str(self.matrix_id),
+            "form_version_id": str(self.version),
+            "form_content_hash": "c" * 64,
+            "document_id": str(self.document),
+            "source_hash": "d" * 64,
+            "kind": kind,
+            "observations": {str(o): str(field or self.field) for o in obs_ids},
+            "extractor_run_id": "task-1" if machine else None,
+            "extractor_model": "gpt-4o-mini" if machine else None,
+        }
+
+    def accepted(
+        self,
+        accepted_id: UUID,
+        cited: list[UUID],
+        supersedes: UUID | None = None,
+        field: UUID | None = None,
+    ) -> dict[str, object]:
+        return {
+            "collection_id": str(self.collection_id),
+            "matrix_id": str(self.matrix_id),
+            "accepted_value_id": str(accepted_id),
+            "form_version_id": str(self.version),
+            "document_id": str(self.document),
+            "field_id": str(field or self.field),
+            "observation_ids": [str(c) for c in cited],
+            "value": 12,
+            "missingness": None,
+            "supersedes_accepted_value_id": str(supersedes) if supersedes else None,
+            "source_hash": "d" * 64,
+        }
+
+    def staled(self, *accepted_ids: UUID) -> dict[str, object]:
+        return {
+            "collection_id": str(self.collection_id),
+            "matrix_id": str(self.matrix_id),
+            "new_form_version_id": str(uuid4()),
+            "accepted_value_ids": [str(a) for a in accepted_ids],
+        }
+
+    def validate(
+        self, event_type: str, payload: dict[str, object], reason: str | None = "ok"
+    ) -> None:
+        _validate_event(
+            aggregate_type="research_extraction",
+            aggregate_id=self.matrix_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="extraction_matrix",
+            subject_id=self.matrix_id,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+            reason=reason,
+        )
+
+    def replay(self, *events: tuple[str, str, dict[str, object]]) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_extraction_transitions(stored, self.matrix_id)
+
+
+def test_extraction_replay_rejects_worker_acceptance() -> None:
+    ex = _Extraction()
+    obs, acc = uuid4(), uuid4()
+    observed = ("extraction.observed", "machine", ex.observed(obs))
+    ex.replay(observed, ("extraction.accepted", "adjudicator", ex.accepted(acc, [obs])))
+    for role in ("machine", "reviewer", "editor"):
+        with pytest.raises(DecisionReplayError, match="adjudicator"):
+            ex.replay(observed, ("extraction.accepted", role, ex.accepted(acc, [obs])))
+
+
+def test_extraction_replay_rejects_accept_citing_unobserved_or_other_field() -> None:
+    ex = _Extraction()
+    obs, other = uuid4(), uuid4()
+    events = (
+        ("extraction.observed", "machine", ex.observed(obs)),
+        (
+            "extraction.observed",
+            "reviewer",
+            ex.observed(other, kind="human", field=uuid4()),
+        ),
+    )
+    with pytest.raises(DecisionReplayError, match="cites"):
+        ex.replay(
+            *events,
+            ("extraction.accepted", "adjudicator", ex.accepted(uuid4(), [uuid4()])),
+        )
+    with pytest.raises(DecisionReplayError, match="cites"):
+        ex.replay(
+            *events,
+            ("extraction.accepted", "adjudicator", ex.accepted(uuid4(), [obs, other])),
+        )
+    with pytest.raises(DecisionReplayError, match="reused"):
+        ex.replay(*events, ("extraction.observed", "machine", ex.observed(obs)))
+
+
+def test_extraction_replay_rejects_forked_accept_chain() -> None:
+    ex = _Extraction()
+    obs, first, second = uuid4(), uuid4(), uuid4()
+    base = (
+        ("extraction.observed", "machine", ex.observed(obs)),
+        ("extraction.accepted", "adjudicator", ex.accepted(first, [obs])),
+    )
+    ex.replay(
+        *base, ("extraction.accepted", "adjudicator", ex.accepted(second, [obs], first))
+    )
+    with pytest.raises(DecisionReplayError, match="forked"):
+        ex.replay(
+            *base, ("extraction.accepted", "adjudicator", ex.accepted(second, [obs]))
+        )
+    with pytest.raises(DecisionReplayError, match="forked"):
+        ex.replay(
+            *base,
+            ("extraction.accepted", "adjudicator", ex.accepted(second, [obs], first)),
+            ("extraction.accepted", "adjudicator", ex.accepted(uuid4(), [obs], first)),
+        )
+    # staled names only current, not-yet-staled tips.
+    ex.replay(*base, ("extraction.staled", "editor", ex.staled(first)))
+    with pytest.raises(DecisionReplayError, match="stale"):
+        ex.replay(
+            *base,
+            ("extraction.accepted", "adjudicator", ex.accepted(second, [obs], first)),
+            ("extraction.staled", "editor", ex.staled(first)),
+        )
+    with pytest.raises(DecisionReplayError, match="stale"):
+        ex.replay(
+            *base,
+            ("extraction.staled", "editor", ex.staled(first)),
+            ("extraction.staled", "editor", ex.staled(first)),
+        )
+    same_version = {**ex.staled(first), "new_form_version_id": str(ex.version)}
+    with pytest.raises(DecisionReplayError, match="stale"):
+        ex.replay(*base, ("extraction.staled", "editor", same_version))
+
+
+def test_extraction_replay_rejects_machine_without_extractor() -> None:
+    ex = _Extraction()
+    obs = uuid4()
+    no_extractor = {**ex.observed(obs), "extractor_run_id": None}
+    with pytest.raises(DecisionReplayError, match="extractor"):
+        ex.replay(("extraction.observed", "machine", no_extractor))
+    with pytest.raises(DecisionReplayError, match="extractor"):
+        ex.replay(("extraction.observed", "reviewer", ex.observed(obs)))
+    human_with_model = {**ex.observed(obs, kind="human"), "extractor_model": "x"}
+    with pytest.raises(DecisionReplayError, match="extractor"):
+        ex.replay(("extraction.observed", "reviewer", human_with_model))
+    with pytest.raises(DecisionReplayError, match="extractor"):
+        ex.replay(("extraction.observed", "machine", ex.observed(obs, kind="human")))
+    ex.replay(("extraction.observed", "reviewer", ex.observed(obs, kind="human")))
+    foreign = {**ex.observed(uuid4()), "collection_id": str(uuid4())}
+    with pytest.raises(DecisionReplayError, match="another collection"):
+        ex.replay(
+            ("extraction.observed", "machine", ex.observed(obs)),
+            ("extraction.observed", "machine", foreign),
+        )
+
+
+def test_extraction_payload_keys_exact() -> None:
+    ex = _Extraction()
+    obs = uuid4()
+    ex.validate("extraction.observed", ex.observed(obs))
+    ex.validate("extraction.accepted", ex.accepted(uuid4(), [obs]))
+    ex.validate("extraction.staled", ex.staled(uuid4()))
+    for event_type, payload in (
+        ("extraction.observed", ex.observed(obs)),
+        ("extraction.accepted", ex.accepted(uuid4(), [obs])),
+        ("extraction.staled", ex.staled(uuid4())),
+    ):
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            ex.validate(event_type, {**payload, "extra": 1})
+        trimmed = dict(payload)
+        trimmed.pop("matrix_id")
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            ex.validate(event_type, trimmed)
+        with pytest.raises(DecisionValidationError, match="another extraction matrix"):
+            ex.validate(event_type, {**payload, "matrix_id": str(uuid4())})
+    with pytest.raises(DecisionValidationError, match="kind"):
+        ex.validate("extraction.observed", {**ex.observed(obs), "kind": "agent"})
+    with pytest.raises(DecisionValidationError, match="observations"):
+        ex.validate("extraction.observed", {**ex.observed(obs), "observations": {}})
+    with pytest.raises(DecisionValidationError, match="not a UUID"):
+        ex.validate("extraction.observed", {**ex.observed(obs), "document_id": "x"})
+    with pytest.raises(DecisionValidationError, match="missingness"):
+        ex.validate(
+            "extraction.accepted",
+            {
+                **ex.accepted(uuid4(), [obs]),
+                "value": None,
+                "missingness": "extraction_error",
+            },
+        )
+    with pytest.raises(DecisionValidationError, match="exactly one"):
+        ex.validate(
+            "extraction.accepted",
+            {**ex.accepted(uuid4(), [obs]), "missingness": "not_reported"},
+        )
+    with pytest.raises(DecisionValidationError, match="observation_ids"):
+        ex.validate("extraction.accepted", ex.accepted(uuid4(), []))
+    with pytest.raises(DecisionValidationError, match="rationale"):
+        ex.validate("extraction.accepted", ex.accepted(uuid4(), [obs]), reason=None)

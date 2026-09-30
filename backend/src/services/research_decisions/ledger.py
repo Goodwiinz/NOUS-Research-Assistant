@@ -1,7 +1,8 @@
 """Caller-owned append and replay operations for research decisions.
 
 Each aggregate family (``research_protocol``, ``research_identity``,
-``research_screening``, ``research_acquisition``) registers
+``research_screening``, ``research_acquisition``, ``research_extraction``)
+registers
 its subject type, payload vocabulary, value validation and replay transition
 rules in ``_FAMILIES``.
 
@@ -27,6 +28,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
+from src.services.research import extraction_rules
 from src.services.research_engine import screening_rules
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -162,6 +164,45 @@ _ACQUISITION_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     | {"document_id", "document_content_hash"},
 }
 
+# GOO-304: extraction forms, one stream per matrix. The rationale is the reason.
+_EXTRACTION_AGGREGATE = "research_extraction"
+_EXTRACTION_SUBJECT = "extraction_matrix"
+_EXTRACTION_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("extraction.observed", 1): frozenset(
+        {
+            "collection_id",
+            "matrix_id",
+            "form_version_id",
+            "form_content_hash",
+            "document_id",
+            "source_hash",
+            "kind",
+            "observations",  # {observation_id: field_id}
+            "extractor_run_id",
+            "extractor_model",
+        }
+    ),
+    ("extraction.accepted", 1): frozenset(
+        {
+            "collection_id",
+            "matrix_id",
+            "accepted_value_id",
+            "form_version_id",
+            "document_id",
+            "field_id",
+            "observation_ids",
+            "value",
+            "missingness",
+            "supersedes_accepted_value_id",
+            "source_hash",
+        }
+    ),
+    ("extraction.staled", 1): frozenset(
+        {"collection_id", "matrix_id", "new_form_version_id", "accepted_value_ids"}
+    ),
+}
+_RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {"extraction.accepted"}
+
 
 class ResearchDecisionError(RuntimeError):
     """Base error for the retained decision ledger."""
@@ -245,8 +286,8 @@ def _validate_event(
         aggregate_id
     ):
         raise DecisionValidationError("decision payload belongs to another protocol")
-    if event_type in _SCREENING_RATIONALE_EVENTS and not reason:
-        raise DecisionValidationError("screening adjudicator event needs a rationale")
+    if event_type in _RATIONALE_EVENTS and not reason:
+        raise DecisionValidationError("adjudicator event needs a rationale")
     if not _SHA256_RE.fullmatch(subject_hash):
         raise DecisionValidationError("subject_hash must be a lowercase SHA-256 digest")
     if not _SHA256_RE.fullmatch(request_fingerprint):
@@ -522,6 +563,71 @@ def _validate_acquisition_payload(
             raise DecisionValidationError(
                 "document_content_hash must be a lowercase SHA-256 digest"
             )
+
+
+def _validated_sha256(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+        raise DecisionValidationError(f"{field} must be a lowercase SHA-256 digest")
+
+
+def _validate_extraction_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    _validated_payload_uuid(payload["collection_id"], "collection_id")
+    matrix_id = _validated_payload_uuid(payload["matrix_id"], "matrix_id")
+    if not matrix_id == aggregate_id == subject_id:
+        raise DecisionValidationError(
+            "decision payload belongs to another extraction matrix"
+        )
+    if event_type == "extraction.staled":
+        _validated_payload_uuid(payload["new_form_version_id"], "new_form_version_id")
+        staled = _validated_uuid_list(
+            payload["accepted_value_ids"], "accepted_value_ids"
+        )
+        if not staled or len(set(staled)) != len(staled):
+            raise DecisionValidationError(
+                "accepted_value_ids must be non-empty and unique"
+            )
+        return
+    _validated_payload_uuid(payload["form_version_id"], "form_version_id")
+    _validated_payload_uuid(payload["document_id"], "document_id")
+    _validated_sha256(payload["source_hash"], "source_hash")
+    if event_type == "extraction.observed":
+        _validated_sha256(payload["form_content_hash"], "form_content_hash")
+        if payload["kind"] not in ("machine", "human"):
+            raise DecisionValidationError("extraction observation kind is invalid")
+        observations = payload["observations"]
+        if not isinstance(observations, Mapping) or not observations:
+            raise DecisionValidationError("observations must be a non-empty object")
+        for observation, field in observations.items():
+            _validated_payload_uuid(observation, "observations")
+            _validated_payload_uuid(field, "observations")
+        for key in ("extractor_run_id", "extractor_model"):
+            if payload[key] is not None and not isinstance(payload[key], str):
+                raise DecisionValidationError(f"{key} must be a string")
+        return
+    accepted = _validated_payload_uuid(
+        payload["accepted_value_id"], "accepted_value_id"
+    )
+    if accepted == _validated_optional_uuid(
+        payload["supersedes_accepted_value_id"], "supersedes_accepted_value_id"
+    ):
+        raise DecisionValidationError("accepted value cannot supersede itself")
+    _validated_payload_uuid(payload["field_id"], "field_id")
+    cited = _validated_uuid_list(payload["observation_ids"], "observation_ids")
+    if not 1 <= len(cited) <= 20 or len(set(cited)) != len(cited):
+        raise DecisionValidationError("observation_ids must be 1-20 unique ids")
+    missingness = payload["missingness"]
+    if (payload["value"] is None) == (missingness is None):
+        raise DecisionValidationError("accepted needs exactly one of value/missingness")
+    if missingness is not None and (
+        missingness not in extraction_rules.MISSINGNESS["accepted"]
+    ):
+        raise DecisionValidationError("accepted missingness is invalid")
 
 
 async def _locked_stream(
@@ -1085,6 +1191,92 @@ def _validate_acquisition_transitions(
             retrieved.add(request)
 
 
+def _validate_extraction_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Machine rows come only from the machine, human rows from a reviewer;
+    only an adjudicator accepts, citing observations of that exact cell, and
+    each ``(document, field)`` chain names its current tip. ``staled`` names
+    current tips only, once, made stale by a different form version."""
+    collection: Any = None
+    observed: dict[UUID, tuple[UUID, UUID, UUID]] = {}  # obs -> (doc, form, field)
+    tips: dict[tuple[UUID, UUID], UUID] = {}  # (doc, field) -> accepted tip
+    form_of: dict[UUID, UUID] = {}  # accepted -> form version
+    staled: set[UUID] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["matrix_id"], "matrix_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another matrix")
+        if collection is None:
+            collection = payload["collection_id"]
+        elif payload["collection_id"] != collection:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        role = event.actor_role
+        if event.event_type == "extraction.observed":
+            extractor = (payload["extractor_run_id"], payload["extractor_model"])
+            if payload["kind"] == "machine":
+                consistent = role == "machine" and None not in extractor
+            else:
+                consistent = role == "reviewer" and extractor == (None, None)
+            if not consistent:
+                raise DecisionReplayError(
+                    "extraction observation actor or extractor is inconsistent"
+                )
+            cell = (
+                _payload_uuid(payload["document_id"], "document_id"),
+                _payload_uuid(payload["form_version_id"], "form_version_id"),
+            )
+            for value, field in payload["observations"].items():
+                observation = _payload_uuid(value, "observations")
+                if observation in observed:
+                    raise DecisionReplayError("extraction observation id reused")
+                observed[observation] = (*cell, _payload_uuid(field, "observations"))
+            continue
+        if event.event_type == "extraction.accepted":
+            if role != "adjudicator":
+                raise DecisionReplayError(
+                    "extraction acceptance requires an adjudicator"
+                )
+            document = _payload_uuid(payload["document_id"], "document_id")
+            form = _payload_uuid(payload["form_version_id"], "form_version_id")
+            field = _payload_uuid(payload["field_id"], "field_id")
+            for value in payload["observation_ids"]:
+                if observed.get(_payload_uuid(value, "observation_ids")) != (
+                    document,
+                    form,
+                    field,
+                ):
+                    raise DecisionReplayError(
+                        "accepted value cites an observation of another cell"
+                    )
+            supersedes = payload["supersedes_accepted_value_id"]
+            if tips.get((document, field)) != (
+                None
+                if supersedes is None
+                else _payload_uuid(supersedes, "supersedes_accepted_value_id")
+            ):
+                raise DecisionReplayError("forked accepted value chain")
+            accepted = _payload_uuid(payload["accepted_value_id"], "accepted_value_id")
+            if accepted in form_of:
+                raise DecisionReplayError("accepted value id reused")
+            tips[(document, field)] = accepted
+            form_of[accepted] = form
+            continue
+        new_form = _payload_uuid(payload["new_form_version_id"], "new_form_version_id")
+        current = set(tips.values())
+        for value in payload["accepted_value_ids"]:
+            accepted = _payload_uuid(value, "accepted_value_ids")
+            if (
+                accepted not in current
+                or accepted in staled
+                or form_of[accepted] == new_form
+            ):
+                raise DecisionReplayError(
+                    "staled value is not a current tip made stale by a new form"
+                )
+            staled.add(accepted)
+
+
 _FAMILIES: dict[str, _Family] = {
     _PROTOCOL_AGGREGATE: _Family(
         subject_type=_PROTOCOL_SUBJECT,
@@ -1112,6 +1304,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_ACQUISITION_PAYLOAD_KEYS,
         validate_payload=_validate_acquisition_payload,
         validate_transitions=_validate_acquisition_transitions,
+        requires_subject_version=False,
+    ),
+    _EXTRACTION_AGGREGATE: _Family(
+        subject_type=_EXTRACTION_SUBJECT,
+        payload_keys=_EXTRACTION_PAYLOAD_KEYS,
+        validate_payload=_validate_extraction_payload,
+        validate_transitions=_validate_extraction_transitions,
         requires_subject_version=False,
     ),
 }
