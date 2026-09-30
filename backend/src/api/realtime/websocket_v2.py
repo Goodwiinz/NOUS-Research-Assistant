@@ -24,7 +24,7 @@ from sqlalchemy.orm import selectinload
 
 from src.core.config import settings
 from src.core.database import AsyncSessionLocal
-from src.core.dependencies import get_current_user
+from src.core.dependencies import get_current_user, require_platform_operator
 from src.core.security import TokenData
 from src.core.user_provisioning import ensure_user_and_org
 from src.core.websocket_auth import WebSocketAuthenticator, WebSocketAuthError
@@ -124,8 +124,9 @@ async def _get_user_organization_id(
     Scopes ADMIN cross-user access on the HTTP inspection endpoints:
     ``role==ADMIN`` is a per-org role, not a platform superuser, so an admin
     may only act on users inside their own organization. Returns None when
-    the user does not exist (caller maps that to 404) or on any DB error
-    (fail closed).
+    the user does not exist or is inactive, or on any DB error; callers deny
+    with the same 403 as a foreign-org target so the response cannot be used
+    to probe which IDs are live users of other tenants (fail closed).
     """
     stmt = select(User.organization_id).where(
         User.id == user_id,
@@ -454,7 +455,9 @@ async def websocket_connect_v2_secure(
 
 
 @router.get("/status", response_model=Dict[str, Any])
-async def get_websocket_status(current_user: User = Depends(get_current_user)):
+async def get_websocket_status(
+    current_user: User = Depends(require_platform_operator),
+):
     """
     Get WebSocket service status and statistics
 
@@ -462,13 +465,9 @@ async def get_websocket_status(current_user: User = Depends(get_current_user)):
     including active connections, channel subscriptions, and system health.
     """
     # I6: these are platform-wide ops metrics (total connections, per-channel
-    # subscribers, org/user counts, job throughput) — any authenticated user
-    # could read other tenants' activity volume. Admin-only now.
-    if not current_user.has_permission(UserRole.ADMIN):
-        raise HTTPException(
-            status_code=403,
-            detail="Only administrators can view WebSocket status",
-        )
+    # subscribers, org/user counts, job throughput across ALL tenants).
+    # role==ADMIN is a per-org role, so the gate is the platform-operator
+    # allowlist (require_platform_operator), same as /workers/*.
     try:
         # Get connection manager statistics
         conn_stats = connection_manager.get_connection_stats()
@@ -554,10 +553,11 @@ async def get_user_connections(
                     detail="Not authorized to view these connections",
                 )
             target_org_id = await _get_user_organization_id(user_id)
-            if target_org_id is None:
-                raise HTTPException(status_code=404, detail="User not found")
+            # Missing/inactive target and foreign-org target share one
+            # response: no 404 oracle for other tenants' user IDs.
             if (
-                current_user.organization_id is None
+                target_org_id is None
+                or current_user.organization_id is None
                 or str(current_user.organization_id) != target_org_id
             ):
                 raise HTTPException(
@@ -694,10 +694,11 @@ async def test_websocket_connection(
                     detail="Not authorized to access this connection",
                 )
             target_org_id = await _get_user_organization_id(str(conn_info.user_id))
-            if target_org_id is None:
-                raise HTTPException(status_code=404, detail="User not found")
+            # Missing/inactive target and foreign-org target share one
+            # response: no 404 oracle for other tenants' user IDs.
             if (
-                current_user.organization_id is None
+                target_org_id is None
+                or current_user.organization_id is None
                 or str(current_user.organization_id) != target_org_id
             ):
                 raise HTTPException(

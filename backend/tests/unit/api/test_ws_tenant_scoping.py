@@ -9,8 +9,10 @@ disclosing other tenants' activity volume.
 Contract pinned here:
 - self access unchanged (and does not hit the target-user lookup);
 - admin access requires the target user to be in the caller's org
-  (foreign-org target -> 403, nonexistent target user -> 404, same-org -> 200);
-- /status requires admin (regular user -> 403, admin -> 200, shape unchanged).
+  (foreign-org target and missing/inactive target -> the SAME 403, so an
+  admin cannot probe which IDs are live users of other tenants; same-org -> 200);
+- /status is platform-wide, so it is gated by ``require_platform_operator``,
+  never by tenant ADMIN (shape unchanged for an operator).
 
 Direct-call + monkeypatch pattern (see test_ws_broadcast_authz.py).
 asyncio_mode=auto, so plain ``async def`` tests run natively.
@@ -108,8 +110,8 @@ async def test_connections_self_allowed_without_lookup(monkeypatch):
     lookup.assert_not_awaited()
 
 
-async def test_connections_nonexistent_target_user_404(monkeypatch):
-    """Admin + unknown target user -> 404 (sibling-endpoint convention)."""
+async def test_connections_nonexistent_target_user_indistinguishable(monkeypatch):
+    """Admin + unknown target user -> same 403 as a foreign-org target."""
     manager = SimpleNamespace(
         get_user_connections=Mock(return_value=[]),
         active_connections={},
@@ -121,11 +123,13 @@ async def test_connections_nonexistent_target_user_404(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         await ws.get_user_connections(user_id="ghost-user", current_user=admin)
 
-    assert ei.value.status_code == 404
+    assert ei.value.status_code == 403
+    assert ei.value.detail == "Not authorized to view these connections"
+    manager.get_user_connections.assert_not_called()
 
 
-async def test_connections_deactivated_target_user_404(monkeypatch):
-    """Admin + deactivated/soft-deleted target -> 404 (liveness filters in helper)."""
+async def test_connections_deactivated_target_user_indistinguishable(monkeypatch):
+    """Admin + deactivated/soft-deleted target -> same 403 as foreign-org."""
     manager = SimpleNamespace(
         get_user_connections=Mock(return_value=[]),
         active_connections={},
@@ -137,7 +141,9 @@ async def test_connections_deactivated_target_user_404(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         await ws.get_user_connections(user_id=TARGET, current_user=admin)
 
-    assert ei.value.status_code == 404
+    assert ei.value.status_code == 403
+    assert ei.value.detail == "Not authorized to view these connections"
+    manager.get_user_connections.assert_not_called()
 
 
 async def test_connections_null_org_admin_denied(monkeypatch):
@@ -208,16 +214,18 @@ async def test_test_connection_self_allowed(monkeypatch):
     lookup.assert_not_awaited()
 
 
-async def test_test_connection_nonexistent_target_user_404(monkeypatch):
-    """Connection alive in manager but target user gone from DB -> 404."""
-    _patch_test_manager(monkeypatch, TARGET)
+async def test_test_connection_nonexistent_target_user_indistinguishable(monkeypatch):
+    """Connection alive but target user gone from DB -> same 403 as foreign-org."""
+    manager = _patch_test_manager(monkeypatch, TARGET)
     _patch_org_lookup(monkeypatch, None)
 
     admin = _user(UserRole.ADMIN, org_id=ORG_A)
     with pytest.raises(HTTPException) as ei:
         await ws.test_websocket_connection(connection_id="conn-1", current_user=admin)
 
-    assert ei.value.status_code == 404
+    assert ei.value.status_code == 403
+    assert ei.value.detail == "Not authorized to access this connection"
+    manager.send_message_to_connection.assert_not_awaited()
 
 
 # --- GET /status ---------------------------------------------------------------
@@ -253,26 +261,44 @@ def _patch_status_service(monkeypatch):
     return service
 
 
-async def test_status_regular_user_denied(monkeypatch):
-    """Global infra stats are not for regular users -> 403."""
-    manager = _patch_status_manager(monkeypatch)
-    _patch_status_service(monkeypatch)
+def _status_route():
+    from fastapi.routing import APIRoute
 
-    user = _user(UserRole.USER, org_id=ORG_A)
+    for route in ws.router.routes:
+        if isinstance(route, APIRoute) and route.path.endswith("/status"):
+            return route
+    raise AssertionError("WS v2 /status route not found")
+
+
+def test_status_route_requires_platform_operator():
+    """Platform-wide stats are gated by the platform-operator allowlist,
+    not by tenant ADMIN (an org admin must not see other tenants' volume)."""
+    from src.core.dependencies import get_current_user, require_platform_operator
+
+    calls = [d.call for d in _status_route().dependant.dependencies]
+    assert require_platform_operator in calls
+    assert get_current_user not in calls
+
+
+def test_status_dependency_denies_tenant_admin(monkeypatch):
+    """A tenant ADMIN without an allowlisted UUID is refused by the gate."""
+    from src.core import dependencies as deps
+
+    admin = _user(UserRole.ADMIN, org_id=ORG_A)
+    monkeypatch.setattr(deps.settings, "PLATFORM_OPERATOR_USER_IDS", str(uuid4()))
     with pytest.raises(HTTPException) as ei:
-        await ws.get_websocket_status(current_user=user)
+        deps.require_platform_operator(current_user=admin)
 
     assert ei.value.status_code == 403
-    manager.get_connection_stats.assert_not_called()
 
 
-async def test_status_admin_allowed_shape_unchanged(monkeypatch):
-    """Admin still gets the full status payload (shape unchanged)."""
+async def test_status_operator_shape_unchanged(monkeypatch):
+    """A platform operator still gets the full status payload."""
     _patch_status_manager(monkeypatch)
     _patch_status_service(monkeypatch)
 
-    admin = _user(UserRole.ADMIN, org_id=ORG_A)
-    result = await ws.get_websocket_status(current_user=admin)
+    operator = _user(UserRole.USER, org_id=ORG_A)
+    result = await ws.get_websocket_status(current_user=operator)
 
     assert result["websocket_service"]["status"] == "healthy"
     assert result["connections"]["total_connections"] == 1
