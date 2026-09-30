@@ -1,0 +1,40 @@
+{
+  "step": "B1-01-templates",
+  "as": "owner",
+  "at": "2026-09-29T10:17:52.440990+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/blueprints/templates",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "slug": "daily_research_brief",
+      "name": "Daily Research Brief",
+      "description": "Produce a bounded research brief from selected scholarly providers with screening, extraction, synthesis, verification, and human review gates.",
+      "step_count": 6
+    },
+    {
+      "slug": "data_extraction",
+      "name": "Data Extraction",
+      "description": "Extract structured data from the RAG store according to a user-defined schema, validate against the schema and source grounding, and export as a JSON dataset.",
+      "step_count": 4
+    },
+    {
+      "slug": "evidence_synthesis",
+      "name": "Evidence Synthesis",
+      "description": "Search configured academic sources, extract claims and supporting evidence, build an evidence map, verify grounding, and export a synthesis report.",
+      "step_count": 5
+    },
+    {
+      "slug": "systematic_literature_review",
+      "name": "Systematic Literature Review",
+      "description": "Conduct a systematic literature review following PRISMA-like methodology: search multiple academic databases, screen results by inclusion/exclusion criteria, extract key data, synthesize findings, verify grounding, and export a structured report.",
+      "step_count": 6
+    }
+  ]
+}

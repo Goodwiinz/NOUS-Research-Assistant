@@ -40,6 +40,25 @@ def _no_sleep():
 
 
 @pytest.fixture(autouse=True)
+def _task_result_row_is_running():
+    # GOO-297 binds the draft via finish_task inside the draft transaction and
+    # records failures in its own session; these mocked sessions only script
+    # the draft windows. The retained row has its own tests
+    # (test_draft_task_results.py).
+    async def _cache_only_fail(self, task_id, state, step, _error_code):
+        await self._set_status(task_id, state, 0, step)
+
+    with (
+        patch(
+            "src.services.research.draft_generation_service.finish_task",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(DraftGenerationService, "_fail_task", new=_cache_only_fail),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _passing_citation_review():
     async def _review(_db, content, documents):
         cited_indices = sorted(

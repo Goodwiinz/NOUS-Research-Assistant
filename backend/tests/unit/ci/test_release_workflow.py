@@ -13,8 +13,6 @@ import yaml  # type: ignore[import-untyped]
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 DOCKER_PATH = WORKFLOWS / "docker-build.yml"
-GITOPS_PATH = WORKFLOWS / "gitops-image-update.yml"
-DEPLOY_PATH = WORKFLOWS / "deploy.yml"
 
 
 def _load_workflow(path: Path) -> dict[str, Any]:
@@ -100,32 +98,6 @@ def test_docker_outputs_full_sha_trace_tag_and_immutable_digest() -> None:
     assert 'echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"' in str(verify["run"])
 
 
-def test_old_gitops_workflow_has_no_automatic_dev_update_path() -> None:
-    gitops = _load_workflow(GITOPS_PATH)
-    triggers = _triggers(gitops)
-    jobs = cast("dict[str, Any]", gitops["jobs"])
-    shell = "\n".join(
-        str(step.get("run", ""))
-        for job in jobs.values()
-        for step in cast("list[dict[str, Any]]", job.get("steps", []))
-    )
-
-    assert set(triggers) == {"workflow_dispatch"}
-    assert "workflow_run" not in triggers
-    assert "update-dev" not in jobs
-    assert not re.search(r"git\s+push[^\n]*(?:refs/heads/)?develop", shell)
-    assert "refs/heads/develop" not in shell
-
-
-def test_deploy_workflow_has_no_automatic_docker_build_trigger() -> None:
-    deploy = _load_workflow(DEPLOY_PATH)
-    triggers = _triggers(deploy)
-
-    assert set(triggers) == {"workflow_dispatch"}
-    assert "workflow_run" not in triggers
-    assert "push" not in triggers
-
-
 def test_dev_release_uses_builtin_token_and_preserves_branch_checks() -> None:
     release = _load_workflow(WORKFLOWS / "release-dev.yml")
     promote = release["jobs"]["promote"]
@@ -133,17 +105,31 @@ def test_dev_release_uses_builtin_token_and_preserves_branch_checks() -> None:
     shell = str(proposal["run"])
 
     assert proposal["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert proposal["env"]["PR_TOKEN"] == "${{ secrets.RELEASE_PR_TOKEN }}"
+    assert 'GH_TOKEN="${PR_TOKEN:-$GH_TOKEN}" gh pr create' in shell
+    assert 'if [ -z "$PR_TOKEN" ]; then' in shell
+    assert (
+        "::warning::RELEASE_PR_TOKEN is not set: approve this PR's workflow "
+        "runs or it cannot merge."
+    ) in shell
     assert promote["permissions"] == {
         "contents": "write",
         "pull-requests": "write",
-        "actions": "write",
     }
     assert "create-github-app-token" not in str(release)
     assert "CLAUDE_APP" not in str(release)
     assert not re.search(r"git\s+push[^\n]*(?:HEAD:|origin\s+)develop", shell)
     assert "[skip ci]" not in shell
-    assert "test-pipeline.yml secret-scan.yml helm-validate.yml" in shell
-    assert 'gh workflow run "$workflow" --ref "$BRANCH"' in shell
+    assert "gh workflow run" not in shell
+    assert "gh pr list --base develop --state open --limit 100" in shell
+    assert 'startswith("codex/release-dev-")' in shell
+    assert '[ "$head" != "$BRANCH" ]' in shell
+    assert 'gh pr close "$number" --delete-branch --comment' in shell
+    assert (
+        shell.index("develop moved; the newer source run owns promotion")
+        < (shell.index('gh pr close "$number"'))
+        < shell.index('gh pr list --base develop --head "$BRANCH"')
+    )
     assert release["jobs"]["build"]["needs"] == "prepare"
     assert release["jobs"]["build"]["if"] == "needs.prepare.outputs.needed == 'true'"
 

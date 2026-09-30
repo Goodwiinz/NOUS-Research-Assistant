@@ -1,0 +1,23 @@
+{
+  "step": "A5-05-question-after-archive",
+  "as": "owner",
+  "at": "2026-09-29T10:17:29.928872+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/f40af11e-87a0-49a6-a715-714ef2298799/questions",
+    "body": {
+      "question": "eval-2026-09-29 mutation after archive"
+    }
+  },
+  "status": 409,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Project is not writable",
+      "status_code": 409,
+      "type": "http_error"
+    }
+  }
+}

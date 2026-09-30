@@ -43,7 +43,7 @@ from sqlalchemy.orm import selectinload
 
 from src.models.chat_message import ChatMessage
 from src.models.citation import Citation
-from src.models.collection import Collection
+from src.models.collection import Collection, CollectionDocument
 from src.models.conversation import Conversation
 from src.models.document import Document
 from src.models.message_attachment import MessageAttachment
@@ -306,7 +306,9 @@ async def get_collection(
 
     options = [selectinload(Collection.workspace).selectinload(Workspace.members)]
     if load_documents:
-        options.append(selectinload(Collection.documents))
+        options.append(
+            selectinload(Collection.documents).selectinload(CollectionDocument.document)
+        )
 
     stmt = select(Collection).options(*options).where(*conditions)
     result = await db.execute(stmt)
