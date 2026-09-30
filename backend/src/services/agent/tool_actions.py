@@ -7,6 +7,11 @@ conditional UPDATE, commits the claim, revalidates authority, then runs the
 effect and the receipt in one transaction. A commit that fails ambiguously
 leaves the row ``executing``; ``sweep_stale_actions`` moves it to
 ``outcome_unknown`` and nothing ever re-runs it.
+
+Authority is bound to the consent chain (the consumed grant request), not to
+one grant token: grants expire in minutes and renewal revokes the old token,
+while an approval is human-paced. A grant issued without a consent request
+(trusted internal issuance) is checked as itself.
 """
 
 import hashlib
@@ -16,11 +21,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.integration_grant import IntegrationGrant
+from src.core.config import settings
+from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
 from src.schemas.integration_tools import ToolInvocation, ToolResult
@@ -35,6 +41,8 @@ IDENTITY_KEYS = frozenset({"project_id", "user_id", "organization_id", "thread_i
 STALE_EXECUTION = timedelta(minutes=5)
 MAX_TITLE = 255
 MAX_CONTENT = 200_000
+MAX_TAG = 64
+REQUIRED_SCOPE = "tools:write"
 
 
 class ToolActionError(Exception):
@@ -70,23 +78,22 @@ def canonical_hash(tool_name: str, arguments: dict[str, Any]) -> str:
 def _validate_note_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     if IDENTITY_KEYS & arguments.keys():
         raise ToolActionArgumentError("identity arguments are not accepted")
-    unknown = arguments.keys() - {"title", "content", "tags"}
-    if unknown:
-        raise ToolActionArgumentError("unknown arguments")
+    if arguments.keys() - {"title", "content", "tags"}:
+        raise ToolActionArgumentError("only title, content and tags are accepted")
     title, content = arguments.get("title"), arguments.get("content")
-    if not isinstance(title, str) or not title.strip() or len(title) > MAX_TITLE:
+    if not isinstance(title, str) or not title.strip():
         raise ToolActionArgumentError("title is required")
-    if (
-        not isinstance(content, str)
-        or not content.strip()
-        or len(content) > MAX_CONTENT
-    ):
+    if len(title) > MAX_TITLE:
+        raise ToolActionArgumentError("title must be at most 255 characters")
+    if not isinstance(content, str) or not content.strip():
         raise ToolActionArgumentError("content is required")
+    if len(content) > MAX_CONTENT:
+        raise ToolActionArgumentError("content must be at most 200000 characters")
     tags = arguments.get("tags", [])
     if not isinstance(tags, list) or not all(
-        isinstance(t, str) and 0 < len(t) <= 64 for t in tags
+        isinstance(t, str) and 0 < len(t) <= MAX_TAG for t in tags
     ):
-        raise ToolActionArgumentError("tags must be short strings")
+        raise ToolActionArgumentError("tags must be strings of 1-64 characters")
     return {"title": title, "content": content, "tags": tags}
 
 
@@ -106,8 +113,10 @@ def _scoped(actor: ActionActor, invocation_id: UUID) -> Any:
         IntegrationToolAction.invocation_id == invocation_id,
         IntegrationToolAction.is_deleted.is_(False),
     )
-    if actor.grant_id is not None:
-        # A grant only ever sees the actions it requested.
+    if actor.consent_id is not None:
+        # Any grant renewed under the same consent sees the consent's actions.
+        query = query.where(IntegrationToolAction.consent_id == actor.consent_id)
+    elif actor.grant_id is not None:
         query = query.where(IntegrationToolAction.grant_id == actor.grant_id)
     return query.execution_options(populate_existing=True)
 
@@ -129,6 +138,7 @@ async def request_action(
             thread_id=actor.thread_id,
             run_id=str(actor.run_id) if actor.run_id else None,
             grant_id=actor.grant_id,
+            consent_id=actor.consent_id,
             invocation_id=invocation.invocation_id,
             tool_name=invocation.tool_name,
             arguments=arguments,
@@ -139,18 +149,32 @@ async def request_action(
         try:
             await db.commit()
         except IntegrityError:
-            # Concurrent identical request: the first writer wins, re-read it.
+            # Concurrent identical request, or the same id under another
+            # consent of this user: the first writer wins, re-read it. The
+            # rollback already discards the pending row.
             await db.rollback()
-            db.expunge(row)
+            logger.info(
+                "integration action insert lost a race",
+                extra={"invocation_id": str(invocation.invocation_id)},
+            )
             existing = await db.scalar(_scoped(actor, invocation.invocation_id))
         else:
             return _status(row)
     if existing is None:
-        # Same invocation id under a different grant: never disclose it.
+        # Same invocation id under a different consent: never disclose it.
         raise ActionConflict()
-    if existing.argument_hash != digest:
+    if existing.argument_hash != digest or not _same_target(existing, actor):
         raise ActionConflict()
     return _status(existing)
+
+
+def _same_target(row: IntegrationToolAction, actor: ActionActor) -> bool:
+    """A replay must name the stored target; the hash excludes server bindings."""
+    return (
+        row.project_id == actor.project_id
+        and row.thread_id == actor.thread_id
+        and row.run_id == (str(actor.run_id) if actor.run_id else None)
+    )
 
 
 async def decide_action(
@@ -204,23 +228,46 @@ async def get_action_status(
 
 async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str | None:
     """Return a stable reason when the request may no longer run."""
-    if row.grant_id is not None:
-        grant = await db.scalar(
-            select(IntegrationGrant)
-            .where(IntegrationGrant.id == row.grant_id)
-            .execution_options(populate_existing=True)
+    if row.grant_id is None:
+        return None  # trusted native request; the adapter still checks the project
+    grant = await db.scalar(
+        select(IntegrationGrant)
+        .where(IntegrationGrant.id == row.grant_id)
+        .execution_options(populate_existing=True)
+    )
+    if (
+        grant is None
+        or grant.is_deleted
+        or grant.user_id != row.user_id
+        or grant.organization_id != row.organization_id
+        or grant.project_id != row.project_id
+        or REQUIRED_SCOPE not in grant.scopes
+    ):
+        return "grant no longer authorizes this action"
+    if grant.request_id is None:
+        # No consent chain: the token itself must still be live.
+        if grant.revoked_at is not None or not live(grant.expires_at):
+            return "grant revoked or expired"
+        return None
+    if row.consent_id is not None and row.consent_id != grant.request_id:
+        return "grant no longer authorizes this action"
+    consent = await db.scalar(
+        select(IntegrationGrantRequest)
+        .where(
+            IntegrationGrantRequest.id == grant.request_id,
+            IntegrationGrantRequest.status == "consumed",
+            IntegrationGrantRequest.user_id == row.user_id,
+            IntegrationGrantRequest.organization_id == row.organization_id,
+            IntegrationGrantRequest.project_id == row.project_id,
+            IntegrationGrantRequest.consent_revoked_at.is_(None),
+            IntegrationGrantRequest.is_deleted.is_(False),
         )
-        if (
-            grant is None
-            or grant.is_deleted
-            or grant.revoked_at is not None
-            or not live(grant.expires_at)
-            or "tools:write" not in grant.scopes
-            or grant.user_id != row.user_id
-            or grant.organization_id != row.organization_id
-            or grant.project_id != row.project_id
-        ):
-            return "grant revoked or no longer authorizes this action"
+        .execution_options(populate_existing=True)
+    )
+    if consent is None or REQUIRED_SCOPE not in consent.scopes:
+        return "consent revoked"
+    if grant.device_id is not None and consent.device_id != grant.device_id:
+        return "consent revoked"
     return None
 
 
@@ -238,24 +285,54 @@ async def _run_effect(
     )
 
 
-async def execute_action(db: AsyncSession, invocation_id: UUID) -> ActionStatus | None:
-    """Run one approved action. Returns None when there was nothing to claim."""
-    row = await db.scalar(
-        select(IntegrationToolAction)
+async def _finish(
+    db: AsyncSession,
+    row_id: UUID,
+    *,
+    state: str,
+    last_error: str | None,
+    result: dict[str, Any] | None = None,
+) -> bool:
+    """Write the receipt only while the row is still ours; commit with the effect."""
+    written = await db.execute(
+        update(IntegrationToolAction)
         .where(
-            IntegrationToolAction.invocation_id == invocation_id,
-            IntegrationToolAction.state == "approved",
-            IntegrationToolAction.is_deleted.is_(False),
+            IntegrationToolAction.id == row_id,
+            IntegrationToolAction.state == "executing",
         )
-        .execution_options(populate_existing=True)
+        .values(
+            state=state,
+            last_error=last_error,
+            result=result,
+            executed_at=_now(),
+            updated_at=_now(),
+        )
     )
-    if row is None:
-        return None
+    if cast(CursorResult[Any], written).rowcount != 1:
+        # The sweeper already called this outcome unknown; discard the effect.
+        await db.rollback()
+        return False
+    # Effect and receipt commit together: a rollback here leaves no note, and
+    # an ambiguous commit leaves the row `executing` for the sweeper.
+    await db.commit()
+    return True
+
+
+async def _fail_after_rollback(
+    db: AsyncSession, row_id: UUID, reason: str, result: dict[str, Any] | None = None
+) -> ActionStatus | None:
+    await db.rollback()
+    await _finish(db, row_id, state="failed", last_error=reason, result=result)
+    row = await db.get(IntegrationToolAction, row_id, populate_existing=True)
+    return _status(row) if row is not None else None
+
+
+async def _execute_row(db: AsyncSession, row_id: UUID) -> ActionStatus | None:
     now = _now()
     claimed = await db.execute(
         update(IntegrationToolAction)
         .where(
-            IntegrationToolAction.id == row.id,
+            IntegrationToolAction.id == row_id,
             IntegrationToolAction.state == "approved",
         )
         .values(state="executing", claimed_at=now, updated_at=now)
@@ -264,49 +341,90 @@ async def execute_action(db: AsyncSession, invocation_id: UUID) -> ActionStatus 
     await db.commit()
     if cast(CursorResult[Any], claimed).rowcount != 1:
         return None
-    await db.refresh(row)
+    row = await db.get(IntegrationToolAction, row_id, populate_existing=True)
+    if row is None:
+        return None
+    invocation = {"invocation_id": str(row.invocation_id)}
 
-    reason = await _authority_intact(db, row)
-    user = None if reason else await db.get(User, row.user_id)
-    if user is None or not user.is_active or user.is_deleted:
-        reason = reason or "requesting user is not active"
+    try:
+        reason = await _authority_intact(db, row)
+        user = None if reason else await db.get(User, row.user_id)
+        if user is None or not user.is_active or user.is_deleted:
+            reason = reason or "requesting user is not active"
+        elif user.organization_id != row.organization_id:
+            reason = "requesting user left the organization"
+    except Exception as error:  # noqa: BLE001 - the outcome is known: nothing ran
+        logger.error(
+            "integration action authority check failed",
+            extra=invocation,
+            exc_info=error,
+        )
+        return await _fail_after_rollback(db, row_id, "authority check failed")
     if reason or user is None:
-        row.state, row.last_error, row.executed_at = "failed", reason, _now()
-        await db.commit()
-        return _status(row)
+        logger.warning("integration action denied: %s", reason, extra=invocation)
+        return await _fail_after_rollback(db, row_id, reason or "denied")
 
     try:
         payload = await _run_effect(db, row, user)
     except Exception as error:  # noqa: BLE001 - nothing was committed
-        await db.rollback()
-        row = await db.get(IntegrationToolAction, row.id, populate_existing=True)
-        if row is not None:
-            row.state, row.last_error = "failed", "effect failed before commit"
-            row.executed_at = _now()
-            await db.commit()
-        logger.warning("integration action effect failed", exc_info=error)
-        return _status(row) if row is not None else None
+        logger.error(
+            "integration action effect failed", extra=invocation, exc_info=error
+        )
+        return await _fail_after_rollback(db, row_id, "effect failed before commit")
 
-    is_error = "error" in payload
-    row.result = ToolResult(
+    if "error" in payload:
+        # The adapter reports failures as a payload and may leave the session
+        # poisoned; discard any partial write with the failed receipt.
+        logger.warning("integration action effect rejected", extra=invocation)
+        result = ToolResult(content=[payload], is_error=True, source_refs=[])
+        return await _fail_after_rollback(
+            db, row_id, str(payload.get("error")), result.model_dump(mode="json")
+        )
+
+    result = ToolResult(
         content=[payload],
-        is_error=is_error,
-        source_refs=([] if is_error else [{"note_id": payload.get("note_id")}]),
-    ).model_dump(mode="json")
-    row.state = "failed" if is_error else "succeeded"
-    row.last_error = str(payload.get("error")) if is_error else None
-    row.executed_at = _now()
-    # Effect and receipt commit together: a rollback here leaves no note, and
-    # an ambiguous commit leaves the row `executing` for the sweeper.
-    await db.commit()
-    return _status(row)
+        is_error=False,
+        source_refs=[{"note_id": payload.get("note_id")}],
+    )
+    if not await _finish(
+        db,
+        row_id,
+        state="succeeded",
+        last_error=None,
+        result=result.model_dump(mode="json"),
+    ):
+        logger.error(
+            "integration action finished after being marked unknown", extra=invocation
+        )
+    row = await db.get(IntegrationToolAction, row_id, populate_existing=True)
+    return _status(row) if row is not None else None
+
+
+async def execute_action(db: AsyncSession, invocation_id: UUID) -> ActionStatus | None:
+    """Run one approved action by invocation id. Returns None when nothing was claimed."""
+    row_id = await db.scalar(
+        select(IntegrationToolAction.id).where(
+            IntegrationToolAction.invocation_id == invocation_id,
+            IntegrationToolAction.state == "approved",
+            IntegrationToolAction.is_deleted.is_(False),
+        )
+    )
+    if row_id is None:
+        return None
+    return await _execute_row(db, row_id)
 
 
 async def drain_integration_actions(db: AsyncSession, *, limit: int = 50) -> int:
-    """Execute approved rows oldest first. Returns how many finished (any outcome)."""
-    invocation_ids = (
+    """Execute approved rows oldest first. Returns how many finished (any outcome).
+
+    Gated by the same kill switch as new requests: with the flag off, approved
+    rows wait instead of running.
+    """
+    if not settings.NOUS_MCP_ENABLED:
+        return 0
+    row_ids = (
         await db.scalars(
-            select(IntegrationToolAction.invocation_id)
+            select(IntegrationToolAction.id)
             .where(
                 IntegrationToolAction.state == "approved",
                 IntegrationToolAction.is_deleted.is_(False),
@@ -316,19 +434,23 @@ async def drain_integration_actions(db: AsyncSession, *, limit: int = 50) -> int
         )
     ).all()
     finished = 0
-    for invocation_id in invocation_ids:
-        if await execute_action(db, invocation_id) is not None:
+    for row_id in row_ids:
+        if await _execute_row(db, row_id) is not None:
             finished += 1
     return finished
 
 
 async def sweep_stale_actions(db: AsyncSession) -> int:
     """An `executing` row older than STALE_EXECUTION is uncertain, never retried."""
+    cutoff = _now() - STALE_EXECUTION
     swept = await db.execute(
         update(IntegrationToolAction)
         .where(
             IntegrationToolAction.state == "executing",
-            IntegrationToolAction.claimed_at < _now() - STALE_EXECUTION,
+            or_(
+                IntegrationToolAction.claimed_at.is_(None),
+                IntegrationToolAction.claimed_at < cutoff,
+            ),
         )
         .values(
             state="outcome_unknown",
@@ -337,4 +459,7 @@ async def sweep_stale_actions(db: AsyncSession) -> int:
         )
     )
     await db.commit()
-    return int(cast(CursorResult[Any], swept).rowcount)
+    count = int(cast(CursorResult[Any], swept).rowcount)
+    if count:
+        logger.error("integration actions with unknown outcome", extra={"count": count})
+    return count

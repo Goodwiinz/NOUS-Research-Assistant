@@ -15,7 +15,11 @@ from src.core.dependencies import get_current_user
 from src.core.security import TokenData, get_current_user_token
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.tool_actions import ActionStatus
-from src.services.agent.tool_actions import ActionConflict, ActionNotFound
+from src.services.agent.tool_actions import (
+    ActionConflict,
+    ActionNotFound,
+    ToolActionArgumentError,
+)
 from src.services.integrations.context import IntegrationAccessDenied
 
 pytestmark = pytest.mark.unit
@@ -24,7 +28,7 @@ CLI_HEADERS = {
     "Authorization": "Bearer cli-jwt",
     "X-NOUS-Integration-Grant": "opaque-grant",
 }
-BODY = {
+BODY: dict[str, Any] = {
     "tool_name": "create_project_note",
     "arguments": {"title": "t", "content": "c"},
     "invocation_id": str(INVOCATION),
@@ -240,3 +244,32 @@ def test_service_errors_map_to_stable_statuses(
         headers={"Authorization": "Bearer browser"},
     )
     assert unknown_field.status_code == 422
+
+
+def test_argument_errors_are_422_with_the_stable_reason(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.api.integrations import actions
+    from src.services.agent import tool_actions
+
+    monkeypatch.setattr(
+        actions,
+        "request_action",
+        lambda *_a, **_k: _completed(
+            ToolActionArgumentError("identity arguments are not accepted")
+        ),
+    )
+    patched = client.post(
+        "/api/v1/integrations/actions", json=BODY, headers=CLI_HEADERS
+    )
+    assert patched.status_code == 422
+    assert patched.json()["detail"] == "identity arguments are not accepted"
+    # End to end through the real service: validation runs before any DB use.
+    monkeypatch.setattr(actions, "request_action", tool_actions.request_action)
+    real = client.post(
+        "/api/v1/integrations/actions",
+        json={**BODY, "arguments": {**BODY["arguments"], "project_id": str(uuid4())}},
+        headers=CLI_HEADERS,
+    )
+    assert real.status_code == 422
+    assert real.json()["detail"] == "identity arguments are not accepted"

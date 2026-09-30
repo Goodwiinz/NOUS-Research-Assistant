@@ -12,6 +12,23 @@ revision = "it01_integration_actions"
 down_revision = "a3c5e7f9b1d4"
 branch_labels = None
 depends_on = None
+_POSTGREST_ROLES = ("anon", "authenticated")
+
+
+def _deny_data_api(table: str) -> None:
+    # Copied from f2a4c6e8b0d3: internal ledger, never reachable through the
+    # Data API. An inherited insert could forge an `approved` native row.
+    op.execute(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY')
+    for role in _POSTGREST_ROLES:
+        op.execute(f"""
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+                    EXECUTE 'REVOKE ALL ON TABLE "{table}" FROM {role}';
+                END IF;
+            END
+            $$
+            """)
 
 
 def upgrade() -> None:
@@ -47,6 +64,7 @@ def upgrade() -> None:
         ),
         sa.Column("run_id", sa.String(36), sa.ForeignKey("agent_runs.job_id")),
         sa.Column("grant_id", postgresql.UUID(as_uuid=True)),
+        sa.Column("consent_id", postgresql.UUID(as_uuid=True)),
         sa.Column("invocation_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("tool_name", sa.String(64), nullable=False),
         sa.Column("arguments", sa.JSON(), nullable=False),
@@ -74,6 +92,15 @@ def upgrade() -> None:
     op.create_index(
         "ix_integration_tool_actions_state", "integration_tool_actions", ["state"]
     )
+    op.create_index(
+        "ix_integration_tool_actions_consent_id",
+        "integration_tool_actions",
+        ["consent_id"],
+    )
+    op.create_index(
+        "ix_integration_tool_actions_id", "integration_tool_actions", ["id"]
+    )
+    _deny_data_api("integration_tool_actions")
 
 
 def downgrade() -> None:

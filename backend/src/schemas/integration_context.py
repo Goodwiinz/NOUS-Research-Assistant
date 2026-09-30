@@ -28,6 +28,9 @@ class IntegrationContext(BaseModel):
     thread_id: UUID | None = None
     run_id: UUID | None = None
     grant_id: UUID
+    # The consumed consent request the grant was exchanged from; None for
+    # trusted internal issuance. Renewed grants share it.
+    consent_id: UUID | None = None
 
 
 class IssuedGrant(BaseModel):

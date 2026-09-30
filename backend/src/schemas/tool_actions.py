@@ -28,6 +28,8 @@ class ActionActor(BaseModel):
     run_id: UUID | None = None
     # None only for trusted native NOUS requests.
     grant_id: UUID | None = None
+    # Consumed grant request behind the grant, when it was issued by consent.
+    consent_id: UUID | None = None
 
 
 class ActionStatus(BaseModel):

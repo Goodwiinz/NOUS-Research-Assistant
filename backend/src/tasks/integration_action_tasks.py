@@ -27,4 +27,9 @@ def drain_integration_actions() -> int:
 
 @celery_app.task(name="src.tasks.integration_action_tasks.sweep_stale_actions")
 def sweep_stale_actions() -> int:
+    """Beat entry point; flag-gated like the other sweepers."""
+    from src.core.config import settings
+
+    if not settings.SWEEPERS_ENABLED:
+        return 0
     return run_async(_sweep())

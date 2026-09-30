@@ -41,6 +41,7 @@ def _actor(context: IntegrationContext) -> ActionActor:
         thread_id=context.thread_id,
         run_id=context.run_id,
         grant_id=context.grant_id,
+        consent_id=context.consent_id,
     )
 
 

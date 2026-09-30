@@ -60,6 +60,9 @@ class IntegrationToolAction(BaseModel):
     # None for trusted native requests; external requests always carry one and
     # the grant is revalidated immediately before the effect.
     grant_id: Mapped[UUID | None] = mapped_column(GUID())
+    # The consumed grant request behind the grant; renewals keep it, user
+    # revocation ends it. Authority and read scope follow this, not the token.
+    consent_id: Mapped[UUID | None] = mapped_column(GUID(), index=True)
     invocation_id: Mapped[UUID] = mapped_column(GUID(), nullable=False)
     tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
     arguments: Mapped[dict] = mapped_column(JSON, nullable=False)
