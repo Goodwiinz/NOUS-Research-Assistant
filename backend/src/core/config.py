@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     HARNESS_BRIDGE_ENABLED: bool = False
     # Kill switch for the scoped integration read gateway (/integrations/tools).
     NOUS_MCP_ENABLED: bool = False
+    # Artifact workspace rollout flags; reads stay available when writes are off.
+    ARTIFACTS_ENABLED: bool = False
+    ARTIFACT_EDITING_ENABLED: bool = False
+    ARTIFACT_PREVIEW_ENABLED: bool = False
+    ARTIFACT_SHARING_ENABLED: bool = False
 
     # Application
     APP_NAME: str = "Multimodal Enterprise RAG System"

@@ -26,6 +26,7 @@ export const AGENT_STREAM_EVENTS = [
   'approval_required',
   'done',
   'error',
+  'artifact',
 ] as const;
 
 /** Union of every agent SSE event name (mirror of backend `AgentStreamEvent`). */

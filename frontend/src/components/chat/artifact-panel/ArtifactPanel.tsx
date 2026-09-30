@@ -22,6 +22,7 @@ import {
   useDraftCitations,
   useNoteArtifact,
 } from '@/components/chat/artifact-panel/useArtifactContent';
+import { GeneratedArtifactBody } from '@/components/chat/artifact-panel/GeneratedArtifactBody';
 import { DocumentInlineViewer } from '@/components/documents/DocumentInlineViewer';
 import { cn } from '@/lib/utils';
 import { documentService } from '@/services/documentService';
@@ -52,6 +53,7 @@ const KIND_LABEL: Record<Artifact['kind'], string> = {
   external: 'External',
   note: 'Note',
   draft: 'Draft',
+  generated: 'File',
   citations: 'Sources',
 };
 
@@ -529,6 +531,9 @@ export function ArtifactPanel({
             />
           )}
           {artifact.kind === 'note' && <NoteArtifactBody artifact={artifact} />}
+          {artifact.kind === 'generated' && (
+            <GeneratedArtifactBody artifact={artifact} />
+          )}
           {artifact.kind === 'draft' && (
             <DraftArtifactBody
               artifact={artifact}
