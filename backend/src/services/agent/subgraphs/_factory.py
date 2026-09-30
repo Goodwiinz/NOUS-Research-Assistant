@@ -19,7 +19,6 @@ change and belongs in its own PR, not here.
 """
 
 import asyncio
-import json
 import logging
 from typing import (
     Awaitable,
@@ -37,12 +36,18 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
+from src.services.agent._sanitize import (
+    _TOOL_ERROR_DEGRADED_ANSWER,
+    _TOOL_PLACEHOLDER_CONTENT,
+    normalize_terminal_messages,
+    terminal_message_additions,
+)
 from src.services.agent.compactor import make_compactor_node
-from src.services.agent.graph import _TOOL_PLACEHOLDER_CONTENT, _sanitize_messages
+from src.services.agent.execution_evidence import result_evidence_state
+from src.services.agent.graph import MAX_ERRORS, _sanitize_messages
 from src.services.agent.observability import track_node_execution
 from src.services.agent.planner import make_planner_node
 from src.services.agent.reflection import make_reflection_gate
-from src.services.agent.retrieval_provenance import render_retrieval_prompt
 from src.services.agent.state import AgentState
 from src.services.agent.tool_registry import ToolPolicyTag, ToolRegistry
 from src.services.agent.tools import TOOL_REGISTRY
@@ -91,28 +96,7 @@ def _execution_evidence_state(
     """Classify whether a ToolMessage proves completion, start, or neither."""
     if getattr(message, "status", "success") != "success":
         return "none"
-    content = str(message.content or "").strip()
-    if not content:
-        return "none"
-    try:
-        payload = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        return "completed"
-    if not isinstance(payload, dict):
-        return "completed"
-    status = str(payload.get("status") or "").lower()
-    if payload.get("error") or status in {
-        "cancelled",
-        "denied",
-        "error",
-        "failed",
-        "skipped",
-        "timeout",
-    }:
-        return "none"
-    if status == "pending":
-        return "pending"
-    return "completed"
+    return result_evidence_state(message.content)
 
 
 def _is_execution_evidence(message: ToolMessage) -> bool:
@@ -126,10 +110,7 @@ def _is_execution_evidence(message: ToolMessage) -> bool:
 # SOME content-bearing AIMessage to persist as this turn's answer; without
 # it, the walk falls through to whatever content-bearing AIMessage precedes
 # this turn (a stale prior-turn answer, or nothing at all on turn one).
-_BREAKER_DEGRADED_ANSWER = (
-    "I hit repeated tool errors and I'm stopping here without finishing the "
-    "remaining steps. Let me know how you'd like to proceed."
-)
+_BREAKER_DEGRADED_ANSWER = _TOOL_ERROR_DEGRADED_ANSWER
 
 
 def _placeholder_tool_messages(tool_calls: list, content: str) -> list[ToolMessage]:
@@ -194,10 +175,17 @@ def make_specialist_subgraph(
             working — a closure over this module's import would freeze
             the patch point.
     """
-    tool_names_list = [
-        descriptor.name for descriptor in TOOL_REGISTRY.descriptors_for_subgraph(name)
-    ]
-    allowed_tool_names = set(tool_names_list) | {"load_project_skill"}
+    from src.services.agent.tool_registry import runtime_tool_descriptors
+
+    def projected_tool_names(state: AgentState) -> list[str]:
+        return [
+            descriptor.name
+            for descriptor in runtime_tool_descriptors(
+                name, state, tool_registry_getter()
+            )
+        ]
+
+    setattr(projected_tool_names, "__agent_branch__", name)
 
     llm = f"{name}_llm_node"
     tool = f"{name}_tool_node"
@@ -209,9 +197,19 @@ def make_specialist_subgraph(
 
     def should_continue(state: AgentState) -> str:
         """Decide whether to continue tool execution in this sub-graph."""
+        last = state["messages"][-1] if state["messages"] else None
+        if isinstance(last, AIMessage) and last.tool_calls:
+            from src.services.agent._nodes_tools import unavailable_tool_calls
+
+            # Route a mixed/unsupported batch to the paired whole-batch
+            # rejection before approval, error-circuit, or loop-ceiling
+            # handling. That execution boundary records errors for every call
+            # and performs no operation claim or effect.
+            if unavailable_tool_calls(last.tool_calls, state, branch=name):
+                return tool
+
         if state.get("error_count", 0) >= 3:
             return reflection
-        last = state["messages"][-1] if state["messages"] else None
         if isinstance(last, AIMessage) and last.tool_calls:
             if state.get("tool_loop_count", 0) < max_tool_loops:
                 if has_interrupt and any(
@@ -271,19 +269,6 @@ def make_specialist_subgraph(
             messages.pop()
 
         sanitized = _sanitize_messages(messages)
-        non_evidence_ids = [
-            message.tool_call_id
-            for message in sanitized
-            if isinstance(message, ToolMessage)
-            and _execution_evidence_state(message) == "none"
-        ]
-        pending_ids = [
-            message.tool_call_id
-            for message in sanitized
-            if isinstance(message, ToolMessage)
-            and _execution_evidence_state(message) == "pending"
-        ]
-        base_prompt = prompt_builder()
         addendum = synthesis_addendum.format(count=state.get("tool_loop_count", 0))
         limit_contract = (
             "\n\nThe unanswered tool request was not executed because the "
@@ -294,46 +279,10 @@ def make_specialist_subgraph(
             "or error ToolMessages do not prove execution. A pending status proves "
             "the tool started but does not prove completion. Any requested tool or "
             "stage without execution evidence must be described as not executed. "
-            + (
-                "These tool call IDs are not execution evidence: "
-                f"{json.dumps(non_evidence_ids)}. "
-                if non_evidence_ids
-                else ""
-            )
-            + (
-                "These tool call IDs started asynchronously and remain pending: "
-                f"{json.dumps(pending_ids)}; they must be reported as "
-                "started/pending, not completed. "
-                if pending_ids
-                else ""
-            )
-            + "Answer the user's original request from completed tool results "
+            "Answer the user's original request from completed tool results "
             "only. State that the execution limit stopped the remaining work "
             "and identify the last completed or verified result."
         )
-        retrieval_prompt = render_retrieval_prompt(
-            state.get("retrieved_contexts", []), sanitized
-        )
-        from src.services.agent._nodes_llm import _attachment_status_part
-
-        attachment_status_prompt = _attachment_status_part(
-            state.get("attachment_status", [])
-        )
-        attachment_status_suffix = (
-            f"\n\n{attachment_status_prompt}" if attachment_status_prompt else ""
-        )
-        full = [
-            SystemMessage(
-                content=(
-                    base_prompt
-                    + attachment_status_suffix
-                    + "\n\n"
-                    + retrieval_prompt
-                    + addendum
-                    + limit_contract
-                )
-            )
-        ] + sanitized
 
         # No bind_tools — force a pure text response.
         from src.services.agent.graph import (
@@ -341,8 +290,28 @@ def make_specialist_subgraph(
             _build_llm,
             _merge_run_config,
         )
+        from src.services.agent.llm_factory import resolve_chat_deployment
+        from src.services.agent.runtime_context import (
+            forced_synthesis_static_prompt,
+            render_dynamic_context,
+        )
 
         llm_client = _build_llm(state.get("model") or None)
+        dynamic_context = render_dynamic_context(
+            state,
+            config,
+            resolved_model=resolve_chat_deployment(state.get("model") or None),
+            execution_closed=True,
+            branch=name,
+            messages=sanitized,
+            server_guidance=(addendum, limit_contract),
+        )
+        full = [
+            SystemMessage(
+                content=(forced_synthesis_static_prompt() + "\n\n" + dynamic_context)
+            ),
+            *sanitized,
+        ]
 
         # _merge_run_config returns a plain dict; cast for the ainvoke
         # signature (mypy blocks on added files — the historical modules
@@ -480,34 +449,19 @@ def make_specialist_subgraph(
     )
 
     async def reflection_entry_node(state: AgentState, config: RunnableConfig) -> dict:
-        """Answer dangling tool_calls before delegating to the reflection gate.
+        """Normalize terminal history before handing it to reflection."""
+        messages = state.get("messages", [])
+        reason = (
+            _BREAKER_DEGRADED_ANSWER
+            if state.get("error_count", 0) >= MAX_ERRORS
+            else "I could not complete this request. Please try again or adjust your request."
+        )
+        normalized = normalize_terminal_messages(messages, reason)
+        additions = terminal_message_additions(messages, normalized)
 
-        should_continue's error-ceiling branch (checked BEFORE the
-        tool_calls check — see should_continue) routes straight here
-        without ever visiting the tool node, so the trailing AIMessage can
-        still carry unanswered tool_calls. Every OTHER edge into this node
-        already leaves tool_calls answered or absent — force_synthesis
-        never emits tool_calls (no bind_tools) and the interrupt-deny
-        branch answers them itself (interrupt_node_fn) — so "last message
-        is an AIMessage with tool_calls" unambiguously identifies the
-        breaker path; no separate flag needs threading through state.
-        Left unrepaired, the dangling call would survive to
-        agent_execution_service._run_agent_graph's extraction walk, which
-        skips content-less AIMessages and would persist a STALE prior-turn
-        answer as this turn's result.
-        """
-        last = state["messages"][-1] if state.get("messages") else None
-        extra_messages: list = []
-        if isinstance(last, AIMessage) and last.tool_calls:
-            extra_messages = _placeholder_tool_messages(
-                last.tool_calls, _TOOL_PLACEHOLDER_CONTENT
-            )
-            if not (isinstance(last.content, str) and last.content.strip()):
-                extra_messages.append(AIMessage(content=_BREAKER_DEGRADED_ANSWER))
-
-        updates = await _raw_reflection_node(state, config)
-        if extra_messages:
-            updates = {**updates, "messages": extra_messages}
+        updates = await _raw_reflection_node({**state, "messages": normalized}, config)
+        if additions:
+            updates = {**updates, "messages": additions}
         return updates
 
     _rename(reflection_entry_node, reflection)
@@ -522,11 +476,20 @@ def make_specialist_subgraph(
         synthesis so it produces a final answer from the cached results
         already in state.
         """
+        if state.get("capability_limitation"):
+            return "capability_terminal"
         if state.get("tools_all_deduped"):
             return force_synthesis
         return compactor_name
 
     _rename(route_after_tool_node, f"route_after_{name}_tool_node")
+
+    def route_after_planner_node(state: AgentState) -> str:
+        if state.get("capability_limitation"):
+            return "capability_terminal"
+        return llm
+
+    _rename(route_after_planner_node, f"route_after_{name}_planner_node")
 
     def reflection_route(state: AgentState) -> str:
         """Route after reflection: revise loops back to LLM, proceed exits."""
@@ -553,9 +516,9 @@ def make_specialist_subgraph(
         """
         from src.services.agent.graph import make_filtered_tool_node
 
-        filtered_tool = make_filtered_tool_node(allowed_tool_names)
+        filtered_tool = make_filtered_tool_node(branch=name)
 
-        planner = make_planner_node(tool_names_list)
+        planner = make_planner_node(projected_tool_names)
         compactor = make_compactor_node()
 
         graph = StateGraph(AgentState)
@@ -573,7 +536,11 @@ def make_specialist_subgraph(
         graph.add_node(reflection, reflection_entry_node)
 
         graph.set_entry_point(planner_name)
-        graph.add_edge(planner_name, llm)
+        graph.add_conditional_edges(
+            planner_name,
+            route_after_planner_node,
+            {llm: llm, "capability_terminal": END},
+        )
 
         llm_routes: dict[Hashable, str] = {
             tool: tool,
@@ -607,6 +574,7 @@ def make_specialist_subgraph(
             {
                 compactor_name: compactor_name,
                 force_synthesis: force_synthesis,
+                "capability_terminal": END,
             },
         )
         graph.add_edge(compactor_name, llm)

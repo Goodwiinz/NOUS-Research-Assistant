@@ -676,17 +676,7 @@ export type DraftReviewListResponse = Omit<
   'reviews'
 > & { reviews: DraftReview[] };
 
-export interface GenerationStatus {
-  task_id?: string;
-  status: string;
-  progress: number;
-  current_step: string;
-  started_at: string;
-  updated_at?: string;
-  estimated_remaining?: number;
-  draft_id?: string;
-  duration?: number;
-}
+export type GenerationStatus = components['schemas']['DraftTaskStatusResponse'];
 
 export interface DraftCitation {
   id: string;

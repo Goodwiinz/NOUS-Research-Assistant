@@ -132,7 +132,11 @@ class ProjectService:
         }
 
     async def create_project(
-        self, user_id: UUID, project_data: ProjectCreate
+        self,
+        user_id: UUID,
+        project_data: ProjectCreate,
+        *,
+        commit: bool = True,
     ) -> Collection:
         """Create a project after ownership validation."""
         workspace = await require_research_workspace(
@@ -173,7 +177,10 @@ class ProjectService:
         )
 
         self.db.add(project)
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
         await self.db.refresh(project)
         self._set_capabilities(project, workspace, user_id)
         return project
@@ -188,6 +195,7 @@ class ProjectService:
         tags: Optional[List[str]] = None,
         linked_document_ids: Optional[List[Any]] = None,
         is_pinned: bool = False,
+        commit: bool = True,
     ) -> ProjectNote:
         """Persist a note after checking ordinary project edit authority."""
         await resolve_project(self.db, project_id, user_id, ResearchAction.EDIT)
@@ -201,7 +209,10 @@ class ProjectService:
             is_pinned=is_pinned,
         )
         self.db.add(note)
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
         await self.db.refresh(note)
         return note
 

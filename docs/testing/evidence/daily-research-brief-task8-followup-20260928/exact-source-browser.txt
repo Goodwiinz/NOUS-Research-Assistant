@@ -1,0 +1,39 @@
+CLASSIFICATION: PASS
+SOURCE_SHA: 9ca9d6a2995ba8dd52328efd0e5cd93856138b4a
+RAW_CAPTURE_SHA256: 146595cef6179a554b7b71413a99754231fc6dc9a4ad7d529a1b90dfd242e0be
+EXIT_STATUS: 0
+
+PRECONDITION:
+  git HEAD equaled SOURCE_SHA and the worktree was clean.
+
+SERVER ENVIRONMENT (secret values redacted; fixture values shown):
+  BACKEND_URL=http://127.0.0.1:8765
+  NEXT_PUBLIC_API_BASE_URL=/api/v1
+  NEXT_PUBLIC_API_URL=
+  NEXT_PUBLIC_AUTH_COOKIE_NAME=daily-brief-e2e-auth
+  NEXT_PUBLIC_SUPABASE_URL=http://localhost:3000/api/v1/auth-fixture
+  SUPABASE_SERVER_URL=http://127.0.0.1:8765/api/v1/auth-fixture
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=e2e-anon-key
+  DAILY_RESEARCH_BRIEF_ENABLED=true
+
+NEXT COMMAND:
+  "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 --dir frontend run dev:offline
+
+EXACT TEST COMMAND:
+  DAILY_RESEARCH_BRIEF_ENABLED=true ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" DAILY_BRIEF_E2E_PORT=8765 "$NODE24_BIN" /usr/bin/corepack pnpm@10.18.2 --dir frontend exec playwright test e2e/research-engine/daily-research-brief.spec.ts --project=chromium --reporter=line
+
+SALIENT OUTPUT:
+  Running 10 tests using 1 worker
+  reloads all three gates and persists exact artifacts and downloads PASSED
+  retains successful evidence and coverage after a provider partial failure PASSED
+  renders a durable no-evidence result and keeps audit downloads available PASSED
+  stops at a persisted verification failure without offering final approval PASSED
+  binds an explicit override to the failed verification hash PASSED
+  reconnects and manually resumes the same run without duplicating screening PASSED
+  DAILY_BRIEF_REVIEW_PAGE={"candidateRows":200,"samples":11,"p50Ms":519.3,"p95Ms":745.9}
+  stale review, immutable duplicate review, and owner-denial scenarios PASSED
+  10 passed (2.6m)
+
+The frozen browser ceiling is 999.24 ms. The server-owned feature flag was
+enabled only in this isolated test environment. It was not enabled in
+production.

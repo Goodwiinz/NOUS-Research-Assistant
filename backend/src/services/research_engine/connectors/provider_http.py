@@ -87,18 +87,57 @@ def _retry_delay(response: httpx.Response, attempt: int) -> float:
 
 
 async def get(
-    client: httpx.AsyncClient, url: str, *, provider: str, **kwargs: Any
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    provider: str,
+    search_trace: Any = None,
+    **kwargs: Any,
 ) -> httpx.Response:
+    attempt_history: list[dict[str, Any]] = []
     for attempt in range(3):
         await wait_for_slot(provider)
+        request_started_at = datetime.now(timezone.utc).isoformat()
         try:
             response = await client.get(url, **kwargs)
-        except httpx.TransportError:
+        except httpx.TransportError as exc:
+            attempt_history.append(
+                {
+                    "attempt": attempt + 1,
+                    "requested_at": request_started_at,
+                    "error_type": type(exc).__name__,
+                }
+            )
             if attempt == 2:
+                if search_trace is not None:
+                    await search_trace.record_failed_request(
+                        "TransportError",
+                        attempts=attempt + 1,
+                        attempt_history=attempt_history,
+                    )
                 raise
             await asyncio.sleep(2**attempt)
             continue
+        attempt_history.append(
+            {
+                "attempt": attempt + 1,
+                "requested_at": request_started_at,
+                "status_code": response.status_code,
+            }
+        )
+        response.extensions["search_request_started_at"] = request_started_at
+        response.extensions["search_request_attempt"] = attempt + 1
+        response.extensions["search_request_attempts"] = attempt_history
+        if search_trace is not None:
+            await search_trace.record_response(response)
         if response.status_code not in (429, 500, 502, 503, 504) or attempt == 2:
+            if response.is_error and search_trace is not None:
+                await search_trace.record_page(
+                    endpoint=url,
+                    params=kwargs.get("params") or {},
+                    response=response,
+                    error_type="HTTPStatusError",
+                )
             response.raise_for_status()
             return response
         delay = _retry_delay(response, attempt)

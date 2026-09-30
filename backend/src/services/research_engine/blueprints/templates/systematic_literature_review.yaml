@@ -1,6 +1,7 @@
 name: "Systematic Literature Review"
 description: "Conduct a systematic literature review following PRISMA-like methodology: search multiple academic databases, screen results by inclusion/exclusion criteria, extract key data, synthesize findings, verify grounding, and export a structured report."
 parameters:
+  contract_version: 1
   query: ""
   databases:
     - arxiv
@@ -22,11 +23,9 @@ steps:
     name: "Academic Database Search"
     description: "Search arxiv, Semantic Scholar, and PubMed for papers matching the research query."
     parameters:
-      sources:
-        - arxiv
-        - semantic_scholar
-        - pubmed
-      max_results_per_source: 50
+      contract_version: 1
+      sources: "{databases}"
+      max_results_per_source: "{max_results_per_source}"
     model_id: null
     mode: deterministic
     system_prompt_template: null
@@ -35,6 +34,8 @@ steps:
     name: "Title and Abstract Screening"
     description: "Screen retrieved papers by title and abstract using inclusion and exclusion criteria to determine relevance."
     parameters:
+      contract_version: 1
+      output_kind: screening
       screening_fields:
         - title
         - abstract
@@ -46,18 +47,20 @@ steps:
       You are a systematic review screening assistant. Evaluate each paper against the following criteria.
       Inclusion: {inclusion_criteria}
       Exclusion: {exclusion_criteria}
-      Return a JSON object with fields: included (bool), reason (string).
+      Return exactly {"screening":[{"source_id":"<UUID>","part_id":"p0001","included":true,"reason":"Matches the inclusion criteria"}]} with one decision per supplied source part.
 
   - type: extract
     name: "Data Extraction"
     description: "Extract key data fields from each included paper: title, authors, year, methodology, findings, and limitations."
     parameters:
+      contract_version: 1
+      output_kind: review_fields
       fields: "{extraction_fields}"
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >
-      Extract the following fields from the paper: {extraction_fields}.
-      Return structured JSON matching the requested schema.
+      Return exactly {"records":[{"source_id":"<UUID>","part_id":"p0001","data":{"title":"Example title"},"evidence":[{"pointer":"/title","quote":"Example title","page_reference":null}]}]} for requested fields {extraction_fields}.
+      Include exact source-substring evidence for every non-null scalar leaf. Use null only when the generated extraction schema permits null. Set page_reference to null unless trusted source metadata supplied a page locator.
 
   - type: synthesize
     name: "Narrative Synthesis"
@@ -66,9 +69,8 @@ steps:
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >
-      Synthesize the extracted data into a narrative literature review.
-      Identify key themes, areas of agreement, disagreements, and gaps.
-      Cite sources inline using [Author, Year] format.
+      Return exactly {"sections":[{"heading":"Findings","claims":[{"claim_text":"The study reports a lower score","evidence":[{"evidence_id":"e0001","relation":"supports"}]}]}]}.
+      Use only supplied evidence IDs, include at least one supporting reference per factual claim, and use relation supports or contradicts. Do not infer full-paper evidence from abstracts.
 
   - type: verify
     name: "Source Grounding Verification"
@@ -77,9 +79,8 @@ steps:
     model_id: "claude-sonnet-4-6"
     mode: deterministic
     system_prompt_template: >
-      Verify each claim in the synthesis against the source material.
-      Flag any claim that is not directly supported by the extracted data.
-      Return a list of verified and unverified claims with source references.
+      Return exactly {"checks":[{"claim_id":"c0001","status":"supported","reason":"The cited excerpt states this result"}]} with exactly one check per supplied claim ID.
+      Status must be supported, unverified, or contradicted. Assess each claim only against its supplied original source quotes.
 
   - type: export
     name: "Markdown Report Export"

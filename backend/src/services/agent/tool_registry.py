@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 from langchain_core.tools import BaseTool
 
@@ -45,6 +45,14 @@ class ToolPolicyTag(StrEnum):
     CONTEXT_REQUIRED = "context_required"
 
 
+class ToolEffectMode(StrEnum):
+    """Business-effect boundary used by durable operation orchestration."""
+
+    READ_ONLY = "read_only"
+    LOCAL_TRANSACTION = "local_transaction"
+    EXTERNAL = "external"
+
+
 @dataclass(frozen=True)
 class ToolDescriptor:
     """Immutable metadata for one decorated LangChain tool wrapper."""
@@ -54,6 +62,7 @@ class ToolDescriptor:
     intents: frozenset[AgentIntent]
     subgraphs: frozenset[AgentSubgraph]
     policy_tags: frozenset[ToolPolicyTag]
+    effect_mode: ToolEffectMode = ToolEffectMode.READ_ONLY
     enabled: bool = True
     exposed_in_all_tools: bool = True
     availability_condition: str | None = None
@@ -63,7 +72,7 @@ class ToolDescriptor:
 class ToolRegistry:
     """Validated, deterministic view over code-defined tool descriptors."""
 
-    METADATA_VERSION = "1"
+    METADATA_VERSION = "2"
 
     def __init__(self, descriptors: Iterable[ToolDescriptor]) -> None:
         self._descriptors = tuple(descriptors)
@@ -158,6 +167,19 @@ class ToolRegistry:
                 raise TypeError(
                     "tool descriptor policy_tags must contain ToolPolicyTag values"
                 )
+            if not isinstance(descriptor.effect_mode, ToolEffectMode):
+                raise TypeError("tool descriptor effect_mode must be a ToolEffectMode")
+            if descriptor.effect_mode != ToolEffectMode.READ_ONLY:
+                required_tags = {
+                    ToolPolicyTag.DESTRUCTIVE,
+                    ToolPolicyTag.NO_OUTER_RETRY,
+                }
+                if not required_tags.issubset(descriptor.policy_tags):
+                    raise ValueError(
+                        "mutating tool effects require destructive and no_outer_retry policies"
+                    )
+                if ToolPolicyTag.CONTEXT_FREE in descriptor.policy_tags:
+                    raise ValueError("mutating tool effects cannot be context-free")
             if (
                 ToolPolicyTag.NO_OUTER_RETRY in descriptor.policy_tags
                 and ToolPolicyTag.SLOW not in descriptor.policy_tags
@@ -176,6 +198,7 @@ class ToolRegistry:
                     subgraph.value for subgraph in descriptor.subgraphs
                 ),
                 "policy_tags": sorted(tag.value for tag in descriptor.policy_tags),
+                "effect_mode": descriptor.effect_mode.value,
                 "enabled": descriptor.enabled,
                 "exposed_in_all_tools": descriptor.exposed_in_all_tools,
                 "availability_condition": descriptor.availability_condition,
@@ -277,6 +300,7 @@ class ToolRegistry:
                 "intents": sorted(value.value for value in item.intents),
                 "subgraphs": sorted(value.value for value in item.subgraphs),
                 "policy_tags": sorted(value.value for value in item.policy_tags),
+                "effect_mode": item.effect_mode.value,
                 "enabled": item.enabled,
                 "exposed_in_all_tools": item.exposed_in_all_tools,
                 "availability_condition": item.availability_condition,
@@ -288,3 +312,124 @@ class ToolRegistry:
             for item in self._descriptors
             if item.name in self.available_descriptor_names(conditions=conditions)
         ]
+
+
+_BARE_GREETINGS: frozenset[str] = frozenset(
+    {
+        "hi",
+        "hii",
+        "hiya",
+        "hey",
+        "heya",
+        "hello",
+        "hello there",
+        "hi there",
+        "hey there",
+        "yo",
+        "greetings",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    }
+)
+
+
+def is_bare_greeting_text(content: str) -> bool:
+    """Match the narrow greeting fast-path used by main capability binding."""
+    normalized = " ".join((content or "").lower().strip().strip("!.?,").split())
+    return normalized in _BARE_GREETINGS
+
+
+def runtime_tool_descriptors(
+    branch: str,
+    state: Mapping[str, Any],
+    registry: ToolRegistry,
+    *,
+    skill_runtime_enabled: bool | None = None,
+) -> tuple[ToolDescriptor, ...]:
+    """Project one executable capability set from the frozen turn snapshot.
+
+    A persisted snapshot can remove tools from a live registry but cannot add
+    them.  When a checkpoint names a snapshot but lacks its frozen membership,
+    callers must hydrate it from the authorized snapshot row before invoking
+    this function; until then the projection is empty.
+    """
+    branch_key = str(branch or "").strip().lower()
+    if branch_key == "main":
+        intent = str(state.get("intent") or AgentIntent.GENERAL.value)
+        descriptors = registry.descriptors_for_intent(intent)
+        if not descriptors:
+            descriptors = registry.descriptors_for_intent(AgentIntent.GENERAL.value)
+        if intent == AgentIntent.GENERAL.value and not state.get("retrieved_contexts"):
+            messages = state.get("messages") or ()
+            human = next(
+                (
+                    message
+                    for message in reversed(messages)
+                    if getattr(message, "type", None) == "human"
+                    or message.__class__.__name__ == "HumanMessage"
+                ),
+                None,
+            )
+            content = getattr(human, "content", "") if human is not None else ""
+            if isinstance(content, str) and is_bare_greeting_text(content):
+                return ()
+    elif branch_key in {item.value for item in AgentSubgraph}:
+        descriptors = registry.descriptors_for_subgraph(branch_key)
+    else:
+        return ()
+
+    # Conditional tools are not assigned to a business intent/subgraph. They
+    # may join a branch only when the frozen snapshot explicitly recorded
+    # them and the current deny-only flag still permits them.
+    descriptors = tuple(descriptors) + tuple(
+        descriptor
+        for descriptor in registry.descriptors
+        if descriptor.availability_condition == "project_skill_catalog"
+        and descriptor not in descriptors
+    )
+
+    if state.get("runtime_projection_unavailable"):
+        return ()
+
+    snapshot_id = str(state.get("runtime_snapshot_id") or "")
+    frozen_names = state.get("runtime_tool_names")
+    if snapshot_id:
+        metadata = registry.metadata_snapshot()
+        if (
+            state.get("tool_registry_hash") != metadata["hash"]
+            or state.get("tool_registry_version") != metadata["version"]
+        ):
+            return ()
+        if not isinstance(frozen_names, (list, tuple, set, frozenset)):
+            return ()
+        frozen = {name for name in frozen_names if isinstance(name, str)}
+        if not frozen:
+            return ()
+    else:
+        frozen = None
+
+    if skill_runtime_enabled is None:
+        from src.core.config import get_settings
+
+        skill_runtime_enabled = bool(get_settings().PROJECT_SKILL_RUNTIME_ENABLED)
+
+    projected: list[ToolDescriptor] = []
+    for descriptor in descriptors:
+        if not descriptor.enabled:
+            continue
+        if frozen is not None and descriptor.name not in frozen:
+            continue
+        if descriptor.availability_condition == "project_skill_catalog":
+            if not (
+                skill_runtime_enabled
+                and snapshot_id
+                and state.get("project_skill_catalog")
+            ):
+                continue
+        elif descriptor.availability_condition is not None:
+            # Unknown conditional tools are fail-closed until explicitly
+            # included in a server-owned runtime projection.
+            continue
+        projected.append(descriptor)
+    return tuple(projected)

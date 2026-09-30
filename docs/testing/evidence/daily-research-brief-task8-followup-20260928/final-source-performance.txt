@@ -1,0 +1,20 @@
+CLASSIFICATION: PASS
+SOURCE_SHA: 9ca9d6a2995ba8dd52328efd0e5cd93856138b4a
+RAW_CAPTURE_SHA256: a3ee2a314611eb33d942f829cf7bcc408e56dc3effc8823029e726683541c571
+EXIT_STATUS: 0
+COMMAND:
+  PYTHONPATH=backend ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" DAILY_BRIEF_PERF_CAPTURE=1 .venv/bin/python -m pytest -c backend/pytest.ini -q -s backend/tests/performance/test_daily_research_brief_performance.py
+
+SALIENT OUTPUT:
+  DAILY_BRIEF_PERF_SIX_STAGE={"export_p50_ms":0.537,"export_p95_ms":0.595,"export_payload_bytes":15498,"six_stage_p50_ms":18.869,"six_stage_p95_ms":19.962}
+  DAILY_BRIEF_PERF_FANOUT={"extract_batches":25,"max_extract_p95_ms":96.698,"max_screen_p95_ms":31.788,"max_search_p95_ms":15.974,"provider_fanout":{"1":{"candidate_rows":50,"p95_ms":3.524},"2":{"candidate_rows":100,"p95_ms":6.428},"4":{"candidate_rows":200,"p95_ms":13.19}},"screen_batches":25}
+  DAILY_BRIEF_PERF_BOUNDS={"candidate_rows":200,"max_stage_payload_bytes":1152543,"max_stage_peak_bytes":3034368,"review_payload_bytes":24094,"review_projection_p95_ms":6.145}
+  DAILY_BRIEF_PERF_HYDRATION={"cold_hydration_p95_ms":3.096}
+  DAILY_BRIEF_PERF_SOAK={"completed":10,"duplicate_stage_rows":0,"iterations":10,"lifecycle_p50_ms":859.825,"lifecycle_p95_ms":1149.907,"unique_review_rows":30}
+  6 passed, 1 warning in 18.93s
+
+Every numeric result is below its frozen ceiling. The export payload increased
+from 15,294 B to 15,498 B because the final source correctly projects canonical
+bibliography and attestation data; it remains below the unchanged 18,353 B
+ceiling. The method remains one warmup plus 11 measured max-stage observations,
+nearest-rank p95=max, with GC enabled.

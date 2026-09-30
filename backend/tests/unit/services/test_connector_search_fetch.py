@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -96,7 +95,9 @@ async def test_pubmed_search_parses_xml_results():
     from src.services.connectors.pubmed import PubMedConnector
 
     esearch_payload = {"esearchresult": {"idlist": ["12345678"]}}
-    fake_client = _make_http_client([_json_resp(esearch_payload), _text_resp(_PUBMED_XML)])
+    fake_client = _make_http_client(
+        [_json_resp(esearch_payload), _text_resp(_PUBMED_XML)]
+    )
 
     with patch("httpx.AsyncClient", return_value=fake_client):
         connector = PubMedConnector()
@@ -165,7 +166,7 @@ async def test_pubmed_fetch_by_id_parses_article():
 async def test_pubmed_fetch_by_id_missing_article_returns_none():
     from src.services.connectors.pubmed import PubMedConnector
 
-    empty_xml = '<PubmedArticleSet></PubmedArticleSet>'
+    empty_xml = "<PubmedArticleSet></PubmedArticleSet>"
     fake_client = _make_http_client([_text_resp(empty_xml)])
 
     with patch("httpx.AsyncClient", return_value=fake_client):
@@ -222,9 +223,7 @@ _CT_STUDY = {
             "enrollmentInfo": {"count": 500},
         },
         "descriptionModule": {"briefSummary": "A trial of Drug X in T2D patients."},
-        "sponsorCollaboratorsModule": {
-            "leadSponsor": {"name": "Pharma Corp"}
-        },
+        "sponsorCollaboratorsModule": {"leadSponsor": {"name": "Pharma Corp"}},
     }
 }
 
@@ -267,11 +266,19 @@ async def test_clinical_trials_search_applies_filters():
         connector = ClinicalTrialsConnector()
         await connector.search(
             "cancer",
-            filters={"status": "RECRUITING", "phase": "PHASE3", "condition": "Lung Cancer"},
+            filters={
+                "status": "RECRUITING",
+                "phase": "PHASE3",
+                "condition": "Lung Cancer",
+            },
         )
 
     call_kwargs = fake_client.get.call_args
-    params = call_kwargs.kwargs.get("params") or call_kwargs.args[1] if len(call_kwargs.args) > 1 else {}
+    params = (
+        call_kwargs.kwargs.get("params") or call_kwargs.args[1]
+        if len(call_kwargs.args) > 1
+        else {}
+    )
     if not params and call_kwargs.kwargs:
         params = call_kwargs.kwargs.get("params", {})
 
@@ -382,7 +389,11 @@ async def test_sec_edgar_search_applies_filters():
         connector = SECEdgarConnector()
         await connector.search(
             "10-K",
-            filters={"start_date": "2023-01-01", "end_date": "2023-12-31", "form_type": "10-K"},
+            filters={
+                "start_date": "2023-01-01",
+                "end_date": "2023-12-31",
+                "form_type": "10-K",
+            },
         )
 
     call_kwargs = fake_client.get.call_args
@@ -510,7 +521,9 @@ async def test_fred_search_with_filters():
     with patch.dict(os.environ, {"FRED_API_KEY": "test-key"}):
         with patch("httpx.AsyncClient", return_value=fake_client):
             connector = FREDConnector()
-            await connector.search("GDP", filters={"order_by": "popularity", "frequency": "Annual"})
+            await connector.search(
+                "GDP", filters={"order_by": "popularity", "frequency": "Annual"}
+            )
 
     call_kwargs = fake_client.get.call_args
     params = call_kwargs.kwargs.get("params", {})
@@ -630,7 +643,23 @@ async def test_uniprot_search_applies_organism_filter():
 
     call_kwargs = fake_client.get.call_args
     params = call_kwargs.kwargs.get("params", {})
-    assert "organism_name:Homo sapiens" in params.get("query", "")
+    assert params.get("query") == 'kinase AND organism_name:"Homo sapiens"'
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_uniprot_direct_search_rejects_boolean_filter_before_http() -> None:
+    from src.services.connectors.uniprot import UniProtConnector
+
+    fake_client = _make_http_client([_json_resp({"results": []})])
+
+    with patch("httpx.AsyncClient", return_value=fake_client):
+        with pytest.raises(ValueError, match="query syntax"):
+            await UniProtConnector().search(
+                "kinase", filters={"organism": "Homo sapiens OR Mus musculus"}
+            )
+
+    fake_client.get.assert_not_called()
 
 
 @pytest.mark.unit
@@ -1063,6 +1092,7 @@ async def test_cosmic_search_authenticated_single_dict_response():
 @pytest.mark.unit
 def test_cosmic_auth_headers_with_colon_credentials():
     import base64
+
     from src.services.connectors.cosmic import COSMICConnector
 
     with patch.dict(os.environ, {"COSMIC_AUTH": "user@example.com:mypassword"}):

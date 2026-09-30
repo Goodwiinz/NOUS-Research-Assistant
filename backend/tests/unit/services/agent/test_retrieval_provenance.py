@@ -377,7 +377,10 @@ async def test_tool_node_promotes_fresh_execution_before_history_pruning(
     document_id = uuid4()
 
     async def fake_execute(
-        tool_call: dict[str, Any], config: Any, page_context: Any
+        tool_call: dict[str, Any],
+        config: Any,
+        page_context: Any,
+        operation_context: Any,
     ) -> dict[str, Any]:
         execution = {
             "id": tool_call["id"],

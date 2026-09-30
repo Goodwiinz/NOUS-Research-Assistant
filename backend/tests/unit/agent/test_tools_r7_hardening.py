@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.agent import tools_impl
-from src.services.agent.tools_impl import _MAX_TOOL_RESULT_BYTES, execute_tool
+from src.services.agent.tools_impl import _MAX_TOOL_RESULT_BYTES
 
 # ---------------------------------------------------------------------------
 # R7-M4 — result size cap
@@ -25,20 +25,14 @@ from src.services.agent.tools_impl import _MAX_TOOL_RESULT_BYTES, execute_tool
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
-async def test_huge_tool_result_is_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_dispatch(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return {
+def test_huge_tool_result_is_truncated() -> None:
+    result = tools_impl._cap_tool_result(
+        {
             "status": "success",
             "stdout": "A" * (50 * 1024 * 1024),
             "stderr": "B" * 4096,
             "exit_code": 0,
         }
-
-    monkeypatch.setattr(tools_impl, "_dispatch_tool", _fake_dispatch)
-
-    result = await execute_tool(
-        "execute_code", {}, db=MagicMock(), current_user=MagicMock()
     )
 
     assert result["truncated"] is True
@@ -48,34 +42,18 @@ async def test_huge_tool_result_is_truncated(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
-async def test_small_tool_result_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_small_tool_result_is_untouched() -> None:
     payload = {"status": "success", "stdout": "hello", "exit_code": 0}
 
-    async def _fake_dispatch(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return dict(payload)
-
-    monkeypatch.setattr(tools_impl, "_dispatch_tool", _fake_dispatch)
-
-    result = await execute_tool(
-        "execute_code", {}, db=MagicMock(), current_user=MagicMock()
-    )
+    result = tools_impl._cap_tool_result(dict(payload))
 
     assert result == payload
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
-async def test_many_medium_fields_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_dispatch(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return {
-            "results": [{"title": "T" * 5000, "url": "u" * 5000} for _ in range(20)]
-        }
-
-    monkeypatch.setattr(tools_impl, "_dispatch_tool", _fake_dispatch)
-
-    result = await execute_tool(
-        "search_external_database", {}, db=MagicMock(), current_user=MagicMock()
+def test_many_medium_fields_are_bounded() -> None:
+    result = tools_impl._cap_tool_result(
+        {"results": [{"title": "T" * 5000, "url": "u" * 5000} for _ in range(20)]}
     )
 
     assert result["truncated"] is True
@@ -356,24 +334,22 @@ async def test_ingest_arxiv_impl_rejects_bad_id_before_the_service(
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
-async def test_bytes_leaf_is_capped_not_just_flagged(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_bytes_leaf_is_capped_not_just_flagged() -> None:
     # execute_code can return a multi-MB PNG; the oversize is then dominated by
     # a non-string leaf, which string truncation alone never touches.
-    async def _fake_dispatch(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return {"status": "success", "png": b"\x89PNG" * (5 * 1024 * 1024 // 4)}
-
-    monkeypatch.setattr(tools_impl, "_dispatch_tool", _fake_dispatch)
-
-    result = await execute_tool(
-        "execute_code", {}, db=MagicMock(), current_user=MagicMock()
+    stable_project_id = "8a2cae4e-19b0-4a2e-8d91-2b96758967ba"
+    result = tools_impl._cap_tool_result(
+        {
+            "status": "success",
+            "project_id": stable_project_id,
+            "png": b"\x89PNG" * (5 * 1024 * 1024 // 4),
+        }
     )
 
-    assert result["truncated"] is True
     assert len(json.dumps(result, default=str)) <= _MAX_TOOL_RESULT_BYTES
     assert result["status"] == "success"
+    assert result["project_id"] == stable_project_id
+    assert result["png"] == "<bytes: 5242880>"
 
 
 @pytest.mark.unit
@@ -381,7 +357,7 @@ def test_cap_tool_result_always_fits_the_cap() -> None:
     # A long tail of small leaves: no single string is oversized, so the
     # water-fill leaves the payload over the cap on its own.
     payload: Dict[str, Any] = {
-        f"k{i}": {"n": i, "blob": b"z" * 4096} for i in range(200)
+        f"k{i}": {"n": i, "blob": "z" * 4096} for i in range(200)
     }
 
     capped = tools_impl._cap_tool_result(payload)

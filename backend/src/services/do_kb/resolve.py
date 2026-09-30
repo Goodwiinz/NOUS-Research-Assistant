@@ -113,6 +113,7 @@ async def resolve_and_filter_chunks(
         rows = await session.execute(
             select(Document.id, Document.storage_path, Document.title)
             .where(Document.organization_id == org_id)
+            .where(Document.is_deleted == False)
             .where(or_(*filters))
         )
         title_by_doc_id: dict[UUID, Optional[str]] = {}

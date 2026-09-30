@@ -477,7 +477,7 @@ class TestGatherExceptionToolMessages:
         # First tool succeeds, second raises an exception
         from langchain_core.messages import ToolMessage
 
-        async def mock_execute(tc, cfg, ctx):
+        async def mock_execute(tc, cfg, ctx, operation_context=None):
             if tc["id"] == "tc1":
                 return {
                     "message": ToolMessage(

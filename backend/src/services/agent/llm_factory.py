@@ -29,6 +29,11 @@ def _main_chat_deployment() -> str:
     )
 
 
+def resolve_chat_deployment(model_override: str | None = None) -> str:
+    """Resolve the deployment selected by ``graph._build_llm`` exactly."""
+    return model_override or _main_chat_deployment()
+
+
 def credential_fingerprint() -> str:
     """Short digest of the endpoint + API key the chat builders will use.
 

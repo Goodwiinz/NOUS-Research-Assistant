@@ -32,6 +32,7 @@ from src.services.agent.agent_execution_service import (
     _resume_agent_graph,
     _set_job,
 )
+from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
 
 
@@ -41,6 +42,7 @@ def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
         "src.services.threads.workspace_access.get_thread",
         editable_thread_getter(),
     )
+    stub_durable_status_projection(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +186,7 @@ async def test_resume_short_circuits_when_interrupt_already_consumed():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
         await _resume_agent_graph(job_id, confirmed=True, current_user=user)
@@ -230,7 +232,7 @@ async def test_resume_proceeds_when_interrupt_present():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
         await _resume_agent_graph(job_id, confirmed=True, current_user=user)
@@ -271,7 +273,7 @@ async def test_resume_rejects_ownerless_checkpoint():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
         await _resume_agent_graph(job_id, confirmed=True, current_user=user)
@@ -451,7 +453,7 @@ async def test_resume_uses_job_id_when_payload_has_no_thread_id():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
         await _resume_agent_graph(job_id, confirmed=True, current_user=user)
@@ -480,7 +482,7 @@ async def test_resume_fails_expired_when_job_payload_is_gone():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
         await _resume_agent_graph(job_id, confirmed=True, current_user=user)

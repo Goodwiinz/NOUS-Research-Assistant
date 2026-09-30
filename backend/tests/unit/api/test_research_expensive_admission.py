@@ -116,13 +116,19 @@ async def test_stream_claims_before_shared_admission(
             conformance_status="plan_verified",
         ),
     )
-    blueprint = SimpleNamespace(steps=[], parameters={}, version=1, project_id=uuid4())
+    blueprint = SimpleNamespace(
+        steps=[],
+        parameters={},
+        version=1,
+        project_id=uuid4(),
+        template_source="custom",
+    )
     blueprint_result = Mock()
     blueprint_result.scalars.return_value.first.return_value = blueprint
     last_step_result = Mock()
     last_step_result.scalars.return_value.first.return_value = None
-    claim_result = Mock()
-    claim_result.rowcount = 1
+    history_result = Mock()
+    history_result.scalars.return_value.all.return_value = []
     db = AsyncMock()
     db_calls = 0
     events = []
@@ -130,7 +136,7 @@ async def test_stream_claims_before_shared_admission(
     async def execute(_statement: Any) -> Any:
         nonlocal db_calls
         events.append("db")
-        result = [blueprint_result, last_step_result, claim_result][db_calls]
+        result = [blueprint_result, last_step_result, history_result][db_calls]
         db_calls += 1
         return result
 
@@ -186,18 +192,22 @@ async def test_stream_denied_admission_releases_claim(
             conformance_status="plan_verified",
         ),
     )
-    blueprint = SimpleNamespace(steps=[], parameters={}, version=1, project_id=uuid4())
+    blueprint = SimpleNamespace(
+        steps=[],
+        parameters={},
+        version=1,
+        project_id=uuid4(),
+        template_source="custom",
+    )
     blueprint_result = Mock()
     blueprint_result.scalars.return_value.first.return_value = blueprint
     last_step_result = Mock()
     last_step_result.scalars.return_value.first.return_value = None
-    claim_result = Mock()
-    claim_result.rowcount = 1
-    rollback_result = Mock()
-    rollback_result.rowcount = 1
+    history_result = Mock()
+    history_result.scalars.return_value.all.return_value = []
     db = AsyncMock()
     db.execute = AsyncMock(
-        side_effect=[blueprint_result, last_step_result, claim_result, rollback_result]
+        side_effect=[blueprint_result, last_step_result, history_result]
     )
     user = _user()
 
@@ -227,7 +237,7 @@ async def test_stream_denied_admission_releases_claim(
             await stream_run(run.id, user, db)
 
     assert exc_info.value.status_code == 429
-    assert db.execute.await_count == 4
+    assert db.execute.await_count == 3
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@
 # NOUS_API_URL before invocation (e.g. NOUS_API_URL=http://localhost:8000/api/v1
 # ./nous) or by setting it in your shell rc.
 set -euo pipefail
-export NOUS_DEFAULT_API_URL="https://dev-api.gen-text.app/api/v1"
+export NOUS_DEFAULT_API_URL="https://dev-api.goodwiinz.tech/api/v1"
 if [[ $# -eq 0 || "${1:-}" == "--ink" || "${1:-}" == "--new" || "${1:-}" == "--help" ]]; then
   if [[ "${1:-}" == "--ink" ]]; then shift; fi
   exec pnpm --prefix terminal start "$@"
