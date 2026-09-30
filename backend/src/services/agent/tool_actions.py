@@ -170,7 +170,7 @@ async def request_action(
 
 def _same_target(row: IntegrationToolAction, actor: ActionActor) -> bool:
     """A replay must name the stored target; the hash excludes server bindings."""
-    return (
+    return bool(
         row.project_id == actor.project_id
         and row.thread_id == actor.thread_id
         and row.run_id == (str(actor.run_id) if actor.run_id else None)

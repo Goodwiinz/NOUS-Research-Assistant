@@ -197,10 +197,13 @@ async def _approved_action(db: AsyncSession, actor: ActionActor | None = None) -
 
 
 async def _last_error(db: AsyncSession, invocation_id: UUID) -> str | None:
-    return await db.scalar(
-        select(IntegrationToolAction.last_error).where(
-            IntegrationToolAction.invocation_id == invocation_id
-        )
+    return cast(
+        str | None,
+        await db.scalar(
+            select(IntegrationToolAction.last_error).where(
+                IntegrationToolAction.invocation_id == invocation_id
+            )
+        ),
     )
 
 
