@@ -10252,6 +10252,29 @@ export interface components {
             /** Feedback Text */
             feedback_text?: string | null;
         };
+        /**
+         * CitationChaseDeclaration
+         * @description What a citation-chase receipt records as requested (server-set licence).
+         */
+        CitationChaseDeclaration: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "backward" | "forward";
+            /**
+             * Redistribution
+             * @constant
+             */
+            redistribution: "allowed";
+            /** Requested Limit */
+            requested_limit: number;
+            /**
+             * Seed Report Id
+             * Format: uuid
+             */
+            seed_report_id: string;
+        };
         /** CitationChaseRequest */
         CitationChaseRequest: {
             /**
@@ -12247,6 +12270,28 @@ export interface components {
             /** Seq */
             seq: number;
         };
+        /**
+         * ImportDeclaration
+         * @description What the importer declares about the search; never inferred from the file.
+         */
+        ImportDeclaration: {
+            /** Database */
+            database: string;
+            /** Exported At */
+            exported_at?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Query Text */
+            query_text?: string | null;
+            /**
+             * Redistribution
+             * @default restricted
+             * @enum {string}
+             */
+            redistribution: "restricted" | "allowed";
+            /** Search Date */
+            search_date?: string | null;
+        };
         /** ImportReceiptDetail */
         ImportReceiptDetail: {
             /** Accepted Count */
@@ -12257,9 +12302,7 @@ export interface components {
              */
             created_at: string;
             /** Declared */
-            declared: {
-                [key: string]: unknown;
-            };
+            declared: components["schemas"]["ImportDeclaration"] | components["schemas"]["CitationChaseDeclaration"];
             /**
              * Id
              * Format: uuid
@@ -12300,9 +12343,7 @@ export interface components {
              */
             created_at: string;
             /** Declared */
-            declared: {
-                [key: string]: unknown;
-            };
+            declared: components["schemas"]["ImportDeclaration"] | components["schemas"]["CitationChaseDeclaration"];
             /**
              * Id
              * Format: uuid

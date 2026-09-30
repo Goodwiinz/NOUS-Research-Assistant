@@ -2667,6 +2667,41 @@
         "title": "ChatMessageUpdate",
         "type": "object"
       },
+      "CitationChaseDeclaration": {
+        "description": "What a citation-chase receipt records as requested (server-set licence).",
+        "properties": {
+          "direction": {
+            "enum": [
+              "backward",
+              "forward"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "redistribution": {
+            "const": "allowed",
+            "title": "Redistribution",
+            "type": "string"
+          },
+          "requested_limit": {
+            "title": "Requested Limit",
+            "type": "integer"
+          },
+          "seed_report_id": {
+            "format": "uuid",
+            "title": "Seed Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed_report_id",
+          "direction",
+          "requested_limit",
+          "redistribution"
+        ],
+        "title": "CitationChaseDeclaration",
+        "type": "object"
+      },
       "CitationChaseRequest": {
         "properties": {
           "direction": {
@@ -6873,6 +6908,80 @@
         "title": "IdentityEventResponse",
         "type": "object"
       },
+      "ImportDeclaration": {
+        "description": "What the importer declares about the search; never inferred from the file.",
+        "properties": {
+          "database": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Database",
+            "type": "string"
+          },
+          "exported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exported At"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "query_text": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Text"
+          },
+          "redistribution": {
+            "default": "restricted",
+            "enum": [
+              "restricted",
+              "allowed"
+            ],
+            "title": "Redistribution",
+            "type": "string"
+          },
+          "search_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Date"
+          }
+        },
+        "required": [
+          "database"
+        ],
+        "title": "ImportDeclaration",
+        "type": "object"
+      },
       "ImportReceiptDetail": {
         "properties": {
           "accepted_count": {
@@ -6885,9 +6994,15 @@
             "type": "string"
           },
           "declared": {
-            "additionalProperties": true,
-            "title": "Declared",
-            "type": "object"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportDeclaration"
+              },
+              {
+                "$ref": "#/components/schemas/CitationChaseDeclaration"
+              }
+            ],
+            "title": "Declared"
           },
           "id": {
             "format": "uuid",
@@ -6971,9 +7086,15 @@
             "type": "string"
           },
           "declared": {
-            "additionalProperties": true,
-            "title": "Declared",
-            "type": "object"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportDeclaration"
+              },
+              {
+                "$ref": "#/components/schemas/CitationChaseDeclaration"
+              }
+            ],
+            "title": "Declared"
           },
           "id": {
             "format": "uuid",

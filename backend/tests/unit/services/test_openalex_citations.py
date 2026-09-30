@@ -334,7 +334,7 @@ async def test_chase_stores_accepted_records_and_replays(
     assert connector.calls == [("W1", "backward", 5)]
     assert len(calls) == 3  # EDIT before the network, again after it; replay once
     assert receipt.kind == "citation_chase"
-    assert receipt.declared == {
+    assert receipt.declared.model_dump(mode="json") == {
         "seed_report_id": str(seed),
         "direction": "backward",
         "requested_limit": 5,

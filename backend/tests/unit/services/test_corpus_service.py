@@ -190,8 +190,14 @@ async def test_counts_match_rows(db: AsyncSession) -> None:
     )
     assert receipt.observed["counts"] == {"parsed": 5, "accepted": 3, "rejected": 2}
     assert receipt.observed["filename"] == "partial.ris"
-    assert receipt.declared["query_text"] == "aspirin"
-    assert receipt.declared["search_date"] is None
+    assert receipt.declared.model_dump() == {
+        "database": "Embase (Ovid)",
+        "query_text": "aspirin",
+        "search_date": None,
+        "exported_at": None,
+        "redistribution": "restricted",
+        "notes": None,
+    }
     assert "query_text" not in receipt.observed
     detail = await corpus_service.get_receipt(
         db, collection_id=collection_id, receipt_id=receipt.id

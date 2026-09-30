@@ -3,7 +3,7 @@
 import json
 from datetime import date, datetime
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar, Union
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -471,12 +471,22 @@ class ImportDeclaration(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=2000)
 
 
+class CitationChaseDeclaration(BaseModel):
+    """What a citation-chase receipt records as requested (server-set licence)."""
+
+    seed_report_id: UUID
+    direction: Literal["backward", "forward"]
+    requested_limit: int
+    redistribution: Literal["allowed"]
+
+
 class ImportReceiptResponse(BaseModel):
     id: UUID
     kind: Literal["file_import", "citation_chase"]
     version: int
     previous_receipt_id: Optional[UUID] = None
-    declared: Dict[str, Any]
+    # Exactly the validated declaration: an import's, or a chase's request.
+    declared: Union[ImportDeclaration, CitationChaseDeclaration]
     observed: Dict[str, Any]
     parsed_count: int
     accepted_count: int
