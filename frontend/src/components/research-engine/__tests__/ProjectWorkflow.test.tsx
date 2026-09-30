@@ -30,6 +30,19 @@ vi.mock('../ReportIdentityPanel', () => ({
     <div>Reports for {projectId}</div>
   ),
 }));
+vi.mock('../ScreeningQueuePanel', () => ({
+  ScreeningQueuePanel: ({
+    projectId,
+    readOnly,
+  }: {
+    projectId: string;
+    readOnly?: boolean;
+  }) => (
+    <div>
+      Screening for {projectId} {readOnly ? '(read only)' : '(active)'}
+    </div>
+  ),
+}));
 vi.mock('@/services/researchEngineService', () => ({
   createProject: vi.fn(),
   listProjectRoles: vi.fn(),
@@ -39,6 +52,13 @@ vi.mock('@/services/researchEngineService', () => ({
   listReportHistory: vi.fn(),
   linkStudy: vi.fn(),
   mergeReports: vi.fn(),
+  listScreeningQueues: vi.fn(),
+  createScreeningQueue: vi.fn(),
+  assignScreeningReviewer: vi.fn(),
+  revokeScreeningAssignment: vi.fn(),
+  getMyScreeningQueue: vi.fn(),
+  submitScreeningObservation: vi.fn(),
+  listScreeningHistory: vi.fn(),
 }));
 describe('ProjectWorkflow', () => {
   beforeEach(() => {
@@ -70,6 +90,9 @@ describe('ProjectWorkflow', () => {
       screen.getByText('Blueprint for collection-1 (editable)')
     ).toBeInTheDocument();
     expect(screen.getByText('Reports for collection-1')).toBeInTheDocument();
+    expect(
+      screen.getByText('Screening for collection-1 (active)')
+    ).toBeInTheDocument();
     await waitFor(() =>
       expect(listProjectRoles).toHaveBeenCalledWith('collection-1')
     );
@@ -168,6 +191,31 @@ describe('ProjectWorkflow', () => {
       screen.getByText(
         'A project owner or administrator must enable this workflow.'
       )
+    ).toBeInTheDocument();
+  });
+
+  it('renders the screening panel read-only on an archived project', () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProjectWorkflow
+          project={{
+            id: 'collection-archived',
+            workspace_id: 'workspace-1',
+            name: 'Archived project',
+            research_engine_project_id: 'engine-1',
+            research_status: 'archived',
+            can_edit: true,
+            can_manage: true,
+            workspace_archived: false,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          }}
+        />
+      </QueryClientProvider>
+    );
+
+    expect(
+      screen.getByText('Screening for collection-archived (read only)')
     ).toBeInTheDocument();
   });
 });
