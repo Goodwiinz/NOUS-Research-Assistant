@@ -19,6 +19,8 @@ export type McpSession = {
   stateDir: string;
   // Absolute registered output root; enables artifacts_publish when present.
   outputRoot?: string;
+  // Grant carries context:read; enables read_selected_context.
+  context?: boolean;
 };
 export const REAUTH_MESSAGE =
   "NOUS session expired or revoked; reconnect this device (nous-harness connect --tools)";
