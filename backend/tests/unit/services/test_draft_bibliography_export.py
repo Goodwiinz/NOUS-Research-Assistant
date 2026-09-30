@@ -130,3 +130,45 @@ def test_markdown_bibtex_uses_stable_doc_key_and_preserves_missing_metadata(
 def test_markdown_reference_rejects_unknown_format() -> None:
     with pytest.raises(ValueError, match="Unsupported bibliography format"):
         DraftGenerationService(None)._generate_markdown_references([], "csl-json")
+
+
+def _arxiv_document() -> Document:
+    # Shape of an arXiv-ingested document on dev (GOO-291 live evidence):
+    # no ``year`` key, only an ISO ``publication_date``.
+    return Document(
+        title="Attention Is All You Need",
+        arxiv_id="1706.03762v7",
+        document_metadata={
+            "authors": ["Ashish Vaswani", "Noam Shazeer"],
+            "publication_date": "2017-06-12T17:57:34+00:00",
+            "arxiv_id": "1706.03762v7",
+        },
+    )
+
+
+def test_arxiv_document_exports_year_from_publication_date() -> None:
+    """GOO-291: arXiv documents store ``publication_date``, not ``year``.
+
+    Mutation check (2026-09-30): replacing ``publication_year(metadata)`` with
+    the old ``metadata.get("year")`` in ``_canonical_citation_records`` makes
+    this test fail (BibTeX entry has no ``year`` field; APA line has no
+    ``(2017).``). Restoring the fallback makes it pass.
+    """
+    citation = DraftCitation(citation_index=1, document=_arxiv_document())
+
+    _, parsed = _parse_export(citation)
+    assert parsed.entries["doc1"].fields["year"] == "2017"
+
+    apa = DraftGenerationService(None)._generate_markdown_references([citation], "apa")
+    assert "(2017)." in apa
+
+
+def test_canonical_citation_row_without_year_falls_back_to_document() -> None:
+    citation = DraftCitation(
+        citation_index=2,
+        citation=Citation(document_title="Attention Is All You Need"),
+        document=_arxiv_document(),
+    )
+
+    _, parsed = _parse_export(citation)
+    assert parsed.entries["doc2"].fields["year"] == "2017"
