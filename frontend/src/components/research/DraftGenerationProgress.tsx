@@ -74,12 +74,15 @@ export const DraftGenerationProgress: React.FC<
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const getCurrentStepIndex = () => {
+  const getCurrentStepIndex = (): number => {
     return statusSteps.findIndex((s) => s.key === status.status);
   };
 
   const isCompleted = status.status === 'completed';
-  const isFailed = status.status === 'failed';
+  // An interrupted task (its process stopped) is terminal and renders as
+  // a failure: no further status update will arrive.
+  const isInterrupted = status.status === 'interrupted';
+  const isFailed = status.status === 'failed' || isInterrupted;
   const isCancelled = status.status === 'cancelled';
   const isRunning = !isCompleted && !isFailed && !isCancelled;
 
@@ -97,11 +100,13 @@ export const DraftGenerationProgress: React.FC<
             <h3 className="font-medium text-foreground">
               {isCompleted
                 ? 'Draft generated'
-                : isFailed
-                  ? 'Generation failed'
-                  : isCancelled
-                    ? 'Generation cancelled'
-                    : 'Generating draft'}
+                : isInterrupted
+                  ? 'Generation interrupted'
+                  : isFailed
+                    ? 'Generation failed'
+                    : isCancelled
+                      ? 'Generation cancelled'
+                      : 'Generating draft'}
             </h3>
             <p className="text-xs text-muted-foreground">
               {status.current_step}
