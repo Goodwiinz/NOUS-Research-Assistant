@@ -250,6 +250,17 @@ def raw_allowed(receipt: ResearchImportReceipt) -> bool:
     )
 
 
+# Parsed keys that reproduce the licensed original text of a restricted record.
+RESTRICTED_PARSED_FIELDS = ("abstract", "fields")
+
+
+def visible_parsed(parsed: dict[str, Any], allowed: bool) -> dict[str, Any]:
+    """``parsed`` as it may leave the server; the API and export share this."""
+    if allowed:
+        return parsed
+    return {k: v for k, v in parsed.items() if k not in RESTRICTED_PARSED_FIELDS}
+
+
 async def get_receipt(
     db: AsyncSession, *, collection_id: UUID, receipt_id: UUID
 ) -> ImportReceiptDetail:
@@ -277,7 +288,7 @@ async def get_receipt(
                 record_index=cast(int, record.record_index),
                 status=cast(Any, record.status),
                 rejection_reason=cast(str | None, record.rejection_reason),
-                parsed=cast(dict[str, Any], record.parsed),
+                parsed=visible_parsed(cast(dict[str, Any], record.parsed), show_raw),
                 report_id=cast(UUID | None, record.report_id),
                 raw=cast(str, record.raw) if show_raw else None,
             )

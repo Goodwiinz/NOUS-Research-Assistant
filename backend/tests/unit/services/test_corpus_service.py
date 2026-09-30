@@ -201,8 +201,10 @@ async def test_counts_match_rows(db: AsyncSession) -> None:
         "missing_title",
         "unterminated_record",
     ]
-    # Restricted (the default): the original text stays in the database only.
+    # Restricted (the default): the original text stays in the database only,
+    # including the tag values (parsed.fields) that reproduce it.
     assert all(r.raw is None for r in detail.records)
+    assert all(not {"fields", "abstract"} & set(r.parsed) for r in detail.records)
     assert all(r.report_id for r in detail.records[2:])
     assert await _count(db, ResearchReport) == 3
     assert [
@@ -223,6 +225,7 @@ async def test_allowed_receipt_exposes_raw_and_foreign_receipt_is_404(
         db, collection_id=collection_id, receipt_id=receipt.id
     )
     assert detail.records[0].raw is not None
+    assert "fields" in detail.records[0].parsed
 
     with pytest.raises(HTTPException) as missing:
         await corpus_service.get_receipt(
