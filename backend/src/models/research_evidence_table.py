@@ -86,9 +86,9 @@ class EvidenceContradiction(Base):
 
     id: Column = Column(GUID(), primary_key=True, default=uuid.uuid4)
     collection_id = _fk("collections")
-    contradiction_id = Column(GUID(), nullable=False)
+    contradiction_id: Column = Column(GUID(), nullable=False)
     table_version_id = _fk("evidence_table_versions")
-    field_id = Column(GUID(), nullable=False)
+    field_id: Column = Column(GUID(), nullable=False)
     accepted_value_ids = Column(JSONB(none_as_null=True), nullable=True)
     kind = Column(String(16), nullable=False)
     explanation = Column(Text, nullable=False)
