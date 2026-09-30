@@ -1053,8 +1053,12 @@ class _Dual(SimpleNamespace):
 
 async def _dual(db: AsyncSession, stage: str = "title_abstract") -> _Dual:
     project = await _seed(db)
-    fields = {"report_ids": project.reports} if stage == "full_text" else {}
-    queue = await _queue(db, project, stage=stage, **fields)
+    queue = await _queue(
+        db,
+        project,
+        stage=stage,
+        report_ids=project.reports if stage == "full_text" else None,
+    )
     return _Dual(
         project=project,
         queue=queue,

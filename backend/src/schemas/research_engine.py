@@ -468,7 +468,9 @@ class ScreeningQueueCreate(BaseModel):
     protocol_version_id: UUID
     stage: ScreeningStage
     # None on title_abstract = every live report; full_text needs an explicit list.
-    report_ids: Optional[List[UUID]] = Field(None, min_length=1, max_length=10_000)
+    report_ids: Optional[List[UUID]] = Field(
+        default=None, min_length=1, max_length=10_000
+    )
     supersedes_queue_id: Optional[UUID] = None
     suggestion_step_id: Optional[UUID] = None
     idempotency_key: _IdempotencyKey
@@ -489,8 +491,8 @@ class ScreeningObservationCreate(BaseModel):
     assignment_id: UUID
     criteria_hash: str = Field(..., min_length=64, max_length=64)
     decision: ScreeningDecisionValue
-    exclusion_reason: Optional[str] = Field(None, min_length=1, max_length=200)
-    note: Optional[str] = Field(None, max_length=10_000)
+    exclusion_reason: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    note: Optional[str] = Field(default=None, max_length=10_000)
     supersedes_observation_id: Optional[UUID] = None
     idempotency_key: _IdempotencyKey
 
