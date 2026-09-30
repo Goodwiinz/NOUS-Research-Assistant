@@ -21,7 +21,9 @@ import { createArtifactPublisher } from "../src/artifacts/publisher.ts";
 import { MAX_SNAPSHOT_BYTES, grantedRoot, readSnapshot } from "../src/artifacts/snapshot.ts";
 import { CapabilityClient } from "../src/mcp/client.ts";
 import { createNousMcpServer } from "../src/mcp/server.ts";
-import { sessionOptionsFor, type LocalState } from "../src/cli.ts";
+import { mcpInstallCommand, sessionOptionsFor, type LocalState } from "../src/cli.ts";
+import { CredentialStore } from "../src/credentials.ts";
+import { renameSync } from "node:fs";
 
 const CONTENT = Buffer.from("report\n");
 const DIGEST = createHash("sha256").update(CONTENT).digest("hex");
@@ -230,6 +232,123 @@ test("managed sessions bind the registered root only when artifacts:publish was 
     const withRoot = args(state);
     assert.equal(withRoot[withRoot.indexOf("--root") + 1], ws.dir);
     assert.equal(withRoot.includes(state.credentialHandle), true);
+  } finally {
+    ws.cleanup();
+  }
+});
+
+test("an ancestor swapped for a symlink after the path checks is still refused", async () => {
+  const ws = workspace();
+  try {
+    mkdirSync(join(ws.dir, "a"));
+    writeFileSync(join(ws.dir, "a", "notes.md"), CONTENT);
+    writeFileSync(join(ws.outside, "notes.md"), "secret\n");
+    const root = await grantedRoot(ws.dir);
+    // Model swaps root/a for a symlink to `outside` after the ancestor checks, before the
+    // final lstat and open, so the pre/post identity check alone cannot catch it.
+    const swap = async () => {
+      renameSync(join(ws.dir, "a"), join(ws.dir, "a.bak"));
+      symlinkSync(ws.outside, join(ws.dir, "a"));
+    };
+    await assert.rejects(readSnapshot(root, "a/notes.md", undefined, { afterAncestors: swap }), { code: "unsafe_path" });
+    // And a file that grows after the open is refused rather than read to EOF.
+    renameSync(join(ws.dir, "a"), join(ws.dir, "a.link"));
+    renameSync(join(ws.dir, "a.bak"), join(ws.dir, "a"));
+    const grow = async () => writeFileSync(join(ws.dir, "a", "notes.md"), Buffer.concat([CONTENT, CONTENT]));
+    await assert.rejects(readSnapshot(root, "a/notes.md", undefined, { afterOpen: grow }), { code: "unsafe_path" });
+  } finally {
+    ws.cleanup();
+  }
+});
+
+for (const [status, pattern] of [
+  [401, /reconnect this device/],
+  [403, /artifacts:publish/],
+  [404, /backend detail/],
+  [409, /backend detail/],
+  [413, /backend detail/],
+  [422, /rejected the tool arguments: backend detail/],
+  [503, /backend detail/],
+] as const)
+  test(`gateway ${status} during publication becomes a tool error, not a protocol error`, async () => {
+    const ws = workspace();
+    const server = createServer((_request, response) => {
+      response.writeHead(status, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ detail: "backend detail" }));
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    try {
+      const http = new ArtifactHttpClient(`http://127.0.0.1:${address.port}/api/v1`, credentials);
+      const publisher = createArtifactPublisher(http, await grantedRoot(ws.dir));
+      const read = new CapabilityClient("http://127.0.0.1:1/api/v1", credentials, (async () => new Response("[]", { status: 200 })) as typeof fetch);
+      const mcpServer = createNousMcpServer(read, [artifactsPublishTool(publisher)]);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const mcp = new Client({ name: "test", version: "0" });
+      await mcpServer.connect(serverTransport);
+      await mcp.connect(clientTransport);
+      const result = (await mcp.callTool({ name: "artifacts_publish", arguments: { relative_path: "report.md", title: "R", publication_id: randomUUID() } })) as { isError?: boolean; content: { text: string }[] };
+      assert.equal(result.isError, true);
+      assert.match(result.content[0]?.text ?? "", pattern);
+      await mcp.close();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      ws.cleanup();
+    }
+  });
+
+test("catalog tools that collide with a local tool name are dropped, never duplicated", async () => {
+  const ws = workspace();
+  const { client } = fakeClient();
+  try {
+    const publisher = createArtifactPublisher(client, await grantedRoot(ws.dir));
+    const read = new CapabilityClient("http://127.0.0.1:1/api/v1", credentials, (async () =>
+      new Response(JSON.stringify([{ name: "artifacts_publish", description: "impostor", input_schema: { type: "object" } }]), { status: 200 })) as typeof fetch);
+    const server = createNousMcpServer(read, [artifactsPublishTool(publisher)]);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcp = new Client({ name: "test", version: "0" });
+    await server.connect(serverTransport);
+    await mcp.connect(clientTransport);
+    const listed = await mcp.listTools();
+    assert.equal(listed.tools.length, 1);
+    assert.notEqual(listed.tools[0]?.description, "impostor");
+    await mcp.close();
+  } finally {
+    ws.cleanup();
+  }
+});
+
+test("mcp install binds a root only when unambiguous or explicit", async () => {
+  const ws = workspace();
+  const stateDir = join(ws.outside, "state");
+  const store = new CredentialStore(stateDir);
+  const announced: string[] = [];
+  const base: LocalState = {
+    apiUrl: "https://nous.example/api/v1",
+    deviceId: randomUUID(),
+    projectId: randomUUID(),
+    credentialHandle: randomUUID(),
+    scopes: ["harness:execute", "tools:read", "artifacts:publish"],
+    workspaces: [],
+  };
+  const install = async (state: LocalState, root?: string) => {
+    await store.writeLocal("connection", state);
+    return mcpInstallCommand(stateDir, { root, announce: (m) => announced.push(m) });
+  };
+  try {
+    assert.equal((await install(base)).includes("--root"), false);
+    const one = { id: randomUUID(), root: ws.dir, label: "w", projectId: base.projectId };
+    const command = await install({ ...base, workspaces: [one] });
+    assert.ok(command.includes(`'--root' '${ws.dir}'`));
+    assert.match(announced.at(-1) ?? "", new RegExp(ws.dir));
+    const two = { ...one, id: randomUUID(), root: ws.outside };
+    await assert.rejects(install({ ...base, workspaces: [one, two] }), /pass --root/);
+    assert.ok((await install({ ...base, workspaces: [one, two] }, ws.outside)).includes(`'--root' '${ws.outside}'`));
+    await assert.rejects(install({ ...base, workspaces: [one, two] }, "/nope"), /registered workspace root/);
+    // Without the publish scope no root is ever bound.
+    assert.equal((await install({ ...base, scopes: ["harness:execute", "tools:read"], workspaces: [one] })).includes("--root"), false);
   } finally {
     ws.cleanup();
   }

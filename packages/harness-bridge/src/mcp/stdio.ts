@@ -15,15 +15,22 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
   const local: LocalTool[] = [];
   if (session.outputRoot) {
     // The root is pinned now; a later swap of the directory is refused per call.
-    const root = await grantedRoot(session.outputRoot);
-    local.push(
-      artifactsPublishTool(
-        createArtifactPublisher(
-          new ArtifactHttpClient(session.apiOrigin, credentials),
-          root,
+    try {
+      const root = await grantedRoot(session.outputRoot);
+      local.push(
+        artifactsPublishTool(
+          createArtifactPublisher(
+            new ArtifactHttpClient(session.apiOrigin, credentials),
+            root,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (error) {
+      // Read tools stay available; publication is simply not offered.
+      console.error(
+        `artifacts_publish unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   const server = createNousMcpServer(
     new CapabilityClient(session.apiOrigin, credentials),

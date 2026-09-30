@@ -1,5 +1,11 @@
 import { integrationHeaders, type IntegrationCredentials } from "../credentials.ts";
 import { apiBase, throwForStatus } from "../mcp/client.ts";
+
+const MESSAGES = {
+  forbidden:
+    "NOUS denied artifact publication: the grant may lack artifacts:publish (reconnect with nous-harness connect --tools --publish) or the project is outside the grant",
+  disabled: "Artifact publication is disabled",
+};
 import type {
   ArtifactApiClient,
   ArtifactUploadDTO,
@@ -34,9 +40,9 @@ export class ArtifactHttpClient implements ArtifactApiClient {
       "PUT",
       `/artifacts/uploads/${uploadId}/content`,
       bytes,
-      { "Content-Type": "application/octet-stream", "Content-Length": String(bytes.byteLength) },
+      { "Content-Type": "application/octet-stream" },
     );
-    await throwForStatus(response);
+    await throwForStatus(response, MESSAGES);
   }
   async finalize(request: PublishVersionRequest): Promise<ArtifactVersionDTO> {
     const data = await this.json("POST", "/artifacts/versions", request);
@@ -48,7 +54,7 @@ export class ArtifactHttpClient implements ArtifactApiClient {
     const response = await this.send(method, path, JSON.stringify(body), {
       "Content-Type": "application/json",
     });
-    await throwForStatus(response);
+    await throwForStatus(response, MESSAGES);
     try {
       return await response.json();
     } catch {

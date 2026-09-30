@@ -270,10 +270,14 @@ test("connect --tools requests and persists tools:read; plain connect does not",
   };
   try {
     await connect({ ...base, stateDir: join(dir, "tools"), tools: true });
+    await connect({ ...base, stateDir: join(dir, "publish"), tools: true, publish: true });
+    const withPublish = calls.filter((c) => c.url.endsWith("/grant-requests")).at(-1)!;
+    assert.deepEqual(withPublish.body.scopes, ["harness:execute", "tools:read", "artifacts:publish"]);
+    await assert.rejects(connect({ ...base, stateDir: join(dir, "bad"), publish: true }), /--publish requires --tools/);
     const withTools = calls.find((c) => c.url.endsWith("/grant-requests"))!;
-    assert.deepEqual(withTools.body.scopes, ["harness:execute", "tools:read", "artifacts:publish"]);
+    assert.deepEqual(withTools.body.scopes, ["harness:execute", "tools:read"]);
     const state = JSON.parse(readFileSync(join(dir, "tools", "connection.json"), "utf8"));
-    assert.deepEqual(state.scopes, ["harness:execute", "tools:read", "artifacts:publish"]);
+    assert.deepEqual(state.scopes, ["harness:execute", "tools:read"]);
     assert.ok(await mcpInstallCommand(join(dir, "tools")));
 
     calls.length = 0;
@@ -309,7 +313,7 @@ test("managed sessions get the MCP server only with tools:read, with an absolute
     assert.equal("mcpConfig" in sessionOptionsFor(stateDir, state, workspace.id), false);
     state.scopes = ["harness:execute"];
     assert.equal("mcpConfig" in sessionOptionsFor(stateDir, state, workspace.id), false);
-    state.scopes = ["harness:execute", "tools:read", "artifacts:publish"];
+    state.scopes = ["harness:execute", "tools:read"];
     const options = sessionOptionsFor(relativeDir, state, workspace.id);
     const args = options.mcpConfig?.nous?.args ?? [];
     assert.ok(args.includes(state.credentialHandle));

@@ -68,13 +68,23 @@ async function detailOf(response: Response): Promise<string | undefined> {
   }
 }
 
+export type StatusMessages = { forbidden?: string; disabled?: string };
+
 /** Map gateway statuses to stable tool errors; 2xx passes through. */
-export async function throwForStatus(response: Response): Promise<void> {
+export async function throwForStatus(
+  response: Response,
+  messages: StatusMessages = {},
+): Promise<void> {
   if (response.status === 401) throw new ReauthenticationRequired();
-  if (response.status === 403) throw new ToolRequestRejected(FORBIDDEN_MESSAGE);
+  if (response.status === 403)
+    throw new ToolRequestRejected(messages.forbidden ?? FORBIDDEN_MESSAGE);
+  if (response.status === 404)
+    throw new ToolRequestRejected(
+      (await detailOf(response)) ?? "NOUS could not find that resource",
+    );
   if (response.status === 409)
     throw new ToolRequestRejected(
-      (await detailOf(response)) ?? "NOUS reported a publication conflict",
+      (await detailOf(response)) ?? "NOUS reported a conflict",
     );
   if (response.status === 413)
     throw new ToolRequestRejected(
@@ -87,7 +97,9 @@ export async function throwForStatus(response: Response): Promise<void> {
     );
   }
   if (response.status === 503)
-    throw new ToolRequestRejected((await detailOf(response)) ?? DISABLED_MESSAGE);
+    throw new ToolRequestRejected(
+      (await detailOf(response)) ?? messages.disabled ?? DISABLED_MESSAGE,
+    );
   if (!response.ok) throw new Error(`NOUS request failed (${response.status})`);
 }
 

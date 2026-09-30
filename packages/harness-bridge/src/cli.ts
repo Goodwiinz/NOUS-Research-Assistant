@@ -85,15 +85,20 @@ export async function connect(
     projectId: string;
     label: string;
     tools?: boolean;
+    publish?: boolean;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
   if (!uuid(options.projectId) || !options.label.trim())
     throw new Error("project UUID and device label required");
   // NOUS capabilities are opt-in and each scope is shown on the consent page.
-  const scopes = options.tools
-    ? ["harness:execute", "tools:read", "artifacts:publish"]
-    : ["harness:execute"];
+  if (options.publish && !options.tools)
+    throw new Error("--publish requires --tools");
+  const scopes = [
+    "harness:execute",
+    ...(options.tools ? ["tools:read"] : []),
+    ...(options.publish ? ["artifacts:publish"] : []),
+  ];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
   const login = await request(fetchFn, base, "/cli-auth/start", undefined, {});
@@ -337,7 +342,10 @@ export function sessionOptionsFor(
   };
 }
 /** Prints the standalone Codex registration; never edits global Codex config. */
-export async function mcpInstallCommand(stateDir: string): Promise<string> {
+export async function mcpInstallCommand(
+  stateDir: string,
+  options: { root?: string; announce?: (message: string) => void } = {},
+): Promise<string> {
   const value = await new CredentialStore(stateDir).readLocal("connection");
   if (
     !record(value) ||
@@ -348,8 +356,26 @@ export async function mcpInstallCommand(stateDir: string): Promise<string> {
   const state = value as LocalState;
   if (!state.scopes?.includes("tools:read"))
     throw new Error("reconnect with --tools to authorize NOUS tools");
-  // Standalone publication uses the first registered workspace root, if any.
-  const root = state.workspaces[0]?.root;
+  // Publication binds one registered root, chosen explicitly when ambiguous.
+  let root: string | undefined;
+  if (state.scopes.includes("artifacts:publish")) {
+    const roots = state.workspaces.map((w) => w.root);
+    if (options.root !== undefined) {
+      const chosen = resolve(options.root);
+      if (!roots.includes(chosen))
+        throw new Error("--root must name a registered workspace root");
+      root = chosen;
+    } else if (roots.length === 1) root = roots[0];
+    else if (roots.length > 1)
+      throw new Error(
+        `several workspaces are registered; pass --root with one of: ${roots.join(", ")}`,
+      );
+    (options.announce ?? console.error)(
+      root
+        ? `artifacts_publish will publish from ${root}`
+        : "no workspace registered; artifacts_publish will not be offered",
+    );
+  }
   return standaloneInstallCommand(mcpSession(stateDir, state, root));
 }
 export function recoverInterrupt(
@@ -372,8 +398,8 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools] | workspace add --root PATH [--label NAME] | run
-  nous-harness mcp install    Print the Codex command that registers NOUS read tools for a --tools connection.
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools [--publish]] | workspace add --root PATH [--label NAME] | run
+  nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
   nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
@@ -393,6 +419,7 @@ async function main(): Promise<void> {
       command: { type: "string" },
       session: { type: "string" },
       tools: { type: "boolean" },
+      publish: { type: "boolean" },
       help: { type: "boolean" },
     },
   });
@@ -422,9 +449,10 @@ async function main(): Promise<void> {
       projectId: values.project,
       label: values.label,
       tools: values.tools,
+      publish: values.publish,
     });
   else if (positionals.join(" ") === "mcp install")
-    console.log(await mcpInstallCommand(stateDir));
+    console.log(await mcpInstallCommand(stateDir, { root: values.root }));
   else if (positionals.join(" ") === "mcp") {
     if (!values.session || !values.api)
       throw new Error("mcp requires --api and --session");

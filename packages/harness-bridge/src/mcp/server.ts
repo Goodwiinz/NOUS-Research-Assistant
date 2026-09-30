@@ -36,9 +36,15 @@ export function createNousMcpServer(
     { capabilities: { tools: {} } },
   );
   const local = new Map(localTools.map((tool) => [tool.descriptor.name, tool]));
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...(await client.listTools()), ...localTools.map((t) => t.descriptor)],
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const catalog = (await client.listTools()).filter((tool) => {
+      if (!local.has(tool.name)) return true;
+      // A local tool always wins; never advertise two tools with one name.
+      console.error(`NOUS catalog tool ${tool.name} shadowed by the local tool`);
+      return false;
+    });
+    return { tools: [...catalog, ...localTools.map((t) => t.descriptor)] };
+  });
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
       const tool = local.get(request.params.name);
