@@ -559,6 +559,7 @@ def test_screening_queue_migration_upgrade_downgrade_round_trip(
     connection = pre_wave_connection
     for table in _SCREENING_TABLES:
         connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    connection.exec_driver_sql("DROP INDEX idx_research_decision_event_idempotency")
     migration = _load_migration("e1f3a5c7d9b2_create_screening_queues.py")
     assert migration.down_revision == "d4e6f8a0b2c3"
 
@@ -580,7 +581,13 @@ def test_screening_queue_migration_upgrade_downgrade_round_trip(
         "uq_screening_assignment_active": "(revoked_at IS NULL)",
         "uq_screening_observation_initial": "(supersedes_observation_id IS NULL)",
     }
+    assert "idx_research_decision_event_idempotency" in {
+        index["name"] for index in inspector.get_indexes("research_decision_events")
+    }
 
     _run_migration(connection, migration, "downgrade")
     inspector = inspect(connection)
     assert not any(inspector.has_table(table) for table in _SCREENING_TABLES)
+    assert "idx_research_decision_event_idempotency" not in {
+        index["name"] for index in inspector.get_indexes("research_decision_events")
+    }

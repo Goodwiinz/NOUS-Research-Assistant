@@ -9,11 +9,11 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import event, func, select
+from sqlalchemy import Column, MetaData, Table, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import src.models  # noqa: F401  (registers every FK target table)
-from src.models.base import Base
+from src.models.base import GUID, Base
 from src.models.research_blueprint import ResearchBlueprint
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
 from src.models.research_import import ResearchImportRecord
@@ -73,6 +73,14 @@ _TABLES = (
     ScreeningObservation,
     ScreeningSuggestion,
 )
+# Only the columns the service reads: the real User model encrypts its PII
+# columns, which needs key material unit tests do not have.
+_USERS = Table(
+    "users",
+    MetaData(),
+    Column("id", GUID(), primary_key=True),
+    Column("organization_id", GUID()),
+)
 
 
 @pytest.fixture
@@ -91,6 +99,7 @@ async def db() -> AsyncIterator[AsyncSession]:
         await connection.run_sync(
             lambda sync: Base.metadata.create_all(sync, tables=tables)
         )
+        await connection.run_sync(_USERS.create)
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
         yield session
     await engine.dispose()
@@ -102,6 +111,9 @@ class _Project(SimpleNamespace):
     supervisor: UUID
     reviewer: UUID
     reviewer2: UUID
+    outsider: UUID  # REVIEWER role, but not a workspace member
+    foreigner: UUID  # member with REVIEWER role, but in another organization
+    organization_id: UUID
     protocol_id: UUID
     version_id: UUID
     reports: list[UUID]
@@ -110,13 +122,19 @@ class _Project(SimpleNamespace):
 def _context(project: _Project, *roles: ResearchProjectRole) -> ProjectContext:
     members = [
         SimpleNamespace(user_id=user, is_deleted=False)
-        for user in (project.supervisor, project.reviewer, project.reviewer2)
+        for user in (
+            project.supervisor,
+            project.reviewer,
+            project.reviewer2,
+            project.foreigner,
+        )
     ]
     return cast(
         ProjectContext,
         SimpleNamespace(
             collection=SimpleNamespace(id=project.collection_id),
             workspace=SimpleNamespace(owner_id=project.owner, members=members),
+            organization_id=project.organization_id,
             effective_roles=frozenset(roles),
         ),
     )
@@ -151,9 +169,27 @@ async def _seed(db: AsyncSession, snapshot: dict[str, Any] = SNAPSHOT) -> _Proje
         supervisor=uuid4(),
         reviewer=uuid4(),
         reviewer2=uuid4(),
+        outsider=uuid4(),
+        foreigner=uuid4(),
+        organization_id=uuid4(),
         protocol_id=uuid4(),
         reports=[],
     )
+    for user in (
+        project.owner,
+        project.supervisor,
+        project.reviewer,
+        project.reviewer2,
+        project.outsider,
+        project.foreigner,
+    ):
+        foreign = user == project.foreigner
+        await db.execute(
+            _USERS.insert().values(
+                id=user,
+                organization_id=uuid4() if foreign else project.organization_id,
+            )
+        )
     db.add(
         ResearchProtocol(
             id=project.protocol_id, collection_id=project.collection_id, name="p"
@@ -181,7 +217,12 @@ async def _seed(db: AsyncSession, snapshot: dict[str, Any] = SNAPSHOT) -> _Proje
             value="10.1000/alpha",
         )
     )
-    for user in (project.reviewer, project.reviewer2):
+    for user in (
+        project.reviewer,
+        project.reviewer2,
+        project.outsider,
+        project.foreigner,
+    ):
         db.add(
             ResearchProjectRoleAssignment(
                 collection_id=project.collection_id,
@@ -682,3 +723,205 @@ async def test_unique_index_backstop_is_a_409_not_a_500(db: AsyncSession) -> Non
         409,
         "Reviewer already assigned",
     )
+
+
+async def _screen_step(
+    db: AsyncSession,
+    project: _Project,
+    reports: list[UUID],
+    *,
+    collection_id: UUID | None = None,
+    completed: bool = True,
+) -> UUID:
+    """A screen step whose run belongs to ``collection_id``'s engine project;
+    it includes one observed source per report."""
+    engine_id, blueprint_id, run_id, step_id = uuid4(), uuid4(), uuid4(), uuid4()
+    db.add(
+        ResearchProject(
+            id=engine_id,
+            name="engine",
+            owner_id=project.owner,
+            collection_id=collection_id or project.collection_id,
+        )
+    )
+    await db.flush()
+    db.add(ResearchBlueprint(id=blueprint_id, project_id=engine_id, name="bp"))
+    await db.flush()
+    db.add(ResearchRun(id=run_id, blueprint_id=blueprint_id, blueprint_version=1))
+    await db.flush()
+    sources = [uuid4() for _ in reports]
+    for source_id in sources:
+        db.add(
+            ResearchSource(
+                id=source_id, run_id=run_id, connector_type="openalex", title="s"
+            )
+        )
+    await db.flush()
+    for source_id, report_id in zip(sources, reports):
+        db.add(
+            ResearchReportObservation(
+                collection_id=project.collection_id,
+                report_id=report_id,
+                source_id=source_id,
+                match_method="doi",
+            )
+        )
+    db.add(
+        ResearchStep(
+            id=step_id,
+            run_id=run_id,
+            step_index=0,
+            step_type="screen",
+            completed_at=datetime.now(timezone.utc) if completed else None,
+            output={
+                "screening": [
+                    {"source_id": str(s), "part_id": "1", "included": True}
+                    | {"reason": "fits"}
+                    for s in sources
+                ]
+            },
+        )
+    )
+    await db.flush()
+    return step_id
+
+
+@pytest.mark.asyncio
+async def test_supervisor_and_reviewer_roles_are_required(db: AsyncSession) -> None:
+    """An owner/editor context holds no decision role and is refused."""
+    project = await _seed(db)
+    no_role = _context(project)
+    await _raises(
+        screening_service.create_queue(
+            db,
+            no_role,
+            project.owner,
+            ScreeningQueueCreate(
+                protocol_version_id=project.version_id,
+                stage="title_abstract",
+                idempotency_key="q",
+            ),
+        ),
+        403,
+        "supervisor role required",
+    )
+    queue = await _queue(db, project)
+    assignment = await _assign(db, project, queue.id, project.reviewer)
+    await _raises(
+        screening_service.assign(
+            db,
+            no_role,
+            queue.id,
+            project.owner,
+            ScreeningAssignmentCreate(
+                reviewer_user_id=project.reviewer2, idempotency_key="a"
+            ),
+        ),
+        403,
+        "supervisor role required",
+    )
+    await _raises(
+        screening_service.revoke(
+            db,
+            no_role,
+            queue.id,
+            assignment.id,
+            project.owner,
+            ScreeningRevokeRequest(reason="r", idempotency_key="r"),
+        ),
+        403,
+        "supervisor role required",
+    )
+    await _raises(
+        screening_service.submit(
+            db,
+            _context(project, ResearchProjectRole.SUPERVISOR),
+            queue.id,
+            project.reviewer,
+            ScreeningObservationCreate(
+                report_id=project.reports[0],
+                assignment_id=assignment.id,
+                criteria_hash=queue.criteria_hash,
+                decision="include",
+                idempotency_key="s",
+            ),
+        ),
+        403,
+        "reviewer role required",
+    )
+    assert await _count(db, ScreeningObservation) == 0
+
+
+@pytest.mark.asyncio
+async def test_suggestion_step_must_be_this_projects_completed_screen(
+    db: AsyncSession,
+) -> None:
+    project = await _seed(db)
+    foreign = await _screen_step(db, project, project.reports, collection_id=uuid4())
+    await _raises(
+        _queue(db, project, "a", suggestion_step_id=foreign), 404, "Step not found"
+    )
+    running = await _screen_step(db, project, project.reports, completed=False)
+    await _raises(
+        _queue(db, project, "b", suggestion_step_id=running),
+        422,
+        "Step is not a completed screen step",
+    )
+    assert await _count(db, ScreeningQueue) == 0
+
+
+@pytest.mark.asyncio
+async def test_suggestions_outside_the_frozen_corpus_are_skipped(
+    db: AsyncSession,
+) -> None:
+    project = await _seed(db)
+    step = await _screen_step(db, project, project.reports[:2])
+    queue = await _queue(
+        db, project, report_ids=project.reports[:1], suggestion_step_id=step
+    )
+    assert (queue.suggestion_count, queue.suggestions_skipped) == (1, 1)
+    (row,) = (await db.execute(select(ScreeningSuggestion))).scalars().all()
+    assert row.report_id == project.reports[0]
+
+
+@pytest.mark.asyncio
+async def test_assign_requires_a_member_in_the_project_organization(
+    db: AsyncSession,
+) -> None:
+    project = await _seed(db)
+    queue = await _queue(db, project)
+    for user in (project.outsider, project.foreigner):
+        await _raises(
+            _assign(db, project, queue.id, user),
+            422,
+            "User is not an eligible reviewer",
+        )
+    await _assign(db, project, queue.id, project.reviewer)
+
+
+@pytest.mark.asyncio
+async def test_merged_report_is_409(db: AsyncSession) -> None:
+    project = await _seed(db)
+    queue = await _queue(db, project)
+    assignment = await _assign(db, project, queue.id, project.reviewer)
+    merged = await db.get(ResearchReport, project.reports[1])
+    assert merged is not None
+    merged.merged_into_report_id = project.reports[0]
+    await db.flush()
+    await _raises(
+        _submit(db, project, queue, assignment.id, project.reports[1], "k"),
+        409,
+        "Report merged; reconcile queue",
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_key_reused_for_another_queue_is_409(db: AsyncSession) -> None:
+    project = await _seed(db)
+    await _queue(db, project, "same")
+    await _raises(
+        _queue(db, project, "same", report_ids=project.reports[:1]),
+        409,
+        "Idempotency conflict",
+    )
+    assert await _count(db, ScreeningQueue) == 1

@@ -41,6 +41,7 @@ from src.models.screening import (
     ScreeningQueue,
     ScreeningSuggestion,
 )
+from src.models.user import User
 from src.schemas.research_engine import (
     IdentityEventResponse,
     MyScreeningQueueInfo,
@@ -304,14 +305,8 @@ async def _corpus(
     return report_ids
 
 
-async def _import_suggestions(
-    db: AsyncSession,
-    collection_id: UUID,
-    queue_id: UUID,
-    step_id: UUID,
-    corpus: Sequence[UUID],
-) -> int:
-    """Attributed AI rows from a completed screen step; returns the skipped count."""
+async def _screen_step(db: AsyncSession, collection_id: UUID, step_id: UUID) -> Any:
+    """A completed ``screen`` step of this Collection's engine project."""
     step = (
         await db.execute(
             select(ResearchStep)
@@ -334,6 +329,17 @@ async def _import_suggestions(
         raise HTTPException(
             status_code=422, detail="Step is not a completed screen step"
         )
+    return step
+
+
+async def _import_suggestions(
+    db: AsyncSession,
+    collection_id: UUID,
+    queue_id: UUID,
+    step: Any,
+    corpus: Sequence[UUID],
+) -> int:
+    """Attributed AI rows from a validated screen step; returns the skipped count."""
     rows = screening_rules.suggestion_rows(cast(dict[str, Any], step.output or {}))
     source_ids: dict[str, UUID] = {}
     for source_id, _decision, _reason in rows:
@@ -382,7 +388,7 @@ async def _import_suggestions(
                 queue_id=queue_id,
                 report_id=report_id,
                 source_id=source_ids[source_id],
-                step_id=step_id,
+                step_id=step.id,
                 model_id=step.model_id,
                 decision=decision,
                 reason=reason or None,
@@ -399,6 +405,7 @@ async def create_queue(
     data: ScreeningQueueCreate,
 ) -> ScreeningQueueResponse:
     """Freeze a corpus at the current approved protocol version (SUPERVISE)."""
+    _require_role(context, ResearchProjectRole.SUPERVISOR)
     collection_id = cast(UUID, context.collection.id)
     # The idempotency key is per Collection: the queue id (and so its stream)
     # does not exist yet. The Collection lock serializes concurrent creates.
@@ -457,6 +464,11 @@ async def create_queue(
             status_code=422, detail="Suggestions import only into title/abstract queues"
         )
     report_ids = await _corpus(db, collection_id, data)
+    step = (
+        None
+        if data.suggestion_step_id is None
+        else await _screen_step(db, collection_id, data.suggestion_step_id)
+    )
     if data.supersedes_queue_id is not None:
         previous = await _queue(db, context, data.supersedes_queue_id)
         if previous.stage != data.stage:
@@ -482,9 +494,9 @@ async def create_queue(
     await _flush_unique(db, "Screening queue already reconciled")
     await db.refresh(queue)
     skipped = None
-    if data.suggestion_step_id is not None:
+    if step is not None:
         skipped = await _import_suggestions(
-            db, collection_id, queue_id, data.suggestion_step_id, report_ids
+            db, collection_id, queue_id, step, report_ids
         )
     await _append(
         db,
@@ -542,6 +554,7 @@ async def assign(
     data: ScreeningAssignmentCreate,
 ) -> ScreeningAssignmentResponse:
     """Assign a current REVIEWER to the whole queue (SUPERVISE)."""
+    _require_role(context, ResearchProjectRole.SUPERVISOR)
     queue = await _queue(db, context, queue_id)
     stream = await _lock(db, context, queue_id)
     fingerprint = _fingerprint("assign", queue_id, actor_user_id, data)
@@ -565,7 +578,12 @@ async def assign(
             )
         )
     ).first() is not None
-    if not (member and has_role):
+    # Same eligibility as a project role assignment (projects.py): a current
+    # member of this workspace in the project's organization.
+    same_org = (
+        await db.execute(select(User.organization_id).where(User.id == reviewer))
+    ).scalar_one_or_none() == context.organization_id
+    if not (member and same_org and has_role):
         raise HTTPException(status_code=422, detail="User is not an eligible reviewer")
     active = (
         await db.execute(
@@ -610,6 +628,7 @@ async def revoke(
     data: ScreeningRevokeRequest,
 ) -> ScreeningAssignmentResponse:
     """End an assignment revision (SUPERVISE); re-assigning inserts a new row."""
+    _require_role(context, ResearchProjectRole.SUPERVISOR)
     await _queue(db, context, queue_id)
     stream = await _lock(db, context, queue_id)
     fingerprint = _fingerprint(
@@ -796,6 +815,7 @@ async def submit(
     data: ScreeningObservationCreate,
 ) -> ScreeningObservationResponse:
     """Record one human observation (REVIEW context plus an active assignment)."""
+    _require_role(context, ResearchProjectRole.REVIEWER)
     queue = await _queue(db, context, queue_id)
     stream = await _lock(db, context, queue_id)
     fingerprint = _fingerprint("submit", queue_id, actor_user_id, data)

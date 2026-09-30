@@ -174,8 +174,16 @@ def upgrade() -> None:
     )
     for table in _TABLES:
         _deny_data_api(table)
+    # create_queue's per-Collection idempotency lookup.
+    op.create_index(
+        _EVENT_IDEMPOTENCY_INDEX,
+        "research_decision_events",
+        ["collection_id", "event_type", "idempotency_key"],
+        if_not_exists=True,
+    )
 
 
+_EVENT_IDEMPOTENCY_INDEX = "idx_research_decision_event_idempotency"
 _TABLES = (
     "screening_queues",
     "screening_assignments",
@@ -185,6 +193,9 @@ _TABLES = (
 
 
 def downgrade() -> None:
-    # Indexes go with their tables.
+    op.drop_index(
+        _EVENT_IDEMPOTENCY_INDEX, table_name="research_decision_events", if_exists=True
+    )
+    # The screening indexes go with their tables.
     for table in reversed(_TABLES):
         op.drop_table(table)
