@@ -1,7 +1,7 @@
 """Pydantic v2 schemas for the research engine API."""
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar, Union
 from uuid import UUID
@@ -633,6 +633,127 @@ class ScreeningEventResponse(IdentityEventResponse):
     """A screening event; a peer's hidden decision is ``redacted`` (GOO-302)."""
 
     redacted: bool = False
+
+
+# --- Full-text acquisition + PRISMA flow (GOO-303) --------------------------
+
+FulltextOutcome = Literal["requested", "retrieved", "unavailable"]
+
+
+class FulltextRequestCreate(BaseModel):
+    report_id: UUID
+    idempotency_key: _IdempotencyKey
+
+
+class FulltextAttemptCreate(BaseModel):
+    """One attempt; ``previous_attempt_id`` must be the current head (or null)."""
+
+    outcome: FulltextOutcome
+    attempted_on: date
+    reason: Optional[str] = Field(None, min_length=1, max_length=2000)
+    document_id: Optional[UUID] = None
+    previous_attempt_id: Optional[UUID] = None
+    idempotency_key: _IdempotencyKey
+
+    @model_validator(mode="after")
+    def _outcome_fields(self) -> "FulltextAttemptCreate":
+        if (self.outcome == "retrieved") != (self.document_id is not None):
+            raise ValueError("document_id is required for, and only for, retrieved")
+        if self.outcome == "unavailable" and not (self.reason or "").strip():
+            raise ValueError("unavailable needs a reason")
+        # One day of slack: the actor reports their own local date.
+        if self.attempted_on > datetime.now(timezone.utc).date() + timedelta(days=1):
+            raise ValueError("attempted_on cannot be in the future")
+        return self
+
+
+class FulltextAttemptResponse(BaseModel):
+    id: UUID
+    outcome: FulltextOutcome
+    reason: Optional[str] = None
+    attempted_on: date
+    actor_id: UUID
+    document_id: Optional[UUID] = None
+    document_content_hash: Optional[str] = None
+    # False once the linked document is deleted or detached; id and hash stay.
+    document_available: bool = False
+    previous_attempt_id: Optional[UUID] = None
+    created_at: datetime
+
+
+class FulltextStateResponse(BaseModel):
+    request_id: UUID
+    report_id: UUID
+    protocol_version_id: Optional[UUID] = None
+    requested_by_id: UUID
+    requested_at: datetime
+    state: Literal["pending", "requested", "retrieved", "unavailable"]
+    head_attempt_id: Optional[UUID] = None
+    attempts: List[FulltextAttemptResponse]  # chain order, first attempt first
+
+
+class PrismaCounts(BaseModel):
+    records_identified: int
+    records_by_source: Dict[str, int]
+    records_by_import: Dict[str, int]
+    import_rejected: int
+    duplicates_removed: int
+    unique_reports: int
+    records_screened: int
+    records_excluded: int
+    records_awaiting_screening: int
+    reports_sought: int
+    reports_not_retrieved: int
+    reports_awaiting_retrieval: int
+    reports_assessed: int
+    reports_excluded_by_reason: Dict[str, int]
+    included_reports: int
+    included_studies: int
+    unconfirmed_study_links: int
+
+
+class PrismaAmendment(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    event_id: UUID
+    aggregate_type: str
+    seq: int
+    kind: str
+    report_id: UUID
+    from_: str = Field(..., alias="from")
+    to: str
+
+
+class PrismaChecks(BaseModel):
+    screened_plus_awaiting_equals_unique: bool
+    assessed_within_retrieved: bool
+    included_plus_excluded_equals_assessed: bool
+
+
+class PrismaVersions(BaseModel):
+    corpus_hash: str
+    protocol_version_ids: List[str]
+    stream_heads: Dict[str, int]
+
+
+class PrismaFlowBody(BaseModel):
+    counts: PrismaCounts
+    excluded_from_flow: Dict[str, int]
+    amendments: List[PrismaAmendment]
+    warnings: List[str]
+    checks: PrismaChecks
+    versions: PrismaVersions
+
+
+class PrismaFlowResponse(BaseModel):
+    """Recomputed from persisted rows on every call; nothing here is stored."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str = Field(..., alias="schema")
+    generated_at: datetime
+    body_sha256: str
+    body: PrismaFlowBody
 
 
 # --- Search import / corpus (GOO-300) --------------------------------------
