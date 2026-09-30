@@ -65,7 +65,13 @@ from .encrypted_user import (
     EncryptionAuditLog,
 )
 from .entity import Entity, EntityType, ExtractionMethod, entity_relationships
-from .extraction_matrix import ExtractionCell, ExtractionMatrix
+from .extraction_matrix import (
+    ExtractionAcceptedValue,
+    ExtractionCell,
+    ExtractionFormVersion,
+    ExtractionMatrix,
+    ExtractionObservation,
+)
 from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
 from .generated_draft import GeneratedDraft
@@ -276,6 +282,9 @@ __all__ = [
     # Extraction Matrix models
     "ExtractionMatrix",
     "ExtractionCell",
+    "ExtractionFormVersion",
+    "ExtractionObservation",
+    "ExtractionAcceptedValue",
     # Integrity Score models
     "IntegrityScore",
     # Research Engine models
