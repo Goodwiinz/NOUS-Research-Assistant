@@ -67,6 +67,9 @@ describe('ArtifactPreview', () => {
   });
 
   it('offers download for unsupported types without fetching', async () => {
+    // restoreMocks resets vi.fn() to return undefined; the handler chains
+    // .catch, so the mock must resolve like the real service.
+    vi.mocked(artifactService.downloadVersion).mockResolvedValue(undefined);
     const { user } = render(
       <ArtifactPreview
         version={{ ...base, mimeType: 'text/html', title: 'tool.html' }}
