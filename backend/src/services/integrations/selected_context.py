@@ -188,7 +188,7 @@ async def _options(
             )
             for m in listed.values()
         ],
-        selected_memory_ids=[m.id for m in selected],
+        selected_memory_ids=[cast(UUID, m.id) for m in selected],
     )
 
 
