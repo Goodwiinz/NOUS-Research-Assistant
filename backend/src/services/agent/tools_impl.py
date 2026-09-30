@@ -2121,7 +2121,8 @@ async def _execute_external_operation(
     if (
         tool_name == "create_draft"
         and isinstance(bounded_result, dict)
-        and bounded_result.get("status") not in {"completed", "failed", "cancelled"}
+        and bounded_result.get("status")
+        not in {"completed", "failed", "cancelled", "interrupted"}
         and isinstance(bounded_result.get("task_id"), str)
         and bounded_result["task_id"]
     ):
@@ -2193,7 +2194,11 @@ def _uncertain_draft_recovery_result(
 
 
 async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, Any]:
-    from src.services.research.draft_generation_service import DraftGenerationService
+    from src.services.agent.tool_session import tool_session
+    from src.services.research.draft_generation_service import (
+        DraftGenerationService,
+        scoped_task_status,
+    )
 
     task_id = dispatched_result.get("task_id")
     project_id = dispatched_result.get("project_id")
@@ -2211,28 +2216,30 @@ async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, 
             "The saved draft task identifier is missing; use scoped status lookup.",
             "draft_status_unavailable",
         )
+    pending = {
+        **dispatched_result,
+        "status": "pending",
+        "message": "Draft task status is not currently available; it will not be started again.",
+        "error_category": "draft_status_unavailable",
+        "_terminal_status": False,
+    }
     try:
         status = await DraftGenerationService.get_status_shared(task_id)
         if status is None or not DraftGenerationService._status_matches_scope(
             status, parsed_project_id, parsed_user_id
         ):
-            pending = {
-                **dispatched_result,
-                "status": "pending",
-                "message": "Draft task status is not currently available; it will not be started again.",
-                "error_category": "draft_status_unavailable",
-                "_terminal_status": False,
-            }
-            return pending
+            # Worker restart or Redis TTL expiry: the retained row is the record.
+            async with tool_session() as session:
+                status = await scoped_task_status(
+                    session,
+                    task_id,
+                    collection_id=parsed_project_id,
+                    actor_user_id=parsed_user_id,
+                )
+            if status is None:
+                return pending
     except Exception:
         logger.warning("draft status recovery failed closed", exc_info=True)
-        pending = {
-            **dispatched_result,
-            "status": "pending",
-            "message": "Draft task status is not currently available; it will not be started again.",
-            "error_category": "draft_status_unavailable",
-            "_terminal_status": False,
-        }
         return pending
     # Recovery can run on another worker after a process restart. Use the
     # scoped shared snapshot directly; wait_for_terminal_status consults only
@@ -2243,6 +2250,7 @@ async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, 
         "completed",
         "failed",
         "cancelled",
+        "interrupted",
     }
     return result
 
@@ -2269,7 +2277,7 @@ def _draft_status_result(
     project_name = str(dispatched_result.get("project_name", "the project"))
     if state == "completed":
         message = f"Draft generated for project '{project_name}'."
-    elif state in {"failed", "cancelled"}:
+    elif state in {"failed", "cancelled", "interrupted"}:
         detail = str(status.get("current_step") or "Draft generation failed")
         message = detail.removeprefix("Error: ").strip()
         result["error"] = message
