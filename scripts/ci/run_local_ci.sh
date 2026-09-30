@@ -94,9 +94,13 @@ if ! MERGE_BASE="$(git merge-base "$BASE" HEAD 2>/dev/null)"; then
   FAILED+=("merge-base $BASE")
 fi
 FILES=()
+# Capture before looping: a loop fed by process substitution drops the
+# producer's exit status, so a crashed enumerator read as "no changed files"
+# and the gates it arms passed.
+LIST="$("$PY" scripts/ci/changed_source_files.py --base "$BASE" --kind python)" || check 1 "list changed Python files"
 while IFS= read -r file; do
   [ -n "$file" ] && FILES+=("$file")
-done < <("$PY" scripts/ci/changed_source_files.py --base "$BASE" --kind python)
+done <<< "$LIST"
 if [ "${#FILES[@]}" -eq 0 ]; then
   echo "  no changed Python files"
 else
@@ -106,9 +110,10 @@ else
   isort --check-only "${FILES[@]}"; check $? "isort (changed)"
 fi
 ADDED=()
+LIST="$("$PY" scripts/ci/changed_source_files.py --base "$BASE" --kind python-added)" || check 1 "list added Python files"
 while IFS= read -r file; do
   [ -n "$file" ] && ADDED+=("$file")
-done < <("$PY" scripts/ci/changed_source_files.py --base "$BASE" --kind python-added)
+done <<< "$LIST"
 if [ "${#ADDED[@]}" -gt 0 ]; then
   printf '  %d added file(s) — mypy\n' "${#ADDED[@]}"
   mypy --ignore-missing-imports --follow-imports=silent "${ADDED[@]}"; check $? "mypy (added)"
@@ -128,9 +133,10 @@ step "OpenAPI snapshot drift (blocking)"
 
 step "Generated TypeScript types (blocking when the contract moves) — base=$BASE"
 CONTRACT_FILES=()
+LIST="$(changed_paths backend/openapi.json frontend/src/types/generated)" || check 1 "list changed contract files"
 while IFS= read -r file; do
   [ -n "$file" ] && CONTRACT_FILES+=("$file")
-done < <(changed_paths backend/openapi.json frontend/src/types/generated)
+done <<< "$LIST"
 if [ "${#CONTRACT_FILES[@]}" -eq 0 ]; then
   skipped "generated api types" "backend/openapi.json + frontend/src/types/generated unchanged since $BASE"
 else
@@ -348,9 +354,10 @@ alembic_upgrade_from_empty() (
 
 step "Targeted evidence migration delta (blocking when runnable; visible skip when PostgreSQL is unavailable) — base=$BASE"
 MIGRATION_FILES=()
+LIST="$(changed_paths backend/alembic/versions)" || check 1 "list changed migration files"
 while IFS= read -r file; do
   [ -n "$file" ] && MIGRATION_FILES+=("$file")
-done < <(changed_paths backend/alembic/versions)
+done <<< "$LIST"
 if [ "${#MIGRATION_FILES[@]}" -eq 0 ]; then
   skipped "targeted evidence migration delta" "backend/alembic/versions unchanged since $BASE"
 else

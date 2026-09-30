@@ -1,0 +1,71 @@
+{
+  "step": "B1-03-create-question",
+  "as": "owner",
+  "at": "2026-09-29T10:18:37.046406+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/questions",
+    "body": {
+      "question": "eval-2026-09-29: What evidence exists that retrieval-augmented generation reduces factual hallucination in LLM question answering?",
+      "hypothesis": "RAG reduces hallucination rates versus closed-book generation.",
+      "scope": "Peer-reviewed and arXiv studies 2020-2026.",
+      "framework": {
+        "type": "PICO",
+        "population": "LLM QA systems",
+        "intervention": "retrieval augmentation",
+        "comparison": "closed-book",
+        "outcome": "factual accuracy"
+      }
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "90f5a91a-dfcf-4936-8929-04684bd88e3f",
+    "project_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+    "current_version_id": "20da02ff-6318-43ae-bba9-8e8b5ff78b20",
+    "current_version": {
+      "id": "20da02ff-6318-43ae-bba9-8e8b5ff78b20",
+      "question_id": "90f5a91a-dfcf-4936-8929-04684bd88e3f",
+      "version": 1,
+      "parent_version_id": null,
+      "question": "eval-2026-09-29: What evidence exists that retrieval-augmented generation reduces factual hallucination in LLM question answering?",
+      "hypothesis": "RAG reduces hallucination rates versus closed-book generation.",
+      "scope": "Peer-reviewed and arXiv studies 2020-2026.",
+      "framework": {
+        "type": "PICO",
+        "outcome": "factual accuracy",
+        "comparison": "closed-book",
+        "population": "LLM QA systems",
+        "intervention": "retrieval augmentation"
+      },
+      "content_hash": "81025bdde3ef909afc868bd03c5251b7f6fa943b4e7febe1667ff60adbce9ca6",
+      "author_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "created_at": "2026-09-29T10:18:37.020418Z"
+    },
+    "versions": [
+      {
+        "id": "20da02ff-6318-43ae-bba9-8e8b5ff78b20",
+        "question_id": "90f5a91a-dfcf-4936-8929-04684bd88e3f",
+        "version": 1,
+        "parent_version_id": null,
+        "question": "eval-2026-09-29: What evidence exists that retrieval-augmented generation reduces factual hallucination in LLM question answering?",
+        "hypothesis": "RAG reduces hallucination rates versus closed-book generation.",
+        "scope": "Peer-reviewed and arXiv studies 2020-2026.",
+        "framework": {
+          "type": "PICO",
+          "outcome": "factual accuracy",
+          "comparison": "closed-book",
+          "population": "LLM QA systems",
+          "intervention": "retrieval augmentation"
+        },
+        "content_hash": "81025bdde3ef909afc868bd03c5251b7f6fa943b4e7febe1667ff60adbce9ca6",
+        "author_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+        "created_at": "2026-09-29T10:18:37.020418Z"
+      }
+    ],
+    "created_at": "2026-09-29T10:18:37.017662Z"
+  }
+}

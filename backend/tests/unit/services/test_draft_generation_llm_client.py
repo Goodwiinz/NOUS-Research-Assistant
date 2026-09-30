@@ -425,6 +425,7 @@ async def test_generation_rechecks_exact_sources_immediately_before_model_dispat
         yield ReadSession()
 
     monkeypatch.setattr(module, "AsyncSessionLocal", session_factory)
+    monkeypatch.setattr(module, "finish_task", AsyncMock(return_value=True))
 
     async def no_sleep(_seconds: float) -> None:
         return None

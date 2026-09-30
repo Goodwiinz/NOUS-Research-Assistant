@@ -460,11 +460,13 @@ module "rds" {
   maintenance_window = "Mon:03:00-Mon:04:00"
   backup_window      = "04:00-06:00"
 
-  backup_retention_period          = 7
-  skip_final_snapshot              = var.environment == "development" ? true : false
+  backup_retention_period = 7
+  skip_final_snapshot     = false
+  # Module v6 derives final_snapshot_identifier from this deterministic prefix,
+  # the DB identifier, and a state-stable suffix to avoid snapshot collisions.
   final_snapshot_identifier_prefix = "${var.project_name}-final-snapshot"
 
-  deletion_protection = var.environment == "production" ? true : false
+  deletion_protection = true
 
   family               = "postgres16"
   major_engine_version = "16"

@@ -1,0 +1,70 @@
+{
+  "step": "C1-08-get-document-one",
+  "as": "owner",
+  "at": "2026-09-29T10:20:27.996100+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/documents/23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+    "title": "Shadow Queries for Private Retrieval in Vector Databases",
+    "filename": "2609.04767v1.txt",
+    "document_type": "text",
+    "file_size_bytes": 1750,
+    "file_size_mb": 0.0016689300537109375,
+    "mime_type": "text/plain",
+    "processing_status": "indexed",
+    "tags": null,
+    "is_public": false,
+    "content_preview": "# Abstract\n\nLarge language models (LLMs) increasingly rely on information retrieval (IR) systems, such as Retrieval-Augmented Generation (RAG), to incorporate domain-specific knowledge without costly re-training. These systems often store pre-computed document embeddings in cloud-based vector databases. However, such embeddings are vulnerable to embedding inversion attacks (EIAs), which can reconstruct their underlying text. Existing defenses, such as adding noise or scaling embeddings, often pr...",
+    "content_summary": null,
+    "created_at": "2026-09-09T00:44:22.846098+00:00",
+    "updated_at": "2026-09-09T00:44:32.725543+00:00",
+    "uploaded_by_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "organization_id": "e050bd43-6b0b-4425-9848-1bc5ad9d5cc2",
+    "content_text": null,
+    "metadata": {
+      "title": "Shadow Queries for Private Retrieval in Vector Databases",
+      "description": "Large language models (LLMs) increasingly rely on information retrieval (IR) systems, such as Retrieval-Augmented Generation (RAG), to incorporate domain-specific knowledge without costly re-training. These systems often store pre-computed document embeddings in cloud-based vector databases. However, such embeddings are vulnerable to embedding inversion attacks (EIAs), which can reconstruct their underlying text. Existing defenses, such as adding noise or scaling embeddings, often provide limite...",
+      "authors": [
+        "Xinguo Feng",
+        "Zhongkui Ma",
+        "Zihan Wang",
+        "Chuan Yan",
+        "Guowei Yang",
+        "Alsharif Abuadbba",
+        "Guangdong Bai"
+      ],
+      "publication_date": "2026-09-04T05:59:54+00:00",
+      "categories": [
+        "cs.AI"
+      ],
+      "tags": [
+        "cs.AI"
+      ],
+      "arxiv_id": "2609.04767v1",
+      "arxiv_categories": [
+        "cs.AI"
+      ],
+      "arxiv_primary_category": "cs.AI",
+      "journal_reference": null,
+      "doi": null,
+      "comment": "13 pages",
+      "source": "arxiv",
+      "language": "en",
+      "modality": "text",
+      "content_type": "academic_paper",
+      "has_full_text": false
+    },
+    "processing_started_at": null,
+    "processing_completed_at": null,
+    "processing_error": null,
+    "processing_retry_count": 0
+  }
+}

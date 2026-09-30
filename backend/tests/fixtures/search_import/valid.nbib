@@ -1,0 +1,16 @@
+PMID- 31000001
+OWN - NLM
+TI  - A MEDLINE record title that wraps
+      onto a second line.
+FAU - Smith, John
+AU  - Smith J
+DP  - 2019 Mar 4
+AB  - Background text.
+LID - 10.1000/nbib1 [doi]
+AID - 10.1000/nbib1 [doi]
+AID - S0000-0000(19)00001-1 [pii]
+PMC - PMC6000001
+
+PMID- 31000002
+TI  - Second record
+DP  - 2020

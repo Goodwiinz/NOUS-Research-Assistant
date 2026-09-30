@@ -1,0 +1,20 @@
+{
+  "step": "00-auth-session-owner",
+  "as": "owner",
+  "at": "2026-09-29T10:16:36.252922+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/auth/session",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "access_token_expires_minutes": 30,
+    "refresh_token_expires_days": 7,
+    "remember_me_expires_days": 30,
+    "user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a"
+  }
+}

@@ -824,6 +824,21 @@ def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) 
             tmp_path / "trial.json", runtime, state, "development", "a" * 40, 101
         )
 
+    for configuration in (
+        {"headers": ["Authorization: Bearer sk-abc123def456"]},
+        {"headers": ["Cookie: session=abc"]},
+        {"proxy": "https://user:hunter2@proxy.internal/"},
+    ):
+        with pytest.raises(COLLECT.EvidenceError, match="secret-bearing value"):
+            COLLECT._reject_sensitive_configuration(configuration)
+
+    runtime = _runtime(state, task_id, "a" * 40, "run-1")
+    runtime["tool_versions"]["harbor"] = "sk-proj-abcdefgh12345678"
+    with pytest.raises(COLLECT.EvidenceError, match="runtime.tool_versions.harbor"):
+        COLLECT._validate_runtime_identity(
+            tmp_path / "trial.json", runtime, state, "development", "a" * 40, 101
+        )
+
     bundle_path, trial = _success_bundle(tmp_path)
     trial["runtime"] = _runtime(state, task_id, "a" * 40, "run-1")
     trial["runtime"]["request_headers"] = {"Authorization": "Bearer secret"}
@@ -845,6 +860,61 @@ def test_runtime_identity_and_retained_configuration_are_strict(tmp_path: Path) 
     )
     with pytest.raises(COLLECT.EvidenceError, match="unsupported retained field"):
         COLLECT.validate_trial(bundle_path, trial, state, "a" * 40)
+
+
+def test_whole_trial_scan_checks_values_but_not_legitimate_keys(
+    tmp_path: Path,
+) -> None:
+    protocol = COLLECT._load_json(TASK_DIR / "protocol.json")
+    state = COLLECT.validate_protocol(protocol)
+    task_id, seed = "dev-canonical-comparison", 101
+    source_sha = COLLECT._source_sha()
+    bundle_path = tmp_path / "trial" / "trial.json"
+    trial: dict[str, Any] = {
+        "passed": False,
+        "verdicts": {
+            "objective": "failed",
+            "semantic": "not_run",
+            "authorization": "not_run",
+            "infrastructure": "passed",
+        },
+        "failure_class": "objective_failed",
+    }
+    _bind_trial_to_protocol(bundle_path, trial, state, task_id, seed, source_sha, "r1")
+    trial["runtime"]["configuration"]["endpoint"] = "http://host:8000/v1"
+    assert "authorization" in trial["verdicts"]
+
+    key, _ = COLLECT.validate_trial(bundle_path, trial, state, source_sha)
+    assert key == (task_id, seed)
+
+    trial["runtime"]["model"] = "Authorization: Bearer sk-abc123def456"
+    with pytest.raises(COLLECT.EvidenceError, match="trial.runtime.model"):
+        COLLECT.validate_trial(bundle_path, trial, state, source_sha)
+
+
+def test_secret_value_pattern_ignores_urls_with_ports() -> None:
+    for benign in ("http://host:8000/", "https://api.example.com:443/v1?a=b@c"):
+        COLLECT._reject_sensitive_configuration({"endpoint": benign})
+
+
+def test_reused_citation_row_identity_is_rejected(tmp_path: Path) -> None:
+    first_path, first = _success_bundle(tmp_path, bundle_name="first", run_id="run-1")
+    second_path, second = _success_bundle(
+        tmp_path, bundle_name="second", run_id="run-2"
+    )
+    record = second["artifacts"]["citations"]
+    path = second_path.parent / record["path"]
+    rows = COLLECT._load_json(path)
+    shared_id = COLLECT._load_json(first_path.parent / "citations.json")[0]["id"]
+    rows[0]["id"] = shared_id
+    _write_json(path, rows)
+    record["sha256"] = COLLECT._file_digest(path)
+    verdicts = {"objective": "passed", "semantic": "passed", "authorization": "passed"}
+
+    first_ids = COLLECT._evidence_identities(first_path, first, verdicts)
+    second_ids = COLLECT._evidence_identities(second_path, second, verdicts)
+    assert ("citation_row", shared_id) in (first_ids & second_ids)
+    assert ("citations_artifact", record["sha256"]) not in first_ids
 
 
 def test_collect_rejects_reused_run_identity(

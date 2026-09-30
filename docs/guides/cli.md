@@ -1,10 +1,10 @@
-# NOUS CLI — Using with `dev-api.gen-text.app`
+# NOUS CLI — Using with `dev-api.goodwiinz.tech`
 
 An Ink terminal chat client for the NOUS agent. It talks to a NOUS backend over HTTPS — auth via browser-based device flow, then streams agent responses (tokens + tool events + HITL confirmations) straight into your terminal.
 
 Interactive `./nous` now launches Ink. See [the terminal guide](../../terminal/README.md) for native menus, keyboard controls, attachments, branches, and migrated commands. Login and one-shot queries continue to use the shared CLI services.
 
-This guide targets the hosted dev API at **`https://dev-api.gen-text.app/`**.
+This guide targets the hosted dev API at **`https://dev-api.goodwiinz.tech/`**.
 
 ---
 
@@ -12,7 +12,7 @@ This guide targets the hosted dev API at **`https://dev-api.gen-text.app/`**.
 
 - Node 24
 - `pnpm@10.18.2`
-- A NOUS account authorized on `dev-api.gen-text.app`
+- A NOUS account authorized on `dev-api.goodwiinz.tech`
 
 ---
 
@@ -20,15 +20,15 @@ This guide targets the hosted dev API at **`https://dev-api.gen-text.app/`**.
 
 ```bash
 # 1. Clone and install frontend deps
-git clone https://github.com/goodwiins/rag.git nous
+git clone https://github.com/Goodwiinz/NOUS-Research-Assistant.git nous
 cd nous
 pnpm install --frozen-lockfile
 
 # 2. Point the CLI at the dev API
-export NOUS_API_URL="https://dev-api.gen-text.app/api/v1"
+export NOUS_API_URL="https://dev-api.goodwiinz.tech/api/v1"
 
 # Make it permanent (pick your shell)
-echo 'export NOUS_API_URL="https://dev-api.gen-text.app/api/v1"' >> ~/.zshrc   # or ~/.bashrc
+echo 'export NOUS_API_URL="https://dev-api.goodwiinz.tech/api/v1"' >> ~/.zshrc   # or ~/.bashrc
 ```
 
 The CLI reads `NOUS_API_URL` at startup. It **must** include the `/api/v1` suffix — it hits `POST {NOUS_API_URL}/cli-auth/start` and the streaming endpoint under the same base.
@@ -50,7 +50,7 @@ export NOUS_CONFIG_DIR="$HOME/.config/nous"
 What happens:
 
 1. CLI calls `POST /cli-auth/start` and gets a session + browser URL.
-2. Your default browser opens a consent page on `dev-api.gen-text.app`.
+2. Your default browser opens a consent page on `dev-api.goodwiinz.tech`.
 3. You sign in and click **Approve**.
 4. CLI polls `/cli-auth/status/{session_id}` until it flips to `approved`.
 5. Token, email, org ID, and expiry are written to `~/.nous/config.json`.
@@ -147,7 +147,7 @@ Destructive tools (document ingest, draft creation, note writes) pause via LangG
 
 | Variable          | Purpose                              | Default                        |
 | ----------------- | ------------------------------------ | ------------------------------ |
-| `NOUS_API_URL`    | Base API URL (must end in `/api/v1`) | `http://localhost:8000/api/v1` |
+| `NOUS_API_URL`    | Base API URL (must end in `/api/v1`) | `https://dev-api.goodwiinz.tech/api/v1` via `./nous` |
 | `NOUS_CONFIG_DIR` | Where `config.json` lives            | `~/.nous`                      |
 
 ---
@@ -161,14 +161,14 @@ Destructive tools (document ingest, draft creation, note writes) pause via LangG
 | `Session expired. Run: ./nous login` | Token past `expires_at` — re-login                                          |
 | Browser didn't open                  | Copy the printed URL manually; login flow works the same way                |
 | `Poll failed: 403`                   | Your account may not be authorized for this environment — contact the admin |
-| Connection refused                   | `dev-api.gen-text.app` may be down; retry or check status                   |
+| Connection refused                   | `dev-api.goodwiinz.tech` may be down; retry or check status                   |
 
 ### Quick connectivity check
 
 ```bash
 curl -sS "$NOUS_API_URL/../health"
 # or, explicitly:
-curl -sS https://dev-api.gen-text.app/health
+curl -sS https://dev-api.goodwiinz.tech/health
 ```
 
 Should return `{"status":"ok"}` (or similar).

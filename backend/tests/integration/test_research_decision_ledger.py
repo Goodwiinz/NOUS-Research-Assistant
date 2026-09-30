@@ -345,3 +345,43 @@ async def test_replay_rejects_supersession_target_hash_disagreement(
                     0, result="a" * 64 if subject_id == previous_id else "c" * 64
                 ),
             )
+
+
+@pytest.mark.asyncio
+async def test_decisions_survive_agent_run_cleanup(
+    decision_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(decision_engine)
+    kwargs = _approved_kwargs(ids, uuid4(), uuid4())
+    async with AsyncSession(decision_engine, expire_on_commit=False) as db:
+        appended = await append_decision(db, **kwargs)
+        await db.commit()
+
+    job_id = str(uuid4())
+    async with decision_engine.begin() as connection:
+        await connection.execute(
+            text("""INSERT INTO agent_runs
+                    (job_id, user_id, project_id, status, created_at, updated_at)
+                    VALUES (:job_id, :user, :collection, 'completed', now(), now())"""),
+            {"job_id": job_id, **ids},
+        )
+    # disposable agent-run cleanup is a hard delete
+    async with decision_engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM agent_runs WHERE job_id=:job_id"), {"job_id": job_id}
+        )
+    async with decision_engine.connect() as connection:
+        assert (
+            await connection.scalar(
+                text("SELECT count(*) FROM research_decision_events WHERE id=:id"),
+                {"id": appended.event.id},
+            )
+            == 1
+        )
+        assert (
+            await connection.scalar(
+                text("SELECT count(*) FROM agent_runs WHERE job_id=:job_id"),
+                {"job_id": job_id},
+            )
+            == 0
+        )

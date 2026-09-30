@@ -75,7 +75,14 @@ async def test_draft_status_survives_process_local_state_loss(
         route = importlib.util.module_from_spec(route_spec)
         route_spec.loader.exec_module(route)
 
-        with patch.object(route, "_validate_project_ownership", new=AsyncMock()):
+        # No retained row read (GOO-297): this test covers the cache path;
+        # the cancel's row write is stubbed as succeeding.
+        with (
+            patch.object(route, "_validate_project_ownership", new=AsyncMock()),
+            patch.object(route, "get_task_result", new=AsyncMock(return_value=None)),
+            patch.object(route, "reconcile_task", new=AsyncMock(return_value=None)),
+            patch.object(draft_module, "finish_task", new=AsyncMock(return_value=True)),
+        ):
             response = await route.get_generation_status(
                 project_id=project_id,
                 task_id=task_id,
@@ -104,7 +111,7 @@ async def test_draft_status_survives_process_local_state_loss(
                 project_id=project_id,
                 task_id=task_id,
                 current_user=SimpleNamespace(id=user_id),
-                db=MagicMock(),
+                db=AsyncMock(),
             )
             draft_module._generation_status.pop(task_id)
             cancelled = await service.get_status_shared(task_id)

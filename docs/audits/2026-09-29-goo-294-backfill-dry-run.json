@@ -1,0 +1,21 @@
+{
+  "active_invalid": 1,
+  "applied": 0,
+  "counts": {
+    "conflicting": 0,
+    "mapped": 0,
+    "skipped": 0,
+    "unresolved": 1
+  },
+  "guard": "not_required",
+  "mode": "dry-run",
+  "rows": [
+    {
+      "category": "unresolved",
+      "collection_id": null,
+      "project_id": null,
+      "reason": "no_identical_id_collection",
+      "research_engine_project_id": "1bcf8e6f-cffe-4f2b-8839-9165537ab768"
+    }
+  ]
+}

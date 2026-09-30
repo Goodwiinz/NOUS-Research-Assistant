@@ -27,6 +27,7 @@ from starlette.middleware.gzip import GZipMiddleware
 logger = logging.getLogger(__name__)
 
 from src.api.agent import agent_router
+from src.api.artifacts import router as artifacts_router
 from src.api.arxiv import (
     arxiv_bulk_router,
     arxiv_change_router,
@@ -80,6 +81,8 @@ from src.api.research import (
 from src.api.research_engine import (
     research_engine_blueprints_router,
     research_engine_capabilities_router,
+    research_engine_corpus_router,
+    research_engine_identities_router,
     research_engine_projects_router,
     research_engine_protocols_router,
     research_engine_reviews_router,
@@ -571,6 +574,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(cli_auth_router, prefix="/api/v1")
 app.include_router(integrations_router, prefix="/api/v1")
 app.include_router(harness_router, prefix="/api/v1")
+app.include_router(artifacts_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
@@ -666,6 +670,12 @@ app.include_router(
 app.include_router(
     research_engine_reviews_router, prefix="/api/v1"
 )  # Research Engine stage reviews
+app.include_router(
+    research_engine_identities_router, prefix="/api/v1"
+)  # Research Engine report/study identities (GOO-299)
+app.include_router(
+    research_engine_corpus_router, prefix="/api/v1"
+)  # Research Engine search import, citation chase, corpus export (GOO-300)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search

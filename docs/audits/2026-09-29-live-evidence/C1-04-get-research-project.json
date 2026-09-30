@@ -1,0 +1,138 @@
+{
+  "step": "C1-04-get-research-project",
+  "as": "owner",
+  "at": "2026-09-29T10:20:15.111481+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+    "research_engine_project_id": "2dff0f55-c5c0-4fa2-9b22-0922d7eb3bad",
+    "can_edit": true,
+    "can_manage": true,
+    "workspace_archived": false,
+    "workspace_id": "f7538b4a-d043-4a10-b763-e45ce369d69e",
+    "name": "eval-2026-09-29-project",
+    "description": "eval-2026-09-29 canonical project",
+    "project_type": "research",
+    "research_status": "active",
+    "research_goals": null,
+    "deadline": null,
+    "tags": [],
+    "color": null,
+    "icon": null,
+    "is_private": true,
+    "document_count": 12,
+    "note_count": 0,
+    "draft_count": 0,
+    "created_at": "2026-09-29T10:16:55.131450Z",
+    "updated_at": "2026-09-29T10:16:55.131452Z",
+    "documents": [
+      {
+        "id": "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+        "filename": "2609.04767v1.txt",
+        "file_type": "text",
+        "status": "completed",
+        "created_at": "2026-09-09T00:44:22.846098+00:00",
+        "sort_order": 1
+      },
+      {
+        "id": "0b861512-9a44-46d6-aa58-56ed0142adb0",
+        "filename": "2609.04981v1.txt",
+        "file_type": "text",
+        "status": "completed",
+        "created_at": "2026-09-09T00:44:21.889589+00:00",
+        "sort_order": 2
+      },
+      {
+        "id": "aa67db1b-8077-4c15-b9e5-9ec7a1beaa62",
+        "filename": "2510.22344v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-08-12T23:43:22.091425+00:00",
+        "sort_order": 3
+      },
+      {
+        "id": "f92e6be6-20b5-41b6-9300-b29b8b7e3fb1",
+        "filename": "2601.05264v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-07-08T06:07:33.230612+00:00",
+        "sort_order": 4
+      },
+      {
+        "id": "8f7f2119-182d-4a00-b19a-7a7e16abea17",
+        "filename": "2507.23334v2.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-07-07T05:00:13.654930+00:00",
+        "sort_order": 5
+      },
+      {
+        "id": "03be7c34-698e-4c1b-8df0-e2440a0db101",
+        "filename": "2601.11863v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-07-07T05:00:13.443646+00:00",
+        "sort_order": 6
+      },
+      {
+        "id": "0d73d115-762d-4c3c-95bb-75ee470c6813",
+        "filename": "2605.12335v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-07-07T05:00:13.208703+00:00",
+        "sort_order": 7
+      },
+      {
+        "id": "6a9b211c-5505-41c0-9ccc-c81c04c92c8a",
+        "filename": "2005.11401v4.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-06-20T15:05:42.551691+00:00",
+        "sort_order": 8
+      },
+      {
+        "id": "43d53bca-a5f4-4eda-9c43-ec91068e74e8",
+        "filename": "2407.15621v3.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-05-11T23:11:21.582541+00:00",
+        "sort_order": 9
+      },
+      {
+        "id": "b0fec607-9fe1-4024-a2bb-fb3201d709c3",
+        "filename": "2605.10850v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-05-13T02:52:31.946345+00:00",
+        "sort_order": 10
+      },
+      {
+        "id": "22aa7651-4a11-4a54-ae71-20af5a45dd70",
+        "filename": "2605.10893v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-05-13T02:52:31.560768+00:00",
+        "sort_order": 11
+      },
+      {
+        "id": "14c3a929-e371-461c-a76b-d38ed177a950",
+        "filename": "2609.05339v1.txt",
+        "file_type": "text",
+        "status": "completed",
+        "created_at": "2026-09-09T00:44:21.280112+00:00",
+        "sort_order": 12
+      }
+    ],
+    "notes": [],
+    "recent_notes": [],
+    "recent_drafts": []
+  }
+}
