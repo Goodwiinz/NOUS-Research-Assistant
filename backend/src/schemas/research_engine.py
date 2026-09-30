@@ -500,6 +500,14 @@ class ImportReceiptDetail(ImportReceiptResponse):
     records: List[ImportRecordResponse]
 
 
+class CitationChaseRequest(BaseModel):
+    seed_report_id: UUID
+    direction: Literal["backward", "forward"]
+    # 50 mirrors step_executor.MAX_CONNECTOR_RESULTS (pinned by a unit test).
+    max_results: int = Field(50, ge=1, le=50)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
 class ProtocolRegistrationCreate(BaseModel):
     protocol_version_id: UUID
     protocol_version_hash: str = Field(..., min_length=64, max_length=64)

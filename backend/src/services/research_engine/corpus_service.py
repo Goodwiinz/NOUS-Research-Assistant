@@ -7,25 +7,44 @@ serialized per project; ``UNIQUE(collection_id, dedup_key)`` is the database
 guard underneath.
 """
 
+import asyncio
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.models.research_import import ResearchImportReceipt, ResearchImportRecord
+from src.models.research_protocol import ResearchProtocolVersion
+from src.models.research_report import ResearchReportIdentifier
 from src.schemas.research_engine import (
+    CitationChaseRequest,
     ImportDeclaration,
     ImportReceiptDetail,
     ImportReceiptResponse,
     ImportRecordResponse,
 )
 from src.services.research_engine import identity_service, search_import
-from src.services.research_engine.project_access import ProjectContext
+from src.services.research_engine.connectors.base import SearchTrace
+from src.services.research_engine.connectors.openalex_connector import (
+    OpenAlexConnector,
+    work_document,
+)
+from src.services.research_engine.discovery import (
+    SEARCH_TIMEOUT_SECONDS,
+    extract_identifiers,
+)
+from src.services.research_engine.project_access import (
+    ProjectContext,
+    ResearchAction,
+    resolve_project,
+)
 
 _IMPORT_NOT_FOUND = "Import not found"
 _FORMAT_MESSAGES = {
@@ -267,3 +286,186 @@ async def get_receipt(
             )
         ],
     )
+
+
+# --- Citation chasing (OpenAlex only) ----------------------------------------
+
+
+class CitationConnector(Protocol):
+    async def citations(
+        self,
+        work_id: str,
+        direction: Any,
+        max_results: int,
+        *,
+        search_trace: SearchTrace,
+    ) -> list[dict[str, Any]]: ...
+
+
+def _chase_parsed(work: dict[str, Any]) -> dict[str, Any]:
+    document = work_document(work)
+    date = document.metadata.get("publication_date")
+    parsed = {
+        "title": document.title,
+        "authors": document.authors,
+        "year": date[:4] if isinstance(date, str) and date[:4].isdigit() else None,
+        "abstract": document.abstract,
+        "url": document.url,
+        "identifiers": extract_identifiers(document),
+    }
+    return {key: value for key, value in parsed.items() if value not in (None, "", [])}
+
+
+async def _protocol_requirement(
+    db: AsyncSession, collection_id: UUID
+) -> tuple[str | None, Any]:
+    """Governing approved version and its ``sources_search.citation_chasing``."""
+    version_id = await identity_service.current_protocol_version_id(db, collection_id)
+    if version_id is None:
+        return None, None
+    snapshot = (
+        await db.execute(
+            select(ResearchProtocolVersion.snapshot).where(
+                ResearchProtocolVersion.id == UUID(version_id)
+            )
+        )
+    ).scalar_one_or_none()
+    sources_search = cast(dict[str, Any], snapshot or {}).get("sources_search") or {}
+    return version_id, sources_search.get("citation_chasing")
+
+
+async def chase_citations(
+    db: AsyncSession,
+    *,
+    project_id: UUID,
+    user_id: UUID,
+    data: CitationChaseRequest,
+    connector: CitationConnector | None = None,
+) -> tuple[ImportReceiptResponse, bool]:
+    """Record one OpenAlex citation chase as an immutable receipt.
+
+    Three phases so no Collection or stream lock is held across provider I/O:
+    (1) EDIT access, replay check and seed resolution, then roll back;
+    (2) the network call; (3) EDIT access again (authority may have changed
+    while waiting), replay recheck, insert. The caller commits.
+    """
+    # The client key can be 240 chars; hash it to fit dedup_key (160).
+    dedup_key = "chase:" + hashlib.sha256(data.idempotency_key.encode()).hexdigest()
+    declared = {
+        "seed_report_id": str(data.seed_report_id),
+        "direction": data.direction,
+        "requested_limit": data.max_results,
+        # OpenAlex metadata is CC0.
+        "redistribution": "allowed",
+    }
+
+    async def replayed(collection_id: UUID) -> ImportReceiptResponse | None:
+        existing = await _receipt(db, collection_id, dedup_key=dedup_key)
+        if existing is None:
+            return None
+        if existing.declared != declared:
+            raise _error(
+                409,
+                "idempotency_conflict",
+                "This idempotency key was already used for a different chase.",
+            )
+        return receipt_response(existing, replayed=True)
+
+    context = await resolve_project(db, project_id, user_id, ResearchAction.EDIT)
+    collection_id = cast(UUID, context.collection.id)
+    if (hit := await replayed(collection_id)) is not None:
+        return hit, False
+    await identity_service._live_reports(
+        db, collection_id, [data.seed_report_id], merged_status=404
+    )
+    seed_ids = dict(
+        (
+            await db.execute(
+                select(
+                    ResearchReportIdentifier.kind, ResearchReportIdentifier.value
+                ).where(
+                    ResearchReportIdentifier.report_id == data.seed_report_id,
+                    ResearchReportIdentifier.collection_id == collection_id,
+                    ResearchReportIdentifier.kind.in_(("openalex", "doi")),
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    if "openalex" in seed_ids:
+        work_id = seed_ids["openalex"]
+    elif "doi" in seed_ids:
+        work_id = f"doi:{seed_ids['doi']}"
+    else:
+        raise _error(
+            422,
+            "seed_not_resolvable",
+            "The seed report needs an OpenAlex id or a DOI to chase citations.",
+        )
+    protocol_version_id, requirement = await _protocol_requirement(db, collection_id)
+    await db.rollback()
+
+    trace = SearchTrace(
+        execution_id=str(uuid4()), provider="openalex", requested_limit=data.max_results
+    )
+    source = connector or OpenAlexConnector(api_key=settings.OPENALEX_API_KEY)
+    try:
+        works = await asyncio.wait_for(
+            source.citations(
+                work_id, data.direction, data.max_results, search_trace=trace
+            ),
+            SEARCH_TIMEOUT_SECONDS,
+        )
+    except asyncio.CancelledError:
+        await trace.mark_interrupted()
+        raise
+    except Exception as exc:
+        # A failed chase is evidence too; provider text may hold credentials.
+        trace.error_type = type(exc).__name__
+        await trace.record_failed_request(trace.error_type)
+        works = []
+
+    context = await resolve_project(db, project_id, user_id, ResearchAction.EDIT)
+    collection_id = cast(UUID, context.collection.id)
+    if (hit := await replayed(collection_id)) is not None:
+        return hit, False
+    receipt_trace = trace.as_receipt(returned_count=len(works))
+    records = []
+    for index, work in enumerate(works):
+        parsed = _chase_parsed(work)
+        records.append(
+            ResearchImportRecord(
+                id=uuid4(),
+                collection_id=collection_id,
+                record_index=index,
+                status="accepted" if parsed.get("title") else "rejected",
+                rejection_reason=None if parsed.get("title") else "missing_title",
+                raw=json.dumps(work, sort_keys=True),
+                parsed=parsed,
+            )
+        )
+    receipt = await insert_receipt(
+        db,
+        collection_id=collection_id,
+        actor_user_id=user_id,
+        kind="citation_chase",
+        dedup_key=dedup_key,
+        lineage_key=hashlib.sha256(
+            f"chase\x1f{data.seed_report_id}\x1f{data.direction}".encode()
+        ).hexdigest(),
+        declared=declared,
+        observed={
+            "provider": "openalex",
+            "started_at": trace.started_at,
+            "actor_user_id": str(user_id),
+            "seed_work_id": work_id,
+            "trace": receipt_trace,
+            "completion": receipt_trace["completion"],
+            "error_type": trace.error_type,
+            "protocol_version_id": protocol_version_id,
+            "protocol_requires": requirement,
+        },
+        records=records,
+    )
+    return receipt_response(receipt), True
