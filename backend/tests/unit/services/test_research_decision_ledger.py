@@ -9,6 +9,7 @@ from src.models.research_decision import ResearchDecisionEvent
 from src.services.research_decisions.ledger import (
     DecisionReplayError,
     DecisionValidationError,
+    _validate_acquisition_transitions,
     _validate_event,
     _validate_identity_transitions,
     _validate_screening_transitions,
@@ -921,6 +922,147 @@ def test_adjudicated_requires_reason(event_type: str, reason: str | None) -> Non
     _validate_event(**dual.queue.event(event_type, payload, "because"))  # type: ignore[arg-type]
     with pytest.raises(DecisionValidationError, match="rationale"):
         _validate_event(**dual.queue.event(event_type, payload, reason))  # type: ignore[arg-type]
+
+
+# --- GOO-303: research_acquisition family ----------------------------------
+
+
+class _Acquisition:
+    """Hand-built acquisition events for one Collection and report."""
+
+    def __init__(self) -> None:
+        self.collection_id, self.report_id = uuid4(), uuid4()
+
+    def requested(self, request_id: UUID) -> dict[str, object]:
+        return {
+            "collection_id": str(self.collection_id),
+            "request_id": str(request_id),
+            "report_id": str(self.report_id),
+            "protocol_version_id": None,
+        }
+
+    def attempt(
+        self,
+        request_id: UUID,
+        attempt_id: UUID,
+        previous: UUID | None,
+        outcome: str = "unavailable",
+    ) -> tuple[str, dict[str, object]]:
+        payload: dict[str, object] = {
+            "collection_id": str(self.collection_id),
+            "request_id": str(request_id),
+            "report_id": str(self.report_id),
+            "attempt_id": str(attempt_id),
+            "previous_attempt_id": str(previous) if previous else None,
+            "attempted_on": "2026-09-29",
+            "reason": "not held by library" if outcome == "unavailable" else None,
+        }
+        if outcome == "retrieved":
+            payload |= {"document_id": str(uuid4()), "document_content_hash": "c" * 64}
+        event_type = {
+            "requested": "acquisition.attempted",
+            "unavailable": "acquisition.unavailable",
+            "retrieved": "acquisition.retrieved",
+        }[outcome]
+        return event_type, payload
+
+    def validate(self, event_type: str, payload: dict[str, object]) -> None:
+        _validate_event(
+            aggregate_type="research_acquisition",
+            aggregate_id=UUID(str(payload["collection_id"])),
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="research_report",
+            subject_id=self.report_id,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+        )
+
+    def replay(self, *events: tuple[str, dict[str, object]]) -> None:
+        _validate_acquisition_transitions(
+            [_stored(event_type, payload) for event_type, payload in events],
+            self.collection_id,
+        )
+
+
+def test_acquisition_payload_rejects_foreign_collection() -> None:
+    acq = _Acquisition()
+    request = acq.requested(uuid4())
+    acq.validate("acquisition.requested", request)
+    foreign = {**request, "collection_id": str(uuid4())}
+    with pytest.raises(DecisionValidationError, match="another collection"):
+        _validate_event(
+            aggregate_type="research_acquisition",
+            aggregate_id=acq.collection_id,
+            event_type="acquisition.requested",
+            event_schema_version=1,
+            subject_type="research_report",
+            subject_id=acq.report_id,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(foreign),
+            payload=foreign,
+            request_fingerprint="b" * 64,
+        )
+    other_report = {**request, "report_id": str(uuid4())}
+    with pytest.raises(DecisionValidationError, match="subject is not its report"):
+        acq.validate("acquisition.requested", other_report)
+
+
+def test_unavailable_requires_reason() -> None:
+    acq = _Acquisition()
+    event_type, payload = acq.attempt(uuid4(), uuid4(), None)
+    acq.validate(event_type, payload)
+    for reason in (None, "", "   "):
+        with pytest.raises(DecisionValidationError, match="needs a reason"):
+            acq.validate(event_type, {**payload, "reason": reason})
+    with pytest.raises(DecisionValidationError, match="attempted_on"):
+        acq.validate(event_type, {**payload, "attempted_on": "yesterday"})
+    retrieved_type, retrieved = acq.attempt(uuid4(), uuid4(), None, "retrieved")
+    acq.validate(retrieved_type, retrieved)
+    with pytest.raises(DecisionValidationError, match="SHA-256"):
+        acq.validate(retrieved_type, {**retrieved, "document_content_hash": "C" * 64})
+
+
+def test_acquisition_replay_rejects_forked_chain() -> None:
+    acq = _Acquisition()
+    request, first = uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="contradictory acquisition chain"):
+        acq.replay(
+            ("acquisition.requested", acq.requested(request)),
+            acq.attempt(request, first, None),
+            acq.attempt(request, uuid4(), None, "requested"),
+        )
+    with pytest.raises(DecisionReplayError, match="contradictory acquisition chain"):
+        acq.replay(acq.attempt(request, first, None))  # unknown request
+    with pytest.raises(DecisionReplayError, match="contradictory acquisition chain"):
+        acq.replay(
+            ("acquisition.requested", acq.requested(request)),
+            ("acquisition.requested", acq.requested(uuid4())),  # second per report
+        )
+
+
+def test_acquisition_replay_rejects_attempt_after_retrieved() -> None:
+    acq = _Acquisition()
+    request, first = uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="acquisition after retrieval"):
+        acq.replay(
+            ("acquisition.requested", acq.requested(request)),
+            acq.attempt(request, first, None, "retrieved"),
+            acq.attempt(request, uuid4(), first, "requested"),
+        )
+
+
+def test_acquisition_replay_accepts_request_unavailable_retry_retrieved() -> None:
+    acq = _Acquisition()
+    request, first, second, third = uuid4(), uuid4(), uuid4(), uuid4()
+    acq.replay(
+        ("acquisition.requested", acq.requested(request)),
+        acq.attempt(request, first, None),
+        acq.attempt(request, second, first, "requested"),
+        acq.attempt(request, third, second, "retrieved"),
+    )
 
 
 def test_replay_rejects_adjudicating_a_non_conflict_tip() -> None:

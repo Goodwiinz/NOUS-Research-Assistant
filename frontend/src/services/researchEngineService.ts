@@ -22,6 +22,12 @@ import type {
   ApiScreeningRevokeRequest,
 } from '@/types/api/research-screening-contract';
 import type {
+  ApiFulltextAttemptCreate,
+  ApiFulltextRequestCreate,
+  ApiFulltextState,
+  ApiPrismaFlow,
+} from '@/types/api/research-acquisition-contract';
+import type {
   ApiCitationChaseRequest,
   ApiCoverage,
   ApiCoverageRequest,
@@ -350,6 +356,47 @@ export const reopenScreening = (
   api.post<ApiScreeningResolution>(
     `${screening(projectId)}/${queueId}/reports/${reportId}/reopen`,
     data
+  );
+
+// --- Full-text acquisition + PRISMA flow (GOO-303) ------------------------
+
+export type {
+  ApiFulltextState as FulltextState,
+  ApiFulltextStatus as FulltextStatus,
+  ApiPrismaFlow as PrismaFlow,
+} from '@/types/api/research-acquisition-contract';
+
+const fulltext = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/fulltext`;
+
+export const listFulltext = (projectId: string): Promise<ApiFulltextState[]> =>
+  api.get<ApiFulltextState[]>(fulltext(projectId));
+
+export const requestFulltext = (
+  projectId: string,
+  data: ApiFulltextRequestCreate
+): Promise<ApiFulltextState> =>
+  api.post<ApiFulltextState>(`${fulltext(projectId)}/requests`, data);
+
+export const recordFulltextAttempt = (
+  projectId: string,
+  requestId: string,
+  data: ApiFulltextAttemptCreate
+): Promise<ApiFulltextState> =>
+  api.post<ApiFulltextState>(
+    `${fulltext(projectId)}/requests/${requestId}/attempts`,
+    data
+  );
+
+export const getPrismaFlow = (projectId: string): Promise<ApiPrismaFlow> =>
+  api.get<ApiPrismaFlow>(`${BASE}/projects/${projectId}/prisma`);
+
+export const downloadPrismaFlow = (
+  projectId: string,
+  format: 'json' | 'md'
+): Promise<void> =>
+  api.download(
+    `/research-engine/projects/${projectId}/prisma/export?${new URLSearchParams({ format })}`
   );
 
 // --- Search import / citation chase / corpus export (GOO-300) --------------

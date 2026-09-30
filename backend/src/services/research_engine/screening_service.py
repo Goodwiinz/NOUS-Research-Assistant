@@ -79,6 +79,7 @@ from src.services.research_decisions import (
 )
 from src.services.research_decisions.ledger import replay_screening_resolutions
 from src.services.research_engine import screening_rules
+from src.services.research_engine.acquisition_service import retrieved_report_ids
 from src.services.research_engine.corpus_service import raw_allowed, visible_parsed
 from src.services.research_engine.identity_service import (
     _replayed_event,
@@ -107,6 +108,7 @@ NOT_IN_CONFLICT = "Report is not in conflict"
 NOT_RESOLVED = "Report is not resolved"
 RESOLUTION_STALE = "Resolution changed; reload the queue"
 SELF_ADJUDICATION = "Adjudicator reviewed this report"
+FULLTEXT_NOT_RETRIEVED = "Full text not retrieved"  # GOO-303
 _RESOLVED_BASES = ("single", "agreement", "adjudicated")
 _OBSERVATION_EVENTS = ("screening.observed", "screening.superseded")
 
@@ -1060,6 +1062,12 @@ async def submit(
     tip = await _tip(db, queue_id, data.report_id)
     if tip is not None and tip.basis != "reopened":
         raise _conflict(REPORT_RESOLVED)
+    # GOO-303 gate: assessed is a subset of retrieved by construction, so an
+    # unavailable report can never be excluded at full text.
+    if queue.stage == "full_text" and not await retrieved_report_ids(
+        db, cast(UUID, context.collection.id), [data.report_id]
+    ):
+        raise _conflict(FULLTEXT_NOT_RETRIEVED)
     current = (
         await db.execute(
             _current_observations().where(

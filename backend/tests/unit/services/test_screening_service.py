@@ -16,6 +16,10 @@ import src.models  # noqa: F401  (registers every FK target table)
 from src.models.base import GUID, Base
 from src.models.research_blueprint import ResearchBlueprint
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
+from src.models.research_fulltext import (
+    ResearchFulltextAttempt,
+    ResearchFulltextRequest,
+)
 from src.models.research_import import ResearchImportReceipt, ResearchImportRecord
 from src.models.research_project import ResearchProject
 from src.models.research_project_role import (
@@ -79,6 +83,8 @@ _TABLES = (
     ScreeningObservation,
     ScreeningSuggestion,
     ScreeningResolution,
+    ResearchFulltextRequest,
+    ResearchFulltextAttempt,
 )
 # Only the columns the service reads: the real User model encrypts its PII
 # columns, which needs key material unit tests do not have.
@@ -317,6 +323,31 @@ async def _submit(
     )
 
 
+async def _retrieved(db: AsyncSession, project: _Project, report_id: UUID) -> None:
+    """A retrieved acquisition head for the report (GOO-303 full-text gate)."""
+    request_id = uuid4()
+    db.add(
+        ResearchFulltextRequest(
+            id=request_id,
+            collection_id=project.collection_id,
+            report_id=report_id,
+            requested_by_id=project.owner,
+        )
+    )
+    await db.flush()
+    db.add(
+        ResearchFulltextAttempt(
+            request_id=request_id,
+            outcome="retrieved",
+            attempted_on=datetime.now(timezone.utc).date(),
+            actor_id=project.owner,
+            document_id=uuid4(),
+            document_content_hash="d" * 64,
+        )
+    )
+    await db.flush()
+
+
 async def _count(db: AsyncSession, model: Any, **where: Any) -> int:
     query = select(func.count()).select_from(model)
     for field, value in where.items():
@@ -542,6 +573,22 @@ async def test_full_text_reason_validated_against_protocol_list(
     await _raises(
         _submit(db, project, queue, assignment.id, project.reports[0], "c"), 404
     )
+    # GOO-303: full text must be retrieved before any full-text decision.
+    await _raises(
+        _submit(
+            db,
+            project,
+            queue,
+            assignment.id,
+            report,
+            "d",
+            "exclude",
+            exclusion_reason="wrong design",
+        ),
+        409,
+        "Full text not retrieved",
+    )
+    await _retrieved(db, project, report)
     observation = await _submit(
         db,
         project,

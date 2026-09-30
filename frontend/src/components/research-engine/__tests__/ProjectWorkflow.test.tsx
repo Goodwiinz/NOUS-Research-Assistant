@@ -56,6 +56,11 @@ vi.mock('../ScreeningQueuePanel', () => ({
     </div>
   ),
 }));
+vi.mock('../PrismaFlowCard', () => ({
+  PrismaFlowCard: ({ projectId }: { projectId: string }) => (
+    <div>PRISMA for {projectId}</div>
+  ),
+}));
 vi.mock('../ScreeningConflictsPanel', () => ({
   ScreeningConflictsPanel: ({
     projectId,
@@ -125,6 +130,7 @@ describe('ProjectWorkflow', () => {
     expect(
       screen.getByText('Screening for collection-1 (active)')
     ).toBeInTheDocument();
+    expect(screen.getByText('PRISMA for collection-1')).toBeInTheDocument();
     await waitFor(() =>
       expect(listProjectRoles).toHaveBeenCalledWith('collection-1')
     );

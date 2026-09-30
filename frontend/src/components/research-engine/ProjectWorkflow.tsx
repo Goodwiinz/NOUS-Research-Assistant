@@ -13,6 +13,7 @@ import {
 } from '@/services/researchEngineService';
 import { BlueprintEditor } from './BlueprintEditor';
 import { CorpusPanel } from './CorpusPanel';
+import { PrismaFlowCard } from './PrismaFlowCard';
 import { ProtocolPanel } from './ProtocolPanel';
 import { ReportIdentityPanel } from './ReportIdentityPanel';
 import { ScreeningConflictsPanel } from './ScreeningConflictsPanel';
@@ -156,12 +157,14 @@ export function ProjectWorkflow({
         approvedProtocolVersionId={approvedProtocolVersionId}
         roles={roles.data ?? []}
         readOnly={archived}
+        canEdit={canEdit}
       />
       <ScreeningConflictsPanel
         projectId={project.id}
         roles={roles.data ?? []}
         readOnly={archived}
       />
+      <PrismaFlowCard projectId={project.id} />
       <ProjectRoles
         projectId={project.id}
         assignments={roles.data ?? []}

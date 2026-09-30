@@ -6522,6 +6522,264 @@
         "title": "FinalReviewDecisionPayload",
         "type": "object"
       },
+      "FulltextAttemptCreate": {
+        "description": "One attempt; ``previous_attempt_id`` must be the current head (or null).",
+        "properties": {
+          "attempted_on": {
+            "format": "date",
+            "title": "Attempted On",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "requested",
+              "retrieved",
+              "unavailable"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "previous_attempt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Attempt Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "outcome",
+          "attempted_on",
+          "idempotency_key"
+        ],
+        "title": "FulltextAttemptCreate",
+        "type": "object"
+      },
+      "FulltextAttemptResponse": {
+        "properties": {
+          "actor_id": {
+            "format": "uuid",
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "attempted_on": {
+            "format": "date",
+            "title": "Attempted On",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_available": {
+            "default": false,
+            "title": "Document Available",
+            "type": "boolean"
+          },
+          "document_content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Content Hash"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "requested",
+              "retrieved",
+              "unavailable"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "previous_attempt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Attempt Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "attempted_on",
+          "actor_id",
+          "created_at"
+        ],
+        "title": "FulltextAttemptResponse",
+        "type": "object"
+      },
+      "FulltextRequestCreate": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "idempotency_key"
+        ],
+        "title": "FulltextRequestCreate",
+        "type": "object"
+      },
+      "FulltextStateResponse": {
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/FulltextAttemptResponse"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "head_attempt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Attempt Id"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "requested_by_id": {
+            "format": "uuid",
+            "title": "Requested By Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "requested",
+              "retrieved",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "report_id",
+          "requested_by_id",
+          "requested_at",
+          "state",
+          "attempts"
+        ],
+        "title": "FulltextStateResponse",
+        "type": "object"
+      },
       "GrantDecision": {
         "additionalProperties": false,
         "properties": {
@@ -9598,6 +9856,278 @@
         ],
         "title": "Priority",
         "type": "string"
+      },
+      "PrismaAmendment": {
+        "properties": {
+          "aggregate_type": {
+            "title": "Aggregate Type",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "from": {
+            "title": "From",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "to": {
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "aggregate_type",
+          "seq",
+          "kind",
+          "report_id",
+          "from",
+          "to"
+        ],
+        "title": "PrismaAmendment",
+        "type": "object"
+      },
+      "PrismaChecks": {
+        "properties": {
+          "assessed_within_retrieved": {
+            "title": "Assessed Within Retrieved",
+            "type": "boolean"
+          },
+          "included_plus_excluded_equals_assessed": {
+            "title": "Included Plus Excluded Equals Assessed",
+            "type": "boolean"
+          },
+          "screened_plus_awaiting_equals_unique": {
+            "title": "Screened Plus Awaiting Equals Unique",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "screened_plus_awaiting_equals_unique",
+          "assessed_within_retrieved",
+          "included_plus_excluded_equals_assessed"
+        ],
+        "title": "PrismaChecks",
+        "type": "object"
+      },
+      "PrismaCounts": {
+        "properties": {
+          "duplicates_removed": {
+            "title": "Duplicates Removed",
+            "type": "integer"
+          },
+          "import_rejected": {
+            "title": "Import Rejected",
+            "type": "integer"
+          },
+          "included_reports": {
+            "title": "Included Reports",
+            "type": "integer"
+          },
+          "included_studies": {
+            "title": "Included Studies",
+            "type": "integer"
+          },
+          "records_awaiting_screening": {
+            "title": "Records Awaiting Screening",
+            "type": "integer"
+          },
+          "records_by_import": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Records By Import",
+            "type": "object"
+          },
+          "records_by_source": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Records By Source",
+            "type": "object"
+          },
+          "records_excluded": {
+            "title": "Records Excluded",
+            "type": "integer"
+          },
+          "records_identified": {
+            "title": "Records Identified",
+            "type": "integer"
+          },
+          "records_screened": {
+            "title": "Records Screened",
+            "type": "integer"
+          },
+          "reports_assessed": {
+            "title": "Reports Assessed",
+            "type": "integer"
+          },
+          "reports_awaiting_retrieval": {
+            "title": "Reports Awaiting Retrieval",
+            "type": "integer"
+          },
+          "reports_excluded_by_reason": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Reports Excluded By Reason",
+            "type": "object"
+          },
+          "reports_not_retrieved": {
+            "title": "Reports Not Retrieved",
+            "type": "integer"
+          },
+          "reports_sought": {
+            "title": "Reports Sought",
+            "type": "integer"
+          },
+          "unconfirmed_study_links": {
+            "title": "Unconfirmed Study Links",
+            "type": "integer"
+          },
+          "unique_reports": {
+            "title": "Unique Reports",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "records_identified",
+          "records_by_source",
+          "records_by_import",
+          "import_rejected",
+          "duplicates_removed",
+          "unique_reports",
+          "records_screened",
+          "records_excluded",
+          "records_awaiting_screening",
+          "reports_sought",
+          "reports_not_retrieved",
+          "reports_awaiting_retrieval",
+          "reports_assessed",
+          "reports_excluded_by_reason",
+          "included_reports",
+          "included_studies",
+          "unconfirmed_study_links"
+        ],
+        "title": "PrismaCounts",
+        "type": "object"
+      },
+      "PrismaFlowBody": {
+        "properties": {
+          "amendments": {
+            "items": {
+              "$ref": "#/components/schemas/PrismaAmendment"
+            },
+            "title": "Amendments",
+            "type": "array"
+          },
+          "checks": {
+            "$ref": "#/components/schemas/PrismaChecks"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/PrismaCounts"
+          },
+          "excluded_from_flow": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Excluded From Flow",
+            "type": "object"
+          },
+          "versions": {
+            "$ref": "#/components/schemas/PrismaVersions"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "counts",
+          "excluded_from_flow",
+          "amendments",
+          "warnings",
+          "checks",
+          "versions"
+        ],
+        "title": "PrismaFlowBody",
+        "type": "object"
+      },
+      "PrismaFlowResponse": {
+        "description": "Recomputed from persisted rows on every call; nothing here is stored.",
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/PrismaFlowBody"
+          },
+          "body_sha256": {
+            "title": "Body Sha256",
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "schema": {
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "generated_at",
+          "body_sha256",
+          "body"
+        ],
+        "title": "PrismaFlowResponse",
+        "type": "object"
+      },
+      "PrismaVersions": {
+        "properties": {
+          "corpus_hash": {
+            "title": "Corpus Hash",
+            "type": "string"
+          },
+          "protocol_version_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protocol Version Ids",
+            "type": "array"
+          },
+          "stream_heads": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Stream Heads",
+            "type": "object"
+          }
+        },
+        "required": [
+          "corpus_hash",
+          "protocol_version_ids",
+          "stream_heads"
+        ],
+        "title": "PrismaVersions",
+        "type": "object"
       },
       "ProcessingJobResponse": {
         "properties": {
@@ -37651,6 +38181,184 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{project_id}/fulltext": {
+      "get": {
+        "operationId": "list_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FulltextStateResponse"
+                  },
+                  "title": "Response List Fulltext Route Api V1 Research Engine Projects  Project Id  Fulltext Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Fulltext Route",
+        "tags": [
+          "research-engine-acquisition"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/fulltext/requests": {
+      "post": {
+        "operationId": "request_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_requests_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FulltextRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulltextStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Fulltext Route",
+        "tags": [
+          "research-engine-acquisition"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/fulltext/requests/{request_id}/attempts": {
+      "post": {
+        "operationId": "record_attempt_route_api_v1_research_engine_projects__project_id__fulltext_requests__request_id__attempts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FulltextAttemptCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulltextStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Record Attempt Route",
+        "tags": [
+          "research-engine-acquisition"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}/imports": {
       "get": {
         "operationId": "list_imports_route_api_v1_research_engine_projects__project_id__imports_get",
@@ -37825,6 +38533,114 @@
         "summary": "Get Import Route",
         "tags": [
           "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/prisma": {
+      "get": {
+        "operationId": "prisma_flow_route_api_v1_research_engine_projects__project_id__prisma_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrismaFlowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Prisma Flow Route",
+        "tags": [
+          "research-engine-acquisition"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/prisma/export": {
+      "get": {
+        "operationId": "prisma_export_route_api_v1_research_engine_projects__project_id__prisma_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "enum": [
+                "json",
+                "md"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Prisma Export Route",
+        "tags": [
+          "research-engine-acquisition"
         ]
       }
     },

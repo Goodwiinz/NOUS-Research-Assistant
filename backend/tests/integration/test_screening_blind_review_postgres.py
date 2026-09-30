@@ -51,6 +51,7 @@ from tests.integration.test_screening_queue_postgres import (  # noqa: F401
     _body,
     _count,
     _create_queue,
+    _retrieve,
     _status,
     _submit,
     _world,
@@ -143,6 +144,8 @@ async def test_pre_reveal_redaction_on_every_read_path(
     queue = await _create_queue(
         factory, world, "q1", stage="full_text", report_ids=[r1, r3]
     )
+    for report in (r1, r3):  # GOO-303 gate: full text needs retrieval first
+        await _retrieve(factory, world, report)
     mine = await _assign(factory, world, queue.id, "R")
     peer = await _assign(factory, world, queue.id, "R2")
     hidden = await _submit(

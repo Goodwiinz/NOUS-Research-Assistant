@@ -1,7 +1,7 @@
 """Caller-owned append and replay operations for research decisions.
 
 Each aggregate family (``research_protocol``, ``research_identity``,
-``research_screening``) registers
+``research_screening``, ``research_acquisition``) registers
 its subject type, payload vocabulary, value validation and replay transition
 rules in ``_FAMILIES``.
 
@@ -18,6 +18,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 from uuid import UUID, uuid4
 
@@ -136,6 +137,30 @@ _SCREENING_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     ),
 }
 _SCREENING_RATIONALE_EVENTS = frozenset({"screening.adjudicated", "screening.reopened"})
+
+# GOO-303: full-text acquisition, one stream per Collection (like identity).
+_ACQUISITION_AGGREGATE = "research_acquisition"
+_ACQUISITION_ATTEMPT_KEYS = frozenset(
+    {
+        "collection_id",
+        "request_id",
+        "report_id",
+        "attempt_id",
+        "previous_attempt_id",
+        "attempted_on",
+        "reason",
+    }
+)
+_ACQUISITION_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("acquisition.requested", 1): frozenset(
+        {"collection_id", "request_id", "report_id", "protocol_version_id"}
+    ),
+    # Outcome "requested": asked (ILL, author email) and awaiting a response.
+    ("acquisition.attempted", 1): _ACQUISITION_ATTEMPT_KEYS,
+    ("acquisition.unavailable", 1): _ACQUISITION_ATTEMPT_KEYS,
+    ("acquisition.retrieved", 1): _ACQUISITION_ATTEMPT_KEYS
+    | {"document_id", "document_content_hash"},
+}
 
 
 class ResearchDecisionError(RuntimeError):
@@ -457,6 +482,46 @@ def _validate_screening_payload(
         )
     ):
         raise DecisionValidationError("observation cannot supersede itself")
+
+
+def _validate_acquisition_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["report_id"], "report_id") != subject_id:
+        raise DecisionValidationError("acquisition event subject is not its report")
+    _validated_payload_uuid(payload["request_id"], "request_id")
+    if event_type == "acquisition.requested":
+        _validated_optional_uuid(payload["protocol_version_id"], "protocol_version_id")
+        return
+    attempt = _validated_payload_uuid(payload["attempt_id"], "attempt_id")
+    if attempt == _validated_optional_uuid(
+        payload["previous_attempt_id"], "previous_attempt_id"
+    ):
+        raise DecisionValidationError("attempt cannot follow itself")
+    try:
+        date.fromisoformat(payload["attempted_on"])
+    except (TypeError, ValueError) as error:
+        raise DecisionValidationError("attempted_on must be an ISO date") from error
+    reason = payload["reason"]
+    if reason is not None and not isinstance(reason, str):
+        raise DecisionValidationError("acquisition reason must be a string")
+    if event_type == "acquisition.unavailable" and not (reason or "").strip():
+        raise DecisionValidationError("unavailable full text needs a reason")
+    if event_type == "acquisition.retrieved":
+        _validated_payload_uuid(payload["document_id"], "document_id")
+        content_hash = payload["document_content_hash"]
+        if not isinstance(content_hash, str) or not _SHA256_RE.fullmatch(content_hash):
+            raise DecisionValidationError(
+                "document_content_hash must be a lowercase SHA-256 digest"
+            )
 
 
 async def _locked_stream(
@@ -976,6 +1041,50 @@ def _validate_screening_transitions(
     replay_screening_resolutions(events, aggregate_id)
 
 
+def _validate_acquisition_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """One request per report; each request's attempts form one linear chain
+    (``previous_attempt_id`` names the current head) that ends at retrieval."""
+    request_of: dict[UUID, UUID] = {}  # report -> request
+    report_of: dict[UUID, UUID] = {}  # request -> report
+    heads: dict[UUID, UUID | None] = {}  # request -> head attempt
+    attempts: set[UUID] = set()
+    retrieved: set[UUID] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        report = _payload_uuid(payload["report_id"], "report_id")
+        request = _payload_uuid(payload["request_id"], "request_id")
+        if event.event_type == "acquisition.requested":
+            if report in request_of or request in report_of:
+                raise DecisionReplayError("contradictory acquisition chain")
+            request_of[report], report_of[request], heads[request] = (
+                request,
+                report,
+                None,
+            )
+            continue
+        if report_of.get(request) != report:
+            raise DecisionReplayError("contradictory acquisition chain")
+        if request in retrieved:
+            raise DecisionReplayError("acquisition after retrieval")
+        attempt = _payload_uuid(payload["attempt_id"], "attempt_id")
+        previous_value = payload["previous_attempt_id"]
+        previous = (
+            None
+            if previous_value is None
+            else _payload_uuid(previous_value, "previous_attempt_id")
+        )
+        if previous != heads[request] or attempt in attempts:
+            raise DecisionReplayError("contradictory acquisition chain")
+        attempts.add(attempt)
+        heads[request] = attempt
+        if event.event_type == "acquisition.retrieved":
+            retrieved.add(request)
+
+
 _FAMILIES: dict[str, _Family] = {
     _PROTOCOL_AGGREGATE: _Family(
         subject_type=_PROTOCOL_SUBJECT,
@@ -996,6 +1105,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_SCREENING_PAYLOAD_KEYS,
         validate_payload=_validate_screening_payload,
         validate_transitions=_validate_screening_transitions,
+        requires_subject_version=False,
+    ),
+    _ACQUISITION_AGGREGATE: _Family(
+        subject_type=_IDENTITY_SUBJECT,
+        payload_keys=_ACQUISITION_PAYLOAD_KEYS,
+        validate_payload=_validate_acquisition_payload,
+        validate_transitions=_validate_acquisition_transitions,
         requires_subject_version=False,
     ),
 }
