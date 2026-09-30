@@ -75,7 +75,14 @@ class ResearchImportReceipt(Base):
             name="ck_research_import_receipt_counts",
         ),
         Index("idx_research_import_receipt_collection", "collection_id"),
-        Index("idx_research_import_receipt_lineage", "collection_id", "lineage_key"),
+        # Also serves (collection_id, lineage_key) lookups; a second writer
+        # that bypassed the Collection lock cannot mint the same version.
+        UniqueConstraint(
+            "collection_id",
+            "lineage_key",
+            "version",
+            name="uq_research_import_receipt_version",
+        ),
     )
 
 

@@ -232,3 +232,49 @@ async def test_allowed_receipt_exposes_raw_and_foreign_receipt_is_404(
             db, collection_id=uuid4(), receipt_id=receipt.id
         )
     assert missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_restricted_tagged_line_sentinel_never_leaves_the_api(
+    db: AsyncSession,
+) -> None:
+    """A sentinel in an RIS tag (N1 notes / AB) survives only in the database."""
+    collection_id = uuid4()
+    data = (
+        b"TY  - JOUR\nTI  - Tagged\nAB  - ABSTRACT-SENTINEL\n"
+        b"N1  - NOTES-SENTINEL\nER  - \n"
+    )
+    receipt, _ = await _import(db, collection_id, data)
+    detail = await corpus_service.get_receipt(
+        db, collection_id=collection_id, receipt_id=receipt.id
+    )
+
+    dumped = detail.model_dump_json()
+    assert "ABSTRACT-SENTINEL" not in dumped
+    assert "NOTES-SENTINEL" not in dumped
+    stored = (await db.execute(select(ResearchImportRecord.raw))).scalar_one()
+    assert "NOTES-SENTINEL" in stored
+
+
+@pytest.mark.asyncio
+async def test_unique_violation_after_a_bypassed_lookup_is_409_not_500(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection_id = uuid4()
+    await _import(db, collection_id)
+    await db.commit()
+    real_receipt = corpus_service._receipt
+
+    async def lookup_misses(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(corpus_service, "_receipt", lookup_misses)
+    with pytest.raises(HTTPException) as conflict:
+        await _import(db, collection_id)
+    monkeypatch.setattr(corpus_service, "_receipt", real_receipt)
+
+    assert conflict.value.status_code == 409
+    assert cast(dict, conflict.value.detail)["code"] == "import_conflict"
+    # The savepoint rolled back only the failed insert; the session still works.
+    assert await _count(db, ResearchImportReceipt) == 1
+    assert await _count(db, ResearchImportRecord) == 5

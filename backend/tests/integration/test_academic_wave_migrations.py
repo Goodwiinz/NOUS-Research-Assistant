@@ -525,7 +525,10 @@ def test_search_import_migration_upgrade_downgrade_round_trip(
             text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
             {"t": table},
         ).scalar_one()
-    assert "uq_research_import_receipt_dedup" in {
+    assert {
+        "uq_research_import_receipt_dedup",
+        "uq_research_import_receipt_version",
+    } <= {
         c["name"] for c in inspector.get_unique_constraints("research_import_receipts")
     }
     assert {

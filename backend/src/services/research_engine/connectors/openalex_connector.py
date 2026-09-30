@@ -114,16 +114,19 @@ class OpenAlexConnector(SourceConnector):
         max_results: int,
         *,
         search_trace: SearchTrace,
+        into: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Referenced (backward) or citing (forward) Works of one seed Work.
 
         ``work_id`` is an OpenAlex id (``W123``) or ``doi:10.x/y``. Metadata
         only, bounded by ``max_results``; every request is recorded on the trace.
+        Works are appended to ``into`` page by page, so a caller keeps what was
+        already fetched when a later page fails.
         """
         if not 1 <= max_results <= 200:
             raise ValueError("max_results must be between 1 and 200")
         trace = search_trace
-        works: list[dict[str, Any]] = []
+        works: list[dict[str, Any]] = [] if into is None else into
         async with self._client() as client:
             seed: dict[str, Any] = {}
             if direction == "backward" or not work_id.startswith("W"):
