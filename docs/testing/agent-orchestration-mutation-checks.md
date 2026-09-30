@@ -966,6 +966,89 @@ revision case in `test_result_receipts_keep_mutation_root_labels_and_relations_f
   workflow-engine invocations against the task-owned disposable PostgreSQL
   schema (2 integration cases pass; one baseline Pydantic warning).
 
+## GOO-297 draft task terminal results — 2026-09-29
+
+Recorded on branch `feat/goo-297-task-terminal-results` at source revision
+`319a14787`. Pre-mutation and restored SHA-256:
+`backend/src/services/research/draft_generation_service.py`
+`382a5fa44dc8d0f6bb1678ea9120b981cef5834e7826c522d6219eae4f84eeab`;
+`backend/src/api/research/drafts.py`
+`7d1dd8566c681301560cc2620f4a1aafbbe808920aebfae5b07b279043787a5d`. For each
+mutant: copy the source, apply the mutant, run the focused suite, restore
+the copy (`cmp -s` exit 0), rerun. No mutant was committed. After every
+restore the unit command gave `12 passed` and the PostgreSQL command gave
+`8 passed`. Each run also shows the existing Pydantic v2 `schema_extra`
+warning. The PostgreSQL URL is a disposable database supplied through the
+private environment; its value is left out here.
+
+Unit command (aiosqlite, no services):
+
+```sh
+pytest -q backend/tests/unit/services/test_draft_task_results.py backend/tests/unit/api/test_draft_task_status_route.py
+```
+
+PostgreSQL command:
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${RESEARCH_DECISION_DATABASE_URL:?}" pytest -q backend/tests/integration/test_draft_task_results_postgres.py
+```
+
+Line numbers are in `draft_generation_service.py` unless marked
+`drafts.py`.
+
+| Guard | Mutation | Observed mutant failure |
+|---|---|---|
+| `finish_task` running predicate, line 178 (`DraftTaskResult.state == "running"`) | delete the line | unit 6 failed, incl. "a terminal row was overwritten by a second write", "a cancelled task was allowed to complete", "a cancelled task landed a draft", "a cancel was reported for a completed task"; PostgreSQL 2 failed: scenario 5 "both writers claimed the terminal", scenario 6 `[other_replica]` "a cancelled task landed a draft" |
+| window-3 refusal, line 775 (`raise DraftTaskNotRunning(task_id)`) | replace with `pass` | unit `test_completion_on_a_cancelled_row_rolls_the_draft_back` and PostgreSQL scenario 6 `[other_replica]`: "a cancelled task landed a draft" |
+| window-3 result and draft in one commit (`finish_task` before `db.commit()`) | add `await db.commit()` before the `finish_task(completed)` call | PostgreSQL scenario 3 "an uncommitted draft survived the kill", scenario 6 `[other_replica]` "a cancelled task landed a draft" |
+| `finish_task` binds the passed draft, line 172 | A: in-transaction `select(GeneratedDraft).where(is_current)` | unit 2 failed ("task A bound another task's draft", "terminal association moved to draft_b"); PostgreSQL **8 passed, not observable**, see note |
+| same | B: same query through a fresh `AsyncSessionLocal()` | PostgreSQL scenario 4: "a draft was shared" |
+| `reconcile_task` staleness, line 216 (`heartbeat_at < threshold`) | delete the line | "a live task was marked interrupted" |
+| `cancel_latest_task` row write, lines 2036-2038 | replace the `finish_task` call with `cancelled = True` | `assert ('running', None) == ('cancelled', 'cancelled_by_user')`; "a cancel was reported for a completed task" |
+| `cancel_task` reports the row outcome, line 1997 (`return cancelled`) | `return True` | "a cancel was reported for a completed task"; route fallback test "DID NOT RAISE HTTPException" (no 409) |
+| `cancel_latest_task` reports the row outcome, line 2040 (`return task_id, cancelled`) | `return task_id, True` | `test_cancel_latest_after_the_draft_commit_is_refused`: "a cancel was reported for a completed task" |
+| `_fail_task` mirror bypasses the cancelled guard, line 1837 (`force=True`) | drop `force=True` | both late-cancel race tests: `CancelledError: generation cancelled by user` escapes the handler |
+| `drafts.py:497-503` scope check before `reconcile_task` | call `reconcile_task` unconditionally first | `test_status_hides_another_actors_task`: "Expected mock to not have been awaited. Awaited 1 times." |
+| `drafts.py:578-584` cross-replica cancel through the scoped row | 404 whenever there is no in-memory status | `test_cancel_route_falls_back_to_the_retained_row`: `HTTPException: 404` |
+| `drafts.py:581` collection check in that fallback | delete the line | same test (another project's id): "DID NOT RAISE HTTPException" |
+
+Note on mutation A: `lock_active_project` serialises version allocation.
+Inside each task's own transaction, "the current draft" is therefore that
+task's own flushed draft, and the PostgreSQL concurrency test cannot tell
+this mutant from the real code. The plan expected scenario 4 to catch it;
+it does not. The unit test
+`test_completion_binds_the_task_own_draft` catches it. Scenario 4 catches
+the out-of-transaction variant, mutation B.
+### Amendment — PR #1753 review fixes, 2026-09-30
+
+The table above is pinned to `319a14787`; its line numbers are not
+updated. These guards were added for the four Codex review findings and
+mutation-verified at source revision `ba450158a`. Pre-mutation and
+restored SHA-256: `draft_generation_service.py`
+`816c1727c3084db78807440cd574196a3d0ff50ce0801880c4c82e12e15e2cac`;
+`backend/src/services/agent/tools_impl.py`
+`81996deec6d0949a296c9969f1cb64ff1ecb093544e40fd47107880e736ddb30`.
+Same procedure (copy, `perl -0pi` mutant, run, restore, `cmp` and
+`git diff --quiet` both clean). After every restore the unit command gave
+`15 passed`. aiosqlite only; the PostgreSQL suite was not rerun.
+
+Focused command:
+
+```sh
+pytest -q backend/tests/unit/services/test_draft_task_results.py -k <selector>
+```
+
+| Guard | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| `cancel_latest_task` retained-row fallback, line 2088 (`task_id = await db.scalar(...)`) | `task_id = None and ...` | `cancel_latest_route` | `HTTPException: 400: Cannot cancel: no draft generation is in progress` |
+| same fallback's project scope, line 2083 (`collection_id == project_id`) | replace with `True` | `cancel_latest_route` | another project's cancel: "DID NOT RAISE HTTPException" |
+| same fallback's actor scope, line 2087 | replace with `pass` | `cancel_latest_route` | `assert ('foreign-actor', True) == ('remote-latest', True)` |
+| `generate_draft` waits on an unaccepted registration, line 407 (`if active["task_id"] not in _unaccepted_task_ids`) | `if True:` | `durable_acceptance` | "a duplicate was accepted for a task with no retained row" |
+| registration marked unaccepted until commit, line 405 (`_unaccepted_task_ids.add(task_id)`) | replace with `pass` | `durable_acceptance` | same |
+| `scoped_task_status` actor scope, line 238 | `or False` | `agent_recovery` | "another actor's row was read" |
+| `scoped_task_status` reconciles stale rows, line 241 (`reconcile_task`) | `get_task_result` | `agent_recovery` | `assert ('pending', False) == ('interrupted', True)` |
+| `_recover_draft_status` retained-row fallback, `tools_impl.py:2233` | `status = None and ...` | `agent_recovery` | "a retained terminal row was ignored" |
+
 ## GOO-299 report identity guards — 2026-09-29
 
 Three guards in `backend/src/services/research_engine/identity_service.py`
