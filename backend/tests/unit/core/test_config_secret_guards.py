@@ -180,3 +180,52 @@ def test_strict_normalization_variants_reject_weak_jwt_secret(env: str) -> None:
             NEO4J_PASSWORD=STRONG_SECRET,
         )
     assert ("JWT_SECRET_KEY",) in _error_fields(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Same-bug-class gates (audit I24): CORS https-only, DEBUG force-off and the
+# localhost-DB ban must also fire for non-canonical strict spellings, incl.
+# the live shared "dev" deployment name — not just "production"/"staging".
+# ---------------------------------------------------------------------------
+
+_STRONG_SECRETS: dict[str, Any] = {
+    "SECRET_KEY": STRONG_SECRET,
+    "JWT_SECRET_KEY": STRONG_SECRET,
+    "NEO4J_PASSWORD": STRONG_SECRET,
+}
+SPELLING_VARIANTS = ["prod", "dev", "Production", " Staging "]
+
+
+@pytest.mark.parametrize("env", SPELLING_VARIANTS)
+def test_strict_spellings_reject_plain_http_cors_regex(env: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _cfg(
+            env=env,
+            CORS_ORIGIN_REGEX="^http://nous-platform-[a-z0-9-]+\\.vercel\\.app$",
+            **_STRONG_SECRETS,
+        )
+    assert ("CORS_ORIGIN_REGEX",) in _error_fields(exc_info.value)
+
+
+@pytest.mark.parametrize("env", SPELLING_VARIANTS)
+def test_strict_spellings_force_debug_off(env: str) -> None:
+    assert _cfg(env=env, DEBUG=True, **_STRONG_SECRETS).DEBUG is False
+
+
+@pytest.mark.parametrize("env", SPELLING_VARIANTS)
+def test_strict_spellings_reject_localhost_database(env: str) -> None:
+    with pytest.raises(ValidationError, match="must not point to localhost"):
+        _cfg(
+            env=env,
+            DATABASE_URL="postgresql://u:p@localhost:5432/db",
+            **_STRONG_SECRETS,
+        )
+
+
+def test_throwaway_env_keeps_debug_and_localhost_database() -> None:
+    cfg = _cfg(
+        env="development",
+        DEBUG=True,
+        DATABASE_URL="postgresql://u:p@localhost:5432/db",
+    )
+    assert cfg.DEBUG is True
