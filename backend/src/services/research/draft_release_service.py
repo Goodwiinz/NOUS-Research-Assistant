@@ -600,7 +600,7 @@ async def promote(
         await db.rollback()
         if not _is_unique_violation(error):
             raise
-        winner = await _live(db, draft.id)
+        winner = await _live(db, draft_id)  # rollback expired `draft`
         if winner is None:
             raise
         return DraftReleaseResponse.model_validate(winner), True
