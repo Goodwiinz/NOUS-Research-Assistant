@@ -93,6 +93,7 @@ from src.models.document import Document
 from src.models.user import User
 from src.services.agent.trace_metadata import internal_llm_config
 from src.services.research_engine.project_access import ResearchAction
+from src.services.research_engine.report_rendering import publication_year
 
 if TYPE_CHECKING:
     from src.services.agent.tool_operations import ToolOperationKey
@@ -4913,21 +4914,11 @@ def _citations_from_documents(documents: list) -> List[_CitationProxy]:
     proxies: List[_CitationProxy] = []
     for doc in documents:
         meta = doc.document_metadata or {}
-        year = None
-        pub_date = meta.get("publication_date")
-        if pub_date:
-            try:
-                if isinstance(pub_date, str):
-                    year = int(pub_date[:4])
-                elif hasattr(pub_date, "year"):
-                    year = pub_date.year
-            except (ValueError, TypeError):
-                pass
         proxies.append(
             _CitationProxy(
                 document_title=meta.get("title") or doc.title or "",
                 authors=meta.get("authors") or [],
-                year=year,
+                year=publication_year(meta),
                 venue=meta.get("journal_reference"),
                 doi=meta.get("doi"),
                 arxiv_id=meta.get("arxiv_id"),
