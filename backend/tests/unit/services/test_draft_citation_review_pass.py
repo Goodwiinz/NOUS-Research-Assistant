@@ -25,6 +25,22 @@ _VERIFIER_MODULE = "src.services.research.citation_verification_service"
 
 
 @pytest.fixture(autouse=True)
+def _task_result_row_is_running():
+    # GOO-297 binds the draft via finish_task inside the draft transaction and
+    # records failures in its own session; the mocked session only scripts
+    # the draft windows. The retained row has its own tests
+    # (test_draft_task_results.py).
+    async def _cache_only_fail(self, task_id, state, step, _error_code):
+        await self._set_status(task_id, state, 0, step)
+
+    with (
+        patch(f"{_MODULE}.finish_task", new=AsyncMock(return_value=True)),
+        patch(f"{_MODULE}.DraftGenerationService._fail_task", new=_cache_only_fail),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _no_sleep():
     with patch(f"{_MODULE}.asyncio.sleep", new=AsyncMock()):
         yield

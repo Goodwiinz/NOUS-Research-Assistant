@@ -229,6 +229,102 @@ async def test_foreign_organization_member_cannot_approve(
 
 
 @pytest.mark.asyncio
+async def test_public_workspace_outsider_cannot_read_protocol(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    outsider = uuid4()
+    async with protocol_engine.begin() as db:
+        await db.execute(
+            text("""INSERT INTO users
+                (id,email,password_hash,first_name,last_name,role,is_active,
+                 login_count,organization_id,created_at,updated_at,is_deleted)
+                VALUES (:id,:email,'x','x','x','USER',true,0,:org,
+                        now(),now(),false)"""),
+            {
+                "id": outsider,
+                "email": f"outsider-{uuid4()}@test.invalid",
+                "org": ids["org"],
+            },
+        )
+        await db.execute(
+            text("UPDATE workspaces SET is_public=true WHERE id=:workspace"), ids
+        )
+    path = f"/api/v1/research-engine/protocols/{ids['protocol']}"
+    async with _client(protocol_engine, outsider) as client:
+        protocol = await client.get(path)
+        registrations = await client.get(f"{path}/registrations")
+    # Public visibility never reaches protocol artifacts: no body, so no
+    # can_edit/can_manage/can_approve flags (or any protocol data) to leak.
+    assert protocol.status_code == 404
+    assert protocol.json() == {"detail": "Project not found"}
+    assert registrations.status_code == 404
+    assert registrations.json() == {"detail": "Project not found"}
+
+
+@pytest.mark.asyncio
+async def test_workspace_viewer_read_has_no_capabilities(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    async with protocol_engine.begin() as db:
+        await db.execute(
+            text("""UPDATE workspace_members SET role='viewer'
+                WHERE workspace_id=:workspace AND user_id=:supervisor"""),
+            ids,
+        )
+        await db.execute(
+            text("""UPDATE research_project_role_assignments
+                SET is_deleted=true,deleted_at=now()
+                WHERE collection_id=:collection AND user_id=:supervisor"""),
+            ids,
+        )
+    path = f"/api/v1/research-engine/protocols/{ids['protocol']}"
+    async with _client(protocol_engine, ids["supervisor"]) as client:
+        protocol = await client.get(path)
+        registrations = await client.get(f"{path}/registrations")
+    assert protocol.status_code == 200, protocol.text
+    body = protocol.json()
+    assert body["versions"]  # a draft exists, so the per-version check is not vacuous
+    assert body["can_edit"] is False
+    assert body["can_manage"] is False
+    assert body["can_approve"] is False
+    assert [version["can_approve"] for version in body["versions"]] == [False] * len(
+        body["versions"]
+    )
+    assert registrations.status_code == 200, registrations.text
+    assert registrations.json() == []
+
+
+@pytest.mark.asyncio
+async def test_foreign_organization_member_cannot_read_protocol(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    foreign_org = uuid4()
+    async with protocol_engine.begin() as db:
+        await db.execute(
+            text("""INSERT INTO organizations
+                (id,name,storage_tier,storage_used_bytes,storage_limit_bytes,
+                 is_active,created_at,updated_at,is_deleted)
+                VALUES (:id,'foreign','FREE',0,1,true,now(),now(),false)"""),
+            {"id": foreign_org},
+        )
+        await db.execute(
+            text("UPDATE users SET organization_id=:org WHERE id=:supervisor"),
+            {**ids, "org": foreign_org},
+        )
+    path = f"/api/v1/research-engine/protocols/{ids['protocol']}"
+    async with _client(protocol_engine, ids["supervisor"]) as client:
+        protocol = await client.get(path)
+        registrations = await client.get(f"{path}/registrations")
+    assert protocol.status_code == 404
+    assert protocol.json() == {"detail": "Project not found"}
+    assert registrations.status_code == 404
+    assert registrations.json() == {"detail": "Project not found"}
+
+
+@pytest.mark.asyncio
 async def test_protocol_cannot_bind_blueprint_from_another_project(
     protocol_engine: AsyncEngine,
 ) -> None:

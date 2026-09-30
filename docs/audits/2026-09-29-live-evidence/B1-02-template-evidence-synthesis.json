@@ -1,0 +1,108 @@
+{
+  "step": "B1-02-template-evidence-synthesis",
+  "as": "owner",
+  "at": "2026-09-29T10:17:57.977176+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/blueprints/templates/evidence_synthesis",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "slug": "evidence_synthesis",
+    "name": "Evidence Synthesis",
+    "description": "Search configured academic sources, extract claims and supporting evidence, build an evidence map, verify grounding, and export a synthesis report.",
+    "template_source": "evidence_synthesis",
+    "contract_version": 1,
+    "parameters": {
+      "contract_version": 1,
+      "query": "",
+      "sources": [
+        "arxiv",
+        "semantic_scholar"
+      ],
+      "max_results": 30,
+      "claim_threshold": 0.7
+    },
+    "constraints": {},
+    "coverage": {},
+    "steps": [
+      {
+        "type": "search",
+        "name": "Multi-Source Search",
+        "description": "Search configured academic databases for documents related to the research query.",
+        "parameters": {
+          "contract_version": 1,
+          "sources": "{sources}",
+          "max_results": "{max_results}"
+        },
+        "model_id": null,
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": null
+      },
+      {
+        "type": "extract",
+        "name": "Claim and Evidence Extraction",
+        "description": "Extract individual claims and their supporting evidence from each retrieved document.",
+        "parameters": {
+          "contract_version": 1,
+          "output_kind": "claims",
+          "extract_claims": true,
+          "extract_evidence": true,
+          "confidence_threshold": "{claim_threshold}"
+        },
+        "model_id": "claude-sonnet-4-6",
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": "Return exactly {\"records\":[{\"source_id\":\"<UUID>\",\"part_id\":\"p0001\",\"claims\":[{\"claim_text\":\"Treatment reduced the measured score\",\"quote\":\"The measured score decreased after treatment\",\"confidence\":0.9,\"page_reference\":null}]}]}. Include only claims supported by an exact source-substring quote. Confidence must be finite and from 0 to 1. Set page_reference to null unless trusted source metadata supplied a page locator.\n"
+      },
+      {
+        "type": "synthesize",
+        "name": "Evidence Map Construction",
+        "description": "Build an evidence map linking claims to supporting and contradicting evidence across sources.",
+        "parameters": {},
+        "model_id": "claude-sonnet-4-6",
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": "Return exactly {\"sections\":[{\"heading\":\"Findings\",\"claims\":[{\"claim_text\":\"The study reports a lower score\",\"evidence\":[{\"evidence_id\":\"e0001\",\"relation\":\"supports\"}]}]}]}. Use only supplied evidence IDs, include at least one supporting reference per factual claim, and use relation supports or contradicts. Do not infer full-paper evidence from abstracts.\n"
+      },
+      {
+        "type": "verify",
+        "name": "Grounding Verification",
+        "description": "Verify that all synthesized claims are grounded in the original source material.",
+        "parameters": {},
+        "model_id": "claude-sonnet-4-6",
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": "Return exactly {\"checks\":[{\"claim_id\":\"c0001\",\"status\":\"supported\",\"reason\":\"The cited excerpt states this result\"}]} with exactly one check per supplied claim ID. Status must be supported, unverified, or contradicted. Assess each claim only against its supplied original source quotes.\n"
+      },
+      {
+        "type": "export",
+        "name": "Synthesis Report Export",
+        "description": "Export the evidence synthesis as a structured report with evidence map visualization data.",
+        "parameters": {
+          "format": "markdown",
+          "include_evidence_map": true
+        },
+        "model_id": null,
+        "model_version": null,
+        "mode": "deterministic",
+        "temperature": 0.0,
+        "seed": null,
+        "system_prompt_template": null
+      }
+    ]
+  }
+}

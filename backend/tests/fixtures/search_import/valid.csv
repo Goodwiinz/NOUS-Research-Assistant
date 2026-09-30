@@ -1,0 +1,4 @@
+Title,Authors,Year,DOI,PMID,Custom Column
+First CSV paper,"Smith, J; Doe, A",2021,10.1000/csv1,12345678,internal-note
+"Second, with comma",,2022,,,x
+,Nobody,2023,,,

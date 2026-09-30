@@ -1,0 +1,15 @@
+{
+  "step": "A6-04-delete-collection",
+  "as": "owner",
+  "at": "2026-09-29T10:17:39.058300+00:00",
+  "request": {
+    "method": "DELETE",
+    "path": "/api/v2/workspaces/f7538b4a-d043-4a10-b763-e45ce369d69e/collections/e5160575-a1d7-43e0-a833-cf33efff2b7e",
+    "body": null
+  },
+  "status": 204,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": ""
+}

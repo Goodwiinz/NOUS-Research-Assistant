@@ -45,6 +45,10 @@ SENSITIVE_KEY_RE = re.compile(
     r"authorization|proxy[_-]?authorization|cookie|set[_-]?cookie|session[_-]?id)",
     re.IGNORECASE,
 )
+SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(?:bearer|basic)\s+\S+|\bauthorization\s*:|\bcookie\s*:"
+    r"|\bsk-[A-Za-z0-9_-]{8,}|://[^\s/:@]+:[^\s/@]+@"
+)
 BIBTEX_FENCE_RE = re.compile(
     r"```(?:bibtex|biblatex)\s*\n(?P<body>.*?)\n```", re.DOTALL | re.IGNORECASE
 )
@@ -144,12 +148,15 @@ def _verify_declared_artifact(bundle_path: Path, record: Any) -> Path:
     return path
 
 
-def _reject_sensitive_configuration(value: Any, path: str = "configuration") -> None:
+def _reject_sensitive_configuration(
+    value: Any, path: str = "configuration", check_keys: bool = True
+) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             child_path = f"{path}.{key}"
             if (
-                SENSITIVE_KEY_RE.search(str(key))
+                check_keys
+                and SENSITIVE_KEY_RE.search(str(key))
                 and child is not None
                 and child != ""
                 and child is not False
@@ -157,10 +164,14 @@ def _reject_sensitive_configuration(value: Any, path: str = "configuration") -> 
                 raise EvidenceError(
                     f"retained runtime configuration contains sensitive field {child_path}"
                 )
-            _reject_sensitive_configuration(child, child_path)
+            _reject_sensitive_configuration(child, child_path, check_keys)
     elif isinstance(value, list):
         for index, child in enumerate(value):
-            _reject_sensitive_configuration(child, f"{path}[{index}]")
+            _reject_sensitive_configuration(child, f"{path}[{index}]", check_keys)
+    elif isinstance(value, str) and SECRET_VALUE_RE.search(value):
+        raise EvidenceError(
+            f"retained runtime configuration contains secret-bearing value at {path}"
+        )
 
 
 def _reject_unknown_fields(
@@ -1164,6 +1175,8 @@ def _evidence_identities(
         citations = artifacts.get("citations")
         if isinstance(citations, dict) and citations.get("sha256"):
             identities.add(("citations_artifact", str(citations["sha256"])))
+            rows = _load_json(_verify_declared_artifact(bundle_path, citations))
+            identities.update(("citation_row", str(row["id"])) for row in rows)
         exports = artifacts.get("exports")
         if isinstance(exports, dict):
             for name in ("markdown", "latex"):
@@ -1253,6 +1266,8 @@ def validate_trial(
             )
     if is_pass and failure_class is not None:
         raise EvidenceError(f"{bundle_path.name}: passing trial has a failure class")
+    # Values only: verdicts.authorization / artifacts.authorization are legitimate keys.
+    _reject_sensitive_configuration(trial, "trial", check_keys=False)
     return key, verdicts
 
 

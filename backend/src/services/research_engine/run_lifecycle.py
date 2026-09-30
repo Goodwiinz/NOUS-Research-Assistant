@@ -32,6 +32,7 @@ from src.services.research_engine.contracts import (
     canonical_stage_output_hash,
     no_evidence_reason,
 )
+from src.services.research_engine.identity_service import observe_sources
 from src.services.research_engine.observability import (
     ResearchObservability,
     research_observability,
@@ -173,8 +174,13 @@ class ResearchRunLifecycleService:
         event: Mapping[str, Any],
         step_definition: Mapping[str, Any],
         source_rows: Sequence[Any] = (),
+        collection_id: UUID | None = None,
     ) -> PersistedStepTransition:
-        """Persist a completed step and every resulting state change atomically."""
+        """Persist a completed step and every resulting state change atomically.
+
+        With ``collection_id`` the new source rows are also observed as project
+        report identities (GOO-299) inside the same transaction.
+        """
 
         output_value = event.get("output")
         output = (
@@ -297,6 +303,11 @@ class ResearchRunLifecycleService:
                 self.session.add(step)
                 for source_row in source_rows:
                     self.session.add(source_row)
+                if collection_id is not None and source_rows:
+                    await self.session.flush()
+                    await observe_sources(
+                        self.session, collection_id=collection_id, sources=source_rows
+                    )
 
                 manifest: dict[str, Any] = copy.deepcopy(
                     run.reproducibility_manifest or {}
