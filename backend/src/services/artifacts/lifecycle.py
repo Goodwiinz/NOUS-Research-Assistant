@@ -7,9 +7,10 @@ only an announcement, suppressed when the run is closed or unbound.
 
 import logging
 from datetime import datetime, timezone
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.artifact import ArtifactLifecycleOutbox, ArtifactUpload
@@ -64,6 +65,7 @@ async def drain_artifact_outbox(db: AsyncSession, *, limit: int = 100) -> int:
                 )
                 row.status = "delivered"
                 row.delivered_at = _now()
+                row.last_error = None
                 delivered += 1
             except RunAlreadyTerminalError:
                 row.status = "skipped"
@@ -77,7 +79,12 @@ async def drain_artifact_outbox(db: AsyncSession, *, limit: int = 100) -> int:
 
 
 async def sweep_artifact_uploads(db: AsyncSession, *, limit: int = 100) -> int:
-    """Soft-delete expired, unfinalized reservations and drop their bytes."""
+    """Soft-delete expired, unfinalized reservations, then drop their bytes.
+
+    The row is claimed and committed first so a concurrent finalize can no
+    longer succeed against it; only then are the bytes removed. A crash in
+    between leaves an orphaned blob, never a version pointing at nothing.
+    """
     now = _now()
     rows = (
         await db.scalars(
@@ -95,18 +102,31 @@ async def sweep_artifact_uploads(db: AsyncSession, *, limit: int = 100) -> int:
     storage = get_artifact_storage()
     swept = 0
     for upload in rows:
+        upload_id = upload.id
         key = cast(str | None, upload.storage_key)
+        claimed = await db.execute(
+            update(ArtifactUpload)
+            .where(
+                ArtifactUpload.id == upload_id,
+                ArtifactUpload.version_id.is_(None),
+                ArtifactUpload.is_deleted.is_(False),
+            )
+            .values(is_deleted=True, deleted_at=now)
+        )
+        await db.commit()
+        if cast(CursorResult[Any], claimed).rowcount != 1:
+            continue  # finalized or swept by someone else meanwhile
+        swept += 1
         if key is not None:
             try:
                 await storage.delete(key)
-            except Exception as error:  # noqa: BLE001 - retry on the next sweep
+            except Exception as error:  # noqa: BLE001 - orphaned blob, logged
                 logger.warning("artifact upload blob delete failed", exc_info=error)
                 continue
-        await db.execute(
-            update(ArtifactUpload)
-            .where(ArtifactUpload.id == upload.id)
-            .values(is_deleted=True, deleted_at=now, storage_key=None)
-        )
-        swept += 1
-    await db.commit()
+            await db.execute(
+                update(ArtifactUpload)
+                .where(ArtifactUpload.id == upload_id)
+                .values(storage_key=None)
+            )
+            await db.commit()
     return swept

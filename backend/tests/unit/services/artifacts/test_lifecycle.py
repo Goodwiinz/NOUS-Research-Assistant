@@ -317,3 +317,67 @@ async def test_sweep_releases_quota(db: AsyncSession) -> None:
     await db.commit()
     assert await sweep_artifact_uploads(db) == 1
     assert (await reserve_upload(db, context, small)).upload_id
+
+
+async def test_finalize_loses_to_a_concurrent_sweep(
+    db: AsyncSession, storage: MemoryArtifactStorage
+) -> None:
+    context = _context(None)
+    reserve = ReserveArtifactUploadRequest(
+        publication_id=uuid4(),
+        byte_size=len(CONTENT),
+        mime_type="text/markdown",
+        sha256=DIGEST,
+    )
+    upload = await reserve_upload(db, context, reserve)
+    await store_upload(db, context, upload.upload_id, CONTENT)
+    real_exists, real_delete = storage.exists, storage.delete
+
+    async def keep_bytes(key: str) -> None:
+        return None  # bytes survive, so only the row claim can stop the finalize
+
+    async def sweep_meanwhile(key: str) -> bool:
+        # The reservation expires and a sweeper claims it between our read and our write.
+        storage.delete = keep_bytes  # type: ignore[method-assign]
+        async with async_sessionmaker(db.bind, expire_on_commit=False)() as other:  # type: ignore[arg-type]
+            await other.execute(
+                update(ArtifactUpload)
+                .where(ArtifactUpload.id == upload.upload_id)
+                .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+            )
+            await other.commit()
+            assert await sweep_artifact_uploads(other) == 1
+        storage.delete = real_delete  # type: ignore[method-assign]
+        return await real_exists(key)
+
+    storage.exists = sweep_meanwhile  # type: ignore[method-assign]
+    with pytest.raises(service.ArtifactConflict):
+        await publish_version(
+            db,
+            context,
+            PublishVersionRequest(
+                publication_id=reserve.publication_id,
+                upload_id=upload.upload_id,
+                title="report.md",
+                provenance=ArtifactProvenance(producer="harness"),
+            ),
+        )
+    assert await db.scalar(select(func.count()).select_from(ArtifactVersion)) == 0
+    assert (
+        await db.scalar(select(func.count()).select_from(ArtifactLifecycleOutbox)) == 0
+    )
+
+
+async def test_run_bound_to_another_org_is_refused(db: AsyncSession) -> None:
+    foreign_run = str(uuid4())
+    await db.execute(
+        insert(AgentRun).values(
+            job_id=foreign_run, organization_id=uuid4(), status=JobStatus.RUNNING.value
+        )
+    )
+    await db.commit()
+    with pytest.raises(service.ArtifactAccessDenied):
+        await _publish(db, _context(foreign_run))
+    assert (
+        await db.scalar(select(func.count()).select_from(ArtifactLifecycleOutbox)) == 0
+    )

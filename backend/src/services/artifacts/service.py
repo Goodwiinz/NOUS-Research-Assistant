@@ -18,6 +18,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.agent_run import AgentRun
 from src.models.artifact import (
     Artifact,
     ArtifactLifecycleOutbox,
@@ -331,6 +332,15 @@ async def publish_version(
     if not present:
         await db.rollback()
         raise ArtifactStorageUnavailable()
+    if context.run_id is not None:
+        run_org = await db.scalar(
+            select(AgentRun.organization_id).where(
+                AgentRun.job_id == str(context.run_id)
+            )
+        )
+        if run_org != context.organization_id:
+            await db.rollback()
+            raise ArtifactAccessDenied()
     version = ArtifactVersion(
         id=uuid4(),
         artifact_id=artifact.id,
@@ -368,11 +378,27 @@ async def publish_version(
             thread_id=context.thread_id,
         )
     )
-    upload.version_id = version.id
-    upload.publish_hash = publish_hash
     upload_pk = upload.id  # rollback expires the row; keep the key as a plain value
     try:
         await db.flush()
+        # Claim the reservation conditionally: a sweep that soft-deleted it
+        # meanwhile (or a racing finalize) makes this a no-op and we conflict
+        # instead of committing a version whose bytes are gone.
+        claimed = await db.execute(
+            update(ArtifactUpload)
+            .where(
+                ArtifactUpload.id == upload_pk,
+                ArtifactUpload.version_id.is_(None),
+                ArtifactUpload.is_deleted.is_(False),
+            )
+            .values(version_id=version.id, publish_hash=publish_hash)
+        )
+        if cast(CursorResult[Any], claimed).rowcount != 1:
+            await db.rollback()
+            for pending in (version, reference, artifact):
+                if pending in db:
+                    db.expunge(pending)
+            raise ArtifactConflict()
         # Compare-and-swap on the parent pointer: two finalizes that both read
         # the same parent cannot both win. SQLite and PostgreSQL both report
         # the matched row count.
