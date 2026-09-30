@@ -6,7 +6,10 @@ Collection UPDATE, roles reloaded after the lock), then this matrix's
 ``lock_active_project`` (Collection UPDATE) then the stream - the same order
 minus the Workspace SHARE.
 
-``observe``, ``accept_value`` and ``create_version`` each commit exactly once.
+``observe``, ``accept_value`` and ``create_version`` each commit exactly once
+(``accept_value`` on a changed source commits its ``staled`` event, then 409s).
+GOO-305: every value row carries a source anchor into ``content_text`` as
+stored, pinned by ``text_sha256``; events are written as schema v2.
 ``append_machine_observations`` is the only function the worker may call to
 write; it never commits and has no ``ProjectContext``, so it can never reach
 ``accept_value`` (which requires ``ResearchProjectRole.ADJUDICATOR``).
@@ -14,6 +17,7 @@ write; it never commits and has no ``ProjectContext``, so it can never reach
 
 import hashlib
 import re
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence, cast
 from uuid import UUID, uuid4
 
@@ -34,6 +38,7 @@ from src.models.extraction_matrix import (
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
 from src.models.research_project_role import ResearchProjectRole
 from src.services.research import extraction_rules as rules
+from src.services.research import source_anchors as anchors
 from src.services.research_decisions import (
     DecisionIdempotencyConflict,
     append_decision,
@@ -53,6 +58,8 @@ from src.services.research_engine.screening_service import _is_unique_violation
 from src.shared.scispace_schemas import (
     ExtractionAcceptCreate,
     ExtractionAcceptedValueResponse,
+    ExtractionAnchor,
+    ExtractionAnchorOccurrence,
     ExtractionCellObservationsResponse,
     ExtractionFormVersionResponse,
     ExtractionObservationCreate,
@@ -71,7 +78,10 @@ SOURCE_CHANGED = "Source changed; re-extract"
 ACCEPTED_STALE = "Accepted value is stale; reload"
 CITATIONS_OTHER_CELL = "Cited observations must belong to this cell"
 FORM_CHANGED = "Form version changed; reload"
+ANCHOR_AMBIGUOUS = "Anchor ambiguous; choose an occurrence"
+ANCHOR_UNVERIFIED = "Anchor unverified; confirm to accept"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_STATUS_RANK = {"verified": 0, "ambiguous": 1, "unverified": 2}
 
 
 def document_source_hash(document: Any) -> str:
@@ -81,6 +91,48 @@ def document_source_hash(document: Any) -> str:
         return checksum.lower()
     text = document.content_text or ""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def document_pins(document: Any) -> tuple[str, str]:
+    """(source_hash, text_sha256): offsets are valid only against this text."""
+    text_hash = anchors.text_sha256(document.content_text or "")
+    assert text_hash is not None
+    return document_source_hash(document), text_hash
+
+
+def _changed(pins: tuple[str, str], source_hash: str, text_hash: str | None) -> bool:
+    """A NULL text hash (pre-anchor row) compares on the source hash only."""
+    return source_hash != pins[0] or (text_hash is not None and text_hash != pins[1])
+
+
+def _sha(text: str | None) -> str | None:
+    return None if text is None else anchors.text_sha256(text)
+
+
+def _anchor_columns(anchor: anchors.Anchor | None) -> dict[str, Any]:
+    if anchor is None:
+        return {}
+    return {
+        "anchor_status": anchor.status,
+        "anchor_start_char": anchor.start_char,
+        "anchor_end_char": anchor.end_char,
+        "anchor_page": anchor.page,
+        "anchor_occurrences": list(anchor.occurrences),
+        "occurrences_in_text": anchor.occurrences_in_text,
+    }
+
+
+def _anchor_event(row: Any) -> dict[str, Any]:
+    """The per-observation v2 event object; the quote is bound by hash."""
+    return {
+        "field_id": str(row.field_id),
+        "anchor_status": row.anchor_status,
+        "citation_sha256": _sha(row.citation),
+        "start": row.anchor_start_char,
+        "end": row.anchor_end_char,
+        "page": row.anchor_page,
+        "occurrences": list(row.anchor_occurrences or []),
+    }
 
 
 def _unprocessable(error: ValueError) -> HTTPException:
@@ -114,6 +166,7 @@ async def _append(
     payload: dict[str, Any],
     idempotency_key: str,
     fingerprint: str,
+    version: int = 1,
 ) -> None:
     """Append one event; a reused key with other content is a 409."""
     payload = {
@@ -128,7 +181,7 @@ async def _append(
             aggregate_type=AGGREGATE_TYPE,
             aggregate_id=matrix_id,
             event_type=event_type,
-            event_schema_version=1,
+            event_schema_version=version,
             actor_user_id=actor_user_id,
             actor_role=actor_role,
             subject_type=SUBJECT_TYPE,
@@ -289,7 +342,14 @@ async def create_version(
         != rules.field_def(fields, tip.field_id)
     )
     if staled:
-        payload = {"new_form_version_id": str(version.id), "accepted_value_ids": staled}
+        payload = {
+            "new_form_version_id": str(version.id),
+            "accepted_value_ids": staled,
+            "reason": "form_changed",
+            "document_id": None,
+            "new_source_hash": None,
+            "new_text_sha256": None,
+        }
         await _append(
             db,
             collection_id=_project(context),
@@ -301,6 +361,7 @@ async def create_version(
             payload=payload,
             idempotency_key=f"staled:{version.id}",
             fingerprint=decision_request_fingerprint(payload),
+            version=2,
         )
     await db.commit()
     await db.refresh(version)
@@ -374,48 +435,114 @@ async def extraction_task_kwargs(
     }
 
 
+async def _stale_changed_source(
+    db: AsyncSession,
+    stream: ResearchDecisionStream,
+    *,
+    matrix: Any,
+    document: Any,
+    actor_id: UUID,
+    actor_role: str,
+) -> list[str]:
+    """Name this document's accepted tips pinned to an older source in one
+    ``extraction.staled`` v2 event (``source_changed``). Rows are never
+    updated; tips staled before are skipped. The caller holds the stream."""
+    pins = document_pins(document)
+    versions = [cast(UUID, v.id) for v in await _versions(db, matrix.id)]
+    already = await _staled_ids(db, stream)
+    staled = sorted(
+        str(tip.id)
+        for tip in await _tips(db, versions)
+        if tip.document_id == document.id
+        and str(tip.id) not in already
+        and _changed(pins, tip.source_hash, tip.text_sha256)
+    )
+    if staled:
+        payload = {
+            "new_form_version_id": None,
+            "accepted_value_ids": staled,
+            "reason": "source_changed",
+            "document_id": str(document.id),
+            "new_source_hash": pins[0],
+            "new_text_sha256": pins[1],
+        }
+        await _append(
+            db,
+            collection_id=matrix.project_id,
+            matrix_id=matrix.id,
+            event_type="extraction.staled",
+            actor_user_id=actor_id,
+            actor_role=actor_role,
+            reason=None,
+            payload=payload,
+            idempotency_key=f"staled:source:{uuid4()}",
+            fingerprint=decision_request_fingerprint(payload),
+            version=2,
+        )
+    return staled
+
+
 async def append_machine_observations(
     db: AsyncSession,
     *,
     matrix: Any,
     version: Any,
     document: Any,
-    parsed: Mapping[str, Mapping[str, Any]],
+    observations: Mapping[str, Sequence[anchors.Candidate]],
+    coverage: Sequence[tuple[int, int]],
     actor_id: UUID,
     run_id: str,
     model: str,
 ) -> None:
-    """Worker-only: one machine row per form field plus one
-    ``extraction.observed`` event. The caller holds ``lock_active_project``
-    and commits. ``parsed`` maps field name -> {value, missing, citation}; a
-    field it lacks is recorded as ``extraction_error``.
+    """Worker-only: the anchored machine rows of one document plus one
+    ``extraction.observed`` v2 event, after staling this document's accepted
+    tips pinned to an older source. The caller holds ``lock_active_project``
+    and commits. ``observations`` maps field_id -> aggregated candidates
+    (``source_anchors.read_whole_text``); a field it lacks is recorded as
+    ``extraction_error``.
     """
     stream_key = f"{run_id}:{document.id}"
-    source_hash = document_source_hash(document)
-    await _lock(db, matrix.project_id, matrix.id)
-    observations: dict[str, str] = {}
+    source_hash, text_hash = document_pins(document)
+    text_length = len(document.content_text or "")
+    inspected = [[lo, hi] for lo, hi in coverage]
+    stream = await _lock(db, matrix.project_id, matrix.id)
+    await _stale_changed_source(
+        db,
+        stream,
+        matrix=matrix,
+        document=document,
+        actor_id=actor_id,
+        actor_role="machine",
+    )
+    events: dict[str, dict[str, Any]] = {}
     for field in version.fields:
-        entry = parsed.get(field["name"]) or {"missing": "extraction_error"}
-        value, missingness, state = rules.normalize(
-            "machine", field, entry.get("value"), entry.get("missing")
-        )
-        row = ExtractionObservation(
-            id=uuid4(),
-            form_version_id=version.id,
-            field_id=UUID(field["field_id"]),
-            document_id=document.id,
-            kind="machine",
-            actor_user_id=actor_id,
-            extractor_run_id=run_id,
-            extractor_model=model,
-            value=value,
-            missingness=missingness,
-            validation_state=state,
-            citation=entry.get("citation"),
-            source_hash=source_hash,
-        )
-        db.add(row)
-        observations[str(row.id)] = field["field_id"]
+        found = observations.get(field["field_id"]) or [
+            anchors.Candidate(
+                field["field_id"], None, "extraction_error", "valid", None, None
+            )
+        ]
+        for candidate in found:
+            row = ExtractionObservation(
+                id=uuid4(),
+                form_version_id=version.id,
+                field_id=UUID(field["field_id"]),
+                document_id=document.id,
+                kind="machine",
+                actor_user_id=actor_id,
+                extractor_run_id=run_id,
+                extractor_model=model,
+                value=candidate.value,
+                missingness=candidate.missingness,
+                validation_state=candidate.validation_state,
+                citation=candidate.citation,
+                source_hash=source_hash,
+                text_sha256=text_hash,
+                text_length=text_length,
+                inspected_coverage=inspected,
+                **_anchor_columns(candidate.anchor),
+            )
+            db.add(row)
+            events[str(row.id)] = _anchor_event(row)
     await db.flush()
     # A retry reusing this key carries new row ids, so append_decision rejects
     # it as an idempotency conflict and the caller rolls the rows back.
@@ -434,12 +561,15 @@ async def append_machine_observations(
             "document_id": str(document.id),
             "source_hash": source_hash,
             "kind": "machine",
-            "observations": observations,
+            "observations": events,
             "extractor_run_id": run_id,
             "extractor_model": model,
+            "text_sha256": text_hash,
+            "inspected_coverage": inspected,
         },
         idempotency_key=stream_key,
         fingerprint=decision_request_fingerprint(request),
+        version=2,
     )
 
 
@@ -481,18 +611,85 @@ def _fingerprint(operation: str, matrix_id: UUID, actor_id: UUID, data: Any) -> 
     )
 
 
-def _observation(row: Any) -> ExtractionObservationResponse:
+def _anchor(row: Any, text: str | None) -> ExtractionAnchor | None:
+    """Pre-anchor value rows read as ``unverified``; missingness has none.
+    ``text`` (the current text, only while unchanged) adds occurrence context."""
+    if row.missingness is not None:
+        return None
+    occurrences = list(row.anchor_occurrences or [])
+    contexts = []
+    if text and row.citation and row.anchor_status == "ambiguous":
+        for start in occurrences:
+            end = start + len(row.citation)
+            before, after = anchors.context(text, start, end, radius=120)
+            contexts.append(
+                ExtractionAnchorOccurrence(
+                    start_char=start,
+                    end_char=end,
+                    page=anchors.page_at(text, start),
+                    context_before=before,
+                    context_after=after,
+                )
+            )
+    return ExtractionAnchor(
+        status=row.anchor_status or "unverified",
+        start_char=row.anchor_start_char,
+        end_char=row.anchor_end_char,
+        page=row.anchor_page,
+        occurrences=occurrences,
+        occurrences_in_text=row.occurrences_in_text,
+        occurrence_contexts=contexts,
+    )
+
+
+def _observation(row: Any, document: Any = None) -> ExtractionObservationResponse:
+    """Evidence view of one row; context is sliced from the current text only
+    while the pinned source still matches (``document`` given)."""
     response: ExtractionObservationResponse = (
         ExtractionObservationResponse.model_validate(row)
     )
-    return response
+    changed = document is not None and _changed(
+        document_pins(document), row.source_hash, row.text_sha256
+    )
+    text = None if document is None or changed else document.content_text
+    before = after = None
+    if text and row.anchor_start_char is not None:
+        before, after = anchors.context(
+            text, row.anchor_start_char, row.anchor_end_char
+        )
+    coverage = row.inspected_coverage
+    return cast(
+        ExtractionObservationResponse,
+        response.model_copy(
+            update={
+                "anchor": _anchor(row, text),
+                "context_before": before,
+                "context_after": after,
+                "coverage_complete": (
+                    None
+                    if coverage is None or row.text_length is None
+                    else coverage == [[0, row.text_length]]
+                ),
+                "source_changed": changed,
+            }
+        ),
+    )
 
 
-def _accepted(row: Any) -> ExtractionAcceptedValueResponse:
+def _accepted(row: Any, document: Any = None) -> ExtractionAcceptedValueResponse:
     response: ExtractionAcceptedValueResponse = (
         ExtractionAcceptedValueResponse.model_validate(row)
     )
-    return response
+    return cast(
+        ExtractionAcceptedValueResponse,
+        response.model_copy(
+            update={
+                "anchor_resolution": row.anchor_resolution or "legacy",
+                "source_changed": document is not None
+                and _changed(document_pins(document), row.source_hash, row.text_sha256),
+            }
+        ),
+    )
 
 
 async def observe(
@@ -523,7 +720,16 @@ async def observe(
         )
     except ValueError as error:
         raise _unprocessable(error) from error
-    source_hash = document_source_hash(document)
+    source_hash, text_hash = document_pins(document)
+    # A person sees the whole document: the quote must be unique in it or
+    # carry a start. Ambiguous is stored; the block happens at accept.
+    anchor = (
+        None
+        if missingness is not None
+        else anchors.verify_anchor(
+            document.content_text, data.citation, start_hint=data.anchor_start
+        )
+    )
     row = ExtractionObservation(
         id=uuid4(),
         form_version_id=version.id,
@@ -536,6 +742,9 @@ async def observe(
         validation_state=state,
         citation=data.citation,
         source_hash=source_hash,
+        text_sha256=text_hash,
+        text_length=len(document.content_text or ""),
+        **_anchor_columns(anchor),
     )
     db.add(row)
     await db.flush()
@@ -553,16 +762,19 @@ async def observe(
             "document_id": str(document.id),
             "source_hash": source_hash,
             "kind": "human",
-            "observations": {str(row.id): str(data.field_id)},
+            "observations": {str(row.id): _anchor_event(row)},
             "extractor_run_id": None,
             "extractor_model": None,
+            "text_sha256": text_hash,
+            "inspected_coverage": None,
         },
         idempotency_key=key,
         fingerprint=fingerprint,
+        version=2,
     )
     await db.commit()
     await db.refresh(row)
-    return _observation(row)
+    return _observation(row, document)
 
 
 def _rule_obs(row: Any) -> rules.Obs:
@@ -579,6 +791,89 @@ def _rule_obs(row: Any) -> rules.Obs:
     )
 
 
+@dataclass(frozen=True)
+class AnchorResolution:
+    resolution: str
+    observation_id: UUID | None
+    start: int | None
+    end: int | None
+
+
+@dataclass(frozen=True)
+class SourceChanged:
+    staled: list[str]
+
+
+async def assert_anchor_acceptable(
+    db: AsyncSession,
+    context: ProjectContext,
+    stream: ResearchDecisionStream,
+    matrix: Any,
+    document: Any,
+    cited: Sequence[Any],
+    data: ExtractionAcceptCreate,
+    actor_id: UUID,
+) -> AnchorResolution | SourceChanged:
+    """GOO-304 ``accept_value`` step 7, re-checked at decision time.
+
+    ``document`` was re-fetched through ``project_documents_query`` after the
+    project lock. In order: a source that changed since any cited observation
+    stales this document's tips and returns ``SourceChanged``; then the anchor
+    observation (the best-anchored cited row equal to the value) is re-verified
+    on the current text and resolved, or refused with a stable 409.
+    """
+    pins = document_pins(document)
+    if any(_changed(pins, row.source_hash, row.text_sha256) for row in cited):
+        staled = await _stale_changed_source(
+            db,
+            stream,
+            matrix=matrix,
+            document=document,
+            actor_id=actor_id,
+            actor_role="adjudicator",
+        )
+        return SourceChanged(staled)
+    if data.missingness is not None:
+        return AnchorResolution("not_applicable", None, None, None)
+    matching = [
+        row
+        for row in cited
+        if row.validation_state == "valid"
+        and row.missingness is None
+        and rules._same(row.value, data.value)
+    ]
+    row = min(
+        matching,
+        key=lambda r: (
+            _STATUS_RANK.get(r.anchor_status or "unverified", 3),
+            r.created_at,
+            str(r.id),
+        ),
+    )
+    status = row.anchor_status or "unverified"
+    start = data.anchor_start
+    if status == "ambiguous":
+        # Only a recorded occurrence that still re-verifies resolves it.
+        anchor = anchors.verify_anchor(
+            document.content_text, row.citation, start_hint=start
+        )
+        if start not in (row.anchor_occurrences or []) or anchor.status != "verified":
+            raise HTTPException(status_code=409, detail=ANCHOR_AMBIGUOUS)
+        return AnchorResolution(
+            "disambiguated", row.id, anchor.start_char, anchor.end_char
+        )
+    anchor = anchors.verify_anchor(
+        document.content_text,
+        row.citation,
+        start_hint=row.anchor_start_char if start is None else start,
+    )
+    if status == "verified" and anchor.status == "verified":
+        return AnchorResolution("verified", row.id, anchor.start_char, anchor.end_char)
+    if not data.accept_unverified:
+        raise HTTPException(status_code=409, detail=ANCHOR_UNVERIFIED)
+    return AnchorResolution("accepted_unverified", row.id, None, None)
+
+
 async def accept_value(
     db: AsyncSession,
     context: ProjectContext,
@@ -591,6 +886,9 @@ async def accept_value(
     The value must equal one valid cited observation of this exact cell, form
     version and current source, or be ``unresolved_disagreement`` over >=2
     that differ. ``supersedes_accepted_value_id`` must name the current tip.
+    Its anchor must be verified, disambiguated by ``anchor_start``, or
+    accepted unverified on request (GOO-305). On a changed source this is the
+    only commit-then-raise path: the ``staled`` event commits, then 409.
     """
     if ResearchProjectRole.ADJUDICATOR not in context.effective_roles:
         raise HTTPException(status_code=403, detail="adjudicator role required")
@@ -607,7 +905,7 @@ async def accept_value(
     version, field = await _current_field(
         db, matrix_id, data.form_version_id, data.field_id
     )
-    # --- Acceptance checks, in order (GOO-305 adds its anchor check here). ---
+    # --- Acceptance checks, in order. ---
     tip = (
         await db.execute(
             select(ExtractionAcceptedValue.id).where(
@@ -637,9 +935,7 @@ async def accept_value(
     )
     if len(cited) != len(data.observation_ids):
         raise HTTPException(status_code=422, detail=CITATIONS_OTHER_CELL)
-    source_hash = document_source_hash(document)
-    if any(row.source_hash != source_hash for row in cited):
-        raise HTTPException(status_code=409, detail=SOURCE_CHANGED)
+    source_hash, text_hash = document_pins(document)
     try:
         value, missingness = data.value, data.missingness
         if value is not None:
@@ -647,6 +943,19 @@ async def accept_value(
         rules.check_acceptance(value, missingness, [_rule_obs(r) for r in cited])
     except ValueError as error:
         raise _unprocessable(error) from error
+    guard = await assert_anchor_acceptable(
+        db,
+        context,
+        stream,
+        matrix,
+        document,
+        cited,
+        data.model_copy(update={"value": value}),
+        actor_id,
+    )
+    if isinstance(guard, SourceChanged):
+        await db.commit()  # persist the staled event, then refuse
+        raise HTTPException(status_code=409, detail=SOURCE_CHANGED)
     # --- end of acceptance checks ---
     row = ExtractionAcceptedValue(
         id=uuid4(),
@@ -660,6 +969,11 @@ async def accept_value(
         rationale=data.rationale,
         source_hash=source_hash,
         supersedes_accepted_value_id=data.supersedes_accepted_value_id,
+        anchor_observation_id=guard.observation_id,
+        anchor_resolution=guard.resolution,
+        anchor_start_char=guard.start,
+        anchor_end_char=guard.end,
+        text_sha256=text_hash,
     )
     db.add(row)
     await _flush_or_conflict(db, ACCEPTED_STALE)
@@ -685,9 +999,16 @@ async def accept_value(
                 else str(data.supersedes_accepted_value_id)
             ),
             "source_hash": source_hash,
+            "anchor_observation_id": (
+                None if guard.observation_id is None else str(guard.observation_id)
+            ),
+            "anchor_resolution": guard.resolution,
+            "anchor_start_char": guard.start,
+            "text_sha256": text_hash,
         },
         idempotency_key=key,
         fingerprint=fingerprint,
+        version=2,
     )
     await db.commit()
     await db.refresh(row)
@@ -701,8 +1022,13 @@ async def list_observations(
     document_id: UUID,
     field_id: UUID,
 ) -> ExtractionCellObservationsResponse:
-    """Every observation (any version) and the accepted chain for one cell (VIEW)."""
+    """Every observation (any version) and the accepted chain for one cell (VIEW).
+
+    The evidence fetch re-checks the document through ``project_documents_query``
+    (404, no citation), and reads its text once for context and staleness.
+    """
     await _matrix(db, context, matrix_id)
+    document = await _document(db, context, document_id)
     version_ids = select(ExtractionFormVersion.id).where(
         ExtractionFormVersion.matrix_id == matrix_id
     )
@@ -739,12 +1065,8 @@ async def list_observations(
         .all()
     )
     return ExtractionCellObservationsResponse(
-        observations=[
-            ExtractionObservationResponse.model_validate(o) for o in observations
-        ],
-        accepted_chain=[
-            ExtractionAcceptedValueResponse.model_validate(a) for a in chain
-        ],
+        observations=[_observation(o, document) for o in observations],
+        accepted_chain=[_accepted(a, document) for a in chain],
     )
 
 
@@ -774,7 +1096,15 @@ def _summary(version: Any) -> dict[str, Any]:
     }
 
 
-def _cell(document_id: Any, name: str, field_id: str | None, view: Any) -> dict:
+def _cell(
+    document_id: Any,
+    name: str,
+    field_id: str | None,
+    view: Any,
+    anchor_status: str | None = None,
+) -> dict:
+    if view.source == "legacy":
+        anchor_status = "legacy_unanchored"  # never stored (GOO-305)
     return {
         "document_id": str(document_id),
         "column_name": name,
@@ -789,6 +1119,9 @@ def _cell(document_id: Any, name: str, field_id: str | None, view: Any) -> dict:
         "missingness": view.missingness,
         "validation_state": view.validation_state,
         "stale": view.stale,
+        "anchor_status": anchor_status,
+        # A legacy confidence was a constant, never measured.
+        "confidence_calibration": (None if view.confidence is None else "uncalibrated"),
     }
 
 
@@ -842,44 +1175,63 @@ async def cell_view(
     }
     field_ids = [UUID(f["field_id"]) for f in current.fields]
     machine: dict[tuple[Any, str], list[rules.Obs]] = {}
+    status: dict[tuple[Any, str], str | None] = {}  # latest machine / tip anchor
+    values: dict[tuple[Any, str], set[str]] = {}  # distinct observed values
     for row in (
         await db.execute(
             select(ExtractionObservation)
             .where(
                 ExtractionObservation.form_version_id.in_(list(by_id)),
-                ExtractionObservation.kind == "machine",
                 ExtractionObservation.document_id.in_(allowed),
                 ExtractionObservation.field_id.in_(field_ids),
             )
             .order_by(ExtractionObservation.created_at, ExtractionObservation.id)
         )
     ).scalars():
-        machine.setdefault((row.document_id, str(row.field_id)), []).append(
-            _rule_obs(row)
+        key: tuple[Any, str] = (row.document_id, str(row.field_id))
+        if row.missingness is None:
+            values.setdefault(key, set()).add(rules.display(row.value) or "")
+        if row.kind != "machine":
+            continue
+        machine.setdefault(key, []).append(_rule_obs(row))
+        status[key] = (
+            None
+            if row.missingness
+            else cast(str | None, row.anchor_status) or "unverified"
         )
+    # ponytail: loads text to hash it; add a stored text hash if that ever
+    # gets slow.
+    pins: dict[Any, tuple[str, str]] = {
+        document.id: document_pins(document)
+        for document in (
+            await db.execute(select(Document).where(Document.id.in_(allowed)))
+        ).scalars()
+    }
+    hashes = {document_id: pin[0] for document_id, pin in pins.items()}
     accepted: dict[tuple[Any, str], list[rules.Accepted]] = {}
     for tip in await _tips(db, list(by_id)):
         if tip.document_id in allowed:
-            accepted.setdefault((tip.document_id, str(tip.field_id)), []).append(
+            key = (tip.document_id, str(tip.field_id))
+            pin = pins.get(tip.document_id, ("", ""))
+            accepted.setdefault(key, []).append(
                 rules.Accepted(
                     id=tip.id,
                     value=tip.value,
                     missingness=tip.missingness,
                     form_version_id=tip.form_version_id,
-                    source_hash=tip.source_hash,
+                    # A changed text is a changed source (GOO-305): "" never
+                    # equals a current hash, so the tip reads stale.
+                    source_hash=(
+                        ""
+                        if _changed(pin, tip.source_hash, tip.text_sha256)
+                        else tip.source_hash
+                    ),
                     field_def=rules.field_def(
                         by_id[tip.form_version_id].fields, tip.field_id
                     ),
                 )
             )
-    # ponytail: loads text only to hash checksum-less documents; add a stored
-    # text hash if that ever gets slow.
-    hashes: dict[Any, str] = {
-        document.id: document_source_hash(document)
-        for document in (
-            await db.execute(select(Document).where(Document.id.in_(allowed)))
-        ).scalars()
-    }
+            status[key] = tip.anchor_resolution or "legacy"
     cells = []
     for document_id in allowed:
         for field in current.fields:
@@ -902,5 +1254,15 @@ async def cell_view(
                 hashes.get(document_id, ""),
             )
             if view is not None:
-                cells.append(_cell(document_id, field["name"], field["field_id"], view))
+                cells.append(
+                    _cell(
+                        document_id,
+                        field["name"],
+                        field["field_id"],
+                        view,
+                        status.get(key),
+                    )
+                    # Distinct observed values: >1 is a disagreement badge.
+                    | {"observed_values": len(values.get(key, ()))}
+                )
     return _summary(current), cells

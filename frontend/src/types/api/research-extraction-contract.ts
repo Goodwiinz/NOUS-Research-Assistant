@@ -17,6 +17,11 @@ export type ApiExtractionAcceptedValue =
 export type ApiExtractionAcceptCreate = Schemas['ExtractionAcceptCreate'];
 export type ApiExtractionCellObservations =
   Schemas['ExtractionCellObservationsResponse'];
+/** GOO-305 source anchor (offsets are server-side code points; never index). */
+export type ApiExtractionAnchor = Schemas['ExtractionAnchor'];
+export type ApiExtractionAnchorOccurrence =
+  Schemas['ExtractionAnchorOccurrence'];
+export type ApiExtractionAnchorStatus = ApiExtractionAnchor['status'];
 /**
  * `GET /matrices/{id}` is an untyped dict; its `form_version` key is the
  * service's version summary: the version response minus matrix/creator ids,

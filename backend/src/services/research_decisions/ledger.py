@@ -201,6 +201,41 @@ _EXTRACTION_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
         {"collection_id", "matrix_id", "new_form_version_id", "accepted_value_ids"}
     ),
 }
+# GOO-305: source anchors as additive v2 payloads (v1 history still replays).
+# observed v2: each observations{} value is an _ANCHOR_KEYS object; the quote
+# stays on the row and is bound here by citation_sha256.
+_ANCHOR_KEYS = frozenset(
+    {
+        "field_id",
+        "anchor_status",
+        "citation_sha256",
+        "start",
+        "end",
+        "page",
+        "occurrences",
+    }
+)
+_ANCHOR_STATUSES = ("verified", "ambiguous", "unverified", "location_unavailable")
+_ANCHOR_RESOLUTIONS = (
+    "verified",
+    "disambiguated",
+    "accepted_unverified",
+    "not_applicable",
+)
+_STALE_REASONS = ("form_changed", "source_changed")
+_EXTRACTION_PAYLOAD_KEYS |= {
+    ("extraction.observed", 2): _EXTRACTION_PAYLOAD_KEYS[("extraction.observed", 1)]
+    | {"text_sha256", "inspected_coverage"},
+    ("extraction.accepted", 2): _EXTRACTION_PAYLOAD_KEYS[("extraction.accepted", 1)]
+    | {
+        "anchor_observation_id",
+        "anchor_resolution",
+        "anchor_start_char",
+        "text_sha256",
+    },
+    ("extraction.staled", 2): _EXTRACTION_PAYLOAD_KEYS[("extraction.staled", 1)]
+    | {"reason", "document_id", "new_source_hash", "new_text_sha256"},
+}
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {"extraction.accepted"}
 
 
@@ -570,6 +605,98 @@ def _validated_sha256(value: Any, field: str) -> None:
         raise DecisionValidationError(f"{field} must be a lowercase SHA-256 digest")
 
 
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validated_span(start: Any, end: Any, field: str) -> None:
+    if start is None and end is None:
+        return
+    if not (_is_int(start) and _is_int(end) and 0 <= start < end):
+        raise DecisionValidationError(f"{field} offsets must be 0 <= start < end")
+
+
+def _validate_anchor(anchor: Any) -> None:
+    if not isinstance(anchor, Mapping) or set(anchor) != _ANCHOR_KEYS:
+        raise DecisionValidationError("observation anchor does not match its schema")
+    _validated_payload_uuid(anchor["field_id"], "observations")
+    status = anchor["anchor_status"]
+    if status is not None and status not in _ANCHOR_STATUSES:
+        raise DecisionValidationError("anchor_status is invalid")
+    if anchor["citation_sha256"] is not None:
+        _validated_sha256(anchor["citation_sha256"], "citation_sha256")
+    _validated_span(anchor["start"], anchor["end"], "anchor")
+    if (anchor["start"] is not None) != (status == "verified"):
+        raise DecisionValidationError("only a verified anchor carries offsets")
+    if anchor["page"] is not None and not _is_int(anchor["page"]):
+        raise DecisionValidationError("anchor page must be an integer")
+    occurrences = anchor["occurrences"]
+    if (
+        not isinstance(occurrences, list)
+        or len(occurrences) > 20
+        or not all(_is_int(o) and o >= 0 for o in occurrences)
+    ):
+        raise DecisionValidationError("anchor occurrences must be <=20 offsets")
+
+
+def _validate_coverage(coverage: Any) -> None:
+    if coverage is None:
+        return
+    if not isinstance(coverage, list):
+        raise DecisionValidationError("inspected_coverage must be a list")
+    previous_end = -1
+    for pair in coverage:
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise DecisionValidationError("inspected_coverage holds [start, end] pairs")
+        _validated_span(pair[0], pair[1], "inspected_coverage")
+        if pair[0] <= previous_end:
+            raise DecisionValidationError(
+                "inspected_coverage must be sorted and non-overlapping"
+            )
+        previous_end = pair[1]
+
+
+def _validate_staled_v2(payload: Mapping[str, Any]) -> None:
+    reason = payload["reason"]
+    if reason not in _STALE_REASONS:
+        raise DecisionValidationError("staled reason is invalid")
+    source = (
+        payload["document_id"],
+        payload["new_source_hash"],
+        payload["new_text_sha256"],
+    )
+    if reason == "form_changed":
+        _validated_payload_uuid(payload["new_form_version_id"], "new_form_version_id")
+        if source != (None, None, None):
+            raise DecisionValidationError("form staling names no source")
+        return
+    if payload["new_form_version_id"] is not None:
+        raise DecisionValidationError("source staling names no form version")
+    _validated_payload_uuid(payload["document_id"], "document_id")
+    _validated_sha256(payload["new_source_hash"], "new_source_hash")
+    _validated_sha256(payload["new_text_sha256"], "new_text_sha256")
+
+
+def _validate_accepted_v2(payload: Mapping[str, Any]) -> None:
+    resolution = payload["anchor_resolution"]
+    if resolution not in _ANCHOR_RESOLUTIONS:
+        raise DecisionValidationError("anchor_resolution is invalid")
+    anchor = _validated_optional_uuid(
+        payload["anchor_observation_id"], "anchor_observation_id"
+    )
+    start = payload["anchor_start_char"]
+    if start is not None and not (_is_int(start) and start >= 0):
+        raise DecisionValidationError("anchor_start_char must be an offset")
+    if resolution in ("verified", "disambiguated") and (
+        anchor is None or start is None
+    ):
+        raise DecisionValidationError("a located acceptance names its anchor")
+    if anchor is not None and str(anchor) not in payload["observation_ids"]:
+        raise DecisionValidationError("anchor observation must be cited")
+    if payload["text_sha256"] is not None:
+        _validated_sha256(payload["text_sha256"], "text_sha256")
+
+
 def _validate_extraction_payload(
     event_type: str,
     payload: Mapping[str, Any],
@@ -583,8 +710,14 @@ def _validate_extraction_payload(
         raise DecisionValidationError(
             "decision payload belongs to another extraction matrix"
         )
+    # The exact key set was checked per (type, version), so a v2 key marks v2.
     if event_type == "extraction.staled":
-        _validated_payload_uuid(payload["new_form_version_id"], "new_form_version_id")
+        if "reason" in payload:
+            _validate_staled_v2(payload)
+        else:
+            _validated_payload_uuid(
+                payload["new_form_version_id"], "new_form_version_id"
+            )
         staled = _validated_uuid_list(
             payload["accepted_value_ids"], "accepted_value_ids"
         )
@@ -603,9 +736,16 @@ def _validate_extraction_payload(
         observations = payload["observations"]
         if not isinstance(observations, Mapping) or not observations:
             raise DecisionValidationError("observations must be a non-empty object")
+        v2 = "text_sha256" in payload
         for observation, field in observations.items():
             _validated_payload_uuid(observation, "observations")
-            _validated_payload_uuid(field, "observations")
+            if v2:
+                _validate_anchor(field)
+            else:
+                _validated_payload_uuid(field, "observations")
+        if v2:
+            _validated_sha256(payload["text_sha256"], "text_sha256")
+            _validate_coverage(payload["inspected_coverage"])
         for key in ("extractor_run_id", "extractor_model"):
             if payload[key] is not None and not isinstance(payload[key], str):
                 raise DecisionValidationError(f"{key} must be a string")
@@ -628,6 +768,8 @@ def _validate_extraction_payload(
         missingness not in extraction_rules.MISSINGNESS["accepted"]
     ):
         raise DecisionValidationError("accepted missingness is invalid")
+    if "anchor_resolution" in payload:
+        _validate_accepted_v2(payload)
 
 
 async def _locked_stream(
@@ -1197,11 +1339,15 @@ def _validate_extraction_transitions(
     """Machine rows come only from the machine, human rows from a reviewer;
     only an adjudicator accepts, citing observations of that exact cell, and
     each ``(document, field)`` chain names its current tip. ``staled`` names
-    current tips only, once, made stale by a different form version."""
+    current tips only, once, made stale by a different form version (or, v2,
+    by a changed source). A v2 accept's anchor resolution must agree with the
+    anchor its observation recorded (GOO-305)."""
     collection: Any = None
     observed: dict[UUID, tuple[UUID, UUID, UUID]] = {}  # obs -> (doc, form, field)
+    anchors: dict[UUID, Mapping[str, Any]] = {}  # v2 obs -> recorded anchor
     tips: dict[tuple[UUID, UUID], UUID] = {}  # (doc, field) -> accepted tip
     form_of: dict[UUID, UUID] = {}  # accepted -> form version
+    source_of: dict[UUID, tuple[UUID, str, str | None]] = {}  # (doc, hash, text)
     staled: set[UUID] = set()
     for event in events:
         payload = cast(dict[str, Any], event.payload)
@@ -1230,6 +1376,9 @@ def _validate_extraction_transitions(
                 observation = _payload_uuid(value, "observations")
                 if observation in observed:
                     raise DecisionReplayError("extraction observation id reused")
+                if isinstance(field, Mapping):  # v2
+                    anchors[observation] = field
+                    field = field["field_id"]
                 observed[observation] = (*cell, _payload_uuid(field, "observations"))
             continue
         if event.event_type == "extraction.accepted":
@@ -1259,13 +1408,36 @@ def _validate_extraction_transitions(
             accepted = _payload_uuid(payload["accepted_value_id"], "accepted_value_id")
             if accepted in form_of:
                 raise DecisionReplayError("accepted value id reused")
+            if "anchor_resolution" in payload:
+                _check_accepted_anchor(payload, anchors)
             tips[(document, field)] = accepted
             form_of[accepted] = form
+            source_of[accepted] = (
+                document,
+                payload["source_hash"],
+                payload.get("text_sha256"),
+            )
+            continue
+        current = set(tips.values())
+        if payload.get("reason") == "source_changed":
+            if role not in ("editor", "adjudicator", "machine"):
+                raise DecisionReplayError("extraction staling actor is invalid")
+            document = _payload_uuid(payload["document_id"], "document_id")
+            new = (payload["new_source_hash"], payload["new_text_sha256"])
+            for value in payload["accepted_value_ids"]:
+                accepted = _payload_uuid(value, "accepted_value_ids")
+                if accepted not in current or accepted in staled:
+                    raise DecisionReplayError("staled value is not a current tip")
+                tip_document, tip_hash, tip_text = source_of[accepted]
+                if tip_document != document or (
+                    tip_hash == new[0] and tip_text in (None, new[1])
+                ):
+                    raise DecisionReplayError("stale without source change")
+                staled.add(accepted)
             continue
         if role != "editor":
             raise DecisionReplayError("extraction staling requires an editor")
         new_form = _payload_uuid(payload["new_form_version_id"], "new_form_version_id")
-        current = set(tips.values())
         for value in payload["accepted_value_ids"]:
             accepted = _payload_uuid(value, "accepted_value_ids")
             if (
@@ -1277,6 +1449,33 @@ def _validate_extraction_transitions(
                     "staled value is not a current tip made stale by a new form"
                 )
             staled.add(accepted)
+
+
+def _check_accepted_anchor(
+    payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
+) -> None:
+    """``verified`` needs a verified observation at that start; ``disambiguated``
+    an ambiguous one whose recorded occurrences contain the chosen start."""
+    resolution = payload["anchor_resolution"]
+    if resolution not in ("verified", "disambiguated"):
+        return
+    anchor = anchors.get(
+        _payload_uuid(payload["anchor_observation_id"], "anchor_observation_id")
+    )
+    start = payload["anchor_start_char"]
+    if anchor is None or not (
+        (
+            resolution == "verified"
+            and anchor["anchor_status"] == "verified"
+            and anchor["start"] == start
+        )
+        or (
+            resolution == "disambiguated"
+            and anchor["anchor_status"] == "ambiguous"
+            and start in anchor["occurrences"]
+        )
+    ):
+        raise DecisionReplayError("accepted anchor contradicts observation")
 
 
 _FAMILIES: dict[str, _Family] = {
