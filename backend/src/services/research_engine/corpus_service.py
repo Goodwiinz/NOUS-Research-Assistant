@@ -70,7 +70,7 @@ def _lineage_key(database: str, query_text: str | None) -> str:
 def receipt_response(
     receipt: ResearchImportReceipt, *, replayed: bool = False
 ) -> ImportReceiptResponse:
-    return ImportReceiptResponse.model_validate(
+    response: ImportReceiptResponse = ImportReceiptResponse.model_validate(
         {
             **{
                 column: getattr(receipt, column)
@@ -80,6 +80,7 @@ def receipt_response(
             "replayed": replayed,
         }
     )
+    return response
 
 
 async def _receipt(

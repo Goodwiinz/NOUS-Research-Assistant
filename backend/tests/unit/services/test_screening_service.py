@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import Column, MetaData, Table, event, func, select
+from sqlalchemy import Column, MetaData, Table, event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import src.models  # noqa: F401  (registers every FK target table)
@@ -38,6 +38,7 @@ from src.models.screening import (
     ScreeningSuggestion,
 )
 from src.schemas.research_engine import (
+    ScreeningDecisionValue,
     ScreeningAssignmentCreate,
     ScreeningObservationCreate,
     ScreeningQueueCreate,
@@ -162,6 +163,14 @@ async def _version(
     return version_id
 
 
+async def _approve(db: AsyncSession, protocol_id: UUID, version_id: UUID) -> None:
+    await db.execute(
+        update(ResearchProtocol)
+        .where(ResearchProtocol.id == protocol_id)
+        .values(current_approved_version_id=version_id)
+    )
+
+
 async def _seed(db: AsyncSession, snapshot: dict[str, Any] = SNAPSHOT) -> _Project:
     project = _Project(
         collection_id=uuid4(),
@@ -197,9 +206,7 @@ async def _seed(db: AsyncSession, snapshot: dict[str, Any] = SNAPSHOT) -> _Proje
     )
     await db.flush()
     project.version_id = await _version(db, project.protocol_id, 1, snapshot)
-    protocol = await db.get(ResearchProtocol, project.protocol_id)
-    assert protocol is not None
-    protocol.current_approved_version_id = project.version_id
+    await _approve(db, project.protocol_id, project.version_id)
     for title in ("Alpha", "Beta", "Gamma"):
         report_id = uuid4()
         db.add(
@@ -284,7 +291,7 @@ async def _submit(
     assignment_id: UUID,
     report_id: UUID,
     key: str,
-    decision: str = "include",
+    decision: ScreeningDecisionValue = "include",
     reviewer: UUID | None = None,
     **fields: Any,
 ) -> Any:
@@ -644,10 +651,7 @@ async def test_stale_criteria_hash_is_409(db: AsyncSession) -> None:
     amended = await _version(
         db, project.protocol_id, 2, {**SNAPSHOT, "eligibility": {"population": "all"}}
     )
-    protocol = await db.get(ResearchProtocol, project.protocol_id)
-    assert protocol is not None
-    protocol.current_approved_version_id = amended
-    await db.flush()
+    await _approve(db, project.protocol_id, amended)
     await _raises(
         _submit(db, project, queue, assignment.id, report, "b"),
         409,
@@ -799,6 +803,7 @@ async def test_supervisor_and_reviewer_roles_are_required(db: AsyncSession) -> N
             ScreeningQueueCreate(
                 protocol_version_id=project.version_id,
                 stage="title_abstract",
+                report_ids=None,
                 idempotency_key="q",
             ),
         ),
@@ -843,6 +848,8 @@ async def test_supervisor_and_reviewer_roles_are_required(db: AsyncSession) -> N
                 assignment_id=assignment.id,
                 criteria_hash=queue.criteria_hash,
                 decision="include",
+                exclusion_reason=None,
+                note=None,
                 idempotency_key="s",
             ),
         ),
@@ -904,10 +911,11 @@ async def test_merged_report_is_409(db: AsyncSession) -> None:
     project = await _seed(db)
     queue = await _queue(db, project)
     assignment = await _assign(db, project, queue.id, project.reviewer)
-    merged = await db.get(ResearchReport, project.reports[1])
-    assert merged is not None
-    merged.merged_into_report_id = project.reports[0]
-    await db.flush()
+    await db.execute(
+        update(ResearchReport)
+        .where(ResearchReport.id == project.reports[1])
+        .values(merged_into_report_id=project.reports[0])
+    )
     await _raises(
         _submit(db, project, queue, assignment.id, project.reports[1], "k"),
         409,
