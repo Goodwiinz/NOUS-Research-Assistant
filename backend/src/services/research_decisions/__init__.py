@@ -7,6 +7,7 @@ from .ledger import (
     DecisionValidationError,
     append_decision,
     decision_request_fingerprint,
+    lock_aggregate_stream,
     replay_decisions,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "DecisionValidationError",
     "append_decision",
     "decision_request_fingerprint",
+    "lock_aggregate_stream",
     "replay_decisions",
 ]

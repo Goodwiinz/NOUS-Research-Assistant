@@ -9,7 +9,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "aw01_artifact_workspace"
-down_revision = "merge_daily_harness_20260928"
+down_revision = "c9d1e2f3a4b5"
 branch_labels = None
 depends_on = None
 

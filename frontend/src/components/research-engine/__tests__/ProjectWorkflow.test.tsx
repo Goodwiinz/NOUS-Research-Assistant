@@ -25,11 +25,33 @@ vi.mock('../ProtocolPanel', () => ({
     <div>Protocol for {projectId}</div>
   ),
 }));
+vi.mock('../ReportIdentityPanel', () => ({
+  ReportIdentityPanel: ({ projectId }: { projectId: string }) => (
+    <div>Reports for {projectId}</div>
+  ),
+}));
+vi.mock('../CorpusPanel', () => ({
+  CorpusPanel: ({
+    projectId,
+    readOnly,
+  }: {
+    projectId: string;
+    readOnly?: boolean;
+  }) => (
+    <div>
+      Corpus for {projectId} {readOnly ? '(read only)' : '(editable)'}
+    </div>
+  ),
+}));
 vi.mock('@/services/researchEngineService', () => ({
   createProject: vi.fn(),
   listProjectRoles: vi.fn(),
   assignProjectRole: vi.fn(),
   removeProjectRole: vi.fn(),
+  listReports: vi.fn(),
+  listReportHistory: vi.fn(),
+  linkStudy: vi.fn(),
+  mergeReports: vi.fn(),
 }));
 describe('ProjectWorkflow', () => {
   beforeEach(() => {
@@ -59,6 +81,10 @@ describe('ProjectWorkflow', () => {
 
     expect(
       screen.getByText('Blueprint for collection-1 (editable)')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Reports for collection-1')).toBeInTheDocument();
+    expect(
+      screen.getByText('Corpus for collection-1 (editable)')
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(listProjectRoles).toHaveBeenCalledWith('collection-1')
@@ -158,6 +184,31 @@ describe('ProjectWorkflow', () => {
       screen.getByText(
         'A project owner or administrator must enable this workflow.'
       )
+    ).toBeInTheDocument();
+  });
+
+  it('renders the corpus panel read-only for an archived project', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProjectWorkflow
+          project={{
+            id: 'collection-3',
+            workspace_id: 'workspace-3',
+            name: 'Archived',
+            research_engine_project_id: 'engine-3',
+            research_status: 'archived',
+            can_edit: true,
+            can_manage: true,
+            workspace_archived: false,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          }}
+        />
+      </QueryClientProvider>
+    );
+
+    expect(
+      await screen.findByText('Corpus for collection-3 (read only)')
     ).toBeInTheDocument();
   });
 });
