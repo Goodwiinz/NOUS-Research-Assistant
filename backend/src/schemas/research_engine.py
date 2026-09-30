@@ -1,9 +1,9 @@
 """Pydantic v2 schemas for the research engine API."""
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar, Union
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -468,7 +468,9 @@ class ScreeningQueueCreate(BaseModel):
     protocol_version_id: UUID
     stage: ScreeningStage
     # None on title_abstract = every live report; full_text needs an explicit list.
-    report_ids: Optional[List[UUID]] = Field(None, min_length=1, max_length=10_000)
+    report_ids: Optional[List[UUID]] = Field(
+        default=None, min_length=1, max_length=10_000
+    )
     supersedes_queue_id: Optional[UUID] = None
     suggestion_step_id: Optional[UUID] = None
     idempotency_key: _IdempotencyKey
@@ -489,8 +491,8 @@ class ScreeningObservationCreate(BaseModel):
     assignment_id: UUID
     criteria_hash: str = Field(..., min_length=64, max_length=64)
     decision: ScreeningDecisionValue
-    exclusion_reason: Optional[str] = Field(None, min_length=1, max_length=200)
-    note: Optional[str] = Field(None, max_length=10_000)
+    exclusion_reason: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    note: Optional[str] = Field(default=None, max_length=10_000)
     supersedes_observation_id: Optional[UUID] = None
     idempotency_key: _IdempotencyKey
 
@@ -513,6 +515,9 @@ class ScreeningQueueResponse(BaseModel):
     # Set only on the create response that imported them.
     suggestions_skipped: Optional[int] = None
     stale: Optional[str] = None
+    # GOO-302: counted from revealed (resolution tip) rows only.
+    resolved_count: int = 0
+    conflict_count: int = 0
 
 
 class ScreeningAssignmentResponse(BaseModel):
@@ -525,6 +530,25 @@ class ScreeningAssignmentResponse(BaseModel):
     created_at: datetime
     revoked_at: Optional[datetime] = None
     revoked_by_id: Optional[UUID] = None
+
+
+ScreeningBasis = Literal["single", "agreement", "conflict", "adjudicated", "reopened"]
+
+
+class ScreeningResolutionResponse(BaseModel):
+    """A derived or adjudicated outcome; never an editable field (GOO-302)."""
+
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    report_id: UUID
+    basis: ScreeningBasis
+    outcome: Optional[ScreeningDecisionValue] = None
+    exclusion_reason: Optional[str] = None
+    input_observation_ids: List[UUID]
+    criteria_hash: str
+    supersedes_resolution_id: Optional[UUID] = None
+    created_at: datetime
 
 
 class ScreeningObservationResponse(BaseModel):
@@ -540,6 +564,8 @@ class ScreeningObservationResponse(BaseModel):
     note: Optional[str] = None
     supersedes_observation_id: Optional[UUID] = None
     created_at: datetime
+    # Set only on the submit response whose observation revealed the report.
+    resolution: Optional[ScreeningResolutionResponse] = None
 
 
 class MyScreeningQueueInfo(BaseModel):
@@ -556,14 +582,21 @@ class MyScreeningQueueItem(BaseModel):
     title_snapshot: str
     identifiers: Dict[str, List[str]]
     abstract: Optional[str] = None
-    # The caller's own current observation only; peers stay hidden (GOO-302).
+    # The caller's own current observation.
     observation: Optional[ScreeningObservationResponse] = None
+    # GOO-302: "revealed" iff the report has a resolution in this queue. Peers'
+    # current observations appear in ``others`` only once revealed.
+    reveal_state: Literal["hidden", "revealed"] = "hidden"
+    others: List[ScreeningObservationResponse] = Field(default_factory=list)
+    resolution: Optional[ScreeningResolutionResponse] = None
 
 
 class ScreeningCounts(BaseModel):
     total: int
     screened: int
     remaining: int
+    revealed: int = 0
+    conflicts: int = 0
 
 
 class MyScreeningQueueResponse(BaseModel):
@@ -573,6 +606,161 @@ class MyScreeningQueueResponse(BaseModel):
     counts: ScreeningCounts
 
 
+class ScreeningConflictResponse(BaseModel):
+    report_id: UUID
+    title_snapshot: str
+    identifiers: Dict[str, List[str]]
+    # The queue's pinned protocol reasons, for a full-text exclusion ruling.
+    exclusion_reasons: List[str]
+    resolution: ScreeningResolutionResponse
+    observations: List[ScreeningObservationResponse]
+
+
+class ScreeningAdjudicateRequest(BaseModel):
+    """Resolve the exact conflict tip the adjudicator saw (stale inputs: 409)."""
+
+    resolution_id: UUID
+    input_observation_ids: List[UUID] = Field(..., min_length=1, max_length=10)
+    criteria_hash: str = Field(..., min_length=64, max_length=64)
+    decision: ScreeningDecisionValue
+    exclusion_reason: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: _IdempotencyKey
+
+
+class ScreeningReopenRequest(BaseModel):
+    resolution_id: UUID
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: _IdempotencyKey
+
+
+class ScreeningEventResponse(IdentityEventResponse):
+    """A screening event; a peer's hidden decision is ``redacted`` (GOO-302)."""
+
+    redacted: bool = False
+
+
+# --- Full-text acquisition + PRISMA flow (GOO-303) --------------------------
+
+FulltextOutcome = Literal["requested", "retrieved", "unavailable"]
+
+
+class FulltextRequestCreate(BaseModel):
+    report_id: UUID
+    idempotency_key: _IdempotencyKey
+
+
+class FulltextAttemptCreate(BaseModel):
+    """One attempt; ``previous_attempt_id`` must be the current head (or null)."""
+
+    outcome: FulltextOutcome
+    attempted_on: date
+    reason: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    document_id: Optional[UUID] = None
+    previous_attempt_id: Optional[UUID] = None
+    idempotency_key: _IdempotencyKey
+
+    @model_validator(mode="after")
+    def _outcome_fields(self) -> "FulltextAttemptCreate":
+        if (self.outcome == "retrieved") != (self.document_id is not None):
+            raise ValueError("document_id is required for, and only for, retrieved")
+        if self.outcome == "unavailable" and not (self.reason or "").strip():
+            raise ValueError("unavailable needs a reason")
+        # One day of slack: the actor reports their own local date.
+        if self.attempted_on > datetime.now(timezone.utc).date() + timedelta(days=1):
+            raise ValueError("attempted_on cannot be in the future")
+        return self
+
+
+class FulltextAttemptResponse(BaseModel):
+    id: UUID
+    outcome: FulltextOutcome
+    reason: Optional[str] = None
+    attempted_on: date
+    actor_id: UUID
+    document_id: Optional[UUID] = None
+    document_content_hash: Optional[str] = None
+    # False once the linked document is deleted or detached; id and hash stay.
+    document_available: bool = False
+    previous_attempt_id: Optional[UUID] = None
+    created_at: datetime
+
+
+class FulltextStateResponse(BaseModel):
+    request_id: UUID
+    report_id: UUID
+    protocol_version_id: Optional[UUID] = None
+    requested_by_id: UUID
+    requested_at: datetime
+    state: Literal["pending", "requested", "retrieved", "unavailable"]
+    head_attempt_id: Optional[UUID] = None
+    attempts: List[FulltextAttemptResponse]  # chain order, first attempt first
+
+
+class PrismaCounts(BaseModel):
+    records_identified: int
+    records_by_source: Dict[str, int]
+    records_by_import: Dict[str, int]
+    import_rejected: int
+    duplicates_removed: int
+    unique_reports: int
+    records_screened: int
+    records_excluded: int
+    records_awaiting_screening: int
+    reports_sought: int
+    reports_not_retrieved: int
+    reports_awaiting_retrieval: int
+    reports_assessed: int
+    reports_excluded_by_reason: Dict[str, int]
+    included_reports: int
+    included_studies: int
+    unconfirmed_study_links: int
+
+
+class PrismaAmendment(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    event_id: UUID
+    aggregate_type: str
+    seq: int
+    kind: str
+    report_id: UUID
+    from_: str = Field(..., alias="from")
+    to: str
+
+
+class PrismaChecks(BaseModel):
+    screened_plus_awaiting_equals_unique: bool
+    assessed_within_retrieved: bool
+    included_plus_excluded_equals_assessed: bool
+
+
+class PrismaVersions(BaseModel):
+    corpus_hash: str
+    protocol_version_ids: List[str]
+    stream_heads: Dict[str, int]
+
+
+class PrismaFlowBody(BaseModel):
+    counts: PrismaCounts
+    excluded_from_flow: Dict[str, int]
+    amendments: List[PrismaAmendment]
+    warnings: List[str]
+    checks: PrismaChecks
+    versions: PrismaVersions
+
+
+class PrismaFlowResponse(BaseModel):
+    """Recomputed from persisted rows on every call; nothing here is stored."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str = Field(..., alias="schema")
+    generated_at: datetime
+    body_sha256: str
+    body: PrismaFlowBody
+
+
 # --- Search import / corpus (GOO-300) --------------------------------------
 
 
@@ -580,11 +768,20 @@ class ImportDeclaration(BaseModel):
     """What the importer declares about the search; never inferred from the file."""
 
     database: str = Field(..., min_length=1, max_length=200)
-    query_text: Optional[str] = Field(None, min_length=1, max_length=20_000)
+    query_text: Optional[str] = Field(default=None, min_length=1, max_length=20_000)
     search_date: Optional[date] = None
     exported_at: Optional[datetime] = None
     redistribution: Literal["restricted", "allowed"] = "restricted"
-    notes: Optional[str] = Field(None, max_length=2000)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CitationChaseDeclaration(BaseModel):
+    """What a citation-chase receipt records as requested (server-set licence)."""
+
+    seed_report_id: UUID
+    direction: Literal["backward", "forward"]
+    requested_limit: int
+    redistribution: Literal["allowed"]
 
 
 class ImportReceiptResponse(BaseModel):
@@ -592,7 +789,8 @@ class ImportReceiptResponse(BaseModel):
     kind: Literal["file_import", "citation_chase"]
     version: int
     previous_receipt_id: Optional[UUID] = None
-    declared: Dict[str, Any]
+    # Exactly the validated declaration: an import's, or a chase's request.
+    declared: Union[ImportDeclaration, CitationChaseDeclaration]
     observed: Dict[str, Any]
     parsed_count: int
     accepted_count: int
@@ -620,8 +818,31 @@ class CitationChaseRequest(BaseModel):
     seed_report_id: UUID
     direction: Literal["backward", "forward"]
     # 50 mirrors step_executor.MAX_CONNECTOR_RESULTS (pinned by a unit test).
-    max_results: int = Field(50, ge=1, le=50)
+    max_results: int = Field(default=50, ge=1, le=50)
     idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+COVERAGE_STATEMENT = (
+    "Coverage lists what was searched, imported and chased for this project. "
+    "It is not exhaustive and does not prove that no other relevant records exist."
+)
+
+
+class CoverageRequest(BaseModel):
+    """Known records to check, each ``{kind: value}`` (e.g. ``{"doi": "10.1/x"}``)."""
+
+    known: List[Dict[str, str]] = Field(default_factory=list, max_length=1000)
+
+
+class CoverageResponse(BaseModel):
+    found: List[Dict[str, Any]]
+    missing: List[Dict[str, str]]
+    recall: Optional[float] = None
+    searched: List[Dict[str, Any]]
+    not_searched: List[str]
+    citation_chasing: Optional[Dict[str, Any]] = None
+    exhaustive: Literal[False] = False
+    statement: str = COVERAGE_STATEMENT
 
 
 class ProtocolRegistrationCreate(BaseModel):

@@ -84,6 +84,12 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "collection_id", "dedup_key", name="uq_research_import_receipt_dedup"
         ),
+        sa.UniqueConstraint(
+            "collection_id",
+            "lineage_key",
+            "version",
+            name="uq_research_import_receipt_version",
+        ),
     )
     op.create_table(
         "research_import_records",
@@ -135,11 +141,6 @@ _INDEXES = (
         "research_import_receipts",
         "idx_research_import_receipt_collection",
         ["collection_id"],
-    ),
-    (
-        "research_import_receipts",
-        "idx_research_import_receipt_lineage",
-        ["collection_id", "lineage_key"],
     ),
     (
         "research_import_records",

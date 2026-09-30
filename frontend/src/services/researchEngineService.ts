@@ -8,14 +8,34 @@ import type {
 } from '@/types/api/research-identity-contract';
 import type {
   ApiMyScreeningQueue,
+  ApiScreeningAdjudicateRequest,
   ApiScreeningAssignment,
   ApiScreeningAssignmentCreate,
+  ApiScreeningConflict,
+  ApiScreeningEvent,
   ApiScreeningObservation,
   ApiScreeningObservationCreate,
   ApiScreeningQueue,
   ApiScreeningQueueCreate,
+  ApiScreeningReopenRequest,
+  ApiScreeningResolution,
   ApiScreeningRevokeRequest,
 } from '@/types/api/research-screening-contract';
+import type {
+  ApiFulltextAttemptCreate,
+  ApiFulltextRequestCreate,
+  ApiFulltextState,
+  ApiPrismaFlow,
+} from '@/types/api/research-acquisition-contract';
+import type {
+  ApiCitationChaseRequest,
+  ApiCoverage,
+  ApiCoverageRequest,
+  ApiImportDeclaration,
+  ApiImportFormat,
+  ApiImportReceipt,
+  ApiImportReceiptDetail,
+} from '@/types/api/research-corpus-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -242,8 +262,12 @@ export const mergeReports = (
 export type {
   ApiMyScreeningItem as MyScreeningItem,
   ApiMyScreeningQueue as MyScreeningQueue,
+  ApiScreeningConflict as ScreeningConflict,
   ApiScreeningDecision as ScreeningDecision,
+  ApiScreeningEvent as ScreeningEvent,
+  ApiScreeningObservation as ScreeningObservation,
   ApiScreeningQueue as ScreeningQueue,
+  ApiScreeningResolution as ScreeningResolution,
 } from '@/types/api/research-screening-contract';
 
 const screening = (projectId: string): string =>
@@ -300,5 +324,131 @@ export const submitScreeningObservation = (
 export const listScreeningHistory = (
   projectId: string,
   queueId: string
-): Promise<ApiIdentityEvent[]> =>
-  api.get<ApiIdentityEvent[]>(`${screening(projectId)}/${queueId}/history`);
+): Promise<ApiScreeningEvent[]> =>
+  api.get<ApiScreeningEvent[]>(`${screening(projectId)}/${queueId}/history`);
+
+// GOO-302: adjudicator reads and events.
+export const listScreeningConflicts = (
+  projectId: string,
+  queueId: string
+): Promise<ApiScreeningConflict[]> =>
+  api.get<ApiScreeningConflict[]>(
+    `${screening(projectId)}/${queueId}/conflicts`
+  );
+
+export const adjudicateScreening = (
+  projectId: string,
+  queueId: string,
+  reportId: string,
+  data: ApiScreeningAdjudicateRequest
+): Promise<ApiScreeningResolution> =>
+  api.post<ApiScreeningResolution>(
+    `${screening(projectId)}/${queueId}/reports/${reportId}/adjudicate`,
+    data
+  );
+
+export const reopenScreening = (
+  projectId: string,
+  queueId: string,
+  reportId: string,
+  data: ApiScreeningReopenRequest
+): Promise<ApiScreeningResolution> =>
+  api.post<ApiScreeningResolution>(
+    `${screening(projectId)}/${queueId}/reports/${reportId}/reopen`,
+    data
+  );
+
+// --- Full-text acquisition + PRISMA flow (GOO-303) ------------------------
+
+export type {
+  ApiFulltextState as FulltextState,
+  ApiFulltextStatus as FulltextStatus,
+  ApiPrismaFlow as PrismaFlow,
+} from '@/types/api/research-acquisition-contract';
+
+const fulltext = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/fulltext`;
+
+export const listFulltext = (projectId: string): Promise<ApiFulltextState[]> =>
+  api.get<ApiFulltextState[]>(fulltext(projectId));
+
+export const requestFulltext = (
+  projectId: string,
+  data: ApiFulltextRequestCreate
+): Promise<ApiFulltextState> =>
+  api.post<ApiFulltextState>(`${fulltext(projectId)}/requests`, data);
+
+export const recordFulltextAttempt = (
+  projectId: string,
+  requestId: string,
+  data: ApiFulltextAttemptCreate
+): Promise<ApiFulltextState> =>
+  api.post<ApiFulltextState>(
+    `${fulltext(projectId)}/requests/${requestId}/attempts`,
+    data
+  );
+
+export const getPrismaFlow = (projectId: string): Promise<ApiPrismaFlow> =>
+  api.get<ApiPrismaFlow>(`${BASE}/projects/${projectId}/prisma`);
+
+export const downloadPrismaFlow = (
+  projectId: string,
+  format: 'json' | 'md'
+): Promise<void> =>
+  api.download(
+    `/research-engine/projects/${projectId}/prisma/export?${new URLSearchParams({ format })}`
+  );
+
+// --- Search import / citation chase / corpus export (GOO-300) --------------
+
+export type {
+  ApiCoverage as CorpusCoverage,
+  ApiImportDeclaration as ImportDeclaration,
+  ApiImportFormat as ImportFormat,
+  ApiImportReceipt as ImportReceipt,
+  ApiImportReceiptDetail as ImportReceiptDetail,
+} from '@/types/api/research-corpus-contract';
+
+export const importSearchResults = (
+  projectId: string,
+  file: File,
+  format: ApiImportFormat,
+  declaration: ApiImportDeclaration
+): Promise<ApiImportReceipt> =>
+  api.upload<ApiImportReceipt>(`${BASE}/projects/${projectId}/imports`, file, {
+    metadata: { format, declaration: JSON.stringify(declaration) },
+  });
+
+export const listImports = (projectId: string): Promise<ApiImportReceipt[]> =>
+  api.get<ApiImportReceipt[]>(`${BASE}/projects/${projectId}/imports`);
+
+export const getImport = (
+  projectId: string,
+  receiptId: string
+): Promise<ApiImportReceiptDetail> =>
+  api.get<ApiImportReceiptDetail>(
+    `${BASE}/projects/${projectId}/imports/${receiptId}`
+  );
+
+export const chaseCitations = (
+  projectId: string,
+  data: ApiCitationChaseRequest
+): Promise<ApiImportReceipt> =>
+  api.post<ApiImportReceipt>(
+    `${BASE}/projects/${projectId}/citation-chases`,
+    data
+  );
+
+export const getCorpusCoverage = (
+  projectId: string,
+  data: ApiCoverageRequest = { known: [] }
+): Promise<ApiCoverage> =>
+  api.post<ApiCoverage>(`${BASE}/projects/${projectId}/corpus/coverage`, data);
+
+export const downloadCorpus = (
+  projectId: string,
+  format: 'json' | 'zip'
+): Promise<void> =>
+  api.download(
+    `/research-engine/projects/${projectId}/corpus/export?${new URLSearchParams({ format })}`
+  );

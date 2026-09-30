@@ -387,3 +387,41 @@ Every principal is in the same org and workspace. The protocol is approved with 
    - Adjudicate on an archived project gets 409.
 9. **Export:** if GOO-300 is deployed, download the corpus ZIP and `grep` it for P2's note sentinel. It must be absent.
 10. **CI:** record the Integration job URL where `test_screening_blind_review_postgres.py` passed at the merge SHA, and paste the three mutation transcripts into the PR.
+
+---
+
+## Amendment — 2026-09-29 (implementation review)
+
+Decisions taken during review of Tasks 1–6; they supersede the text above
+where they differ.
+
+1. **Auto-resolution ids are deterministic:** `screening_rules.auto_resolution_id(event_id)`
+   (uuid5 of the triggering `screening.observed`/`superseded` event). Replay can
+   then name the exact conflict tip an adjudication or reopen cites. Stored rows
+   are compared with the replayed ones (including `criteria_hash`) in
+   `screening_service.history`; drift raises `DecisionReplayError`.
+2. **History is VIEW for every member**, redacted per viewer through
+   `visible_observation_ids`. Decision-free metadata (who observed which report,
+   when, how often superseded) remains visible; that is accepted.
+3. **"Adjudicator reviewed this report" means any observation of that report by
+   the adjudicator, in any cycle** (superseded or consumed by an earlier
+   resolution), not only the current inputs. The service also follows
+   `supersedes_queue_id`, so reviewing the report in a queue that this queue
+   reconciles disqualifies too. The ledger replay enforces the same rule within
+   one queue's stream only: a stream cannot see another queue's events, so the
+   cross-queue part is a service-level check.
+4. **A reopen starts a new blind cycle:** `my_queue` reports the item as
+   `reveal_state="hidden"` with `resolution.basis == "reopened"`, and
+   `counts.revealed` excludes reopened tips. Earlier inputs stay revealed in
+   `history`, but `others` shows only peers' *current* observations that are
+   visible, so a peer's post-reopen observation stays hidden until re-reveal.
+5. **Conflicts carry `identifiers` and `exclusion_reasons`** (the prose above
+   was right; the schema now matches it).
+6. **Extra stable details:** reopen with a non-tip `resolution_id` →
+   409 `Resolution changed; reload the queue`; adjudicate/reopen outside the
+   queue's corpus → 404 `Report not found`. After waiting on the Collection
+   lock, the archive race returns 409 `Project is not writable` (from
+   `lock_active_project`), not `Archived projects are read-only`.
+7. **Reopen UI is conflicts-only:** the Conflicts panel can reopen a conflict.
+   Reopening an agreed or adjudicated report is API-only until an adjudicator
+   read path lists resolved reports.

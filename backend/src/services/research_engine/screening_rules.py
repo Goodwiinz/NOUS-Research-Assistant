@@ -1,14 +1,19 @@
-"""Pure screening rules shared by the service and the ledger replay (GOO-301).
+"""Pure screening rules shared by the service and the ledger replay (GOO-301/302).
 
 No database access and only stdlib imports at module level: the decision
 ledger imports this module, so it must not import the ledger back.
 """
 
-from typing import Any, Mapping, Sequence
+from typing import AbstractSet, Any, Mapping, NamedTuple, Sequence
+from uuid import UUID, uuid5
 
 STAGES = ("title_abstract", "full_text")
 DECISIONS = ("include", "exclude", "uncertain")
 MODES = ("single", "dual_independent")
+# GOO-302: fresh observations from distinct reviewers needed to reveal a report.
+REQUIRED = {"single": 1, "dual_independent": 2}  # keys == MODES
+BASES = ("single", "agreement", "conflict", "adjudicated", "reopened")
+_AUTO_RESOLUTION_NAMESPACE = UUID("5c7e1f0a-3b2d-4e8f-9a6c-2d1b0e3f4a5c")
 
 _MAX_REASONS = 50
 _MAX_REASON_LENGTH = 200
@@ -93,3 +98,59 @@ def suggestion_rows(step_output: Mapping[str, Any]) -> list[tuple[str, str, str]
         elif source_id not in rows:
             rows[source_id] = (source_id, "exclude", reason)
     return list(rows.values())
+
+
+class Obs(NamedTuple):
+    """One fresh current observation, as derivation sees it."""
+
+    id: UUID
+    reviewer_id: UUID
+    decision: str
+    exclusion_reason: str | None
+
+
+class Derived(NamedTuple):
+    basis: str
+    outcome: str | None
+    exclusion_reason: str | None
+    input_observation_ids: list[str]  # sorted
+
+
+def derive(mode: str, fresh: Sequence[Obs]) -> Derived | None:
+    """The one producer of an automatic resolution; None until enough reviewers.
+
+    Unanimous ``(decision, exclusion_reason)`` that is not ``uncertain``
+    resolves (``single`` / ``agreement``); anything else is a ``conflict`` for
+    a human adjudicator.
+    """
+    if mode not in REQUIRED:
+        raise ValueError("Unknown screening reviewer mode")
+    if len({obs.reviewer_id for obs in fresh}) < REQUIRED[mode]:
+        return None
+    inputs = sorted(str(obs.id) for obs in fresh)
+    votes = {(obs.decision, obs.exclusion_reason) for obs in fresh}
+    if len(votes) == 1:
+        decision, reason = next(iter(votes))
+        if decision != "uncertain":
+            basis = "single" if mode == "single" else "agreement"
+            return Derived(basis, decision, reason, inputs)
+    return Derived("conflict", None, None, inputs)
+
+
+def visible(
+    observation_reviewer: UUID,
+    observation_id: UUID,
+    viewer: UUID,
+    revealed: AbstractSet[UUID],
+) -> bool:
+    """The reveal predicate: own observations, or inputs of any resolution."""
+    return observation_reviewer == viewer or observation_id in revealed
+
+
+def auto_resolution_id(event_id: UUID) -> UUID:
+    """An automatic resolution's id, fixed by the event that triggered it.
+
+    Auto resolutions get no ledger event of their own, so a deterministic id
+    lets replay name the exact conflict tip an adjudication or reopen cites.
+    """
+    return uuid5(_AUTO_RESOLUTION_NAMESPACE, str(event_id))

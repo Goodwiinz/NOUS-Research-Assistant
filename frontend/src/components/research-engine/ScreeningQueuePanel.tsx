@@ -1,21 +1,28 @@
 'use client';
 
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { useState, type ReactElement } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
+import { APIErrorClass } from '@/types/api';
+import { projectService } from '@/services/projectService';
 import {
   assignScreeningReviewer,
   createScreeningQueue,
   getMyScreeningQueue,
+  listFulltext,
   listScreeningHistory,
   listScreeningQueues,
+  recordFulltextAttempt,
+  requestFulltext,
   revokeScreeningAssignment,
   submitScreeningObservation,
+  type FulltextState,
   type IdentityEvent,
   type MyScreeningItem,
   type MyScreeningQueue,
   type ProjectRoleAssignment,
   type ScreeningDecision,
+  type ScreeningResolution,
 } from '@/services/researchEngineService';
 
 interface ScreeningQueuePanelProps {
@@ -23,12 +30,6 @@ interface ScreeningQueuePanelProps {
   approvedProtocolVersionId?: string;
   roles: ProjectRoleAssignment[];
   readOnly?: boolean;
-  /**
-   * GOO-302 slot: per-report reveal/agreement/conflict state. Until a report is
-   * revealed a reviewer sees only their own observation, so GOO-301 renders
-   * nothing here.
-   */
-  renderRevealState?: (item: MyScreeningItem) => ReactNode;
 }
 
 const DECISIONS: { value: ScreeningDecision; label: string }[] = [
@@ -54,15 +55,233 @@ function activeAssignments(events: IdentityEvent[]): Map<string, string> {
   return active;
 }
 
+/** The resolution badge text: never an editable value, only the server's. */
+function resolutionLabel(resolution: ScreeningResolution): string {
+  const { basis, outcome, exclusion_reason: reason } = resolution;
+  const decided = `${outcome ?? ''}${reason ? ` — ${reason}` : ''}`;
+  if (basis === 'single') return `Decided: ${decided}`;
+  if (basis === 'agreement') return `Agreed: ${decided}`;
+  if (basis === 'adjudicated') return `Adjudicated: ${decided}`;
+  if (basis === 'reopened') return 'Reopened';
+  return 'Conflict';
+}
+
+/** GOO-302 reveal state: peers' decisions appear only once the server reveals. */
+function RevealState({ item }: { item: MyScreeningItem }): ReactElement {
+  if (item.reveal_state !== 'revealed' || !item.resolution) {
+    // A reopen starts a new blind cycle: hidden again, the reopen still shown.
+    return (
+      <div className="space-y-1 text-xs">
+        {item.resolution?.basis === 'reopened' && (
+          <span className="inline-block rounded bg-muted px-2 py-0.5 font-medium text-foreground">
+            Reopened
+          </span>
+        )}
+        <p className="text-muted-foreground">
+          Other reviewers&apos; decisions are hidden until reveal.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1 text-xs">
+      <span className="inline-block rounded bg-muted px-2 py-0.5 font-medium text-foreground">
+        {resolutionLabel(item.resolution)}
+      </span>
+      {(item.others ?? []).length > 0 && (
+        <ul
+          aria-label={`Other reviewers' decisions for ${item.title_snapshot}`}
+          className="text-muted-foreground"
+        >
+          {(item.others ?? []).map((other) => (
+            <li key={other.id}>
+              {`Reviewer ${other.reviewer_id}: ${other.decision}`}
+              {other.exclusion_reason ? ` (${other.exclusion_reason})` : ''}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const RESOLVED_TITLE = 'Resolved — an adjudicator must reopen';
+
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : 'Screening request failed.';
+const NOT_RETRIEVED = 'Full text not retrieved';
+
+/** Local calendar date as YYYY-MM-DD, the actor's own reported date. */
+const today = (): string => new Date().toLocaleDateString('en-CA');
+
+/**
+ * GOO-303 full-text status for one report row. Acquisition is not
+ * eligibility: marking a report unavailable never excludes it. Every action
+ * names the current head so a concurrent writer gets a 409, never a fork.
+ */
+function FullTextStatus({
+  projectId,
+  reportId,
+  title,
+  state,
+  readOnly,
+  onChanged,
+}: {
+  projectId: string;
+  reportId: string;
+  title: string;
+  state?: FulltextState;
+  readOnly: boolean;
+  onChanged: () => void;
+}): ReactElement {
+  const [form, setForm] = useState<'unavailable' | 'retrieved' | null>(null);
+  const [reason, setReason] = useState('');
+  const [documentId, setDocumentId] = useState('');
+  const [attemptedOn, setAttemptedOn] = useState(today);
+  const documents = useQuery({
+    queryKey: ['project', projectId, 'documents'],
+    queryFn: () =>
+      projectService.listProjectDocuments(projectId, { limit: 100 }),
+    enabled: form === 'retrieved',
+  });
+  const request = useMutation({
+    mutationFn: (key: string) =>
+      requestFulltext(projectId, { report_id: reportId, idempotency_key: key }),
+    onSuccess: onChanged,
+  });
+  const attempt = useMutation({
+    mutationFn: (key: string) =>
+      recordFulltextAttempt(projectId, state?.request_id ?? '', {
+        outcome: form ?? 'requested',
+        attempted_on: attemptedOn,
+        reason: form === 'unavailable' ? reason.trim() : null,
+        document_id: form === 'retrieved' ? documentId : null,
+        previous_attempt_id: state?.head_attempt_id ?? null,
+        idempotency_key: key,
+      }),
+    onSuccess: () => {
+      setForm(null);
+      setReason('');
+      setDocumentId('');
+      onChanged();
+    },
+  });
+  const status = state?.state ?? 'not requested';
+  const head = state?.attempts[state.attempts.length - 1];
+  const busy = request.isPending || attempt.isPending;
+  const error = request.error ?? attempt.error;
+  const ready =
+    Boolean(attemptedOn) &&
+    (form === 'unavailable' ? Boolean(reason.trim()) : Boolean(documentId));
+  return (
+    <div className="space-y-2 text-xs">
+      <span
+        aria-label={`Full-text status for ${title}`}
+        title={
+          status === 'unavailable' ? (head?.reason ?? undefined) : undefined
+        }
+        className="inline-block rounded bg-muted px-2 py-0.5 text-muted-foreground"
+      >
+        {`Full text: ${status}`}
+      </span>
+      {!readOnly && !state && (
+        <button
+          type="button"
+          aria-label={`Request full text for ${title}`}
+          disabled={busy}
+          onClick={() => request.mutate(crypto.randomUUID())}
+          className="ml-2 rounded-md border border-border px-2 py-0.5 disabled:opacity-50"
+        >
+          Request
+        </button>
+      )}
+      {!readOnly && state && status !== 'retrieved' && (
+        <span className="ml-2 inline-flex gap-2">
+          <button
+            type="button"
+            aria-label={`Mark full text unavailable for ${title}`}
+            aria-pressed={form === 'unavailable'}
+            onClick={() =>
+              setForm(form === 'unavailable' ? null : 'unavailable')
+            }
+            className="rounded-md border border-border px-2 py-0.5 aria-pressed:bg-muted"
+          >
+            Mark unavailable
+          </button>
+          <button
+            type="button"
+            aria-label={`Mark full text retrieved for ${title}`}
+            aria-pressed={form === 'retrieved'}
+            onClick={() => setForm(form === 'retrieved' ? null : 'retrieved')}
+            className="rounded-md border border-border px-2 py-0.5 aria-pressed:bg-muted"
+          >
+            Mark retrieved
+          </button>
+        </span>
+      )}
+      {form && (
+        <div className="space-y-2">
+          {form === 'unavailable' ? (
+            <textarea
+              aria-label={`Reason full text is unavailable for ${title}`}
+              required
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="Why the full text could not be obtained"
+              rows={2}
+              className="w-full rounded-md border border-border bg-background px-2 py-1"
+            />
+          ) : (
+            <select
+              aria-label={`Project document with the full text of ${title}`}
+              value={documentId}
+              onChange={(event) => setDocumentId(event.target.value)}
+              className="rounded-md border border-border bg-background px-2 py-1"
+            >
+              <option value="">Choose a project document…</option>
+              {(documents.data?.documents ?? []).map((doc) => (
+                <option key={doc.document_id} value={doc.document_id}>
+                  {doc.document?.title ??
+                    doc.document?.filename ??
+                    doc.document_id}
+                </option>
+              ))}
+            </select>
+          )}
+          <input
+            type="date"
+            aria-label={`Date attempted for ${title}`}
+            required
+            max={today()}
+            value={attemptedOn}
+            onChange={(event) => setAttemptedOn(event.target.value)}
+            className="ml-2 rounded-md border border-border bg-background px-2 py-1"
+          />
+          <button
+            type="button"
+            aria-label={`Save full-text attempt for ${title}`}
+            disabled={!ready || busy}
+            onClick={() => attempt.mutate(crypto.randomUUID())}
+            className="ml-2 rounded-md border border-border px-2 py-1 disabled:opacity-50"
+          >
+            Save
+          </button>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-destructive">
+          {errorText(error)}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function ScreeningQueuePanel({
   projectId,
   approvedProtocolVersionId,
   roles,
   readOnly = false,
-  renderRevealState,
 }: ScreeningQueuePanelProps): ReactElement {
   const queryClient = useQueryClient();
   const queryKey = ['screening-queues', projectId] as const;
@@ -101,11 +320,24 @@ export function ScreeningQueuePanel({
     queryFn: () => listScreeningHistory(projectId, queueId ?? ''),
     enabled: isSupervisor && Boolean(queueId),
   });
+  const fulltext = useQuery({
+    queryKey: ['fulltext', projectId],
+    queryFn: () => listFulltext(projectId),
+    enabled: isReviewer && Boolean(queueId),
+  });
+  const fulltextByReport = new Map(
+    (fulltext.data ?? []).map((state) => [state.report_id, state])
+  );
+  // Screening and acquisition both move the derived PRISMA flow.
   const refresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: [...queryKey] });
+    void queryClient.invalidateQueries({ queryKey: ['prisma', projectId] });
+    void queryClient.invalidateQueries({ queryKey: ['fulltext', projectId] });
   };
 
-  // Each click mints one idempotency key, so a retry of that click replays.
+  // One idempotency key per click. Mutations are not retried; a transport-level
+  // resend of the same request carries the same key and the server replays it,
+  // while a second click is a new request with a new key.
   const create = useMutation({
     mutationFn: (key: string) =>
       createScreeningQueue(projectId, {
@@ -171,13 +403,29 @@ export function ScreeningQueuePanel({
         supersedes_observation_id: item.observation?.id ?? null,
         idempotency_key: key,
       }),
-    onSuccess: refresh,
+    onSuccess: (_observation, { item }) => {
+      // The submitted note/reason belong to that decision; start the row clean.
+      const clear = (all: Record<string, string>): Record<string, string> => {
+        const { [item.report_id]: _dropped, ...rest } = all;
+        return rest;
+      };
+      setNotes(clear);
+      setReasons(clear);
+      refresh();
+    },
   });
 
   const mutations = [create, assign, revoke, submit];
   const busy = mutations.some((mutation) => mutation.isPending);
   const error =
-    mutations.find((mutation) => mutation.error)?.error ?? queues.error;
+    mutations.find((mutation) => mutation.error)?.error ??
+    queues.error ??
+    history.error;
+  // A reviewer who is not assigned to the selected queue gets a 403: that is a
+  // normal state, not an error.
+  const notAssigned =
+    myQueue.error instanceof APIErrorClass &&
+    myQueue.error.error.status_code === 403;
   const clearErrors = (): void => mutations.forEach((m) => m.reset());
   const active = activeAssignments(history.data ?? []);
   const view = myQueue.data;
@@ -188,7 +436,8 @@ export function ScreeningQueuePanel({
       <h2 className="font-medium text-foreground">Screening queues</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         Each queue freezes the reports at one approved protocol version.
-        Reviewers screen independently and only see their own decisions.
+        Reviewers screen independently and only see their own decisions until a
+        report is revealed.
       </p>
 
       {queues.isLoading ? (
@@ -339,10 +588,16 @@ export function ScreeningQueuePanel({
               Loading your queue…
             </p>
           )}
-          {myQueue.error && (
+          {notAssigned ? (
             <p className="mt-2 text-sm text-muted-foreground">
-              {errorText(myQueue.error)}
+              You are not assigned to this queue.
             </p>
+          ) : (
+            myQueue.error && (
+              <p role="alert" className="mt-2 text-sm text-destructive">
+                {errorText(myQueue.error)}
+              </p>
+            )
           )}
           {view && (
             <ul className="mt-2 divide-y divide-border">
@@ -351,7 +606,15 @@ export function ScreeningQueuePanel({
                 const current = item.observation;
                 const fullText = view.queue.stage === 'full_text';
                 const reason = reasons[item.report_id] ?? '';
-                const locked = readOnly || Boolean(stale) || busy;
+                // Reveal is irreversible: a resolved report needs a reopen.
+                const resolved =
+                  Boolean(item.resolution) &&
+                  item.resolution?.basis !== 'reopened';
+                const locked = readOnly || Boolean(stale) || busy || resolved;
+                // Mirrors the server's GOO-303 gate; the server stays authoritative.
+                const gated =
+                  fullText &&
+                  fulltextByReport.get(item.report_id)?.state !== 'retrieved';
                 return (
                   <li key={item.report_id} className="space-y-2 py-3 text-sm">
                     <div className="font-medium text-foreground">{title}</div>
@@ -377,7 +640,20 @@ export function ScreeningQueuePanel({
                           : ''}
                       </p>
                     )}
-                    {renderRevealState?.(item)}
+                    <RevealState item={item} />
+                    <FullTextStatus
+                      projectId={projectId}
+                      reportId={item.report_id}
+                      title={title}
+                      state={fulltextByReport.get(item.report_id)}
+                      readOnly={readOnly}
+                      onChanged={refresh}
+                    />
+                    {gated && (
+                      <p className="text-xs text-muted-foreground">
+                        {NOT_RETRIEVED}
+                      </p>
+                    )}
                     {fullText && (
                       <select
                         aria-label={`Exclusion reason for ${title}`}
@@ -418,9 +694,17 @@ export function ScreeningQueuePanel({
                         <button
                           key={value}
                           type="button"
+                          title={
+                            resolved
+                              ? RESOLVED_TITLE
+                              : gated
+                                ? NOT_RETRIEVED
+                                : undefined
+                          }
                           aria-label={`${current ? 'Change to ' : ''}${label} ${title}`}
                           disabled={
                             locked ||
+                            gated ||
                             (fullText && value === 'exclude' && !reason)
                           }
                           onClick={() => {

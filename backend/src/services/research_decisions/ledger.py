@@ -1,7 +1,7 @@
 """Caller-owned append and replay operations for research decisions.
 
 Each aggregate family (``research_protocol``, ``research_identity``,
-``research_screening``) registers
+``research_screening``, ``research_acquisition``) registers
 its subject type, payload vocabulary, value validation and replay transition
 rules in ``_FAMILIES``.
 
@@ -18,6 +18,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 from uuid import UUID, uuid4
 
@@ -111,6 +112,54 @@ _SCREENING_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     ("screening.observed", 1): _SCREENING_OBSERVATION_KEYS,
     ("screening.superseded", 1): _SCREENING_OBSERVATION_KEYS
     | {"superseded_observation_id"},
+    # GOO-302: human adjudicator events; the rationale is the event reason.
+    ("screening.adjudicated", 1): frozenset(
+        {
+            "collection_id",
+            "queue_id",
+            "report_id",
+            "resolution_id",
+            "conflict_resolution_id",
+            "input_observation_ids",
+            "criteria_hash",
+            "decision",
+            "exclusion_reason",
+        }
+    ),
+    ("screening.reopened", 1): frozenset(
+        {
+            "collection_id",
+            "queue_id",
+            "report_id",
+            "resolution_id",
+            "reopened_resolution_id",
+        }
+    ),
+}
+_SCREENING_RATIONALE_EVENTS = frozenset({"screening.adjudicated", "screening.reopened"})
+
+# GOO-303: full-text acquisition, one stream per Collection (like identity).
+_ACQUISITION_AGGREGATE = "research_acquisition"
+_ACQUISITION_ATTEMPT_KEYS = frozenset(
+    {
+        "collection_id",
+        "request_id",
+        "report_id",
+        "attempt_id",
+        "previous_attempt_id",
+        "attempted_on",
+        "reason",
+    }
+)
+_ACQUISITION_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("acquisition.requested", 1): frozenset(
+        {"collection_id", "request_id", "report_id", "protocol_version_id"}
+    ),
+    # Outcome "requested": asked (ILL, author email) and awaiting a response.
+    ("acquisition.attempted", 1): _ACQUISITION_ATTEMPT_KEYS,
+    ("acquisition.unavailable", 1): _ACQUISITION_ATTEMPT_KEYS,
+    ("acquisition.retrieved", 1): _ACQUISITION_ATTEMPT_KEYS
+    | {"document_id", "document_content_hash"},
 }
 
 
@@ -167,6 +216,7 @@ def _validate_event(
     subject_hash: str,
     payload: Mapping[str, Any],
     request_fingerprint: str,
+    reason: str | None = None,
 ) -> None:
     key = (event_type, event_schema_version)
     if not any(key in family.payload_keys for family in _FAMILIES.values()):
@@ -195,6 +245,8 @@ def _validate_event(
         aggregate_id
     ):
         raise DecisionValidationError("decision payload belongs to another protocol")
+    if event_type in _SCREENING_RATIONALE_EVENTS and not reason:
+        raise DecisionValidationError("screening adjudicator event needs a rationale")
     if not _SHA256_RE.fullmatch(subject_hash):
         raise DecisionValidationError("subject_hash must be a lowercase SHA-256 digest")
     if not _SHA256_RE.fullmatch(request_fingerprint):
@@ -383,6 +435,36 @@ def _validate_screening_payload(
                 "suggestions_skipped must be a non-negative integer"
             )
         return
+    if event_type in _SCREENING_RATIONALE_EVENTS:
+        _validated_payload_uuid(payload["report_id"], "report_id")
+        resolution = _validated_payload_uuid(payload["resolution_id"], "resolution_id")
+        prior_field = (
+            "conflict_resolution_id"
+            if event_type == "screening.adjudicated"
+            else "reopened_resolution_id"
+        )
+        if resolution == _validated_payload_uuid(payload[prior_field], prior_field):
+            raise DecisionValidationError("resolution cannot supersede itself")
+        if event_type == "screening.reopened":
+            return
+        inputs = _validated_uuid_list(
+            payload["input_observation_ids"], "input_observation_ids"
+        )
+        if not inputs or len(set(inputs)) != len(inputs):
+            raise DecisionValidationError(
+                "input_observation_ids must be non-empty and unique"
+            )
+        criteria = payload["criteria_hash"]
+        if not isinstance(criteria, str) or not _SHA256_RE.fullmatch(criteria):
+            raise DecisionValidationError(
+                "criteria_hash must be a lowercase SHA-256 digest"
+            )
+        if payload["decision"] not in screening_rules.DECISIONS:
+            raise DecisionValidationError("screening decision is invalid")
+        reason = payload["exclusion_reason"]
+        if reason is not None and not isinstance(reason, str):
+            raise DecisionValidationError("exclusion_reason must be a string")
+        return
     _validated_payload_uuid(payload["assignment_id"], "assignment_id")
     _validated_payload_uuid(payload["reviewer_id"], "reviewer_id")
     if event_type in {"screening.assigned", "screening.unassigned"}:
@@ -400,6 +482,46 @@ def _validate_screening_payload(
         )
     ):
         raise DecisionValidationError("observation cannot supersede itself")
+
+
+def _validate_acquisition_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["report_id"], "report_id") != subject_id:
+        raise DecisionValidationError("acquisition event subject is not its report")
+    _validated_payload_uuid(payload["request_id"], "request_id")
+    if event_type == "acquisition.requested":
+        _validated_optional_uuid(payload["protocol_version_id"], "protocol_version_id")
+        return
+    attempt = _validated_payload_uuid(payload["attempt_id"], "attempt_id")
+    if attempt == _validated_optional_uuid(
+        payload["previous_attempt_id"], "previous_attempt_id"
+    ):
+        raise DecisionValidationError("attempt cannot follow itself")
+    try:
+        date.fromisoformat(payload["attempted_on"])
+    except (TypeError, ValueError) as error:
+        raise DecisionValidationError("attempted_on must be an ISO date") from error
+    reason = payload["reason"]
+    if reason is not None and not isinstance(reason, str):
+        raise DecisionValidationError("acquisition reason must be a string")
+    if event_type == "acquisition.unavailable" and not (reason or "").strip():
+        raise DecisionValidationError("unavailable full text needs a reason")
+    if event_type == "acquisition.retrieved":
+        _validated_payload_uuid(payload["document_id"], "document_id")
+        content_hash = payload["document_content_hash"]
+        if not isinstance(content_hash, str) or not _SHA256_RE.fullmatch(content_hash):
+            raise DecisionValidationError(
+                "document_content_hash must be a lowercase SHA-256 digest"
+            )
 
 
 async def _locked_stream(
@@ -478,6 +600,7 @@ async def append_decision(
         subject_hash=subject_hash,
         payload=payload,
         request_fingerprint=request_fingerprint,
+        reason=reason,
     )
     if not idempotency_key or len(idempotency_key) > 255:
         raise DecisionValidationError("idempotency_key must contain 1-255 characters")
@@ -606,6 +729,7 @@ async def replay_decisions(
                 subject_hash=cast(str, event.subject_hash),
                 payload=cast(dict[str, Any], event.payload),
                 request_fingerprint=cast(str, event.request_fingerprint),
+                reason=cast(str | None, event.reason),
             )
         except DecisionValidationError as error:
             raise DecisionReplayError(str(error)) from error
@@ -722,18 +846,63 @@ def _validate_identity_transitions(
             live(payload["new_report_id"], "new_report_id")
 
 
-def _validate_screening_transitions(
+@dataclass(frozen=True)
+class ReplayedResolution:
+    """One ``screening_resolutions`` row as replay derives it from events."""
+
+    id: UUID
+    event_id: UUID
+    report_id: UUID
+    basis: str
+    outcome: str | None
+    exclusion_reason: str | None
+    input_observation_ids: list[str]  # sorted
+    supersedes_resolution_id: UUID | None
+    criteria_hash: str
+
+
+def replay_screening_resolutions(
     events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
-) -> None:
-    """Self-contained queue replay: event 1 carries the corpus and the reasons.
+) -> list[ReplayedResolution]:
+    """Self-contained queue replay: event 1 carries the corpus, reasons and mode.
 
     Assignments must be active for their reviewer; an initial observation needs
-    no current one, and a supersession must name the current one.
+    no current one, and a supersession must name the current one. After each
+    observation ``screening_rules.derive`` runs over the report's fresh
+    observations (current and not an input of an earlier resolution), exactly
+    as the service does, so every automatic resolution is re-derived here. The
+    resolutions come back in event order; the service compares them with the
+    stored rows.
     """
     created: dict[str, Any] | None = None
     corpus: set[UUID] = set()
     active: dict[UUID, UUID] = {}  # assignment -> reviewer
     current: dict[tuple[UUID, UUID], UUID] = {}  # (reviewer, report) -> observation
+    seen: dict[UUID, screening_rules.Obs] = {}  # observation -> as derive sees it
+    consumed: set[str] = set()  # observation ids already input to a resolution
+    tips: dict[UUID, ReplayedResolution] = {}  # report -> current resolution
+    # report -> every reviewer who ever observed it (any cycle, superseded too)
+    reviewed: dict[UUID, set[UUID]] = {}
+    resolutions: list[ReplayedResolution] = []
+
+    def criteria(decision: Any, reason: Any) -> None:
+        assert created is not None
+        try:
+            screening_rules.validate_observation(
+                created["stage"], decision, reason, created["exclusion_reasons"]
+            )
+        except ValueError as error:
+            raise DecisionReplayError(
+                "screening observation violates protocol criteria"
+            ) from error
+
+    def resolve(resolution: ReplayedResolution) -> None:
+        if any(r.id == resolution.id for r in resolutions):
+            raise DecisionReplayError("screening resolution id reused")
+        tips[resolution.report_id] = resolution
+        consumed.update(resolution.input_observation_ids)
+        resolutions.append(resolution)
+
     for event in events:
         payload = cast(dict[str, Any], event.payload)
         if _payload_uuid(payload["queue_id"], "queue_id") != aggregate_id:
@@ -746,6 +915,66 @@ def _validate_screening_transitions(
             continue
         if payload["collection_id"] != created["collection_id"]:
             raise DecisionReplayError("decision payload belongs to another collection")
+        if event.event_type in _SCREENING_RATIONALE_EVENTS:
+            report = _payload_uuid(payload["report_id"], "report_id")
+            if report not in corpus:
+                raise DecisionReplayError("screening resolution outside corpus")
+            tip = tips.get(report)
+            new_id = _payload_uuid(payload["resolution_id"], "resolution_id")
+            if event.event_type == "screening.reopened":
+                if (
+                    tip is None
+                    or tip.basis == "reopened"
+                    or tip.id
+                    != _payload_uuid(
+                        payload["reopened_resolution_id"], "reopened_resolution_id"
+                    )
+                ):
+                    raise DecisionReplayError("screening report is not resolved")
+                resolve(
+                    ReplayedResolution(
+                        new_id,
+                        event.id,
+                        report,
+                        "reopened",
+                        None,
+                        None,
+                        [],
+                        tip.id,
+                        created["criteria_hash"],
+                    )
+                )
+                continue
+            if tip is None or tip.basis != "conflict":
+                raise DecisionReplayError("screening report is not in conflict")
+            inputs = sorted(str(i) for i in payload["input_observation_ids"])
+            if (
+                _payload_uuid(
+                    payload["conflict_resolution_id"], "conflict_resolution_id"
+                )
+                != tip.id
+                or inputs != tip.input_observation_ids
+            ):
+                raise DecisionReplayError("screening adjudication inputs are stale")
+            if event.actor_user_id in reviewed.get(report, set()):
+                raise DecisionReplayError("screening adjudicator reviewed this report")
+            if payload["criteria_hash"] != created["criteria_hash"]:
+                raise DecisionReplayError("screening adjudication criteria changed")
+            criteria(payload["decision"], payload["exclusion_reason"])
+            resolve(
+                ReplayedResolution(
+                    new_id,
+                    event.id,
+                    report,
+                    "adjudicated",
+                    payload["decision"],
+                    payload["exclusion_reason"],
+                    inputs,
+                    tip.id,
+                    payload["criteria_hash"],
+                )
+            )
+            continue
         assignment = _payload_uuid(payload["assignment_id"], "assignment_id")
         reviewer = _payload_uuid(payload["reviewer_id"], "reviewer_id")
         if event.event_type == "screening.assigned":
@@ -763,17 +992,10 @@ def _validate_screening_transitions(
         report = _payload_uuid(payload["report_id"], "report_id")
         if report not in corpus:
             raise DecisionReplayError("screening observation outside corpus")
-        try:
-            screening_rules.validate_observation(
-                created["stage"],
-                payload["decision"],
-                payload["exclusion_reason"],
-                created["exclusion_reasons"],
-            )
-        except ValueError as error:
-            raise DecisionReplayError(
-                "screening observation violates protocol criteria"
-            ) from error
+        criteria(payload["decision"], payload["exclusion_reason"])
+        tip = tips.get(report)
+        if tip is not None and tip.basis != "reopened":
+            raise DecisionReplayError("screening observation after resolution")
         key = (reviewer, report)
         if event.event_type == "screening.observed":
             if key in current:
@@ -782,7 +1004,85 @@ def _validate_screening_transitions(
             payload["superseded_observation_id"], "superseded_observation_id"
         ):
             raise DecisionReplayError("contradictory screening supersession")
-        current[key] = _payload_uuid(payload["observation_id"], "observation_id")
+        observation = _payload_uuid(payload["observation_id"], "observation_id")
+        current[key] = observation
+        reviewed.setdefault(report, set()).add(reviewer)
+        seen[observation] = screening_rules.Obs(
+            observation, reviewer, payload["decision"], payload["exclusion_reason"]
+        )
+        derived = screening_rules.derive(
+            created["reviewer_mode"],
+            [
+                seen[oid]
+                for (_, rep), oid in current.items()
+                if rep == report and str(oid) not in consumed
+            ],
+        )
+        if derived is not None:
+            resolve(
+                ReplayedResolution(
+                    screening_rules.auto_resolution_id(cast(UUID, event.id)),
+                    cast(UUID, event.id),
+                    report,
+                    derived.basis,
+                    derived.outcome,
+                    derived.exclusion_reason,
+                    derived.input_observation_ids,
+                    None if tip is None else tip.id,
+                    created["criteria_hash"],
+                )
+            )
+    return resolutions
+
+
+def _validate_screening_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    replay_screening_resolutions(events, aggregate_id)
+
+
+def _validate_acquisition_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """One request per report; each request's attempts form one linear chain
+    (``previous_attempt_id`` names the current head) that ends at retrieval."""
+    request_of: dict[UUID, UUID] = {}  # report -> request
+    report_of: dict[UUID, UUID] = {}  # request -> report
+    heads: dict[UUID, UUID | None] = {}  # request -> head attempt
+    attempts: set[UUID] = set()
+    retrieved: set[UUID] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        report = _payload_uuid(payload["report_id"], "report_id")
+        request = _payload_uuid(payload["request_id"], "request_id")
+        if event.event_type == "acquisition.requested":
+            if report in request_of or request in report_of:
+                raise DecisionReplayError("contradictory acquisition chain")
+            request_of[report], report_of[request], heads[request] = (
+                request,
+                report,
+                None,
+            )
+            continue
+        if report_of.get(request) != report:
+            raise DecisionReplayError("contradictory acquisition chain")
+        if request in retrieved:
+            raise DecisionReplayError("acquisition after retrieval")
+        attempt = _payload_uuid(payload["attempt_id"], "attempt_id")
+        previous_value = payload["previous_attempt_id"]
+        previous = (
+            None
+            if previous_value is None
+            else _payload_uuid(previous_value, "previous_attempt_id")
+        )
+        if previous != heads[request] or attempt in attempts:
+            raise DecisionReplayError("contradictory acquisition chain")
+        attempts.add(attempt)
+        heads[request] = attempt
+        if event.event_type == "acquisition.retrieved":
+            retrieved.add(request)
 
 
 _FAMILIES: dict[str, _Family] = {
@@ -805,6 +1105,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_SCREENING_PAYLOAD_KEYS,
         validate_payload=_validate_screening_payload,
         validate_transitions=_validate_screening_transitions,
+        requires_subject_version=False,
+    ),
+    _ACQUISITION_AGGREGATE: _Family(
+        subject_type=_IDENTITY_SUBJECT,
+        payload_keys=_ACQUISITION_PAYLOAD_KEYS,
+        validate_payload=_validate_acquisition_payload,
+        validate_transitions=_validate_acquisition_transitions,
         requires_subject_version=False,
     ),
 }

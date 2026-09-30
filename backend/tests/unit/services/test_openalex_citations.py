@@ -3,7 +3,7 @@
 Every HTTP call goes through ``httpx.MockTransport``; nothing touches the network.
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, cast
@@ -28,7 +28,7 @@ from src.models.research_report import (
 )
 from src.models.research_source import ResearchSource
 from src.schemas.research_engine import CitationChaseRequest
-from src.services.research_engine import corpus_service
+from src.services.research_engine import corpus_service, search_import
 from src.services.research_engine.connectors import openalex_connector, provider_http
 from src.services.research_engine.connectors.base import SearchTrace
 from src.services.research_engine.connectors.openalex_connector import OpenAlexConnector
@@ -256,14 +256,27 @@ def _request(report_id: UUID, **overrides: Any) -> CitationChaseRequest:
 
 
 class _FakeConnector:
-    def __init__(self, works: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        works: list[dict[str, Any]] | None = None,
+        before: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self.works = works
+        self.before = before
         self.calls: list[tuple[str, str, int]] = []
 
     async def citations(
-        self, work_id: str, direction: str, max_results: int, *, search_trace: Any
+        self,
+        work_id: str,
+        direction: str,
+        max_results: int,
+        *,
+        search_trace: Any,
+        into: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         self.calls.append((work_id, direction, max_results))
+        if self.before is not None:
+            await self.before()
         await search_trace.begin_request(
             OpenAlexConnector.endpoint, {"filter": f"cites:{work_id}"}
         )
@@ -275,6 +288,8 @@ class _FakeConnector:
             documents=[],
             has_more=False,
         )
+        if into is not None:
+            into.extend(self.works)
         return self.works
 
 
@@ -319,7 +334,7 @@ async def test_chase_stores_accepted_records_and_replays(
     assert connector.calls == [("W1", "backward", 5)]
     assert len(calls) == 3  # EDIT before the network, again after it; replay once
     assert receipt.kind == "citation_chase"
-    assert receipt.declared == {
+    assert receipt.declared.model_dump(mode="json") == {
         "seed_report_id": str(seed),
         "direction": "backward",
         "requested_limit": 5,
@@ -402,3 +417,106 @@ async def test_failed_provider_still_records_receipt(
     assert receipt.observed["completion"] == "failed"
     assert receipt.observed["error_type"] == "ConnectError"
     assert receipt.observed["trace"]["pages"][0]["page_status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_pages_fetched_before_a_failure_are_kept(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection_id, seed = await _seed_report(factory, openalex="W1")
+    _resolve(monkeypatch, collection_id)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.params["cursor"] != "*":
+            return httpx.Response(500)
+        return httpx.Response(
+            200,
+            json={
+                "results": [_work("W2"), _work("W3")],
+                "meta": {"next_cursor": "c1"},
+            },
+        )
+
+    connector, _seen = _connector(respond)
+    async with factory() as db:
+        receipt, _ = await corpus_service.chase_citations(
+            db,
+            project_id=collection_id,
+            user_id=uuid4(),
+            data=_request(seed, direction="forward"),
+            connector=connector,
+        )
+
+    assert receipt.accepted_count == 2
+    assert receipt.observed["completion"] == "partial_failure"
+    assert receipt.observed["trace"]["status"] == "partial"
+    assert receipt.observed["trace"]["returned_count"] == 2
+    assert receipt.observed["error_type"] == "HTTPStatusError"
+
+
+@pytest.mark.asyncio
+async def test_seed_merged_during_the_network_call_is_409(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection_id, seed = await _seed_report(factory, openalex="W1")
+    _resolve(monkeypatch, collection_id)
+    survivor = uuid4()
+
+    async def merge_seed() -> None:
+        async with factory() as other:
+            other.add(
+                ResearchReport(
+                    id=survivor, collection_id=collection_id, title_snapshot="T"
+                )
+            )
+            await other.flush()
+            report = await other.get(ResearchReport, seed)
+            cast(Any, report).merged_into_report_id = survivor
+            await other.commit()
+
+    async with factory() as db:
+        with pytest.raises(HTTPException) as merged:
+            await corpus_service.chase_citations(
+                db,
+                project_id=collection_id,
+                user_id=uuid4(),
+                data=_request(seed),
+                connector=_FakeConnector([_work("W2")], before=merge_seed),
+            )
+        assert await _count(db, ResearchImportReceipt) == 0
+
+    assert merged.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_oversized_chased_work_is_rejected_with_bounded_raw(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection_id, seed = await _seed_report(factory, openalex="W1")
+    _resolve(monkeypatch, collection_id)
+    monkeypatch.setattr(search_import, "MAX_RECORD_BYTES", 600)
+    big = _work("W2", abstract_inverted_index={"x" * 900: [0]})
+
+    async with factory() as db:
+        receipt, _ = await corpus_service.chase_citations(
+            db,
+            project_id=collection_id,
+            user_id=uuid4(),
+            data=_request(seed),
+            connector=_FakeConnector([big, _work("W3")]),
+        )
+        records = (
+            (
+                await db.execute(
+                    select(ResearchImportRecord).order_by(
+                        ResearchImportRecord.record_index
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert (receipt.accepted_count, receipt.rejected_count) == (1, 1)
+    assert records[0].rejection_reason == "record_too_large"
+    assert len(records[0].raw.encode()) <= 600

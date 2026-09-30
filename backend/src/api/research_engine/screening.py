@@ -1,4 +1,4 @@
-"""Protocol-bound screening queue API (GOO-301).
+"""Protocol-bound screening queue API (GOO-301) and adjudication (GOO-302).
 
 Transport only: authorization through ``resolve_project``, persistence in
 ``screening_service``. The service never commits, so each mutating route ends
@@ -17,23 +17,30 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.user import User
 from src.schemas.research_engine import (
-    IdentityEventResponse,
     MyScreeningQueueResponse,
+    ScreeningAdjudicateRequest,
     ScreeningAssignmentCreate,
     ScreeningAssignmentResponse,
+    ScreeningConflictResponse,
+    ScreeningEventResponse,
     ScreeningObservationCreate,
     ScreeningObservationResponse,
     ScreeningQueueCreate,
     ScreeningQueueResponse,
+    ScreeningReopenRequest,
+    ScreeningResolutionResponse,
     ScreeningRevokeRequest,
 )
 from src.services.research_engine.project_access import ResearchAction, resolve_project
 from src.services.research_engine.screening_service import (
+    adjudicate,
     assign,
+    conflicts,
     create_queue,
     history,
     list_queues,
     my_queue,
+    reopen,
     revoke,
     submit,
 )
@@ -142,14 +149,75 @@ async def submit_screening_observation_route(
     return observation
 
 
-@router.get(QUEUES + "/{queue_id}/history", response_model=list[IdentityEventResponse])
+# VIEW for every member: the service redacts what the caller cannot see.
+@router.get(QUEUES + "/{queue_id}/history", response_model=list[ScreeningEventResponse])
 async def screening_history_route(
     project_id: UUID,
     queue_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[IdentityEventResponse]:
+) -> list[ScreeningEventResponse]:
     context = await resolve_project(
         db, project_id, cast(UUID, current_user.id), ResearchAction.VIEW
     )
-    return await history(db, context, queue_id)
+    return await history(db, context, queue_id, cast(UUID, current_user.id))
+
+
+# VIEW, not ADJUDICATE (a mutating action); the service requires ADJUDICATOR.
+@router.get(
+    QUEUES + "/{queue_id}/conflicts", response_model=list[ScreeningConflictResponse]
+)
+async def screening_conflicts_route(
+    project_id: UUID,
+    queue_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ScreeningConflictResponse]:
+    context = await resolve_project(
+        db, project_id, cast(UUID, current_user.id), ResearchAction.VIEW
+    )
+    return await conflicts(db, context, queue_id, cast(UUID, current_user.id))
+
+
+@router.post(
+    QUEUES + "/{queue_id}/reports/{report_id}/adjudicate",
+    response_model=ScreeningResolutionResponse,
+)
+async def adjudicate_screening_report_route(
+    project_id: UUID,
+    queue_id: UUID,
+    report_id: UUID,
+    body: ScreeningAdjudicateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ScreeningResolutionResponse:
+    context = await resolve_project(
+        db, project_id, cast(UUID, current_user.id), ResearchAction.ADJUDICATE
+    )
+    resolution = await adjudicate(
+        db, context, queue_id, report_id, cast(UUID, current_user.id), body
+    )
+    await db.commit()
+    return resolution
+
+
+@router.post(
+    QUEUES + "/{queue_id}/reports/{report_id}/reopen",
+    response_model=ScreeningResolutionResponse,
+)
+async def reopen_screening_report_route(
+    project_id: UUID,
+    queue_id: UUID,
+    report_id: UUID,
+    body: ScreeningReopenRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ScreeningResolutionResponse:
+    context = await resolve_project(
+        db, project_id, cast(UUID, current_user.id), ResearchAction.ADJUDICATE
+    )
+    resolution = await reopen(
+        db, context, queue_id, report_id, cast(UUID, current_user.id), body
+    )
+    await db.commit()
+    return resolution

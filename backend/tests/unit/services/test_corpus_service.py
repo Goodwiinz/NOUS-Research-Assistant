@@ -190,8 +190,14 @@ async def test_counts_match_rows(db: AsyncSession) -> None:
     )
     assert receipt.observed["counts"] == {"parsed": 5, "accepted": 3, "rejected": 2}
     assert receipt.observed["filename"] == "partial.ris"
-    assert receipt.declared["query_text"] == "aspirin"
-    assert receipt.declared["search_date"] is None
+    assert receipt.declared.model_dump() == {
+        "database": "Embase (Ovid)",
+        "query_text": "aspirin",
+        "search_date": None,
+        "exported_at": None,
+        "redistribution": "restricted",
+        "notes": None,
+    }
     assert "query_text" not in receipt.observed
     detail = await corpus_service.get_receipt(
         db, collection_id=collection_id, receipt_id=receipt.id
@@ -201,8 +207,10 @@ async def test_counts_match_rows(db: AsyncSession) -> None:
         "missing_title",
         "unterminated_record",
     ]
-    # Restricted (the default): the original text stays in the database only.
+    # Restricted (the default): the original text stays in the database only,
+    # including the tag values (parsed.fields) that reproduce it.
     assert all(r.raw is None for r in detail.records)
+    assert all(not {"fields", "abstract"} & set(r.parsed) for r in detail.records)
     assert all(r.report_id for r in detail.records[2:])
     assert await _count(db, ResearchReport) == 3
     assert [
@@ -223,9 +231,56 @@ async def test_allowed_receipt_exposes_raw_and_foreign_receipt_is_404(
         db, collection_id=collection_id, receipt_id=receipt.id
     )
     assert detail.records[0].raw is not None
+    assert "fields" in detail.records[0].parsed
 
     with pytest.raises(HTTPException) as missing:
         await corpus_service.get_receipt(
             db, collection_id=uuid4(), receipt_id=receipt.id
         )
     assert missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_restricted_tagged_line_sentinel_never_leaves_the_api(
+    db: AsyncSession,
+) -> None:
+    """A sentinel in an RIS tag (N1 notes / AB) survives only in the database."""
+    collection_id = uuid4()
+    data = (
+        b"TY  - JOUR\nTI  - Tagged\nAB  - ABSTRACT-SENTINEL\n"
+        b"N1  - NOTES-SENTINEL\nER  - \n"
+    )
+    receipt, _ = await _import(db, collection_id, data)
+    detail = await corpus_service.get_receipt(
+        db, collection_id=collection_id, receipt_id=receipt.id
+    )
+
+    dumped = detail.model_dump_json()
+    assert "ABSTRACT-SENTINEL" not in dumped
+    assert "NOTES-SENTINEL" not in dumped
+    stored = (await db.execute(select(ResearchImportRecord.raw))).scalar_one()
+    assert "NOTES-SENTINEL" in stored
+
+
+@pytest.mark.asyncio
+async def test_unique_violation_after_a_bypassed_lookup_is_409_not_500(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection_id = uuid4()
+    await _import(db, collection_id)
+    await db.commit()
+    real_receipt = corpus_service._receipt
+
+    async def lookup_misses(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(corpus_service, "_receipt", lookup_misses)
+    with pytest.raises(HTTPException) as conflict:
+        await _import(db, collection_id)
+    monkeypatch.setattr(corpus_service, "_receipt", real_receipt)
+
+    assert conflict.value.status_code == 409
+    assert cast(dict, conflict.value.detail)["code"] == "import_conflict"
+    # The savepoint rolled back only the failed insert; the session still works.
+    assert await _count(db, ResearchImportReceipt) == 1
+    assert await _count(db, ResearchImportRecord) == 5

@@ -78,8 +78,10 @@ from src.api.research import (
     writer_router,
 )
 from src.api.research_engine import (
+    research_engine_acquisition_router,
     research_engine_blueprints_router,
     research_engine_capabilities_router,
+    research_engine_corpus_router,
     research_engine_identities_router,
     research_engine_projects_router,
     research_engine_protocols_router,
@@ -674,6 +676,12 @@ app.include_router(
 app.include_router(
     research_engine_screening_router, prefix="/api/v1"
 )  # Research Engine screening queues (GOO-301)
+app.include_router(
+    research_engine_corpus_router, prefix="/api/v1"
+)  # Research Engine search import, citation chase, corpus export (GOO-300)
+app.include_router(
+    research_engine_acquisition_router, prefix="/api/v1"
+)  # Research Engine full-text acquisition + PRISMA flow (GOO-303)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search

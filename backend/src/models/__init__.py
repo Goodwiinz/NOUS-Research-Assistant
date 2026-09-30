@@ -122,6 +122,7 @@ from .research_protocol import (
     ResearchQuestion,
     ResearchQuestionVersion,
 )
+from .research_fulltext import ResearchFulltextAttempt, ResearchFulltextRequest
 from .research_import import ResearchImportReceipt, ResearchImportRecord
 from .research_project import ResearchProject
 from .research_project_role import ResearchProjectRole, ResearchProjectRoleAssignment
@@ -139,6 +140,7 @@ from .screening import (
     ScreeningAssignment,
     ScreeningObservation,
     ScreeningQueue,
+    ScreeningResolution,
     ScreeningSuggestion,
 )
 
@@ -294,6 +296,8 @@ __all__ = [
     "ExecutionMode",
     "ResearchSource",
     "ResearchStageReview",
+    "ResearchFulltextRequest",
+    "ResearchFulltextAttempt",
     "ResearchImportReceipt",
     "ResearchImportRecord",
     "ResearchReport",
@@ -304,6 +308,7 @@ __all__ = [
     "ScreeningAssignment",
     "ScreeningObservation",
     "ScreeningSuggestion",
+    "ScreeningResolution",
     # Research Pipeline
     "ResearchPipeline",
     # Evaluation models

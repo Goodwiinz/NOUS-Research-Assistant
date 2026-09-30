@@ -1030,6 +1030,126 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
   merged".
 - **Restored result:** `1 passed`.
 
+## GOO-300 search import / corpus export guards — 2026-09-29
+
+Four guards were mutation-verified against
+`backend/tests/integration/test_search_import_postgres.py` on a disposable local
+PostgreSQL 14.23 database (schema-per-test; the identity and import tables are
+created by revisions `c9d2e4f6a8b1` and `d4e6f8a0b2c3` themselves).
+Pre-mutation SHA-256:
+`backend/src/services/research_engine/corpus_service.py`
+`630c01f070f00244882f8652628d581919f5810e62ec55c42c6c19ba5afca66a`,
+`backend/src/services/research_engine/corpus_export.py`
+`bd71b819cbeedc315b5f961782034622cc9cbc442d4279b48eb3973d71520296`.
+Each mutant was applied by exact string replacement, run, then restored from a
+copy of the pre-mutation file; `cmp -s` and `git diff --quiet` both succeeded
+and the same command passed again. No mutant was committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_search_import_postgres.py -k <selector>
+```
+
+### Import idempotency lookup
+
+- **Source and guard:** `import_file`, line 217, `existing = await
+  _receipt(db, collection_id, dedup_key=dedup_key)`, evaluated under the
+  Collection `FOR UPDATE` lock taken by `resolve_project(EDIT)`.
+  `UNIQUE(collection_id, dedup_key)` is only the backstop; a violation inside
+  the insert savepoint becomes 409 `import_conflict`, never a 500.
+- **Covering test:** `test_concurrent_duplicate_import_yields_one_receipt`
+  (`-k concurrent_duplicate_import`). Importer one pauses after its insert,
+  before commit; importer two is observed blocked on the Collection lock via
+  `pg_blocking_pids`; importer one commits and importer two must replay.
+- **Mutation:** replaced the line with `existing = None`.
+- **Observed mutant failure:** exit 1; `HTTPException: 409: {'code':
+  'import_conflict', ...}` — the second writer re-inserted the same file and
+  hit `uq_research_import_receipt_dedup` instead of returning the replayed
+  receipt.
+- **Restored result:** `1 passed`.
+
+### Citation-chase phase-3 replay recheck
+
+- **Source and guard:** `chase_citations`, line 485, `if (hit := await
+  replayed(collection_id)) is not None: return hit, False`, run after the
+  network call under a fresh `resolve_project(EDIT)`.
+- **Covering test:** `test_concurrent_identical_chases_yield_one_receipt`
+  (`-k concurrent_identical_chases`). A connector barrier releases only after
+  both chases (same idempotency key) passed the phase-1 check with no receipt.
+- **Mutation:** removed the two-line recheck.
+- **Observed mutant failure:** exit 1; `IntegrityError ...
+  uq_research_import_receipt_dedup` inside the savepoint, surfaced as
+  `HTTPException: 409: {'code': 'import_conflict', ...}` instead of a replay.
+- **Restored result:** `1 passed`.
+
+### Export read-only guarantee
+
+- **Source and guard:** `corpus_export` builds every value it returns from
+  copies (`declared = dict(...)`, line 419; `deepcopy(row.metadata_)`) and the
+  export route never commits.
+- **Covering test:** `test_downloaded_package_matches_persisted_rows`
+  (`-k downloaded_package`): row counts and `research_decision_streams.next_seq`
+  are unchanged after two exports, the session has no pending changes, and two
+  exports in one session plus one in a new session share `body_sha256`.
+- **Mutation:** injected `receipt.declared = declared` after the
+  `for key in missing:` loop (line 423), i.e. writing the export's
+  `not_declared` view back onto the retained receipt.
+- **Observed mutant failure:** exit 1; `AssertionError: assert '9a913fad…' ==
+  '35da1c6e…'` — the second export autoflushed the rewritten declaration and its
+  body hash drifted from the first.
+- **Restored result:** `1 passed`.
+- **Survivor, recorded honestly:** removing only the `dict(...)` copy (so the
+  loop edits the loaded JSONB dict in place) is *not* detected. A plain JSONB
+  column does not track in-place edits, so the object is never marked dirty and
+  nothing is flushed. The session's identity map holds only weak references to
+  clean objects, so once the first export drops its last strong reference the
+  receipt is garbage-collected and the second export's `SELECT` reloads the
+  stored row. Anything that kept a strong reference across both exports (or a
+  `MutableDict` column) would expose the edit; this test does not.
+
+### Provenance `full_text` strip
+
+- **Source and guard:** `corpus_export._source`, line 361, `if
+  entry.pop("full_text", None):`.
+- **Covering test:** `-k downloaded_package`.
+- **Mutation:** replaced the condition with `if False:` (the key is kept).
+- **Observed mutant failure:** exit 1; `assert b'OA-FULLTEXT-SENTINEL' not in
+  b'{ "body": ...'`.
+- **Restored result:** `1 passed`.
+
+### Unit-level guards added in the same review round
+
+Each was checked the same way with the unit suites (SQLite):
+
+- `identity_service.split_report` fingerprint `model_dump(mode="json",
+  exclude_defaults=True)` → plain `model_dump(mode="json")`:
+  `test_v1_split_request_fingerprint_is_unchanged` fails with a fingerprint
+  mismatch.
+- `corpus_service.insert_receipt` `except IntegrityError` → `except KeyError`:
+  `test_unique_violation_after_a_bypassed_lookup_is_409_not_500` fails with the
+  raw `IntegrityError`.
+- `chase_citations` phase-3 `live_reports` seed recheck → `pass`:
+  `test_seed_merged_during_the_network_call_is_409` fails with `DID NOT RAISE
+  HTTPException`.
+- `chase_citations` `into=works` → `into=None`:
+  `test_pages_fetched_before_a_failure_are_kept` fails with `accepted_count ==
+  0`.
+
+### Chase phase-1 rollback (amendment, same day)
+
+- **Source and guard:** `chase_citations`, line 464, `await db.rollback()`
+  after the phase-1 checks, so no Collection or stream lock is held during the
+  provider call (pre-mutation SHA-256 of `corpus_service.py`
+  `465ada2afdabeba17f8d78fbf2f36779be2ae17d8da7456d4b45dc3b07e27b38`).
+- **Covering test:** `-k concurrent_identical_chases`.
+- **Mutation:** replaced the line with `pass`.
+- **Observed mutant failure:** exit 1; `assert 1 == 2` on `connector.calls`.
+  Chase one kept the Collection lock across the network call, so chase two
+  blocked in phase 1 until the barrier timed out, then replayed chase one's
+  (failed) receipt instead of reaching the provider.
+- **Restored result:** `1 passed`.
+
 ## GOO-301 screening queue guards — 2026-09-29
 
 Two guards in `backend/src/services/research_engine/screening_service.py`
@@ -1116,3 +1236,125 @@ the four checks (`create_queue`, `assign`, `revoke`, `submit`) was replaced
 with `pass` during fix-up `e864f9131`, and each mutant failed exactly that
 test.
 
+
+## GOO-302 blind dual review and adjudication — 2026-09-29
+
+Three guards were mutation-verified against
+`backend/tests/integration/test_screening_blind_review_postgres.py` on a
+disposable local PostgreSQL 14 database (schema-per-test; the screening
+tables are rebuilt through revisions `e1f3a5c7d9b2` then `f3b5d7e9a1c4`).
+Pre-mutation SHA-256:
+
+- `backend/src/services/research_engine/project_access.py`
+  `41e1b0635bf311534cee68bef1601d4ec3d78fa4c3f24b6f82b34f4fcff44d33`
+- `backend/src/services/research_decisions/ledger.py`
+  `c08d08ad5b0ea7fefb25a3d993e47d28a5fd7de30f05f3cdf7d00bf1cedffcd0`
+- `backend/src/services/research_engine/screening_service.py`
+  `1f1b65817e47c2559bd723550bdbb648cedef99dfbb2baa27e88546bbcf7b94d`
+
+Each mutant was applied with a scripted string replacement, run, then restored
+from a copy of the pre-mutation file. `git diff --quiet` succeeded on the
+restored files, and the same command passed again (`1 passed`). No mutant was
+committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_screening_blind_review_postgres.py -k <selector>
+```
+
+| Guard (line) | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| GOO-301 lock order: Collection `UPDATE` (`project_access.py:173`) and stream `FOR UPDATE` (`ledger.py:490`) | both `.with_for_update(...)` lines deleted | `simultaneous` | `assert 'FOR UPDATE OF collections' in 'INSERT INTO research_decision_streams ... ON CONFLICT ... DO NOTHING'`: session 2 no longer waits in `resolve_project` before reading screening state. |
+| Stale-input comparison in `adjudicate` (`screening_service.py:1286`) | condition prefixed with `False and` | `stale` | `DID NOT RAISE HTTPException`: the pre-reopen tip and its superseded input ids were adjudicated. |
+| Per-viewer redaction in `history` (`screening_service.py:1137`) | raw payload and note put back after `redacted = True` | `redaction` | `assert 'R2-SENTINEL-7f3' not in ...`: a reviewer read a peer's hidden note. |
+
+**Why the lock-order test asserts where session 2 waits.** With only the two
+`FOR UPDATE` clauses removed, session 2 still blocks: the ledger's stream
+upsert (`INSERT ... ON CONFLICT DO NOTHING`) waits on the stream row that
+session 1 already updated (`next_seq`). Because that wait also happens before
+`_derive_and_record`, and each READ COMMITTED statement takes a fresh
+snapshot, the mutant still produced exactly one resolution. A test that only
+counted resolutions would therefore survive the plan's mutant. The test now
+also reads `pg_stat_activity.query` for the waiting backend and requires the
+Collection `FOR UPDATE`, which is the documented lock order (Workspace
+`SHARE` -> Collection `UPDATE` -> stream).
+
+The post-lock role reload in `resolve_project` (the role-revocation race in
+`-k stale`) is already mutation-verified in
+`test_research_authorization_concurrency.py` and is not repeated here.
+
+### GOO-302 review round — additional guards (2026-09-29)
+
+Same procedure (apply, run, restore from a copy, `cmp -s`, rerun). Pre-mutation
+`screening_service.py` SHA-256 for the last three rows:
+`01c5cfb94718602b27bb59585d88dc6505db329515e2911864a8e6145579e93c`. Unit
+selectors run `backend/tests/unit/services/test_screening_service.py` or
+`test_research_decision_ledger.py`; PG selectors run
+`test_screening_blind_review_postgres.py`.
+
+| Guard | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| Replay: reopen of a reopened tip (`ledger.replay_screening_resolutions`) | `or tip.basis == "reopened"` deleted | unit `-k double_reopen` | `DID NOT RAISE DecisionReplayError` |
+| Replay: adjudication needs a conflict tip | `tip.basis != "conflict"` dropped | unit `-k non_conflict_tip` | `DID NOT RAISE DecisionReplayError` |
+| Replay: adjudication criteria equal the queue's | condition replaced with `False` | unit `-k other_criteria` | `DID NOT RAISE DecisionReplayError` |
+| Replay: any-cycle self-check | reverted to "actor authored an input" | unit ledger `-k earlier_cycle` | `DID NOT RAISE DecisionReplayError` |
+| Service: reopen names the current tip | `RESOLUTION_STALE` check replaced with `pass` | unit `-k stale_resolution_id` | `DID NOT RAISE HTTPException` |
+| Service: any-cycle self-check | query narrowed to the request's input ids | unit service `-k earlier_cycle` | `DID NOT RAISE HTTPException` |
+| Service: drift key includes `criteria_hash` | `row.criteria_hash` removed from the key | unit `-k drifted` | `DID NOT RAISE DecisionReplayError` (criteria case) |
+| Service: step 4a resolved-report 409 | check replaced with `pass` | unit `-k "after_resolution or single_mode"` | `DID NOT RAISE HTTPException` (2 tests) |
+| Service: `my_queue` peers filtered by `visible_observation_ids` | `visible` replaced by "every observation of a report that has a tip" | PG `-k stale` | `'R2-SENTINEL-7f3'` found in R2's `my_queue` after the reopen |
+| Service: self-check follows `supersedes_queue_id` | chain walk disabled (`prior = None`) | unit `-k reconciled_queue` | `DID NOT RAISE HTTPException` |
+| Service: reopened report is `hidden` in `my_queue` | `basis != "reopened"` dropped | unit `-k fresh_observations_from_both` | `assert 'revealed' == 'hidden'` |
+| Frontend: resolved rows lock decisions (`ScreeningQueuePanel`) | `resolved` removed from `locked` | vitest `ScreeningQueuePanel.test.tsx` | 3 failed |
+| Frontend: stale 409 maps to the reload alert (`ScreeningConflictsPanel`) | `return STALE` → `return error.message` | vitest `ScreeningConflictsPanel.test.tsx` | 1 failed |
+| Frontend: a failed adjudication refetches conflicts | `onError: refresh` removed | vitest `ScreeningConflictsPanel.test.tsx` | 1 failed |
+
+## GOO-303 full-text acquisition and derived PRISMA flow — 2026-09-29
+
+Six guards were mutation-verified against
+`backend/tests/integration/test_acquisition_prisma_postgres.py` (and, for the
+pure duplicate-row check, `backend/tests/unit/services/test_prisma_flow.py`)
+on a disposable local PostgreSQL 14.23 database. The fixture reuses GOO-301's
+`screening_factory`, which drops the acquisition, resolution, screening,
+import and identity tables and rebuilds them through revisions `c9d2e4f6a8b1`
+-> `d4e6f8a0b2c3` -> `e1f3a5c7d9b2` -> `f3b5d7e9a1c4` -> `f2a4c6e8b0d3`.
+Pre-mutation SHA-256:
+
+- `backend/src/services/research_engine/acquisition_service.py`
+  `72322987dd65a9122f878d06d08b089aef84afce696017cf3165c188c7ecdfa9`
+- `backend/src/services/research_engine/screening_service.py`
+  `8aa2bc7579247c2b1338c8cb20ab24e52a33959b71fa8e1d3ba16d1ee96286ff`
+- `backend/src/services/research_engine/prisma.py`
+  `e858d6b409571d2c6d82d1ec1eb8a64ce67b61484b3d82e3342a6310b9efe7f2`
+- `backend/src/services/research_engine/prisma_service.py`
+  `b4103b0f134da8582b2cb1f25b93fb4065edf14c040fe7835dce4cb2e894bf65`
+
+Each mutant was applied with a scripted string replacement (the script
+asserted the exact match count), run, then restored from a copy of the
+pre-mutation file. `cmp` against that copy and `git diff --quiet` succeeded
+for every restored file, and the full file passed again (`4 passed`). No
+mutant was committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_acquisition_prisma_postgres.py -k <selector>
+```
+
+| Guard (line) | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| Head check in `record_attempt` (`acquisition_service.py:314`) | condition prefixed with `False and` | `concurrent` | `IntegrityError ... duplicate key value violates unique constraint "uq_research_fulltext_attempt_head"` in the blocked writer, instead of 409 `Attempt is stale; reload acquisition state`. The partial unique index is the backstop; the service check is what turns it into a stable 409. |
+| Idempotent replay in `request_fulltext` and `record_attempt` (`acquisition_service.py:230,290`) | both conditions prefixed with `False and` | `recomputes` | `HTTPException: 409: Full text already requested` on the replayed request. |
+| Idempotent replay in `record_attempt` only (`acquisition_service.py:290`) | condition prefixed with `False and` | `recomputes` | `HTTPException: 409: Full text already retrieved` on the replayed r3 retry. |
+| Full-text retrieved gate in `screening_service.submit` (`screening_service.py:1061`) | condition prefixed with `False and` | `concurrent` | `DID NOT RAISE HTTPException`: the full-text exclude on the `unavailable` report landed after the lock was released. |
+| Duplicate-row check `prisma._unique` (`prisma.py:102`) | body replaced with `return` | `duplicate` (unit file) | `test_duplicate_input_rows_raise[record]`: `DID NOT RAISE PrismaInconsistency`. The `attempt` and `outcome` cases still raise through the chain-linearity checks (`prisma.py:174,225`). |
+| `_begin_snapshot` writer refusal (`prisma_service.py:58`) | ` or wrote is not None` removed | `snapshot` | `DID NOT RAISE RuntimeError`: the loader ran inside a transaction that had already flushed an `UPDATE`. |
+| `_begin_snapshot` isolation (`prisma_service.py:61`) | `execution_options={"isolation_level": "REPEATABLE READ"}` removed | `snapshot` | `assert 'read committed' == 'repeatable read'` from `SHOW transaction_isolation`. |
+
+**Plan deviation.** The plan's fourth mutant ("make the loader join attempts
+without `DISTINCT`/head filtering; test 1 fails with inflated `sought`") was
+not applied as written: the loader's request-attempt outer join
+(`prisma_service.py:231-243`) already has no `DISTINCT` or head filter, and
+heads are derived in the pure function. Doubled rows are therefore caught only
+by `_unique` and the chain-linearity checks, which is what was mutated.

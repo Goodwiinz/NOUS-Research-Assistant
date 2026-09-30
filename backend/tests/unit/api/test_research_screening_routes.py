@@ -1,4 +1,4 @@
-"""Transport contract for GOO-301 screening queue routes."""
+"""Transport contract for GOO-301/302 screening queue routes."""
 
 from __future__ import annotations
 
@@ -133,6 +133,29 @@ def _observation_body() -> dict[str, Any]:
     }
 
 
+def _resolution() -> dict[str, Any]:
+    return {
+        "id": str(uuid4()),
+        "report_id": str(uuid4()),
+        "basis": "adjudicated",
+        "outcome": "exclude",
+        "input_observation_ids": [str(uuid4()), str(uuid4())],
+        "criteria_hash": "c" * 64,
+        "created_at": NOW,
+    }
+
+
+def _adjudicate_body() -> dict[str, Any]:
+    return {
+        "resolution_id": str(uuid4()),
+        "input_observation_ids": [str(uuid4()), str(uuid4())],
+        "criteria_hash": "c" * 64,
+        "decision": "exclude",
+        "rationale": "protocol 3.2",
+        "idempotency_key": "j1",
+    }
+
+
 # (method, path suffix, service name, body, service result, action, status)
 _MUTATIONS = [
     (
@@ -171,6 +194,22 @@ _MUTATIONS = [
         ResearchAction.REVIEW,
         200,
     ),
+    (
+        "queues/{queue}/reports/{report}/adjudicate",
+        "adjudicate",
+        _adjudicate_body(),
+        _resolution,
+        ResearchAction.ADJUDICATE,
+        200,
+    ),
+    (
+        "queues/{queue}/reports/{report}/reopen",
+        "reopen",
+        {"resolution_id": str(uuid4()), "rationale": "why", "idempotency_key": "o"},
+        _resolution,
+        ResearchAction.ADJUDICATE,
+        200,
+    ),
 ]
 
 
@@ -187,11 +226,11 @@ def test_each_mutation_maps_its_action_and_commits_once(
     action: ResearchAction,
     status: int,
 ) -> None:
-    project_id, queue_id, assignment_id = uuid4(), uuid4(), uuid4()
+    project_id, queue_id, assignment_id, report_id = (uuid4() for _ in range(4))
     call = AsyncMock(return_value=result())
     monkeypatch.setattr(_routes(), service, call)
 
-    path = suffix.format(queue=queue_id, assignment=assignment_id)
+    path = suffix.format(queue=queue_id, assignment=assignment_id, report=report_id)
     response = harness.client.post(f"{BASE}/{project_id}/screening/{path}", json=body)
 
     assert response.status_code == status, response.text
@@ -200,6 +239,8 @@ def test_each_mutation_maps_its_action_and_commits_once(
     assert harness.user.id in call.await_args.args
     if "{queue}" in suffix:
         assert call.await_args.args[2] == queue_id
+    if "{report}" in suffix:
+        assert call.await_args.args[3] == report_id
     harness.db.commit.assert_awaited_once()
 
 
@@ -279,27 +320,107 @@ def test_foreign_queue_is_a_stable_404(
     harness.db.commit.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    ("role", "status"),
-    [(ResearchProjectRole.REVIEWER, 403), (ResearchProjectRole.SUPERVISOR, 200)],
-)
-def test_history_is_supervisor_only_until_goo302_redaction(
+@pytest.mark.parametrize("role", [None, ResearchProjectRole.REVIEWER])
+def test_history_is_view_and_redacted_for_the_caller(
     harness: _Harness,
     monkeypatch: pytest.MonkeyPatch,
-    role: ResearchProjectRole,
-    status: int,
+    role: ResearchProjectRole | None,
 ) -> None:
-    """The real service gate: a reviewer must not read peers' decisions."""
-    harness.roles.add(role)
+    """GOO-302: any VIEW member reads history; the service redacts what the
+    caller cannot see, so the route must pass the caller's own id."""
+    if role is not None:
+        harness.roles.add(role)
     monkeypatch.setattr(screening_service, "_queue", AsyncMock())
     monkeypatch.setattr(
         screening_service, "replay_decisions", AsyncMock(return_value=[])
     )
+    monkeypatch.setattr(screening_service, "_check_resolutions", AsyncMock())
+    visible = AsyncMock(return_value=set())
+    monkeypatch.setattr(screening_service, "visible_observation_ids", visible)
 
     response = harness.client.get(
         f"{BASE}/{uuid4()}/screening/queues/{uuid4()}/history"
     )
 
-    assert response.status_code == status, response.text
+    assert response.status_code == 200, response.text
     assert harness.actions == [ResearchAction.VIEW]
+    assert visible.await_args is not None
+    assert visible.await_args.args[2] == harness.user.id
     harness.db.commit.assert_not_awaited()
+
+
+# --- GOO-302 ---------------------------------------------------------------
+
+
+def test_conflicts_is_a_view_read_that_never_commits(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id, queue_id = uuid4(), uuid4()
+    conflicts = AsyncMock(return_value=[])
+    monkeypatch.setattr(_routes(), "conflicts", conflicts)
+
+    response = harness.client.get(
+        f"{BASE}/{project_id}/screening/queues/{queue_id}/conflicts"
+    )
+
+    assert response.status_code == 200, response.text
+    assert harness.actions == [ResearchAction.VIEW]
+    assert conflicts.await_args is not None
+    assert conflicts.await_args.args[2:] == (queue_id, harness.user.id)
+    harness.db.commit.assert_not_awaited()
+
+
+def test_owner_without_adjudicator_role_is_403_on_conflicts_and_adjudicate(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real service gate for the read; resolve_project for the mutation."""
+    harness.denied[ResearchAction.ADJUDICATE] = (403, "adjudicator role required")
+    adjudicate = AsyncMock()
+    monkeypatch.setattr(_routes(), "adjudicate", adjudicate)
+    queue_path = f"{BASE}/{uuid4()}/screening/queues/{uuid4()}"
+
+    responses = [
+        harness.client.get(f"{queue_path}/conflicts"),
+        harness.client.post(
+            f"{queue_path}/reports/{uuid4()}/adjudicate", json=_adjudicate_body()
+        ),
+    ]
+
+    assert [r.status_code for r in responses] == [403, 403]
+    assert {r.json()["error"]["message"] for r in responses} == {
+        "adjudicator role required"
+    }
+    adjudicate.assert_not_awaited()
+    harness.db.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("service", ["conflicts", "adjudicate"])
+def test_foreign_queue_is_a_stable_404_for_adjudication(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, service: str
+) -> None:
+    missing = HTTPException(status_code=404, detail="Screening queue not found")
+    monkeypatch.setattr(_routes(), service, AsyncMock(side_effect=missing))
+    queue_path = f"{BASE}/{uuid4()}/screening/queues/{uuid4()}"
+
+    response = (
+        harness.client.get(f"{queue_path}/conflicts")
+        if service == "conflicts"
+        else harness.client.post(
+            f"{queue_path}/reports/{uuid4()}/adjudicate", json=_adjudicate_body()
+        )
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["message"] == "Screening queue not found"
+    harness.db.commit.assert_not_awaited()
+
+
+def test_history_response_model_is_screening_event_response() -> None:
+    from src.schemas.research_engine import ScreeningEventResponse
+
+    [route] = [
+        r
+        for r in _routes().router.routes
+        if getattr(r, "path", "").endswith("/{queue_id}/history")
+    ]
+    assert route.response_model == list[ScreeningEventResponse]

@@ -23,6 +23,7 @@ Mutation verification (docs/engineering/testing.md), full record in
 import asyncio
 import importlib.util
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar, cast
 from uuid import UUID, uuid4
@@ -37,7 +38,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models import Base
-from src.models.collection import Collection
+from src.models.collection import Collection, CollectionDocument
+from src.models.document import Document, DocumentType
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
 from src.models.research_project_role import (
     ResearchProjectRole,
@@ -49,12 +51,14 @@ from src.models.screening import ScreeningObservation, ScreeningQueue
 from src.models.user import User
 from src.models.workspace import WorkspaceMember, WorkspaceRole
 from src.schemas.research_engine import (
+    FulltextAttemptCreate,
+    FulltextRequestCreate,
     ScreeningAssignmentCreate,
     ScreeningObservationCreate,
     ScreeningQueueCreate,
     ScreeningRevokeRequest,
 )
-from src.services.research_engine import screening_service
+from src.services.research_engine import acquisition_service, screening_service
 from src.services.research_engine.project_access import (
     ProjectContext,
     ResearchAction,
@@ -75,6 +79,10 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-303: the full-text gate reads acquisition, which references reports.
+    "research_fulltext_attempts",
+    "research_fulltext_requests",
+    "screening_resolutions",  # GOO-302: references the screening tables
     "screening_suggestions",
     "screening_observations",
     "screening_assignments",
@@ -99,6 +107,8 @@ def _upgrade(connection: Connection) -> None:
         "c9d2e4f6a8b1_create_report_identities.py",
         "d4e6f8a0b2c3_create_search_imports.py",
         "e1f3a5c7d9b2_create_screening_queues.py",
+        "f3b5d7e9a1c4_create_screening_resolutions.py",
+        "f2a4c6e8b0d3_create_fulltext_acquisition.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename
@@ -298,6 +308,59 @@ async def _submit(
     )
 
 
+async def _retrieve(
+    factory: async_sessionmaker[AsyncSession], world: _World, report: UUID
+) -> None:
+    """GOO-303 gate: attach a hashed document and record it as retrieved."""
+    async with factory() as db:
+        document = Document(
+            title="full text",
+            filename="full.pdf",
+            file_path="local:///full.pdf",
+            file_size_bytes=1,
+            mime_type="application/pdf",
+            document_type=DocumentType.PDF,
+            organization_id=world.ids["org"],
+            checksum_sha256="e" * 64,
+        )
+        db.add(document)
+        await db.flush()
+        db.add(
+            CollectionDocument(collection_id=world.collection, document_id=document.id)
+        )
+        await db.commit()
+    state, _ = await _act(
+        factory,
+        world,
+        "O",
+        ResearchAction.EDIT,
+        lambda db, ctx: acquisition_service.request_fulltext(
+            db,
+            ctx,
+            world.ids["O"],
+            FulltextRequestCreate(report_id=report, idempotency_key=f"rq-{report}"),
+        ),
+    )
+    await _act(
+        factory,
+        world,
+        "O",
+        ResearchAction.EDIT,
+        lambda db, ctx: acquisition_service.record_attempt(
+            db,
+            ctx,
+            state.request_id,
+            world.ids["O"],
+            FulltextAttemptCreate(
+                outcome="retrieved",
+                attempted_on=date.today(),
+                document_id=document.id,
+                idempotency_key=f"rt-{report}",
+            ),
+        ),
+    )
+
+
 async def _count(db: AsyncSession, query: Any) -> int:
     return int((await db.execute(query)).scalar_one())
 
@@ -337,13 +400,7 @@ async def test_commit_reopen_and_event_state_atomicity(
     mine_r = await _assign(factory, world, queue.id, "R")
     mine_r2 = await _assign(factory, world, queue.id, "R2")
     first = await _submit(factory, world, "R", queue, _body(queue, mine_r, r1, "r-1"))
-    await _submit(
-        factory,
-        world,
-        "R2",
-        queue,
-        _body(queue, mine_r2, r1, "r2-1", decision="exclude"),
-    )
+    # GOO-302: R supersedes before R2's observation reveals (and resolves) r1.
     changed = await _submit(
         factory,
         world,
@@ -358,6 +415,13 @@ async def test_commit_reopen_and_event_state_atomicity(
             note="needs full text",
             supersedes_observation_id=first.id,
         ),
+    )
+    await _submit(
+        factory,
+        world,
+        "R2",
+        queue,
+        _body(queue, mine_r2, r1, "r2-1", decision="exclude"),
     )
 
     async with factory() as db:  # a fresh session reloads committed state
@@ -376,28 +440,24 @@ async def test_commit_reopen_and_event_state_atomicity(
         assert [r.id for r in rows if r.supersedes_observation_id] == [changed.id]
         original = next(r for r in rows if r.id == first.id)
         assert (original.decision, original.note) == ("include", None)
-        # History is supervisor-only until GOO-302 redacts peers' decisions.
+        # GOO-302: any VIEW member reads history, redacted per viewer; r1 is
+        # revealed (both dual observations are in), R's superseded row is not.
         context = await resolve_project(
             db, world.collection, world.ids["V"], ResearchAction.VIEW
         )
-        assert await _status(screening_service.history(db, context, queue.id)) == (
-            403,
-            "supervisor role required",
-        )
-        context = await resolve_project(
-            db, world.collection, world.ids["O"], ResearchAction.VIEW
-        )
-        history = await screening_service.history(db, context, queue.id)
+        history = await screening_service.history(db, context, queue.id, world.ids["V"])
     assert [e.event_type for e in history] == [
         "screening.queue_created",
         "screening.assigned",
         "screening.assigned",
         "screening.observed",
-        "screening.observed",
         "screening.superseded",
+        "screening.observed",
     ]
     assert [e.seq for e in history] == list(range(1, 7))
     assert history[0].payload["reviewer_mode"] == "dual_independent"
+    assert [e.redacted for e in history[3:]] == [True, False, False]
+    assert "decision" not in history[3].payload
 
     # Atomicity: the ledger append fails after the observation flush.
     async def exploding_append(*_args: Any, **_kwargs: Any) -> None:
@@ -448,6 +508,24 @@ async def test_commit_reopen_and_event_state_atomicity(
             )
         )
     )[0] == 422
+    # GOO-303: a full-text decision needs a retrieved full text first.
+    assert await _status(
+        _submit(
+            factory,
+            world,
+            "R",
+            full,
+            _body(
+                full,
+                mine_full,
+                r2,
+                "f-3",
+                decision="exclude",
+                exclusion_reason="wrong design",
+            ),
+        )
+    ) == (409, "Full text not retrieved")
+    await _retrieve(factory, world, r2)
     excluded = await _submit(
         factory,
         world,

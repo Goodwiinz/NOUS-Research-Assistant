@@ -43,7 +43,7 @@ async def test_reviewer_proposal_cannot_overwrite_an_adjudicated_link(
     monkeypatch.setattr(
         identity_service, "_replayed_event", AsyncMock(return_value=None)
     )
-    monkeypatch.setattr(identity_service, "_live_reports", live_reports)
+    monkeypatch.setattr(identity_service, "live_reports", live_reports)
     append = AsyncMock()
     monkeypatch.setattr(identity_service, "_append", append)
     context = cast(
@@ -386,3 +386,46 @@ def test_split_request_needs_sources_or_import_records() -> None:
 
     with pytest.raises(ValidationError):
         ReportSplitRequest(rationale="empty", idempotency_key="k")
+
+
+@pytest.mark.asyncio
+async def test_v1_split_request_fingerprint_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-GOO-300 split retries must keep their stored request fingerprint."""
+    from src.schemas.research_engine import ReportSplitRequest
+    from src.services.research_decisions import decision_request_fingerprint
+
+    collection_id, report_id, actor, source_id = uuid4(), uuid4(), uuid4(), uuid4()
+    seen: list[str] = []
+
+    async def capture(_db: Any, _stream: Any, _key: str, fingerprint: str) -> None:
+        seen.append(fingerprint)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(identity_service, "_lock", AsyncMock())
+    monkeypatch.setattr(identity_service, "_replayed_event", capture)
+    with pytest.raises(RuntimeError):
+        await identity_service.split_report(
+            cast(AsyncSession, AsyncMock()),
+            _adjudicator(collection_id),
+            report_id,
+            actor,
+            ReportSplitRequest(
+                source_ids=[source_id], rationale="r", idempotency_key="k"
+            ),
+        )
+
+    # The exact dict GOO-299 fingerprinted: no import_record_ids key.
+    assert seen == [
+        decision_request_fingerprint(
+            {
+                "operation": "split",
+                "report_id": str(report_id),
+                "actor_user_id": str(actor),
+                "source_ids": [str(source_id)],
+                "rationale": "r",
+                "idempotency_key": "k",
+            }
+        )
+    ]

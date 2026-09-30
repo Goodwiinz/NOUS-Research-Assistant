@@ -10,6 +10,7 @@ guard underneath.
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
@@ -17,6 +18,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
@@ -45,6 +47,8 @@ from src.services.research_engine.project_access import (
     ResearchAction,
     resolve_project,
 )
+
+logger = logging.getLogger(__name__)
 
 _IMPORT_NOT_FOUND = "Import not found"
 _FORMAT_MESSAGES = {
@@ -114,7 +118,47 @@ async def insert_receipt(
     """Insert one receipt version plus its records and attach report identities.
 
     The caller holds the Collection lock and has already checked ``dedup_key``.
+    If ``UNIQUE(collection_id, dedup_key)`` or ``UNIQUE(collection_id,
+    lineage_key, version)`` still fires (a writer that bypassed the lock), the
+    savepoint is rolled back and the caller gets a stable 409, never a 500.
     """
+    try:
+        async with db.begin_nested():
+            return await _insert_receipt(
+                db,
+                collection_id=collection_id,
+                actor_user_id=actor_user_id,
+                kind=kind,
+                dedup_key=dedup_key,
+                lineage_key=lineage_key,
+                declared=declared,
+                observed=observed,
+                records=records,
+            )
+    except IntegrityError as exc:
+        logger.warning(
+            "import receipt insert hit a unique constraint",
+            extra={"collection_id": str(collection_id), "error": str(exc.orig)},
+        )
+        raise _error(
+            409,
+            "import_conflict",
+            "Another import changed this project at the same time. Retry.",
+        ) from exc
+
+
+async def _insert_receipt(
+    db: AsyncSession,
+    *,
+    collection_id: UUID,
+    actor_user_id: UUID,
+    kind: str,
+    dedup_key: str,
+    lineage_key: str,
+    declared: dict[str, Any],
+    observed: dict[str, Any],
+    records: list[ResearchImportRecord],
+) -> ResearchImportReceipt:
     previous = (
         await db.execute(
             select(ResearchImportReceipt)
@@ -251,6 +295,17 @@ def raw_allowed(receipt: ResearchImportReceipt) -> bool:
     )
 
 
+# Parsed keys that reproduce the licensed original text of a restricted record.
+RESTRICTED_PARSED_FIELDS = ("abstract", "fields")
+
+
+def visible_parsed(parsed: dict[str, Any], allowed: bool) -> dict[str, Any]:
+    """``parsed`` as it may leave the server; the API and export share this."""
+    if allowed:
+        return parsed
+    return {k: v for k, v in parsed.items() if k not in RESTRICTED_PARSED_FIELDS}
+
+
 async def get_receipt(
     db: AsyncSession, *, collection_id: UUID, receipt_id: UUID
 ) -> ImportReceiptDetail:
@@ -278,7 +333,7 @@ async def get_receipt(
                 record_index=cast(int, record.record_index),
                 status=cast(Any, record.status),
                 rejection_reason=cast(str | None, record.rejection_reason),
-                parsed=cast(dict[str, Any], record.parsed),
+                parsed=visible_parsed(cast(dict[str, Any], record.parsed), show_raw),
                 report_id=cast(UUID | None, record.report_id),
                 raw=cast(str, record.raw) if show_raw else None,
             )
@@ -300,6 +355,7 @@ class CitationConnector(Protocol):
         max_results: int,
         *,
         search_trace: SearchTrace,
+        into: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]: ...
 
 
@@ -356,7 +412,7 @@ async def chase_citations(
         "seed_report_id": str(data.seed_report_id),
         "direction": data.direction,
         "requested_limit": data.max_results,
-        # OpenAlex metadata is CC0.
+        # Server-set, not client-declared: OpenAlex metadata is CC0.
         "redistribution": "allowed",
     }
 
@@ -376,7 +432,7 @@ async def chase_citations(
     collection_id = cast(UUID, context.collection.id)
     if (hit := await replayed(collection_id)) is not None:
         return hit, False
-    await identity_service._live_reports(
+    await identity_service.live_reports(
         db, collection_id, [data.seed_report_id], merged_status=404
     )
     seed_ids = dict(
@@ -411,10 +467,16 @@ async def chase_citations(
         execution_id=str(uuid4()), provider="openalex", requested_limit=data.max_results
     )
     source = connector or OpenAlexConnector(api_key=settings.OPENALEX_API_KEY)
+    # Pages already fetched stay evidence when a later page fails.
+    works: list[dict[str, Any]] = []
     try:
-        works = await asyncio.wait_for(
+        await asyncio.wait_for(
             source.citations(
-                work_id, data.direction, data.max_results, search_trace=trace
+                work_id,
+                data.direction,
+                data.max_results,
+                search_trace=trace,
+                into=works,
             ),
             SEARCH_TIMEOUT_SECONDS,
         )
@@ -425,24 +487,32 @@ async def chase_citations(
         # A failed chase is evidence too; provider text may hold credentials.
         trace.error_type = type(exc).__name__
         await trace.record_failed_request(trace.error_type)
-        works = []
 
     context = await resolve_project(db, project_id, user_id, ResearchAction.EDIT)
     collection_id = cast(UUID, context.collection.id)
     if (hit := await replayed(collection_id)) is not None:
         return hit, False
+    # The seed may have been merged away while the lock was released.
+    await identity_service.live_reports(db, collection_id, [data.seed_report_id])
     receipt_trace = trace.as_receipt(returned_count=len(works))
     records = []
     for index, work in enumerate(works):
+        raw = json.dumps(work, sort_keys=True)
         parsed = _chase_parsed(work)
+        reason = None if parsed.get("title") else "missing_title"
+        if len(raw.encode("utf-8")) > search_import.MAX_RECORD_BYTES:
+            raw = raw.encode("utf-8")[: search_import.MAX_RECORD_BYTES].decode(
+                "utf-8", "ignore"
+            )
+            parsed, reason = {"raw_truncated": True}, "record_too_large"
         records.append(
             ResearchImportRecord(
                 id=uuid4(),
                 collection_id=collection_id,
                 record_index=index,
-                status="accepted" if parsed.get("title") else "rejected",
-                rejection_reason=None if parsed.get("title") else "missing_title",
-                raw=json.dumps(work, sort_keys=True),
+                status="rejected" if reason else "accepted",
+                rejection_reason=reason,
+                raw=raw,
                 parsed=parsed,
             )
         )

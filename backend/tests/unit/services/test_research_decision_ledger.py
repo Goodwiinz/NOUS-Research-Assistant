@@ -1,5 +1,6 @@
 """Focused vocabulary and fingerprint tests for the research decision ledger."""
 
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -8,11 +9,14 @@ from src.models.research_decision import ResearchDecisionEvent
 from src.services.research_decisions.ledger import (
     DecisionReplayError,
     DecisionValidationError,
+    _validate_acquisition_transitions,
     _validate_event,
     _validate_identity_transitions,
     _validate_screening_transitions,
     decision_request_fingerprint,
+    replay_screening_resolutions,
 )
+from src.services.research_engine.screening_rules import auto_resolution_id
 
 
 def test_request_fingerprint_is_canonical() -> None:
@@ -449,8 +453,42 @@ class _Queue:
             payload["superseded_observation_id"] = str(superseded)
         return payload
 
-    def event(self, event_type: str, payload: dict[str, object]) -> dict[str, object]:
+    def adjudicated(
+        self,
+        report: UUID,
+        resolution_id: UUID,
+        conflict_id: UUID,
+        inputs: list[UUID],
+        decision: str = "include",
+        exclusion_reason: str | None = None,
+    ) -> dict[str, object]:
+        return self.payload(
+            report_id=report,
+            resolution_id=resolution_id,
+            conflict_resolution_id=conflict_id,
+            input_observation_ids=sorted(str(i) for i in inputs),
+            criteria_hash="c" * 64,
+            decision=decision,
+            exclusion_reason=exclusion_reason,
+        )
+
+    def reopened(
+        self, report: UUID, resolution_id: UUID, reopened_id: UUID
+    ) -> dict[str, object]:
+        return self.payload(
+            report_id=report,
+            resolution_id=resolution_id,
+            reopened_resolution_id=reopened_id,
+        )
+
+    def event(
+        self,
+        event_type: str,
+        payload: dict[str, object],
+        reason: str | None = None,
+    ) -> dict[str, object]:
         return {
+            "reason": reason,
             "aggregate_type": "research_screening",
             "aggregate_id": self.queue_id,
             "event_type": event_type,
@@ -463,17 +501,32 @@ class _Queue:
             "request_fingerprint": "b" * 64,
         }
 
-    def replay(
-        self, *events: tuple[str, dict[str, object]], actor: UUID | None = None
-    ) -> None:
-        """Observations are authored by their reviewer unless ``actor`` overrides."""
+    def replay(self, *events: tuple[Any, ...], actor: UUID | None = None) -> list[Any]:
+        """Observations are authored by their reviewer unless ``actor`` overrides.
+
+        An event is ``(type, payload)`` or ``(type, payload, overrides)`` with
+        optional ``id``/``actor``/``reason`` overrides; adjudications and
+        reopens carry a rationale by default.
+        """
         stored = []
-        for event_type, payload in events:
-            _validate_event(**self.event(event_type, payload))  # type: ignore[arg-type]
+        for event_type, payload, *rest in events:
+            extra: dict[str, Any] = rest[0] if rest else {}
+            reason = extra.get(
+                "reason", "rationale" if event_type in _RATIONALE else None
+            )
+            _validate_event(**self.event(event_type, payload, reason))  # type: ignore[arg-type]
             row = _stored(event_type, payload)
-            row.actor_user_id = actor or UUID(str(payload.get("reviewer_id", uuid4())))
+            row.id = extra.get("id", uuid4())
+            row.reason = reason
+            row.actor_user_id = extra.get(
+                "actor", actor or UUID(str(payload.get("reviewer_id", uuid4())))
+            )
             stored.append(row)
         _validate_screening_transitions(stored, self.queue_id)
+        return list(replay_screening_resolutions(stored, self.queue_id))
+
+
+_RATIONALE = ("screening.adjudicated", "screening.reopened")
 
 
 def test_screening_payload_rejects_foreign_queue() -> None:
@@ -671,3 +724,413 @@ def test_screening_suggestions_skipped_is_a_count(skipped: object) -> None:
     payload["suggestions_skipped"] = skipped
     with pytest.raises(DecisionValidationError, match="suggestions_skipped"):
         _validate_event(**queue.event("screening.queue_created", payload))  # type: ignore[arg-type]
+
+
+# --- GOO-302: resolutions, adjudication and reopen --------------------------
+
+
+class _Dual:
+    """A dual full-text queue with reviewers R, R2 assigned; R3 is spare."""
+
+    def __init__(self) -> None:
+        self.queue = _Queue(stage="full_text")
+        self.report = self.queue.reports[0]
+        self.r, self.r2 = uuid4(), uuid4()
+        self.a, self.a2 = uuid4(), uuid4()
+        self.base: list[tuple[Any, ...]] = [
+            ("screening.queue_created", self.queue.created()),
+            ("screening.assigned", self.queue.assignment(self.a, self.r)),
+            ("screening.assigned", self.queue.assignment(self.a2, self.r2)),
+        ]
+
+    def observe(
+        self,
+        observation: UUID,
+        reviewer: UUID,
+        decision: str = "include",
+        reason: str | None = None,
+        superseded: UUID | None = None,
+        event_id: UUID | None = None,
+    ) -> tuple[Any, ...]:
+        assignment = self.a if reviewer == self.r else self.a2
+        return (
+            "screening.observed" if superseded is None else "screening.superseded",
+            self.queue.observed(
+                observation,
+                assignment,
+                reviewer,
+                self.report,
+                decision,
+                reason,
+                superseded=superseded,
+            ),
+            {"id": event_id or uuid4()},
+        )
+
+
+def test_replay_rederives_agreement_and_conflict() -> None:
+    dual = _Dual()
+    o1, o2, trigger = uuid4(), uuid4(), uuid4()
+    [agreement] = dual.queue.replay(
+        *dual.base,
+        dual.observe(o1, dual.r, "exclude", "wrong design"),
+        dual.observe(o2, dual.r2, "exclude", "wrong design", event_id=trigger),
+    )
+    assert agreement.id == auto_resolution_id(trigger)
+    assert agreement.event_id == trigger
+    assert (agreement.basis, agreement.outcome, agreement.exclusion_reason) == (
+        "agreement",
+        "exclude",
+        "wrong design",
+    )
+    assert agreement.input_observation_ids == sorted([str(o1), str(o2)])
+    assert agreement.supersedes_resolution_id is None
+
+    [conflict] = dual.queue.replay(
+        *dual.base,
+        dual.observe(o1, dual.r, "exclude", "wrong design"),
+        dual.observe(o2, dual.r2, "exclude", "wrong population"),
+    )
+    assert (conflict.basis, conflict.outcome) == ("conflict", None)
+
+    # One observation, even superseded twice, never resolves a dual report.
+    o3 = uuid4()
+    assert (
+        dual.queue.replay(
+            *dual.base,
+            dual.observe(o1, dual.r),
+            dual.observe(o3, dual.r, "uncertain", superseded=o1),
+        )
+        == []
+    )
+
+
+def test_replay_rejects_observation_after_resolution() -> None:
+    dual = _Dual()
+    o1, o2 = uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="observation after resolution"):
+        dual.queue.replay(
+            *dual.base,
+            dual.observe(o1, dual.r),
+            dual.observe(o2, dual.r2),
+            dual.observe(uuid4(), dual.r, "uncertain", superseded=o1),
+        )
+
+
+def _conflict(dual: _Dual) -> tuple[list[tuple[Any, ...]], UUID, list[UUID]]:
+    o1, o2, trigger = uuid4(), uuid4(), uuid4()
+    events = [
+        *dual.base,
+        dual.observe(o1, dual.r, "include"),
+        dual.observe(o2, dual.r2, "exclude", "wrong design", event_id=trigger),
+    ]
+    return events, auto_resolution_id(trigger), [o1, o2]
+
+
+def test_replay_rejects_adjudication_with_stale_inputs() -> None:
+    dual = _Dual()
+    events, tip, inputs = _conflict(dual)
+    good = dual.queue.adjudicated(dual.report, uuid4(), tip, inputs)
+    resolutions = dual.queue.replay(*events, ("screening.adjudicated", good))
+    assert [r.basis for r in resolutions] == ["conflict", "adjudicated"]
+    assert resolutions[1].supersedes_resolution_id == tip
+    assert resolutions[1].input_observation_ids == resolutions[0].input_observation_ids
+
+    stale_tip = dual.queue.adjudicated(dual.report, uuid4(), uuid4(), inputs)
+    stale_ids = dual.queue.adjudicated(dual.report, uuid4(), tip, [inputs[0]])
+    for payload in (stale_tip, stale_ids):
+        with pytest.raises(DecisionReplayError, match="inputs are stale"):
+            dual.queue.replay(*events, ("screening.adjudicated", payload))
+    # A second adjudication: the tip is no longer a conflict.
+    with pytest.raises(DecisionReplayError, match="not in conflict"):
+        dual.queue.replay(
+            *events,
+            ("screening.adjudicated", good),
+            (
+                "screening.adjudicated",
+                dual.queue.adjudicated(
+                    dual.report, uuid4(), good["resolution_id"], inputs  # type: ignore[arg-type]
+                ),
+            ),
+        )
+    bad_reason = dual.queue.adjudicated(
+        dual.report, uuid4(), tip, inputs, "exclude", "too old"
+    )
+    with pytest.raises(DecisionReplayError, match="protocol criteria"):
+        dual.queue.replay(*events, ("screening.adjudicated", bad_reason))
+
+
+def test_replay_rejects_self_adjudication() -> None:
+    dual = _Dual()
+    events, tip, inputs = _conflict(dual)
+    payload = dual.queue.adjudicated(dual.report, uuid4(), tip, inputs)
+    with pytest.raises(DecisionReplayError, match="adjudicator reviewed"):
+        dual.queue.replay(
+            *events, ("screening.adjudicated", payload, {"actor": dual.r2})
+        )
+
+
+def test_replay_accepts_reopen_then_fresh_resolution() -> None:
+    dual = _Dual()
+    events, tip, [o1, o2] = _conflict(dual)
+    reopen_id = uuid4()
+    reopen = ("screening.reopened", dual.queue.reopened(dual.report, reopen_id, tip))
+    # Reopen consumes the old inputs: one fresh observation does not resolve.
+    o3, o4 = uuid4(), uuid4()
+    resolutions = dual.queue.replay(
+        *events, reopen, dual.observe(o3, dual.r, "exclude", "wrong design", o1)
+    )
+    assert [r.basis for r in resolutions] == ["conflict", "reopened"]
+    assert resolutions[1].id == reopen_id
+    assert resolutions[1].input_observation_ids == []
+    resolutions = dual.queue.replay(
+        *events,
+        reopen,
+        dual.observe(o3, dual.r, "exclude", "wrong design", o1),
+        dual.observe(o4, dual.r2, "exclude", "wrong design", o2),
+    )
+    assert [r.basis for r in resolutions] == ["conflict", "reopened", "agreement"]
+    assert resolutions[2].input_observation_ids == sorted([str(o3), str(o4)])
+    assert resolutions[2].supersedes_resolution_id == reopen_id
+
+    with pytest.raises(DecisionReplayError, match="not resolved"):
+        dual.queue.replay(
+            *events,
+            reopen,
+            (
+                "screening.reopened",
+                dual.queue.reopened(dual.report, uuid4(), reopen_id),
+            ),
+        )
+    with pytest.raises(DecisionReplayError, match="not resolved"):
+        dual.queue.replay(
+            *dual.base,
+            ("screening.reopened", dual.queue.reopened(dual.report, uuid4(), uuid4())),
+        )
+
+
+@pytest.mark.parametrize("event_type", ["screening.adjudicated", "screening.reopened"])
+@pytest.mark.parametrize("reason", [None, ""])
+def test_adjudicated_requires_reason(event_type: str, reason: str | None) -> None:
+    dual = _Dual()
+    report, tip = dual.report, uuid4()
+    payload = (
+        dual.queue.adjudicated(report, uuid4(), tip, [uuid4()])
+        if event_type == "screening.adjudicated"
+        else dual.queue.reopened(report, uuid4(), tip)
+    )
+    _validate_event(**dual.queue.event(event_type, payload, "because"))  # type: ignore[arg-type]
+    with pytest.raises(DecisionValidationError, match="rationale"):
+        _validate_event(**dual.queue.event(event_type, payload, reason))  # type: ignore[arg-type]
+
+
+# --- GOO-303: research_acquisition family ----------------------------------
+
+
+class _Acquisition:
+    """Hand-built acquisition events for one Collection and report."""
+
+    def __init__(self) -> None:
+        self.collection_id, self.report_id = uuid4(), uuid4()
+
+    def requested(self, request_id: UUID) -> dict[str, object]:
+        return {
+            "collection_id": str(self.collection_id),
+            "request_id": str(request_id),
+            "report_id": str(self.report_id),
+            "protocol_version_id": None,
+        }
+
+    def attempt(
+        self,
+        request_id: UUID,
+        attempt_id: UUID,
+        previous: UUID | None,
+        outcome: str = "unavailable",
+    ) -> tuple[str, dict[str, object]]:
+        payload: dict[str, object] = {
+            "collection_id": str(self.collection_id),
+            "request_id": str(request_id),
+            "report_id": str(self.report_id),
+            "attempt_id": str(attempt_id),
+            "previous_attempt_id": str(previous) if previous else None,
+            "attempted_on": "2026-09-29",
+            "reason": "not held by library" if outcome == "unavailable" else None,
+        }
+        if outcome == "retrieved":
+            payload |= {"document_id": str(uuid4()), "document_content_hash": "c" * 64}
+        event_type = {
+            "requested": "acquisition.attempted",
+            "unavailable": "acquisition.unavailable",
+            "retrieved": "acquisition.retrieved",
+        }[outcome]
+        return event_type, payload
+
+    def validate(self, event_type: str, payload: dict[str, object]) -> None:
+        _validate_event(
+            aggregate_type="research_acquisition",
+            aggregate_id=UUID(str(payload["collection_id"])),
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="research_report",
+            subject_id=self.report_id,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+        )
+
+    def replay(self, *events: tuple[str, dict[str, object]]) -> None:
+        _validate_acquisition_transitions(
+            [_stored(event_type, payload) for event_type, payload in events],
+            self.collection_id,
+        )
+
+
+def test_acquisition_payload_rejects_foreign_collection() -> None:
+    acq = _Acquisition()
+    request = acq.requested(uuid4())
+    acq.validate("acquisition.requested", request)
+    foreign = {**request, "collection_id": str(uuid4())}
+    with pytest.raises(DecisionValidationError, match="another collection"):
+        _validate_event(
+            aggregate_type="research_acquisition",
+            aggregate_id=acq.collection_id,
+            event_type="acquisition.requested",
+            event_schema_version=1,
+            subject_type="research_report",
+            subject_id=acq.report_id,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(foreign),
+            payload=foreign,
+            request_fingerprint="b" * 64,
+        )
+    other_report = {**request, "report_id": str(uuid4())}
+    with pytest.raises(DecisionValidationError, match="subject is not its report"):
+        acq.validate("acquisition.requested", other_report)
+
+
+def test_unavailable_requires_reason() -> None:
+    acq = _Acquisition()
+    event_type, payload = acq.attempt(uuid4(), uuid4(), None)
+    acq.validate(event_type, payload)
+    for reason in (None, "", "   "):
+        with pytest.raises(DecisionValidationError, match="needs a reason"):
+            acq.validate(event_type, {**payload, "reason": reason})
+    with pytest.raises(DecisionValidationError, match="attempted_on"):
+        acq.validate(event_type, {**payload, "attempted_on": "yesterday"})
+    retrieved_type, retrieved = acq.attempt(uuid4(), uuid4(), None, "retrieved")
+    acq.validate(retrieved_type, retrieved)
+    with pytest.raises(DecisionValidationError, match="SHA-256"):
+        acq.validate(retrieved_type, {**retrieved, "document_content_hash": "C" * 64})
+
+
+def test_acquisition_replay_rejects_forked_chain() -> None:
+    acq = _Acquisition()
+    request, first = uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="contradictory acquisition chain"):
+        acq.replay(
+            ("acquisition.requested", acq.requested(request)),
+            acq.attempt(request, first, None),
+            acq.attempt(request, uuid4(), None, "requested"),
+        )
+    with pytest.raises(DecisionReplayError, match="contradictory acquisition chain"):
+        acq.replay(acq.attempt(request, first, None))  # unknown request
+    with pytest.raises(DecisionReplayError, match="contradictory acquisition chain"):
+        acq.replay(
+            ("acquisition.requested", acq.requested(request)),
+            ("acquisition.requested", acq.requested(uuid4())),  # second per report
+        )
+
+
+def test_acquisition_replay_rejects_attempt_after_retrieved() -> None:
+    acq = _Acquisition()
+    request, first = uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="acquisition after retrieval"):
+        acq.replay(
+            ("acquisition.requested", acq.requested(request)),
+            acq.attempt(request, first, None, "retrieved"),
+            acq.attempt(request, uuid4(), first, "requested"),
+        )
+
+
+def test_acquisition_replay_accepts_request_unavailable_retry_retrieved() -> None:
+    acq = _Acquisition()
+    request, first, second, third = uuid4(), uuid4(), uuid4(), uuid4()
+    acq.replay(
+        ("acquisition.requested", acq.requested(request)),
+        acq.attempt(request, first, None),
+        acq.attempt(request, second, first, "requested"),
+        acq.attempt(request, third, second, "retrieved"),
+    )
+
+
+def test_replay_rejects_adjudicating_a_non_conflict_tip() -> None:
+    dual = _Dual()
+    o1, o2, trigger = uuid4(), uuid4(), uuid4()
+    events = [
+        *dual.base,
+        dual.observe(o1, dual.r, "exclude", "wrong design"),
+        dual.observe(o2, dual.r2, "exclude", "wrong design", event_id=trigger),
+    ]
+    payload = dual.queue.adjudicated(
+        dual.report, uuid4(), auto_resolution_id(trigger), [o1, o2]
+    )
+    with pytest.raises(DecisionReplayError, match="not in conflict"):
+        dual.queue.replay(*events, ("screening.adjudicated", payload))
+
+
+def test_replay_rejects_adjudication_under_other_criteria() -> None:
+    dual = _Dual()
+    events, tip, inputs = _conflict(dual)
+    payload = dual.queue.adjudicated(dual.report, uuid4(), tip, inputs)
+    payload["criteria_hash"] = "d" * 64
+    with pytest.raises(DecisionReplayError, match="criteria changed"):
+        dual.queue.replay(*events, ("screening.adjudicated", payload))
+
+
+def test_replay_rejects_double_reopen() -> None:
+    dual = _Dual()
+    events, tip, _inputs = _conflict(dual)
+    first = uuid4()
+    with pytest.raises(DecisionReplayError, match="not resolved"):
+        dual.queue.replay(
+            *events,
+            ("screening.reopened", dual.queue.reopened(dual.report, first, tip)),
+            ("screening.reopened", dual.queue.reopened(dual.report, uuid4(), first)),
+        )
+
+
+def test_replay_rejects_adjudicator_who_reviewed_an_earlier_cycle() -> None:
+    """R3 was an input of cycle 1 only; after a reopen, R and R2 conflict and
+    R3 (also an adjudicator) still may not adjudicate the report."""
+    dual = _Dual()
+    r3, a3 = uuid4(), uuid4()
+    o_r3, o_r, o_r_new, o_r2, t1, t3 = (uuid4() for _ in range(6))
+    events: list[tuple[Any, ...]] = [
+        *dual.base,
+        ("screening.assigned", dual.queue.assignment(a3, r3)),
+        (
+            "screening.observed",
+            dual.queue.observed(o_r3, a3, r3, dual.report, "include"),
+        ),
+        dual.observe(o_r, dual.r, "exclude", "wrong design", event_id=t1),
+    ]
+    reopen = uuid4()
+    events += [
+        (
+            "screening.reopened",
+            dual.queue.reopened(dual.report, reopen, auto_resolution_id(t1)),
+        ),
+        dual.observe(o_r_new, dual.r, "include", superseded=o_r),
+        dual.observe(o_r2, dual.r2, "exclude", "wrong design", event_id=t3),
+    ]
+    resolutions = dual.queue.replay(*events)
+    assert [r.basis for r in resolutions] == ["conflict", "reopened", "conflict"]
+    assert str(o_r3) not in resolutions[-1].input_observation_ids
+    payload = dual.queue.adjudicated(
+        dual.report, uuid4(), auto_resolution_id(t3), [o_r_new, o_r2]
+    )
+    dual.queue.replay(*events, ("screening.adjudicated", payload))
+    with pytest.raises(DecisionReplayError, match="adjudicator reviewed"):
+        dual.queue.replay(*events, ("screening.adjudicated", payload, {"actor": r3}))

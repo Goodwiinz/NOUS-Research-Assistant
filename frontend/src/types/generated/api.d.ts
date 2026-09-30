@@ -5939,6 +5939,183 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/citation-chases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Chase Citations Route
+         * @description OpenAlex citation chase; the service checks EDIT before and after I/O.
+         */
+        post: operations["chase_citations_route_api_v1_research_engine_projects__project_id__citation_chases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/corpus/coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Corpus Coverage Route */
+        post: operations["corpus_coverage_route_api_v1_research_engine_projects__project_id__corpus_coverage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/corpus/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Corpus Route */
+        get: operations["export_corpus_route_api_v1_research_engine_projects__project_id__corpus_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/fulltext": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Fulltext Route */
+        get: operations["list_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/fulltext/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request Fulltext Route */
+        post: operations["request_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/fulltext/requests/{request_id}/attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Attempt Route */
+        post: operations["record_attempt_route_api_v1_research_engine_projects__project_id__fulltext_requests__request_id__attempts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Imports Route */
+        get: operations["list_imports_route_api_v1_research_engine_projects__project_id__imports_get"];
+        put?: never;
+        /**
+         * Import Search Results Route
+         * @description Import one exported result file (RIS, CSV, NBIB) as an immutable receipt.
+         */
+        post: operations["import_search_results_route_api_v1_research_engine_projects__project_id__imports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/imports/{receipt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Import Route */
+        get: operations["get_import_route_api_v1_research_engine_projects__project_id__imports__receipt_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/prisma": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Prisma Flow Route */
+        get: operations["prisma_flow_route_api_v1_research_engine_projects__project_id__prisma_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/prisma/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Prisma Export Route */
+        get: operations["prisma_export_route_api_v1_research_engine_projects__project_id__prisma_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/protocols": {
         parameters: {
             query?: never;
@@ -6164,6 +6341,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Screening Conflicts Route */
+        get: operations["screening_conflicts_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__conflicts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/history": {
         parameters: {
             query?: never;
@@ -6209,6 +6403,40 @@ export interface paths {
         put?: never;
         /** Submit Screening Observation Route */
         post: operations["submit_screening_observation_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/adjudicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adjudicate Screening Report Route */
+        post: operations["adjudicate_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__adjudicate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen Screening Report Route */
+        post: operations["reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9787,6 +10015,15 @@ export interface components {
              */
             paper_id: string;
         };
+        /** Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post */
+        Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post: {
+            /** Declaration */
+            declaration: string;
+            /** File */
+            file: string;
+            /** Format */
+            format: string;
+        };
         /** Body_upload_file_api_v1_files_upload_post */
         Body_upload_file_api_v1_files_upload_post: {
             /** Custom Metadata */
@@ -10253,6 +10490,49 @@ export interface components {
             feedback_rating?: number | null;
             /** Feedback Text */
             feedback_text?: string | null;
+        };
+        /**
+         * CitationChaseDeclaration
+         * @description What a citation-chase receipt records as requested (server-set licence).
+         */
+        CitationChaseDeclaration: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "backward" | "forward";
+            /**
+             * Redistribution
+             * @constant
+             */
+            redistribution: "allowed";
+            /** Requested Limit */
+            requested_limit: number;
+            /**
+             * Seed Report Id
+             * Format: uuid
+             */
+            seed_report_id: string;
+        };
+        /** CitationChaseRequest */
+        CitationChaseRequest: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "backward" | "forward";
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Max Results
+             * @default 50
+             */
+            max_results: number;
+            /**
+             * Seed Report Id
+             * Format: uuid
+             */
+            seed_report_id: string;
         };
         /**
          * CitationExtractRequest
@@ -10764,6 +11044,50 @@ export interface components {
             is_pinned?: boolean | null;
             /** Title */
             title?: string | null;
+        };
+        /**
+         * CoverageRequest
+         * @description Known records to check, each ``{kind: value}`` (e.g. ``{"doi": "10.1/x"}``).
+         */
+        CoverageRequest: {
+            /** Known */
+            known?: {
+                [key: string]: string;
+            }[];
+        };
+        /** CoverageResponse */
+        CoverageResponse: {
+            /** Citation Chasing */
+            citation_chasing?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Exhaustive
+             * @default false
+             * @constant
+             */
+            exhaustive: false;
+            /** Found */
+            found: {
+                [key: string]: unknown;
+            }[];
+            /** Missing */
+            missing: {
+                [key: string]: string;
+            }[];
+            /** Not Searched */
+            not_searched: string[];
+            /** Recall */
+            recall?: number | null;
+            /** Searched */
+            searched: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Statement
+             * @default Coverage lists what was searched, imported and chased for this project. It is not exhaustive and does not prove that no other relevant records exist.
+             */
+            statement: string;
         };
         /**
          * CreateEntityRequest
@@ -11762,6 +12086,115 @@ export interface components {
          * @description Final review carries no client-authored report or evidence fields.
          */
         FinalReviewDecisionPayload: Record<string, never>;
+        /**
+         * FulltextAttemptCreate
+         * @description One attempt; ``previous_attempt_id`` must be the current head (or null).
+         */
+        FulltextAttemptCreate: {
+            /**
+             * Attempted On
+             * Format: date
+             */
+            attempted_on: string;
+            /** Document Id */
+            document_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "requested" | "retrieved" | "unavailable";
+            /** Previous Attempt Id */
+            previous_attempt_id?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** FulltextAttemptResponse */
+        FulltextAttemptResponse: {
+            /**
+             * Actor Id
+             * Format: uuid
+             */
+            actor_id: string;
+            /**
+             * Attempted On
+             * Format: date
+             */
+            attempted_on: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Document Available
+             * @default false
+             */
+            document_available: boolean;
+            /** Document Content Hash */
+            document_content_hash?: string | null;
+            /** Document Id */
+            document_id?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "requested" | "retrieved" | "unavailable";
+            /** Previous Attempt Id */
+            previous_attempt_id?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** FulltextRequestCreate */
+        FulltextRequestCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+        };
+        /** FulltextStateResponse */
+        FulltextStateResponse: {
+            /** Attempts */
+            attempts: components["schemas"]["FulltextAttemptResponse"][];
+            /** Head Attempt Id */
+            head_attempt_id?: string | null;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Requested By Id
+             * Format: uuid
+             */
+            requested_by_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "requested" | "retrieved" | "unavailable";
+        };
         /** GrantDecision */
         GrantDecision: {
             /** Approved */
@@ -12184,6 +12617,133 @@ export interface components {
             reason?: string | null;
             /** Seq */
             seq: number;
+        };
+        /**
+         * ImportDeclaration
+         * @description What the importer declares about the search; never inferred from the file.
+         */
+        ImportDeclaration: {
+            /** Database */
+            database: string;
+            /** Exported At */
+            exported_at?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Query Text */
+            query_text?: string | null;
+            /**
+             * Redistribution
+             * @default restricted
+             * @enum {string}
+             */
+            redistribution: "restricted" | "allowed";
+            /** Search Date */
+            search_date?: string | null;
+        };
+        /** ImportReceiptDetail */
+        ImportReceiptDetail: {
+            /** Accepted Count */
+            accepted_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Declared */
+            declared: components["schemas"]["ImportDeclaration"] | components["schemas"]["CitationChaseDeclaration"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "file_import" | "citation_chase";
+            /** Observed */
+            observed: {
+                [key: string]: unknown;
+            };
+            /** Parsed Count */
+            parsed_count: number;
+            /** Previous Receipt Id */
+            previous_receipt_id?: string | null;
+            /** Records */
+            records: components["schemas"]["ImportRecordResponse"][];
+            /** Rejected Count */
+            rejected_count: number;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+            /** Version */
+            version: number;
+        };
+        /** ImportReceiptResponse */
+        ImportReceiptResponse: {
+            /** Accepted Count */
+            accepted_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Declared */
+            declared: components["schemas"]["ImportDeclaration"] | components["schemas"]["CitationChaseDeclaration"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "file_import" | "citation_chase";
+            /** Observed */
+            observed: {
+                [key: string]: unknown;
+            };
+            /** Parsed Count */
+            parsed_count: number;
+            /** Previous Receipt Id */
+            previous_receipt_id?: string | null;
+            /** Rejected Count */
+            rejected_count: number;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+            /** Version */
+            version: number;
+        };
+        /** ImportRecordResponse */
+        ImportRecordResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parsed */
+            parsed: {
+                [key: string]: unknown;
+            };
+            /** Raw */
+            raw?: string | null;
+            /** Record Index */
+            record_index: number;
+            /** Rejection Reason */
+            rejection_reason?: string | null;
+            /** Report Id */
+            report_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "rejected";
         };
         /**
          * ImportedRecordObservation
@@ -12752,11 +13312,20 @@ export interface components {
                 [key: string]: string[];
             };
             observation?: components["schemas"]["ScreeningObservationResponse"] | null;
+            /** Others */
+            others?: components["schemas"]["ScreeningObservationResponse"][];
             /**
              * Report Id
              * Format: uuid
              */
             report_id: string;
+            resolution?: components["schemas"]["ScreeningResolutionResponse"] | null;
+            /**
+             * Reveal State
+             * @default hidden
+             * @enum {string}
+             */
+            reveal_state: "hidden" | "revealed";
             /** Title Snapshot */
             title_snapshot: string;
         };
@@ -13052,6 +13621,122 @@ export interface components {
          * @enum {string}
          */
         Priority: "low" | "normal" | "high" | "critical";
+        /** PrismaAmendment */
+        PrismaAmendment: {
+            /** Aggregate Type */
+            aggregate_type: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** From */
+            from: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Seq */
+            seq: number;
+            /** To */
+            to: string;
+        };
+        /** PrismaChecks */
+        PrismaChecks: {
+            /** Assessed Within Retrieved */
+            assessed_within_retrieved: boolean;
+            /** Included Plus Excluded Equals Assessed */
+            included_plus_excluded_equals_assessed: boolean;
+            /** Screened Plus Awaiting Equals Unique */
+            screened_plus_awaiting_equals_unique: boolean;
+        };
+        /** PrismaCounts */
+        PrismaCounts: {
+            /** Duplicates Removed */
+            duplicates_removed: number;
+            /** Import Rejected */
+            import_rejected: number;
+            /** Included Reports */
+            included_reports: number;
+            /** Included Studies */
+            included_studies: number;
+            /** Records Awaiting Screening */
+            records_awaiting_screening: number;
+            /** Records By Import */
+            records_by_import: {
+                [key: string]: number;
+            };
+            /** Records By Source */
+            records_by_source: {
+                [key: string]: number;
+            };
+            /** Records Excluded */
+            records_excluded: number;
+            /** Records Identified */
+            records_identified: number;
+            /** Records Screened */
+            records_screened: number;
+            /** Reports Assessed */
+            reports_assessed: number;
+            /** Reports Awaiting Retrieval */
+            reports_awaiting_retrieval: number;
+            /** Reports Excluded By Reason */
+            reports_excluded_by_reason: {
+                [key: string]: number;
+            };
+            /** Reports Not Retrieved */
+            reports_not_retrieved: number;
+            /** Reports Sought */
+            reports_sought: number;
+            /** Unconfirmed Study Links */
+            unconfirmed_study_links: number;
+            /** Unique Reports */
+            unique_reports: number;
+        };
+        /** PrismaFlowBody */
+        PrismaFlowBody: {
+            /** Amendments */
+            amendments: components["schemas"]["PrismaAmendment"][];
+            checks: components["schemas"]["PrismaChecks"];
+            counts: components["schemas"]["PrismaCounts"];
+            /** Excluded From Flow */
+            excluded_from_flow: {
+                [key: string]: number;
+            };
+            versions: components["schemas"]["PrismaVersions"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * PrismaFlowResponse
+         * @description Recomputed from persisted rows on every call; nothing here is stored.
+         */
+        PrismaFlowResponse: {
+            body: components["schemas"]["PrismaFlowBody"];
+            /** Body Sha256 */
+            body_sha256: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Schema */
+            schema: string;
+        };
+        /** PrismaVersions */
+        PrismaVersions: {
+            /** Corpus Hash */
+            corpus_hash: string;
+            /** Protocol Version Ids */
+            protocol_version_ids: string[];
+            /** Stream Heads */
+            stream_heads: {
+                [key: string]: number;
+            };
+        };
         /** ProcessingJobResponse */
         ProcessingJobResponse: {
             /** Completed At */
@@ -14694,6 +15379,32 @@ export interface components {
             /** Severity */
             severity: string;
         };
+        /**
+         * ScreeningAdjudicateRequest
+         * @description Resolve the exact conflict tip the adjudicator saw (stale inputs: 409).
+         */
+        ScreeningAdjudicateRequest: {
+            /** Criteria Hash */
+            criteria_hash: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "uncertain";
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Input Observation Ids */
+            input_observation_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Resolution Id
+             * Format: uuid
+             */
+            resolution_id: string;
+        };
         /** ScreeningAssignmentCreate */
         ScreeningAssignmentCreate: {
             /** Idempotency Key */
@@ -14736,14 +15447,76 @@ export interface components {
             /** Revoked By Id */
             revoked_by_id?: string | null;
         };
+        /** ScreeningConflictResponse */
+        ScreeningConflictResponse: {
+            /** Exclusion Reasons */
+            exclusion_reasons: string[];
+            /** Identifiers */
+            identifiers: {
+                [key: string]: string[];
+            };
+            /** Observations */
+            observations: components["schemas"]["ScreeningObservationResponse"][];
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            resolution: components["schemas"]["ScreeningResolutionResponse"];
+            /** Title Snapshot */
+            title_snapshot: string;
+        };
         /** ScreeningCounts */
         ScreeningCounts: {
+            /**
+             * Conflicts
+             * @default 0
+             */
+            conflicts: number;
             /** Remaining */
             remaining: number;
+            /**
+             * Revealed
+             * @default 0
+             */
+            revealed: number;
             /** Screened */
             screened: number;
             /** Total */
             total: number;
+        };
+        /**
+         * ScreeningEventResponse
+         * @description A screening event; a peer's hidden decision is ``redacted`` (GOO-302).
+         */
+        ScreeningEventResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            /** Event Type */
+            event_type: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Redacted
+             * @default false
+             */
+            redacted: boolean;
+            /** Seq */
+            seq: number;
         };
         /**
          * ScreeningItemDecision
@@ -14826,6 +15599,7 @@ export interface components {
              * Format: uuid
              */
             report_id: string;
+            resolution?: components["schemas"]["ScreeningResolutionResponse"] | null;
             /**
              * Reviewer Id
              * Format: uuid
@@ -14863,6 +15637,11 @@ export interface components {
             /** Assignment Count */
             assignment_count: number;
             /**
+             * Conflict Count
+             * @default 0
+             */
+            conflict_count: number;
+            /**
              * Created At
              * Format: date-time
              */
@@ -14888,6 +15667,11 @@ export interface components {
             protocol_version_id: string;
             /** Report Count */
             report_count: number;
+            /**
+             * Resolved Count
+             * @default 0
+             */
+            resolved_count: number;
             /** Reviewer Mode */
             reviewer_mode: string;
             /**
@@ -14903,6 +15687,54 @@ export interface components {
             suggestions_skipped?: number | null;
             /** Supersedes Queue Id */
             supersedes_queue_id?: string | null;
+        };
+        /** ScreeningReopenRequest */
+        ScreeningReopenRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Rationale */
+            rationale: string;
+            /**
+             * Resolution Id
+             * Format: uuid
+             */
+            resolution_id: string;
+        };
+        /**
+         * ScreeningResolutionResponse
+         * @description A derived or adjudicated outcome; never an editable field (GOO-302).
+         */
+        ScreeningResolutionResponse: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "single" | "agreement" | "conflict" | "adjudicated" | "reopened";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Criteria Hash */
+            criteria_hash: string;
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Input Observation Ids */
+            input_observation_ids: string[];
+            /** Outcome */
+            outcome?: ("include" | "exclude" | "uncertain") | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Supersedes Resolution Id */
+            supersedes_resolution_id?: string | null;
         };
         /**
          * ScreeningReviewDecisionPayload
@@ -27364,6 +28196,392 @@ export interface operations {
             };
         };
     };
+    chase_citations_route_api_v1_research_engine_projects__project_id__citation_chases_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CitationChaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Replayed receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    corpus_coverage_route_api_v1_research_engine_projects__project_id__corpus_coverage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoverageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoverageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_corpus_route_api_v1_research_engine_projects__project_id__corpus_export_get: {
+        parameters: {
+            query?: {
+                format?: "json" | "zip";
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned corpus package download */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/zip": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulltextStateResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FulltextRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulltextStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_attempt_route_api_v1_research_engine_projects__project_id__fulltext_requests__request_id__attempts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FulltextAttemptCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulltextStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_imports_route_api_v1_research_engine_projects__project_id__imports_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_search_results_route_api_v1_research_engine_projects__project_id__imports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_search_results_route_api_v1_research_engine_projects__project_id__imports_post"];
+            };
+        };
+        responses: {
+            /** @description Replayed receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_import_route_api_v1_research_engine_projects__project_id__imports__receipt_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                receipt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReceiptDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prisma_flow_route_api_v1_research_engine_projects__project_id__prisma_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrismaFlowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prisma_export_route_api_v1_research_engine_projects__project_id__prisma_export_get: {
+        parameters: {
+            query?: {
+                format?: "json" | "md";
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_protocols_api_v1_research_engine_projects__project_id__protocols_get: {
         parameters: {
             query?: never;
@@ -27933,6 +29151,38 @@ export interface operations {
             };
         };
     };
+    screening_conflicts_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__conflicts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningConflictResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get: {
         parameters: {
             query?: never;
@@ -27951,7 +29201,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IdentityEventResponse"][];
+                    "application/json": components["schemas"]["ScreeningEventResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -28020,6 +29270,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreeningObservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adjudicate_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__adjudicate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningAdjudicateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningResolutionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningReopenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningResolutionResponse"];
                 };
             };
             /** @description Validation Error */

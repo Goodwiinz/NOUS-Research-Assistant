@@ -30,6 +30,19 @@ vi.mock('../ReportIdentityPanel', () => ({
     <div>Reports for {projectId}</div>
   ),
 }));
+vi.mock('../CorpusPanel', () => ({
+  CorpusPanel: ({
+    projectId,
+    readOnly,
+  }: {
+    projectId: string;
+    readOnly?: boolean;
+  }) => (
+    <div>
+      Corpus for {projectId} {readOnly ? '(read only)' : '(editable)'}
+    </div>
+  ),
+}));
 vi.mock('../ScreeningQueuePanel', () => ({
   ScreeningQueuePanel: ({
     projectId,
@@ -40,6 +53,24 @@ vi.mock('../ScreeningQueuePanel', () => ({
   }) => (
     <div>
       Screening for {projectId} {readOnly ? '(read only)' : '(active)'}
+    </div>
+  ),
+}));
+vi.mock('../PrismaFlowCard', () => ({
+  PrismaFlowCard: ({ projectId }: { projectId: string }) => (
+    <div>PRISMA for {projectId}</div>
+  ),
+}));
+vi.mock('../ScreeningConflictsPanel', () => ({
+  ScreeningConflictsPanel: ({
+    projectId,
+    readOnly,
+  }: {
+    projectId: string;
+    readOnly?: boolean;
+  }) => (
+    <div>
+      Conflicts for {projectId} {readOnly ? '(read only)' : '(active)'}
     </div>
   ),
 }));
@@ -59,6 +90,9 @@ vi.mock('@/services/researchEngineService', () => ({
   getMyScreeningQueue: vi.fn(),
   submitScreeningObservation: vi.fn(),
   listScreeningHistory: vi.fn(),
+  listScreeningConflicts: vi.fn(),
+  adjudicateScreening: vi.fn(),
+  reopenScreening: vi.fn(),
 }));
 describe('ProjectWorkflow', () => {
   beforeEach(() => {
@@ -91,8 +125,12 @@ describe('ProjectWorkflow', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Reports for collection-1')).toBeInTheDocument();
     expect(
+      screen.getByText('Corpus for collection-1 (editable)')
+    ).toBeInTheDocument();
+    expect(
       screen.getByText('Screening for collection-1 (active)')
     ).toBeInTheDocument();
+    expect(screen.getByText('PRISMA for collection-1')).toBeInTheDocument();
     await waitFor(() =>
       expect(listProjectRoles).toHaveBeenCalledWith('collection-1')
     );
@@ -194,15 +232,15 @@ describe('ProjectWorkflow', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders the screening panel read-only on an archived project', () => {
+  it('renders the corpus panel read-only for an archived project', async () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
         <ProjectWorkflow
           project={{
-            id: 'collection-archived',
-            workspace_id: 'workspace-1',
-            name: 'Archived project',
-            research_engine_project_id: 'engine-1',
+            id: 'collection-3',
+            workspace_id: 'workspace-3',
+            name: 'Archived',
+            research_engine_project_id: 'engine-3',
             research_status: 'archived',
             can_edit: true,
             can_manage: true,
@@ -215,7 +253,13 @@ describe('ProjectWorkflow', () => {
     );
 
     expect(
-      screen.getByText('Screening for collection-archived (read only)')
+      await screen.findByText('Corpus for collection-3 (read only)')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Screening for collection-3 (read only)')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Conflicts for collection-3 (read only)')
     ).toBeInTheDocument();
   });
 });
