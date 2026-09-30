@@ -69,6 +69,7 @@ MIGRATION = (
     / "versions"
     / "a3c5e7f9b1d4_version_extraction_forms.py"
 )
+ANCHORS_MIGRATION = MIGRATION.with_name("b8d0f2a4c6e9_add_extraction_source_anchors.py")
 
 
 class _LLM:
@@ -84,20 +85,31 @@ class _LLM:
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
-async def _migration(factory: Factory, *steps: str) -> None:
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
-
-    spec = importlib.util.spec_from_file_location("goo304_migration", MIGRATION)
+def _module(path: Path) -> Any:
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec is not None and spec.loader is not None
     module: Any = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+async def _migration(factory: Factory, *steps: str) -> None:
+    """Run a3c5e7f9b1d4's steps. Its upgrade also re-applies the GOO-305
+    anchor columns (b8d0f2a4c6e9), which the ORM models now carry."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    module, anchors = _module(MIGRATION), _module(ANCHORS_MIGRATION)
     async with factory() as db:
 
         def run(sync_connection: Any) -> None:
-            module.op = Operations(MigrationContext.configure(sync_connection))
+            module.op = anchors.op = Operations(
+                MigrationContext.configure(sync_connection)
+            )
             for step in steps:
                 getattr(module, step)()
+                if step == "upgrade":
+                    anchors.upgrade()
 
         await (await db.connection()).run_sync(run)
         await db.commit()
