@@ -37,6 +37,7 @@ from src.services.research.evidence_selection import (
     evidence_location,
     select_relevant_passages,
 )
+from src.services.research.release_rules import assertion_spans
 from src.shared.research_schemas import CitationCreate, CitationVerdict
 
 logger = structlog.get_logger()
@@ -350,14 +351,7 @@ class CitationVerificationService:
         """Expose cited and uncited prose assertions in document order."""
         verdict_by_index = {int(entry["doc_index"]): entry for entry in verdicts}
         observations: List[Dict[str, Any]] = []
-        boundary_re = re.compile(r"(?<!\d)[.!?](?!\d)|\n")
-        start = 0
-        for boundary in [*boundary_re.finditer(draft_content), None]:
-            end = boundary.end() if boundary is not None else len(draft_content)
-            assertion = draft_content[start:end].strip()
-            start = end
-            if not assertion or assertion.startswith("#"):
-                continue
+        for _start, _end, assertion in assertion_spans(draft_content):
             indices = sorted(
                 {int(value) for value in _CITATION_PATTERN.findall(assertion)}
             )
