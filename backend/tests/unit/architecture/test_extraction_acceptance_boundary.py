@@ -6,6 +6,11 @@ and may import from ``extraction_forms_service`` only the machine-observation
 helpers. ``accept_value`` itself must check ``ResearchProjectRole.ADJUDICATOR``.
 Ledger replay rejects a non-adjudicator ``extraction.accepted`` as the third
 enforcement (``test_extraction_replay_rejects_worker_acceptance``).
+
+GOO-306 adds claim assessment: automation may not name ``assess`` (the
+``claims_service`` writer) or ``ResearchClaimAssessment``, and ``assess``
+must check ``ResearchProjectRole.ADJUDICATOR`` too
+(``test_claims_replay_rejects_machine_assessment`` is the replay backstop).
 """
 
 import ast
@@ -17,7 +22,12 @@ pytestmark = pytest.mark.unit
 
 SRC = Path(__file__).resolve().parents[3] / "src"
 FORMS_MODULE = "src.services.research.extraction_forms_service"
-FORBIDDEN_NAMES = {"accept_value", "ExtractionAcceptedValue"}
+FORBIDDEN_NAMES = {
+    "accept_value",
+    "ExtractionAcceptedValue",
+    "assess",
+    "ResearchClaimAssessment",
+}
 ALLOWED_IMPORTS = {
     "append_machine_observations",
     "extraction_task_kwargs",
@@ -89,14 +99,21 @@ def test_worker_writes_only_through_machine_observations() -> None:
     assert "append_machine_observations" in imported
 
 
-def test_accept_value_requires_the_adjudicator_role() -> None:
-    tree = ast.parse(
-        (SRC / "services/research/extraction_forms_service.py").read_text()
-    )
+@pytest.mark.parametrize(
+    ("module", "function"),
+    [
+        ("extraction_forms_service.py", "accept_value"),
+        ("claims_service.py", "assess"),
+    ],
+)
+def test_decision_writer_requires_the_adjudicator_role(
+    module: str, function: str
+) -> None:
+    tree = ast.parse((SRC / "services/research" / module).read_text())
     (accept,) = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "accept_value"
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == function
     ]
     checks = [
         node
@@ -108,4 +125,4 @@ def test_accept_value_requires_the_adjudicator_role() -> None:
         and isinstance(node.left.value, ast.Name)
         and node.left.value.id == "ResearchProjectRole"
     ]
-    assert checks, "accept_value must check ResearchProjectRole.ADJUDICATOR"
+    assert checks, f"{function} must check ResearchProjectRole.ADJUDICATOR"

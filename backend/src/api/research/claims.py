@@ -54,6 +54,27 @@ async def list_claims(
     return await claims_service.list_claims(db, context, draft_id)
 
 
+@router.get(
+    "/export",
+    response_class=Response,
+    responses={200: {"content": {"application/json": {}}}},
+)
+async def export_claims(
+    project_id: UUID,
+    draft_id: Optional[UUID] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download the reconstructable claims evidence package (VIEW)."""
+    context = await resolve_project(db, project_id, _uid(current_user))
+    content, filename = await claims_service.export_package(db, context, draft_id)
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/{claim_id:uuid}", response_model=ClaimDetailResponse)
 async def get_claim(
     project_id: UUID,

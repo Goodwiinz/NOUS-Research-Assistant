@@ -36425,6 +36425,68 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/claims/export": {
+      "get": {
+        "description": "Download the reconstructable claims evidence package (VIEW).",
+        "operationId": "export_claims_api_v1_projects__project_id__claims_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "draft_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Claims",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/claims/{claim_id}": {
       "get": {
         "description": "The claim's full version, link, observation and assessment history.",

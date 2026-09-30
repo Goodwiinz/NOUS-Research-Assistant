@@ -8,11 +8,13 @@ decision event and commits exactly once; the five tables are insert-only.
 A unique-index hit (a lost race past the tip checks) is a stable 409.
 """
 
+import json
+from datetime import datetime, timezone
 from typing import Any, Sequence, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import exists, select
+from sqlalchemy import exists, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -34,9 +36,10 @@ from src.models.research_claim import (
     ResearchClaimStanceObservation,
     ResearchClaimVersion,
 )
+from src.models.research_decision import ResearchDecisionStream
 from src.models.research_project_role import ResearchProjectRole
 from src.services.evidence.stance_classifier import StanceClassifier
-from src.services.research import claim_rules, extraction_rules
+from src.services.research import claim_rules, claims_export, extraction_rules
 from src.services.research import source_anchors as anchors
 from src.services.research.extraction_forms_service import (
     _changed,
@@ -1129,3 +1132,116 @@ async def get_claim(
         ],
         assessments=[ClaimAssessmentResponse.model_validate(a) for a in assessments],
     )
+
+
+# --- Export (VIEW; zero writes) ---
+
+
+def _json_row(row: Any) -> dict[str, Any]:
+    """Every mapped column as JSON-ready values (ids and times as strings)."""
+    out: dict[str, Any] = {}
+    for attr in inspect(row).mapper.column_attrs:
+        value = getattr(row, attr.key)
+        if isinstance(value, UUID):
+            value = str(value)
+        elif isinstance(value, datetime):
+            value = value.isoformat()
+        elif hasattr(value, "value") and not isinstance(value, (str, int, float)):
+            value = value.value  # enums
+        out[attr.key] = value
+    return out
+
+
+async def export_package(
+    db: AsyncSession, context: ProjectContext, draft_id: UUID | None
+) -> tuple[bytes, str]:
+    """The project's claims evidence package: (JSON bytes, filename)."""
+    cid = _cid(context)
+    where = [ResearchClaimVersion.collection_id == cid]
+    if draft_id is not None:
+        where.append(ResearchClaimVersion.draft_id == draft_id)
+    versions = await _rows(db, ResearchClaimVersion, *where)
+    version_ids = [v.id for v in versions]
+    claims = await _rows(
+        db, ResearchClaim, ResearchClaim.id.in_({v.claim_id for v in versions})
+    )
+    links = await _rows(
+        db,
+        ResearchClaimEvidenceLink,
+        ResearchClaimEvidenceLink.claim_version_id.in_(version_ids),
+    )
+    stance_rows = await _rows(
+        db,
+        ResearchClaimStanceObservation,
+        ResearchClaimStanceObservation.link_id.in_([row.id for row in links]),
+    )
+    assessments = await _rows(
+        db,
+        ResearchClaimAssessment,
+        ResearchClaimAssessment.claim_version_id.in_(version_ids),
+    )
+    drafts = await _rows(
+        db, GeneratedDraft, GeneratedDraft.id.in_({v.draft_id for v in versions})
+    )
+    accepted = await _rows(
+        db,
+        ExtractionAcceptedValue,
+        ExtractionAcceptedValue.id.in_(
+            {row.accepted_value_id for row in links if row.accepted_value_id}
+        ),
+    )
+    cited = {UUID(str(i)) for a in accepted for i in a.observation_ids or []}
+    cited |= {a.anchor_observation_id for a in accepted if a.anchor_observation_id}
+    extraction_observations = await _rows(
+        db, ExtractionObservation, ExtractionObservation.id.in_(cited)
+    )
+    document_ids = {row.document_id for row in links if row.document_id}
+    document_ids |= {a.document_id for a in accepted}
+    documents = []
+    for document in (
+        await db.execute(select(Document).where(Document.id.in_(document_ids)))
+    ).scalars():
+        source_hash, text_hash = document_pins(document)
+        documents.append(
+            {
+                "id": str(document.id),
+                "title": document.title,
+                "source_hash": source_hash,
+                "current_text_sha256": text_hash,
+            }
+        )
+    next_seq = (
+        await db.execute(
+            select(ResearchDecisionStream.next_seq).where(
+                ResearchDecisionStream.collection_id == cid,
+                ResearchDecisionStream.aggregate_type == AGGREGATE_TYPE,
+                ResearchDecisionStream.aggregate_id == cid,
+            )
+        )
+    ).scalar_one_or_none()
+    body = claims_export.build_body(
+        collection_id=str(cid),
+        draft_filter=_str(draft_id),
+        stream_head=0 if next_seq is None else int(next_seq) - 1,
+        drafts=[
+            {
+                "id": str(d.id),
+                "version": d.version,
+                "content": d.content,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in drafts
+        ],
+        documents=documents,
+        accepted_values=[_json_row(a) for a in accepted],
+        extraction_observations=[_json_row(o) for o in extraction_observations],
+        claims=[_json_row(c) for c in claims],
+        claim_versions=[_json_row(v) for v in versions],
+        links=[_json_row(row) for row in links],
+        stance_observations=[_json_row(o) for o in stance_rows],
+        assessments=[_json_row(a) for a in assessments],
+    )
+    package = claims_export.package(body, datetime.now(timezone.utc).isoformat())
+    filename = f"claims-{cid}-{package['body_sha256'][:12]}.json"
+    content = json.dumps(package, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return content, filename
