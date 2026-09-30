@@ -25,13 +25,15 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
     // The root is pinned now; a later swap of the directory is refused per call.
     try {
       const root = await grantedRoot(session.outputRoot);
+      const publisher = createArtifactPublisher(
+        new ArtifactHttpClient(session.apiOrigin, credentials, keeper.fetch),
+        root,
+      );
+      // Reserve, upload and finalize must all use the reserving grant.
       local.push(
-        artifactsPublishTool(
-          createArtifactPublisher(
-            new ArtifactHttpClient(session.apiOrigin, credentials, keeper.fetch),
-            root,
-          ),
-        ),
+        artifactsPublishTool({
+          publish: (input) => keeper.pinned(() => publisher.publish(input)),
+        }),
       );
     } catch (error) {
       // Read tools stay available; the publish tool stays visible and says why.

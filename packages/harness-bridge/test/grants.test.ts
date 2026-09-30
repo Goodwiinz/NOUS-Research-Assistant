@@ -4,7 +4,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CredentialStore, type IntegrationCredentials } from "../src/credentials.ts";
-import { GRANT_RENEW_AFTER_MS, GrantExpired, GrantKeeper } from "../src/grants.ts";
+import {
+  GRANT_LIFETIME_MS,
+  GRANT_PIN_FRESH_MS,
+  GRANT_RENEW_AFTER_MS,
+  GrantExpired,
+  GrantKeeper,
+} from "../src/grants.ts";
 
 const API = "https://nous.test/api/v1";
 const OLD_GRANT = "11111111-1111-4111-8111-111111111111";
@@ -95,7 +101,8 @@ test("concurrent callers in one process share a single renewal", async () => {
   }
 });
 
-test("losing a renewal race to another process picks up its grant", async () => {
+test("losing a renewal race to another process picks up its grant (409 or 403)", async () => {
+  for (const status of [409, 403]) {
   const s = await setup();
   try {
     s.advance(GRANT_RENEW_AFTER_MS);
@@ -107,17 +114,64 @@ test("losing a renewal race to another process picks up its grant", async () => 
         grantId: NEW_GRANT,
         renewedAt: T0 + GRANT_RENEW_AFTER_MS,
       });
-      return new Response(JSON.stringify({ detail: "no longer available" }), { status: 409 });
+      return new Response(JSON.stringify({ detail: "no longer available" }), { status });
     });
     const credentials = await s.keeper().current();
-    assert.equal(credentials.grantToken, "grant-winner");
+    assert.equal(credentials.grantToken, "grant-winner", String(status));
+  } finally {
+    s.cleanup();
+  }
+  }
+});
+
+test("a transient renewal failure keeps the still-valid grant and retries later", async () => {
+  for (const status of [404, 429, 503]) {
+    const s = await setup();
+    try {
+      s.advance(GRANT_RENEW_AFTER_MS);
+      s.setReply(() => new Response("{}", { status }));
+      const keeper = s.keeper();
+      assert.equal((await keeper.current()).grantToken, "grant-old", String(status));
+      s.setReply(() => new Response(JSON.stringify({ token: "grant-new", grant_id: NEW_GRANT }), { status: 200 }));
+      assert.equal((await keeper.current()).grantToken, "grant-new");
+    } finally {
+      s.cleanup();
+    }
+  }
+  const late = await setup();
+  try {
+    late.advance(GRANT_LIFETIME_MS);
+    late.setReply(() => new Response("{}", { status: 503 }));
+    await assert.rejects(late.keeper().current(), GrantExpired);
+  } finally {
+    late.cleanup();
+  }
+});
+
+test("a pinned sequence starts on a fresh grant and is never renewed midway", async () => {
+  const s = await setup();
+  try {
+    const keeper = s.keeper();
+    s.advance(GRANT_PIN_FRESH_MS);
+    const seen: string[] = [];
+    await keeper.pinned(async () => {
+      seen.push((await keeper.current()).grantToken);
+      s.advance(GRANT_RENEW_AFTER_MS);
+      seen.push((await keeper.current()).grantToken);
+    });
+    // Renewed once up front (older than 5 minutes), then held for the sequence.
+    assert.deepEqual(seen, ["grant-new", "grant-new"]);
+    assert.equal(s.calls.length, 1);
+    // After the sequence, the due grant renews again.
+    s.setReply(() => new Response(JSON.stringify({ token: "grant-third", grant_id: OLD_GRANT }), { status: 200 }));
+    assert.equal((await keeper.current()).grantToken, "grant-third");
   } finally {
     s.cleanup();
   }
 });
 
 test("a grant that can no longer be renewed says to reconnect", async () => {
-  for (const status of [403, 409]) {
+  for (const status of [401, 403, 409]) {
     const s = await setup();
     try {
       s.advance(GRANT_RENEW_AFTER_MS);
