@@ -21,6 +21,7 @@ import {
 import { AppraisalPanel } from './AppraisalPanel';
 import { BlueprintEditor } from './BlueprintEditor';
 import { CorpusPanel } from './CorpusPanel';
+import { EvidenceTablePanel } from './EvidenceTablePanel';
 import { JourneyRail } from './JourneyRail';
 import { PrismaFlowCard } from './PrismaFlowCard';
 import { ProtocolPanel } from './ProtocolPanel';
@@ -241,6 +242,11 @@ export function ProjectWorkflow({
       </Stage>
       <Stage id="extract" title="Extract">
         <AppraisalPanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+        <EvidenceTablePanel
           projectId={project.id}
           roles={roles.data ?? []}
           readOnly={archived}
