@@ -4,14 +4,19 @@ import { useState, type ReactElement } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { APIErrorClass } from '@/types/api';
+import { projectService } from '@/services/projectService';
 import {
   assignScreeningReviewer,
   createScreeningQueue,
   getMyScreeningQueue,
+  listFulltext,
   listScreeningHistory,
   listScreeningQueues,
+  recordFulltextAttempt,
+  requestFulltext,
   revokeScreeningAssignment,
   submitScreeningObservation,
+  type FulltextState,
   type IdentityEvent,
   type MyScreeningItem,
   type MyScreeningQueue,
@@ -96,6 +101,173 @@ const RESOLVED_TITLE = 'Resolved — an adjudicator must reopen';
 
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : 'Screening request failed.';
+const NOT_RETRIEVED = 'Full text not retrieved';
+
+/** Local calendar date as YYYY-MM-DD, the actor's own reported date. */
+const today = (): string => new Date().toLocaleDateString('en-CA');
+
+/**
+ * GOO-303 full-text status for one report row. Acquisition is not
+ * eligibility: marking a report unavailable never excludes it. Every action
+ * names the current head so a concurrent writer gets a 409, never a fork.
+ */
+function FullTextStatus({
+  projectId,
+  reportId,
+  title,
+  state,
+  readOnly,
+  onChanged,
+}: {
+  projectId: string;
+  reportId: string;
+  title: string;
+  state?: FulltextState;
+  readOnly: boolean;
+  onChanged: () => void;
+}): ReactElement {
+  const [form, setForm] = useState<'unavailable' | 'retrieved' | null>(null);
+  const [reason, setReason] = useState('');
+  const [documentId, setDocumentId] = useState('');
+  const [attemptedOn, setAttemptedOn] = useState(today);
+  const documents = useQuery({
+    queryKey: ['project', projectId, 'documents'],
+    queryFn: () =>
+      projectService.listProjectDocuments(projectId, { limit: 100 }),
+    enabled: form === 'retrieved',
+  });
+  const request = useMutation({
+    mutationFn: (key: string) =>
+      requestFulltext(projectId, { report_id: reportId, idempotency_key: key }),
+    onSuccess: onChanged,
+  });
+  const attempt = useMutation({
+    mutationFn: (key: string) =>
+      recordFulltextAttempt(projectId, state?.request_id ?? '', {
+        outcome: form ?? 'requested',
+        attempted_on: attemptedOn,
+        reason: form === 'unavailable' ? reason.trim() : null,
+        document_id: form === 'retrieved' ? documentId : null,
+        previous_attempt_id: state?.head_attempt_id ?? null,
+        idempotency_key: key,
+      }),
+    onSuccess: () => {
+      setForm(null);
+      setReason('');
+      setDocumentId('');
+      onChanged();
+    },
+  });
+  const status = state?.state ?? 'not requested';
+  const head = state?.attempts[state.attempts.length - 1];
+  const busy = request.isPending || attempt.isPending;
+  const error = request.error ?? attempt.error;
+  const ready =
+    Boolean(attemptedOn) &&
+    (form === 'unavailable' ? Boolean(reason.trim()) : Boolean(documentId));
+  return (
+    <div className="space-y-2 text-xs">
+      <span
+        aria-label={`Full-text status for ${title}`}
+        title={
+          status === 'unavailable' ? (head?.reason ?? undefined) : undefined
+        }
+        className="inline-block rounded bg-muted px-2 py-0.5 text-muted-foreground"
+      >
+        {`Full text: ${status}`}
+      </span>
+      {!readOnly && !state && (
+        <button
+          type="button"
+          aria-label={`Request full text for ${title}`}
+          disabled={busy}
+          onClick={() => request.mutate(crypto.randomUUID())}
+          className="ml-2 rounded-md border border-border px-2 py-0.5 disabled:opacity-50"
+        >
+          Request
+        </button>
+      )}
+      {!readOnly && state && status !== 'retrieved' && (
+        <span className="ml-2 inline-flex gap-2">
+          <button
+            type="button"
+            aria-label={`Mark full text unavailable for ${title}`}
+            aria-pressed={form === 'unavailable'}
+            onClick={() =>
+              setForm(form === 'unavailable' ? null : 'unavailable')
+            }
+            className="rounded-md border border-border px-2 py-0.5 aria-pressed:bg-muted"
+          >
+            Mark unavailable
+          </button>
+          <button
+            type="button"
+            aria-label={`Mark full text retrieved for ${title}`}
+            aria-pressed={form === 'retrieved'}
+            onClick={() => setForm(form === 'retrieved' ? null : 'retrieved')}
+            className="rounded-md border border-border px-2 py-0.5 aria-pressed:bg-muted"
+          >
+            Mark retrieved
+          </button>
+        </span>
+      )}
+      {form && (
+        <div className="space-y-2">
+          {form === 'unavailable' ? (
+            <textarea
+              aria-label={`Reason full text is unavailable for ${title}`}
+              required
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="Why the full text could not be obtained"
+              rows={2}
+              className="w-full rounded-md border border-border bg-background px-2 py-1"
+            />
+          ) : (
+            <select
+              aria-label={`Project document with the full text of ${title}`}
+              value={documentId}
+              onChange={(event) => setDocumentId(event.target.value)}
+              className="rounded-md border border-border bg-background px-2 py-1"
+            >
+              <option value="">Choose a project document…</option>
+              {(documents.data?.documents ?? []).map((doc) => (
+                <option key={doc.document_id} value={doc.document_id}>
+                  {doc.document?.title ??
+                    doc.document?.filename ??
+                    doc.document_id}
+                </option>
+              ))}
+            </select>
+          )}
+          <input
+            type="date"
+            aria-label={`Date attempted for ${title}`}
+            required
+            max={today()}
+            value={attemptedOn}
+            onChange={(event) => setAttemptedOn(event.target.value)}
+            className="ml-2 rounded-md border border-border bg-background px-2 py-1"
+          />
+          <button
+            type="button"
+            aria-label={`Save full-text attempt for ${title}`}
+            disabled={!ready || busy}
+            onClick={() => attempt.mutate(crypto.randomUUID())}
+            className="ml-2 rounded-md border border-border px-2 py-1 disabled:opacity-50"
+          >
+            Save
+          </button>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-destructive">
+          {errorText(error)}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function ScreeningQueuePanel({
   projectId,
@@ -140,8 +312,19 @@ export function ScreeningQueuePanel({
     queryFn: () => listScreeningHistory(projectId, queueId ?? ''),
     enabled: isSupervisor && Boolean(queueId),
   });
+  const fulltext = useQuery({
+    queryKey: ['fulltext', projectId],
+    queryFn: () => listFulltext(projectId),
+    enabled: isReviewer && Boolean(queueId),
+  });
+  const fulltextByReport = new Map(
+    (fulltext.data ?? []).map((state) => [state.report_id, state])
+  );
+  // Screening and acquisition both move the derived PRISMA flow.
   const refresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: [...queryKey] });
+    void queryClient.invalidateQueries({ queryKey: ['prisma', projectId] });
+    void queryClient.invalidateQueries({ queryKey: ['fulltext', projectId] });
   };
 
   // One idempotency key per click. Mutations are not retried; a transport-level
@@ -420,6 +603,10 @@ export function ScreeningQueuePanel({
                   Boolean(item.resolution) &&
                   item.resolution?.basis !== 'reopened';
                 const locked = readOnly || Boolean(stale) || busy || resolved;
+                // Mirrors the server's GOO-303 gate; the server stays authoritative.
+                const gated =
+                  fullText &&
+                  fulltextByReport.get(item.report_id)?.state !== 'retrieved';
                 return (
                   <li key={item.report_id} className="space-y-2 py-3 text-sm">
                     <div className="font-medium text-foreground">{title}</div>
@@ -446,6 +633,19 @@ export function ScreeningQueuePanel({
                       </p>
                     )}
                     <RevealState item={item} />
+                    <FullTextStatus
+                      projectId={projectId}
+                      reportId={item.report_id}
+                      title={title}
+                      state={fulltextByReport.get(item.report_id)}
+                      readOnly={readOnly}
+                      onChanged={refresh}
+                    />
+                    {gated && (
+                      <p className="text-xs text-muted-foreground">
+                        {NOT_RETRIEVED}
+                      </p>
+                    )}
                     {fullText && (
                       <select
                         aria-label={`Exclusion reason for ${title}`}
@@ -486,10 +686,17 @@ export function ScreeningQueuePanel({
                         <button
                           key={value}
                           type="button"
-                          title={resolved ? RESOLVED_TITLE : undefined}
+                          title={
+                            resolved
+                              ? RESOLVED_TITLE
+                              : gated
+                                ? NOT_RETRIEVED
+                                : undefined
+                          }
                           aria-label={`${current ? 'Change to ' : ''}${label} ${title}`}
                           disabled={
                             locked ||
+                            gated ||
                             (fullText && value === 'exclude' && !reason)
                           }
                           onClick={() => {
