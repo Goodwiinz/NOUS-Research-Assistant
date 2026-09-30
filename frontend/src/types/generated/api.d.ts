@@ -6256,6 +6256,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Screening Conflicts Route */
+        get: operations["screening_conflicts_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__conflicts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/history": {
         parameters: {
             query?: never;
@@ -6301,6 +6318,40 @@ export interface paths {
         put?: never;
         /** Submit Screening Observation Route */
         post: operations["submit_screening_observation_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/adjudicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adjudicate Screening Report Route */
+        post: operations["adjudicate_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__adjudicate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen Screening Report Route */
+        post: operations["reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -13067,11 +13118,20 @@ export interface components {
                 [key: string]: string[];
             };
             observation?: components["schemas"]["ScreeningObservationResponse"] | null;
+            /** Others */
+            others?: components["schemas"]["ScreeningObservationResponse"][];
             /**
              * Report Id
              * Format: uuid
              */
             report_id: string;
+            resolution?: components["schemas"]["ScreeningResolutionResponse"] | null;
+            /**
+             * Reveal State
+             * @default hidden
+             * @enum {string}
+             */
+            reveal_state: "hidden" | "revealed";
             /** Title Snapshot */
             title_snapshot: string;
         };
@@ -15009,6 +15069,32 @@ export interface components {
             /** Severity */
             severity: string;
         };
+        /**
+         * ScreeningAdjudicateRequest
+         * @description Resolve the exact conflict tip the adjudicator saw (stale inputs: 409).
+         */
+        ScreeningAdjudicateRequest: {
+            /** Criteria Hash */
+            criteria_hash: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "uncertain";
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Input Observation Ids */
+            input_observation_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Resolution Id
+             * Format: uuid
+             */
+            resolution_id: string;
+        };
         /** ScreeningAssignmentCreate */
         ScreeningAssignmentCreate: {
             /** Idempotency Key */
@@ -15051,14 +15137,70 @@ export interface components {
             /** Revoked By Id */
             revoked_by_id?: string | null;
         };
+        /** ScreeningConflictResponse */
+        ScreeningConflictResponse: {
+            /** Observations */
+            observations: components["schemas"]["ScreeningObservationResponse"][];
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            resolution: components["schemas"]["ScreeningResolutionResponse"];
+            /** Title Snapshot */
+            title_snapshot: string;
+        };
         /** ScreeningCounts */
         ScreeningCounts: {
+            /**
+             * Conflicts
+             * @default 0
+             */
+            conflicts: number;
             /** Remaining */
             remaining: number;
+            /**
+             * Revealed
+             * @default 0
+             */
+            revealed: number;
             /** Screened */
             screened: number;
             /** Total */
             total: number;
+        };
+        /**
+         * ScreeningEventResponse
+         * @description A screening event; a peer's hidden decision is ``redacted`` (GOO-302).
+         */
+        ScreeningEventResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            /** Event Type */
+            event_type: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Redacted
+             * @default false
+             */
+            redacted: boolean;
+            /** Seq */
+            seq: number;
         };
         /**
          * ScreeningItemDecision
@@ -15141,6 +15283,7 @@ export interface components {
              * Format: uuid
              */
             report_id: string;
+            resolution?: components["schemas"]["ScreeningResolutionResponse"] | null;
             /**
              * Reviewer Id
              * Format: uuid
@@ -15178,6 +15321,11 @@ export interface components {
             /** Assignment Count */
             assignment_count: number;
             /**
+             * Conflict Count
+             * @default 0
+             */
+            conflict_count: number;
+            /**
              * Created At
              * Format: date-time
              */
@@ -15203,6 +15351,11 @@ export interface components {
             protocol_version_id: string;
             /** Report Count */
             report_count: number;
+            /**
+             * Resolved Count
+             * @default 0
+             */
+            resolved_count: number;
             /** Reviewer Mode */
             reviewer_mode: string;
             /**
@@ -15218,6 +15371,54 @@ export interface components {
             suggestions_skipped?: number | null;
             /** Supersedes Queue Id */
             supersedes_queue_id?: string | null;
+        };
+        /** ScreeningReopenRequest */
+        ScreeningReopenRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Rationale */
+            rationale: string;
+            /**
+             * Resolution Id
+             * Format: uuid
+             */
+            resolution_id: string;
+        };
+        /**
+         * ScreeningResolutionResponse
+         * @description A derived or adjudicated outcome; never an editable field (GOO-302).
+         */
+        ScreeningResolutionResponse: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "single" | "agreement" | "conflict" | "adjudicated" | "reopened";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Criteria Hash */
+            criteria_hash: string;
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Input Observation Ids */
+            input_observation_ids: string[];
+            /** Outcome */
+            outcome?: ("include" | "exclude" | "uncertain") | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Supersedes Resolution Id */
+            supersedes_resolution_id?: string | null;
         };
         /**
          * ScreeningReviewDecisionPayload
@@ -28468,6 +28669,38 @@ export interface operations {
             };
         };
     };
+    screening_conflicts_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__conflicts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningConflictResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get: {
         parameters: {
             query?: never;
@@ -28486,7 +28719,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IdentityEventResponse"][];
+                    "application/json": components["schemas"]["ScreeningEventResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -28555,6 +28788,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreeningObservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adjudicate_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__adjudicate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningAdjudicateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningResolutionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningReopenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningResolutionResponse"];
                 };
             };
             /** @description Validation Error */
