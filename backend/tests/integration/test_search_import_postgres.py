@@ -29,7 +29,7 @@ import io
 import json
 import zipfile
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -91,7 +91,7 @@ TY  - JOUR
 TI  - Never ends
 """
 DECLARATION = ImportDeclaration(database="Embase (Ovid)", query_text="aspirin")
-Factory = async_sessionmaker[AsyncSession]
+Factory: TypeAlias = async_sessionmaker[AsyncSession]
 
 
 async def _import(
@@ -617,7 +617,7 @@ async def _route_import(factory: Factory, collection_id: UUID, user_id: UUID) ->
             current_user=SimpleNamespace(id=user_id),  # type: ignore[arg-type]
             db=db,
         )
-        return response.status_code
+        return int(response.status_code)
 
 
 async def _route_export(factory: Factory, collection_id: UUID, user_id: UUID) -> int:
@@ -628,14 +628,14 @@ async def _route_export(factory: Factory, collection_id: UUID, user_id: UUID) ->
             current_user=SimpleNamespace(id=user_id),  # type: ignore[arg-type]
             db=db,
         )
-        return response.status_code
+        return int(response.status_code)
 
 
 async def _status(call: Any) -> int:
     try:
         return cast(int, await call)
     except HTTPException as exc:
-        return exc.status_code
+        return int(exc.status_code)
 
 
 @pytest.mark.asyncio
