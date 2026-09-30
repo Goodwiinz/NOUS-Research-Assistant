@@ -152,6 +152,21 @@ async def current_version(db: AsyncSession, matrix_id: UUID) -> Any:
     ).scalar_one_or_none()
 
 
+async def matrix_project_id(db: AsyncSession, matrix_id: UUID) -> UUID:
+    """The live matrix's Collection id (for ``resolve_project``), else 404."""
+    project_id = (
+        await db.execute(
+            select(ExtractionMatrix.project_id).where(
+                ExtractionMatrix.id == matrix_id,
+                ExtractionMatrix.is_deleted.is_(False),
+            )
+        )
+    ).scalar_one_or_none()
+    if project_id is None:
+        raise HTTPException(status_code=404, detail=MATRIX_NOT_FOUND)
+    return cast(UUID, project_id)
+
+
 async def _matrix(db: AsyncSession, context: ProjectContext, matrix_id: UUID) -> Any:
     matrix = (
         await db.execute(
@@ -744,6 +759,7 @@ async def list_versions(
 def _summary(version: Any) -> dict[str, Any]:
     return {
         "id": str(version.id),
+        "fields": version.fields,
         "version_no": version.version_no,
         "provenance": version.provenance,
         "content_hash": version.content_hash,

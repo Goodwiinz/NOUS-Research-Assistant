@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _SAFE_COLUMN_NAME_RE = re.compile(r"^[\w\s\-\(\)\/\.,:]+$")
 
@@ -23,6 +23,18 @@ class ExtractionColumn(BaseModel):
     description: Optional[str] = Field(
         None, max_length=500, description="What to extract"
     )
+    # GOO-304: typed fields. All optional, so the request change is additive.
+    type: Literal["text", "number", "boolean", "categorical"] = Field(
+        default="text", description="Value type of the extracted field"
+    )
+    unit: Optional[str] = Field(default=None, max_length=50)
+    timepoint: Optional[str] = Field(default=None, max_length=100)
+    categories: Optional[List[str]] = Field(
+        default=None,
+        min_length=1,
+        max_length=50,
+        description="Allowed values; required for, and only for, categorical",
+    )
 
     @field_validator("name")
     @classmethod
@@ -30,6 +42,12 @@ class ExtractionColumn(BaseModel):
         if not _SAFE_COLUMN_NAME_RE.match(v):
             raise ValueError("Column name contains disallowed characters")
         return v
+
+    @model_validator(mode="after")
+    def categories_iff_categorical(self) -> "ExtractionColumn":
+        if (self.type == "categorical") != (self.categories is not None):
+            raise ValueError("categories are required for, and only for, categorical")
+        return self
 
 
 class ExtractionCellResponse(BaseModel):
@@ -56,7 +74,10 @@ class UpdateMatrixRequest(BaseModel):
     columns: Optional[List[ExtractionColumn]] = Field(None, min_length=1, max_length=20)
     clear_stale_cells: bool = Field(
         False,
-        description="Delete cells whose column_name no longer matches any column",
+        description=(
+            "Deprecated: nothing is deleted. When true and columns changed, the "
+            "response lists documents holding values on removed columns."
+        ),
     )
 
 
