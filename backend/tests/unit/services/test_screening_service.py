@@ -660,3 +660,23 @@ async def test_foreign_queue_and_protocol_are_404(db: AsyncSession) -> None:
     await _raises(_queue(db, other, report_ids=project.reports), 404)
     # A reused create key replays the same queue.
     assert (await _queue(db, project)).id == queue.id
+
+
+@pytest.mark.asyncio
+async def test_unique_index_backstop_is_a_409_not_a_500(db: AsyncSession) -> None:
+    """A write that slips past the service checks still gets a stable 409."""
+    project = await _seed(db)
+    queue = await _queue(db, project)
+    await _assign(db, project, queue.id, project.reviewer)
+    db.add(
+        ScreeningAssignment(
+            queue_id=queue.id,
+            reviewer_id=project.reviewer,
+            assigned_by_id=project.supervisor,
+        )
+    )
+    await _raises(
+        screening_service._flush_unique(db, "Reviewer already assigned"),
+        409,
+        "Reviewer already assigned",
+    )

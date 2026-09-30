@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import exists, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -86,6 +87,21 @@ OBSERVATION_EXISTS = "Observation exists; supersede the current observation"
 
 def _conflict(detail: str) -> HTTPException:
     return HTTPException(status_code=409, detail=detail)
+
+
+async def _flush_unique(db: AsyncSession, detail: str) -> None:
+    """Flush an insert; a unique-index hit becomes a stable 409, never a 500.
+
+    The service checks run first under the Collection lock, so this is only the
+    backstop for a writer that bypassed them. The transaction stays aborted and
+    the route never commits.
+    """
+    try:
+        await db.flush()
+    except IntegrityError as error:
+        if "unique" not in str(error.orig).lower():
+            raise
+        raise _conflict(detail) from error
 
 
 async def _queue(db: AsyncSession, context: ProjectContext, queue_id: UUID) -> Any:
@@ -460,7 +476,7 @@ async def create_queue(
         created_by_id=actor_user_id,
     )
     db.add(queue)
-    await db.flush()
+    await _flush_unique(db, "Screening queue already reconciled")
     await db.refresh(queue)
     skipped = None
     if data.suggestion_step_id is not None:
@@ -565,7 +581,7 @@ async def assign(
         assigned_by_id=actor_user_id,
     )
     db.add(assignment)
-    await db.flush()
+    await _flush_unique(db, "Reviewer already assigned")
     await _append(
         db,
         context,
@@ -834,7 +850,7 @@ async def submit(
         supersedes_observation_id=current_id,
     )
     db.add(observation)
-    await db.flush()
+    await _flush_unique(db, OBSERVATION_EXISTS)
     payload: dict[str, Any] = {
         "observation_id": str(observation.id),
         "assignment_id": str(assignment.id),

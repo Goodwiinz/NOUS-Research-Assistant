@@ -6715,6 +6715,38 @@
         "title": "IdentityEventResponse",
         "type": "object"
       },
+      "ImportedRecordObservation": {
+        "description": "An externally imported record (GOO-300) attached to this report.",
+        "properties": {
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "import_record_id": {
+            "format": "uuid",
+            "title": "Import Record Id",
+            "type": "string"
+          },
+          "match_method": {
+            "title": "Match Method",
+            "type": "string"
+          },
+          "receipt_id": {
+            "format": "uuid",
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "import_record_id",
+          "receipt_id",
+          "match_method",
+          "evidence"
+        ],
+        "title": "ImportedRecordObservation",
+        "type": "object"
+      },
       "IntegrityScoreResponse": {
         "description": "Full integrity score for a document.",
         "properties": {
@@ -7896,6 +7928,140 @@
         ],
         "title": "MetricTimeRange",
         "type": "string"
+      },
+      "MyScreeningQueueInfo": {
+        "properties": {
+          "criteria_hash": {
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "exclusion_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusion Reasons",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "title_abstract",
+              "full_text"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "stale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "protocol_version_id",
+          "criteria_hash",
+          "exclusion_reasons"
+        ],
+        "title": "MyScreeningQueueInfo",
+        "type": "object"
+      },
+      "MyScreeningQueueItem": {
+        "properties": {
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abstract"
+          },
+          "identifiers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Identifiers",
+            "type": "object"
+          },
+          "observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreeningObservationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "title_snapshot": {
+            "title": "Title Snapshot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "title_snapshot",
+          "identifiers"
+        ],
+        "title": "MyScreeningQueueItem",
+        "type": "object"
+      },
+      "MyScreeningQueueResponse": {
+        "properties": {
+          "assignment_id": {
+            "format": "uuid",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ScreeningCounts"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MyScreeningQueueItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/MyScreeningQueueInfo"
+          }
+        },
+        "required": [
+          "queue",
+          "assignment_id",
+          "items",
+          "counts"
+        ],
+        "title": "MyScreeningQueueResponse",
+        "type": "object"
       },
       "NativeDecision": {
         "additionalProperties": false,
@@ -10841,6 +11007,14 @@
             "title": "Identifiers",
             "type": "object"
           },
+          "imported_records": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ImportedRecordObservation"
+            },
+            "title": "Imported Records",
+            "type": "array"
+          },
           "merged_into_report_id": {
             "anyOf": [
               {
@@ -10921,6 +11095,15 @@
             "title": "Idempotency Key",
             "type": "string"
           },
+          "import_record_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Import Record Ids",
+            "type": "array"
+          },
           "rationale": {
             "maxLength": 10000,
             "minLength": 1,
@@ -10928,17 +11111,16 @@
             "type": "string"
           },
           "source_ids": {
+            "default": [],
             "items": {
               "format": "uuid",
               "type": "string"
             },
-            "minItems": 1,
             "title": "Source Ids",
             "type": "array"
           }
         },
         "required": [
-          "source_ids",
           "rationale",
           "idempotency_key"
         ],
@@ -12393,6 +12575,112 @@
         "title": "ScanFindingResponse",
         "type": "object"
       },
+      "ScreeningAssignmentCreate": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reviewer_user_id": {
+            "format": "uuid",
+            "title": "Reviewer User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reviewer_user_id",
+          "idempotency_key"
+        ],
+        "title": "ScreeningAssignmentCreate",
+        "type": "object"
+      },
+      "ScreeningAssignmentResponse": {
+        "properties": {
+          "assigned_by_id": {
+            "format": "uuid",
+            "title": "Assigned By Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "queue_id": {
+            "format": "uuid",
+            "title": "Queue Id",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "revoked_by_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked By Id"
+          }
+        },
+        "required": [
+          "id",
+          "queue_id",
+          "reviewer_id",
+          "assigned_by_id",
+          "created_at"
+        ],
+        "title": "ScreeningAssignmentResponse",
+        "type": "object"
+      },
+      "ScreeningCounts": {
+        "properties": {
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "screened": {
+            "title": "Screened",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "screened",
+          "remaining"
+        ],
+        "title": "ScreeningCounts",
+        "type": "object"
+      },
       "ScreeningItemDecision": {
         "additionalProperties": false,
         "description": "A review decision for exactly one persisted screening source part.",
@@ -12440,6 +12728,352 @@
         "title": "ScreeningItemDecision",
         "type": "object"
       },
+      "ScreeningObservationCreate": {
+        "properties": {
+          "assignment_id": {
+            "format": "uuid",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "criteria_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "include",
+              "exclude",
+              "uncertain"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "supersedes_observation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Observation Id"
+          }
+        },
+        "required": [
+          "report_id",
+          "assignment_id",
+          "criteria_hash",
+          "decision",
+          "idempotency_key"
+        ],
+        "title": "ScreeningObservationCreate",
+        "type": "object"
+      },
+      "ScreeningObservationResponse": {
+        "properties": {
+          "assignment_id": {
+            "format": "uuid",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "include",
+              "exclude",
+              "uncertain"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "queue_id": {
+            "format": "uuid",
+            "title": "Queue Id",
+            "type": "string"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "supersedes_observation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Observation Id"
+          }
+        },
+        "required": [
+          "id",
+          "queue_id",
+          "report_id",
+          "reviewer_id",
+          "assignment_id",
+          "decision",
+          "created_at"
+        ],
+        "title": "ScreeningObservationResponse",
+        "type": "object"
+      },
+      "ScreeningQueueCreate": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "report_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Ids"
+          },
+          "stage": {
+            "enum": [
+              "title_abstract",
+              "full_text"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "suggestion_step_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion Step Id"
+          },
+          "supersedes_queue_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Queue Id"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "stage",
+          "idempotency_key"
+        ],
+        "title": "ScreeningQueueCreate",
+        "type": "object"
+      },
+      "ScreeningQueueResponse": {
+        "description": "Counts only: decision breakdowns belong to GOO-302's reveal rules.",
+        "properties": {
+          "assignment_count": {
+            "title": "Assignment Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "criteria_hash": {
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "observation_count": {
+            "title": "Observation Count",
+            "type": "integer"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "report_count": {
+            "title": "Report Count",
+            "type": "integer"
+          },
+          "reviewer_mode": {
+            "title": "Reviewer Mode",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "title_abstract",
+              "full_text"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "stale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale"
+          },
+          "suggestion_count": {
+            "title": "Suggestion Count",
+            "type": "integer"
+          },
+          "suggestions_skipped": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestions Skipped"
+          },
+          "supersedes_queue_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Queue Id"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "protocol_version_id",
+          "criteria_hash",
+          "reviewer_mode",
+          "created_by_id",
+          "created_at",
+          "report_count",
+          "assignment_count",
+          "observation_count",
+          "suggestion_count"
+        ],
+        "title": "ScreeningQueueResponse",
+        "type": "object"
+      },
       "ScreeningReviewDecisionPayload": {
         "additionalProperties": false,
         "description": "Exact-set screening decisions submitted for one stage output.",
@@ -12458,6 +13092,28 @@
           "items"
         ],
         "title": "ScreeningReviewDecisionPayload",
+        "type": "object"
+      },
+      "ScreeningRevokeRequest": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "idempotency_key"
+        ],
+        "title": "ScreeningRevokeRequest",
         "type": "object"
       },
       "SearchAnalytics": {
@@ -35971,6 +36627,448 @@
         "summary": "Delete Project Role",
         "tags": [
           "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues": {
+      "get": {
+        "operationId": "list_screening_queues_route_api_v1_research_engine_projects__project_id__screening_queues_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScreeningQueueResponse"
+                  },
+                  "title": "Response List Screening Queues Route Api V1 Research Engine Projects  Project Id  Screening Queues Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Screening Queues Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      },
+      "post": {
+        "operationId": "create_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningQueueCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningQueueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Screening Queue Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/assignments": {
+      "post": {
+        "operationId": "assign_screening_reviewer_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningAssignmentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningAssignmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Assign Screening Reviewer Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/assignments/{assignment_id}/revoke": {
+      "post": {
+        "operationId": "revoke_screening_assignment_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments__assignment_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "assignment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Assignment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningAssignmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Screening Assignment Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/history": {
+      "get": {
+        "operationId": "screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IdentityEventResponse"
+                  },
+                  "title": "Response Screening History Route Api V1 Research Engine Projects  Project Id  Screening Queues  Queue Id  History Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Screening History Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/mine": {
+      "get": {
+        "operationId": "my_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__mine_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyScreeningQueueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Screening Queue Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/observations": {
+      "post": {
+        "operationId": "submit_screening_observation_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__observations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningObservationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningObservationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Submit Screening Observation Route",
+        "tags": [
+          "research-engine-screening"
         ]
       }
     },

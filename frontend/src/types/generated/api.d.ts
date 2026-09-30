@@ -6112,6 +6112,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Screening Queues Route */
+        get: operations["list_screening_queues_route_api_v1_research_engine_projects__project_id__screening_queues_get"];
+        put?: never;
+        /** Create Screening Queue Route */
+        post: operations["create_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assign Screening Reviewer Route */
+        post: operations["assign_screening_reviewer_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/assignments/{assignment_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Screening Assignment Route */
+        post: operations["revoke_screening_assignment_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments__assignment_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Screening History Route */
+        get: operations["screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Screening Queue Route */
+        get: operations["my_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__mine_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit Screening Observation Route */
+        post: operations["submit_screening_observation_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/protocols/{protocol_id}": {
         parameters: {
             query?: never;
@@ -12083,6 +12186,28 @@ export interface components {
             seq: number;
         };
         /**
+         * ImportedRecordObservation
+         * @description An externally imported record (GOO-300) attached to this report.
+         */
+        ImportedRecordObservation: {
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /**
+             * Import Record Id
+             * Format: uuid
+             */
+            import_record_id: string;
+            /** Match Method */
+            match_method: string;
+            /**
+             * Receipt Id
+             * Format: uuid
+             */
+            receipt_id: string;
+        };
+        /**
          * IntegrityScoreResponse
          * @description Full integrity score for a document.
          */
@@ -12594,6 +12719,59 @@ export interface components {
          * @enum {string}
          */
         MetricTimeRange: "1h" | "24h" | "7d" | "30d" | "90d";
+        /** MyScreeningQueueInfo */
+        MyScreeningQueueInfo: {
+            /** Criteria Hash */
+            criteria_hash: string;
+            /** Exclusion Reasons */
+            exclusion_reasons: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /** Stale */
+            stale?: string | null;
+        };
+        /** MyScreeningQueueItem */
+        MyScreeningQueueItem: {
+            /** Abstract */
+            abstract?: string | null;
+            /** Identifiers */
+            identifiers: {
+                [key: string]: string[];
+            };
+            observation?: components["schemas"]["ScreeningObservationResponse"] | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Title Snapshot */
+            title_snapshot: string;
+        };
+        /** MyScreeningQueueResponse */
+        MyScreeningQueueResponse: {
+            /**
+             * Assignment Id
+             * Format: uuid
+             */
+            assignment_id: string;
+            counts: components["schemas"]["ScreeningCounts"];
+            /** Items */
+            items: components["schemas"]["MyScreeningQueueItem"][];
+            queue: components["schemas"]["MyScreeningQueueInfo"];
+        };
         /**
          * NativeDecision
          * @description A strict one-time decision, or exact answers to native questions.
@@ -13818,6 +13996,11 @@ export interface components {
             identifiers: {
                 [key: string]: string[];
             };
+            /**
+             * Imported Records
+             * @default []
+             */
+            imported_records: components["schemas"]["ImportedRecordObservation"][];
             /** Merged Into Report Id */
             merged_into_report_id?: string | null;
             /** Observations */
@@ -13835,9 +14018,17 @@ export interface components {
         ReportSplitRequest: {
             /** Idempotency Key */
             idempotency_key: string;
+            /**
+             * Import Record Ids
+             * @default []
+             */
+            import_record_ids: string[];
             /** Rationale */
             rationale: string;
-            /** Source Ids */
+            /**
+             * Source Ids
+             * @default []
+             */
             source_ids: string[];
         };
         /** ReportSuggestion */
@@ -14503,6 +14694,57 @@ export interface components {
             /** Severity */
             severity: string;
         };
+        /** ScreeningAssignmentCreate */
+        ScreeningAssignmentCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Reviewer User Id
+             * Format: uuid
+             */
+            reviewer_user_id: string;
+        };
+        /** ScreeningAssignmentResponse */
+        ScreeningAssignmentResponse: {
+            /**
+             * Assigned By Id
+             * Format: uuid
+             */
+            assigned_by_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Queue Id
+             * Format: uuid
+             */
+            queue_id: string;
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /** Revoked At */
+            revoked_at?: string | null;
+            /** Revoked By Id */
+            revoked_by_id?: string | null;
+        };
+        /** ScreeningCounts */
+        ScreeningCounts: {
+            /** Remaining */
+            remaining: number;
+            /** Screened */
+            screened: number;
+            /** Total */
+            total: number;
+        };
         /**
          * ScreeningItemDecision
          * @description A review decision for exactly one persisted screening source part.
@@ -14520,6 +14762,148 @@ export interface components {
             /** Source Id */
             source_id: string;
         };
+        /** ScreeningObservationCreate */
+        ScreeningObservationCreate: {
+            /**
+             * Assignment Id
+             * Format: uuid
+             */
+            assignment_id: string;
+            /** Criteria Hash */
+            criteria_hash: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "uncertain";
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Note */
+            note?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Supersedes Observation Id */
+            supersedes_observation_id?: string | null;
+        };
+        /** ScreeningObservationResponse */
+        ScreeningObservationResponse: {
+            /**
+             * Assignment Id
+             * Format: uuid
+             */
+            assignment_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "uncertain";
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Note */
+            note?: string | null;
+            /**
+             * Queue Id
+             * Format: uuid
+             */
+            queue_id: string;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /** Supersedes Observation Id */
+            supersedes_observation_id?: string | null;
+        };
+        /** ScreeningQueueCreate */
+        ScreeningQueueCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Report Ids */
+            report_ids?: string[] | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /** Suggestion Step Id */
+            suggestion_step_id?: string | null;
+            /** Supersedes Queue Id */
+            supersedes_queue_id?: string | null;
+        };
+        /**
+         * ScreeningQueueResponse
+         * @description Counts only: decision breakdowns belong to GOO-302's reveal rules.
+         */
+        ScreeningQueueResponse: {
+            /** Assignment Count */
+            assignment_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Criteria Hash */
+            criteria_hash: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Observation Count */
+            observation_count: number;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Report Count */
+            report_count: number;
+            /** Reviewer Mode */
+            reviewer_mode: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /** Stale */
+            stale?: string | null;
+            /** Suggestion Count */
+            suggestion_count: number;
+            /** Suggestions Skipped */
+            suggestions_skipped?: number | null;
+            /** Supersedes Queue Id */
+            supersedes_queue_id?: string | null;
+        };
         /**
          * ScreeningReviewDecisionPayload
          * @description Exact-set screening decisions submitted for one stage output.
@@ -14527,6 +14911,13 @@ export interface components {
         ScreeningReviewDecisionPayload: {
             /** Items */
             items: components["schemas"]["ScreeningItemDecision"][];
+        };
+        /** ScreeningRevokeRequest */
+        ScreeningRevokeRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * SearchAnalytics
@@ -27391,6 +27782,245 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_screening_queues_route_api_v1_research_engine_projects__project_id__screening_queues_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningQueueResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningQueueCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_screening_reviewer_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningAssignmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_screening_assignment_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments__assignment_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+                assignment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningAssignmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityEventResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__mine_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyScreeningQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_screening_observation_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningObservationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningObservationResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
