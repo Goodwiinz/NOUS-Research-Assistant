@@ -3947,6 +3947,74 @@
         "title": "ConsensusLevel",
         "type": "string"
       },
+      "ContextOptions": {
+        "description": "What the owner can share with one connected device, and what is shared.",
+        "properties": {
+          "memories": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryOption"
+            },
+            "title": "Memories",
+            "type": "array"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_label": {
+            "title": "Project Label",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "selected_memory_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Selected Memory Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id",
+          "project_id",
+          "project_label",
+          "memories",
+          "selected_memory_ids"
+        ],
+        "title": "ContextOptions",
+        "type": "object"
+      },
+      "ContextSelectionUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "memory_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 25,
+            "title": "Memory Ids",
+            "type": "array"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "memory_ids"
+        ],
+        "title": "ContextSelectionUpdate",
+        "type": "object"
+      },
       "ConversationCreate": {
         "description": "Create conversation request",
         "properties": {
@@ -9150,6 +9218,36 @@
           }
         },
         "title": "LocalExtractionRequest",
+        "type": "object"
+      },
+      "MemoryOption": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "source",
+          "created_at"
+        ],
+        "title": "MemoryOption",
         "type": "object"
       },
       "MergeJobEntityRef": {
@@ -32015,6 +32113,129 @@
         "summary": "Decide Native Request",
         "tags": [
           "harness"
+        ]
+      }
+    },
+    "/api/v1/integrations/context": {
+      "get": {
+        "operationId": "get_selected_context_api_v1_integrations_context_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Selected Context",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/context/options": {
+      "get": {
+        "operationId": "get_context_options_api_v1_integrations_context_options_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Context Options",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/context/selection": {
+      "put": {
+        "operationId": "put_context_selection_api_v1_integrations_context_selection_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextSelectionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Context Selection",
+        "tags": [
+          "integrations",
+          "integrations"
         ]
       }
     },

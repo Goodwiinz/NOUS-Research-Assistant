@@ -3847,6 +3847,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Selected Context */
+        get: operations["get_selected_context_api_v1_integrations_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/context/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Context Options */
+        get: operations["get_context_options_api_v1_integrations_context_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/context/selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Context Selection */
+        put: operations["put_context_selection_api_v1_integrations_context_selection_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices": {
         parameters: {
             query?: never;
@@ -11195,6 +11246,38 @@ export interface components {
          */
         ConsensusLevel: "strong_agreement" | "moderate_agreement" | "mixed" | "low_agreement" | "insufficient_data";
         /**
+         * ContextOptions
+         * @description What the owner can share with one connected device, and what is shared.
+         */
+        ContextOptions: {
+            /** Memories */
+            memories: components["schemas"]["MemoryOption"][];
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Label */
+            project_label: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Selected Memory Ids */
+            selected_memory_ids: string[];
+        };
+        /** ContextSelectionUpdate */
+        ContextSelectionUpdate: {
+            /** Memory Ids */
+            memory_ids: string[];
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+        };
+        /**
          * ConversationCreate
          * @description Create conversation request
          */
@@ -13622,6 +13705,23 @@ export interface components {
              * @default true
              */
             update_knowledge_graph: boolean;
+        };
+        /** MemoryOption */
+        MemoryOption: {
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Source */
+            source: string;
         };
         /** MergeJobEntityRef */
         MergeJobEntityRef: {
@@ -25106,6 +25206,90 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_selected_context_api_v1_integrations_context_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolResult"];
+                };
+            };
+        };
+    };
+    get_context_options_api_v1_integrations_context_options_get: {
+        parameters: {
+            query: {
+                request_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextOptions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_context_selection_api_v1_integrations_context_selection_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextSelectionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextOptions"];
+                };
             };
             /** @description Validation Error */
             422: {

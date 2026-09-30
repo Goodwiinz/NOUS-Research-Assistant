@@ -356,6 +356,7 @@ from .artifact import (
 )
 from .bridge_device import BridgeDevice, WorkspaceBinding
 from .harness_session import HarnessNativeRequest, HarnessSession
+from .integration_context_selection import IntegrationContextSelection
 from .integration_grant import IntegrationGrant, IntegrationGrantRequest
 
 __all__ += [
@@ -364,6 +365,7 @@ __all__ += [
     "WorkspaceBinding",
     "IntegrationGrant",
     "IntegrationGrantRequest",
+    "IntegrationContextSelection",
     "Artifact",
     "ArtifactVersion",
     "ArtifactUpload",
