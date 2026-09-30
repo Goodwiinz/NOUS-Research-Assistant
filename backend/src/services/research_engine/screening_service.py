@@ -20,7 +20,7 @@ from sqlalchemy.orm import aliased
 
 from src.models.research_blueprint import ResearchBlueprint
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
-from src.models.research_import import ResearchImportRecord
+from src.models.research_import import ResearchImportReceipt, ResearchImportRecord
 from src.models.research_project import ResearchProject
 from src.models.research_project_role import (
     ResearchProjectRole,
@@ -64,6 +64,7 @@ from src.services.research_decisions import (
     replay_decisions,
 )
 from src.services.research_engine import screening_rules
+from src.services.research_engine.corpus_service import raw_allowed, visible_parsed
 from src.services.research_engine.identity_service import (
     _replayed_event,
     _require_role,
@@ -753,15 +754,24 @@ async def my_queue(
         )
     ).all():
         abstracts.setdefault(report_id, abstract)
-    # GOO-300 fallback: an imported record's parsed abstract.
-    for report_id, parsed in (
+    # GOO-300 fallback: an imported record's parsed abstract, only where its
+    # receipt allows redistribution (restricted text never leaves the server).
+    for report_id, parsed, receipt in (
         await db.execute(
-            select(ResearchImportRecord.report_id, ResearchImportRecord.parsed)
+            select(
+                ResearchImportRecord.report_id,
+                ResearchImportRecord.parsed,
+                ResearchImportReceipt,
+            )
+            .join(
+                ResearchImportReceipt,
+                ResearchImportReceipt.id == ResearchImportRecord.receipt_id,
+            )
             .where(ResearchImportRecord.report_id.in_(report_ids))
             .order_by(ResearchImportRecord.created_at, ResearchImportRecord.id)
         )
     ).all():
-        abstract = (parsed or {}).get("abstract")
+        abstract = visible_parsed(parsed or {}, raw_allowed(receipt)).get("abstract")
         if isinstance(abstract, str) and abstract:
             abstracts.setdefault(report_id, abstract)
     own = {

@@ -16,7 +16,7 @@ import src.models  # noqa: F401  (registers every FK target table)
 from src.models.base import GUID, Base
 from src.models.research_blueprint import ResearchBlueprint
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
-from src.models.research_import import ResearchImportRecord
+from src.models.research_import import ResearchImportReceipt, ResearchImportRecord
 from src.models.research_project import ResearchProject
 from src.models.research_project_role import (
     ResearchProjectRole,
@@ -63,6 +63,7 @@ _TABLES = (
     ResearchReportIdentifier,
     ResearchReportObservation,
     ResearchSource,
+    ResearchImportReceipt,
     ResearchImportRecord,
     ResearchProject,
     ResearchBlueprint,
@@ -972,3 +973,54 @@ async def test_flush_backstop_maps_only_unique_violations(
     else:
         with pytest.raises(IntegrityError):
             await screening_service._flush_unique(session, "taken")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("redistribution", "shown"), [("restricted", False), ("allowed", True)]
+)
+async def test_imported_abstract_respects_redistribution(
+    db: AsyncSession, redistribution: str, shown: bool
+) -> None:
+    """A restricted import's abstract stays in the database (GOO-300 rule)."""
+    project = await _seed(db)
+    receipt_id = uuid4()
+    db.add(
+        ResearchImportReceipt(
+            id=receipt_id,
+            collection_id=project.collection_id,
+            kind="file_import",
+            dedup_key=f"file:{receipt_id.hex}",
+            lineage_key="l" * 64,
+            version=1,
+            declared={"redistribution": redistribution},
+            observed={},
+            parsed_count=1,
+            accepted_count=1,
+            rejected_count=0,
+            actor_user_id=project.owner,
+        )
+    )
+    await db.flush()
+    db.add(
+        ResearchImportRecord(
+            collection_id=project.collection_id,
+            receipt_id=receipt_id,
+            record_index=0,
+            status="accepted",
+            raw="TI  - Alpha",
+            parsed={"title": "Alpha", "abstract": "Licensed abstract text."},
+            report_id=project.reports[0],
+            match_method="doi",
+            evidence={},
+        )
+    )
+    await db.flush()
+    queue = await _queue(db, project)
+    await _assign(db, project, queue.id, project.reviewer)
+
+    mine = await screening_service.my_queue(
+        db, _reviewer(project), queue.id, project.reviewer
+    )
+
+    assert mine.items[0].abstract == ("Licensed abstract text." if shown else None)
