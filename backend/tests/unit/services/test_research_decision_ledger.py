@@ -921,3 +921,74 @@ def test_adjudicated_requires_reason(event_type: str, reason: str | None) -> Non
     _validate_event(**dual.queue.event(event_type, payload, "because"))  # type: ignore[arg-type]
     with pytest.raises(DecisionValidationError, match="rationale"):
         _validate_event(**dual.queue.event(event_type, payload, reason))  # type: ignore[arg-type]
+
+
+def test_replay_rejects_adjudicating_a_non_conflict_tip() -> None:
+    dual = _Dual()
+    o1, o2, trigger = uuid4(), uuid4(), uuid4()
+    events = [
+        *dual.base,
+        dual.observe(o1, dual.r, "exclude", "wrong design"),
+        dual.observe(o2, dual.r2, "exclude", "wrong design", event_id=trigger),
+    ]
+    payload = dual.queue.adjudicated(
+        dual.report, uuid4(), auto_resolution_id(trigger), [o1, o2]
+    )
+    with pytest.raises(DecisionReplayError, match="not in conflict"):
+        dual.queue.replay(*events, ("screening.adjudicated", payload))
+
+
+def test_replay_rejects_adjudication_under_other_criteria() -> None:
+    dual = _Dual()
+    events, tip, inputs = _conflict(dual)
+    payload = dual.queue.adjudicated(dual.report, uuid4(), tip, inputs)
+    payload["criteria_hash"] = "d" * 64
+    with pytest.raises(DecisionReplayError, match="criteria changed"):
+        dual.queue.replay(*events, ("screening.adjudicated", payload))
+
+
+def test_replay_rejects_double_reopen() -> None:
+    dual = _Dual()
+    events, tip, _inputs = _conflict(dual)
+    first = uuid4()
+    with pytest.raises(DecisionReplayError, match="not resolved"):
+        dual.queue.replay(
+            *events,
+            ("screening.reopened", dual.queue.reopened(dual.report, first, tip)),
+            ("screening.reopened", dual.queue.reopened(dual.report, uuid4(), first)),
+        )
+
+
+def test_replay_rejects_adjudicator_who_reviewed_an_earlier_cycle() -> None:
+    """R3 was an input of cycle 1 only; after a reopen, R and R2 conflict and
+    R3 (also an adjudicator) still may not adjudicate the report."""
+    dual = _Dual()
+    r3, a3 = uuid4(), uuid4()
+    o_r3, o_r, o_r_new, o_r2, t1, t3 = (uuid4() for _ in range(6))
+    events: list[tuple[Any, ...]] = [
+        *dual.base,
+        ("screening.assigned", dual.queue.assignment(a3, r3)),
+        (
+            "screening.observed",
+            dual.queue.observed(o_r3, a3, r3, dual.report, "include"),
+        ),
+        dual.observe(o_r, dual.r, "exclude", "wrong design", event_id=t1),
+    ]
+    reopen = uuid4()
+    events += [
+        (
+            "screening.reopened",
+            dual.queue.reopened(dual.report, reopen, auto_resolution_id(t1)),
+        ),
+        dual.observe(o_r_new, dual.r, "include", superseded=o_r),
+        dual.observe(o_r2, dual.r2, "exclude", "wrong design", event_id=t3),
+    ]
+    resolutions = dual.queue.replay(*events)
+    assert [r.basis for r in resolutions] == ["conflict", "reopened", "conflict"]
+    assert str(o_r3) not in resolutions[-1].input_observation_ids
+    payload = dual.queue.adjudicated(
+        dual.report, uuid4(), auto_resolution_id(t3), [o_r_new, o_r2]
+    )
+    dual.queue.replay(*events, ("screening.adjudicated", payload))
+    with pytest.raises(DecisionReplayError, match="adjudicator reviewed"):
+        dual.queue.replay(*events, ("screening.adjudicated", payload, {"actor": r3}))

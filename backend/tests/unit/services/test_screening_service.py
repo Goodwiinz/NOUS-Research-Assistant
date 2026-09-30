@@ -1485,17 +1485,109 @@ async def test_single_mode_resolves_immediately(db: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drift",
+    [{"basis": "agreement", "outcome": "include"}, {"criteria_hash": "0" * 64}],
+)
 async def test_history_rejects_a_resolution_that_drifted_from_its_inputs(
-    db: AsyncSession,
+    db: AsyncSession, drift: dict[str, str]
 ) -> None:
     dual = await _dual(db)
     project, report = dual.project, dual.project.reports[0]
     await _vote(db, dual, "r", report, "k1")
     await _vote(db, dual, "r2", report, "k2", "exclude")
-    await db.execute(
-        update(ScreeningResolution).values(basis="agreement", outcome="include")
-    )
+    await db.execute(update(ScreeningResolution).values(**drift))
     with pytest.raises(DecisionReplayError, match="does not match inputs"):
         await screening_service.history(
             db, _supervisor(project), dual.queue.id, project.supervisor
         )
+
+
+@pytest.mark.asyncio
+async def test_reopen_with_a_stale_resolution_id_is_409(db: AsyncSession) -> None:
+    dual = await _dual(db)
+    project = dual.project
+    conflict = await _conflict(db, dual)
+    await _raises(
+        screening_service.reopen(
+            db,
+            _adjudicator(project),
+            dual.queue.id,
+            conflict.report_id,
+            project.supervisor,
+            ScreeningReopenRequest(
+                resolution_id=uuid4(), rationale="x", idempotency_key="stale"
+            ),
+        ),
+        409,
+        "Resolution changed; reload the queue",
+    )
+    assert await _count(db, ScreeningResolution) == 1
+
+
+@pytest.mark.asyncio
+async def test_adjudicator_who_reviewed_an_earlier_cycle_is_403(
+    db: AsyncSession,
+) -> None:
+    """The supervisor reviews cycle 1, is not an input of cycle 2, and still
+    may not adjudicate that report (any observation, any cycle)."""
+    dual = await _dual(db)
+    project, report = dual.project, dual.project.reports[0]
+    db.add(
+        ResearchProjectRoleAssignment(
+            collection_id=project.collection_id,
+            user_id=project.supervisor,
+            role=ResearchProjectRole.REVIEWER,
+            assigned_by_id=project.owner,
+        )
+    )
+    await db.flush()
+    third = await _assign(db, project, dual.queue.id, project.supervisor)
+    both = _context(
+        project, ResearchProjectRole.REVIEWER, ResearchProjectRole.ADJUDICATOR
+    )
+    await screening_service.submit(
+        db,
+        both,
+        dual.queue.id,
+        project.supervisor,
+        ScreeningObservationCreate(
+            report_id=report,
+            assignment_id=third.id,
+            criteria_hash=dual.queue.criteria_hash,
+            decision="include",
+            idempotency_key="s1",
+        ),
+    )
+    first = await _vote(db, dual, "r", report, "k1", "exclude")
+    assert first.resolution is not None and first.resolution.basis == "conflict"
+    await screening_service.reopen(
+        db,
+        _adjudicator(project),
+        dual.queue.id,
+        report,
+        project.owner,
+        ScreeningReopenRequest(
+            resolution_id=first.resolution.id, rationale="r", idempotency_key="o"
+        ),
+    )
+    await _vote(db, dual, "r", report, "k2", supersedes_observation_id=first.id)
+    await _vote(db, dual, "r2", report, "k3", "exclude")
+    [conflict] = await _conflicts(db, dual)
+    assert not any(o.reviewer_id == project.supervisor for o in conflict.observations)
+    await _raises(
+        screening_service.adjudicate(
+            db,
+            both,
+            dual.queue.id,
+            report,
+            project.supervisor,
+            _adjudicate_body(conflict, "self"),
+        ),
+        403,
+        "Adjudicator reviewed this report",
+    )
+    history = await screening_service.history(
+        db, _supervisor(project), dual.queue.id, project.supervisor
+    )
+    assert history[-1].event_type == "screening.observed"

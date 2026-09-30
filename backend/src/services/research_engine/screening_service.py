@@ -1158,6 +1158,7 @@ async def _check_resolutions(
                 if row.supersedes_resolution_id is None
                 else str(row.supersedes_resolution_id)
             ),
+            row.criteria_hash,
         )
 
     stored = (
@@ -1285,15 +1286,19 @@ async def adjudicate(
         tip is None
         or tip.id != data.resolution_id
         or inputs != sorted(str(i) for i in tip.input_observation_ids)
+        # Defense only: step 4a in submit makes a superseded input unreachable.
         or set(inputs) != current
     ):
         raise _conflict(INPUTS_STALE)
     if tip.basis != "conflict":
         raise _conflict(NOT_IN_CONFLICT)
+    # Any observation of this report by the actor, in any cycle (superseded or
+    # consumed by an earlier resolution too), not only the current inputs.
     reviewed = (
         await db.execute(
             select(ScreeningObservation.id).where(
-                ScreeningObservation.id.in_(data.input_observation_ids),
+                ScreeningObservation.queue_id == queue_id,
+                ScreeningObservation.report_id == report_id,
                 ScreeningObservation.reviewer_id == actor_user_id,
             )
         )
