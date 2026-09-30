@@ -133,3 +133,86 @@ async def test_upload_preserves_safe_http_error() -> None:
 
     assert exc_info.value.status_code == status.HTTP_409_CONFLICT
     assert exc_info.value.detail == "Identical file already exists in this organization"
+
+
+@pytest.mark.asyncio
+async def test_upload_validation_error_returns_curated_public_detail() -> None:
+    """Codex P2 on #1733: actionable validation reasons survive via public_detail."""
+    user = _user()
+    service = SimpleNamespace(
+        upload_file=AsyncMock(
+            side_effect=FileValidationError(
+                "internal: extension '.exe' rejected for org organization-id",
+                public_detail="File type is not allowed",
+            )
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await files_module.upload_file(
+            file=cast(Any, _upload()),
+            title="Sample",
+            description=None,
+            tags=None,
+            is_public=False,
+            processing_priority="normal",
+            enable_quality_check=True,
+            custom_metadata=None,
+            current_user=cast(Any, user),
+            db=MagicMock(),
+            file_service=cast(Any, service),
+        )
+
+    assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == "File type is not allowed"
+    assert "internal" not in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    ("filename", "size", "expected"),
+    [
+        ("big.txt", 10_000, "File exceeds the maximum allowed size"),
+        (
+            "bundle.zip",
+            7,
+            "Archive uploads are not supported; extract and upload the files",
+        ),
+        ("tool.exe", 7, "File type is not allowed"),
+    ],
+)
+def test_validate_file_sets_curated_public_detail(
+    filename: str, size: int, expected: str
+) -> None:
+    from src.services.documents.file_service import FileService
+
+    upload = SimpleNamespace(filename=filename, size=size, file=io.BytesIO(b"x"))
+    org = SimpleNamespace(
+        max_file_size_bytes=1_000,
+        storage_available_gb=10.0,
+        can_upload_file=lambda _size: True,
+    )
+
+    with pytest.raises(FileValidationError) as exc_info:
+        FileService.validate_file(
+            cast(Any, MagicMock()), cast(Any, upload), cast(Any, None), cast(Any, org)
+        )
+
+    assert exc_info.value.public_detail == expected
+
+
+def test_validate_file_quota_sets_curated_public_detail() -> None:
+    from src.services.documents.file_service import FileService
+
+    upload = SimpleNamespace(filename="a.txt", size=7, file=io.BytesIO(b"x"))
+    org = SimpleNamespace(
+        max_file_size_bytes=1_000,
+        storage_available_gb=0.0,
+        can_upload_file=lambda _size: False,
+    )
+
+    with pytest.raises(FileValidationError) as exc_info:
+        FileService.validate_file(
+            cast(Any, MagicMock()), cast(Any, upload), cast(Any, None), cast(Any, org)
+        )
+
+    assert exc_info.value.public_detail == "Insufficient storage quota"

@@ -249,13 +249,14 @@ async def upload_file(
     except HTTPException:
         # R2-M10: intentional 4xx (validation/quota) must not be re-wrapped.
         raise
-    except FileValidationError:
-        # I8: even though FileService validation messages are curated, raw
-        # exception text stays out of client responses; details go to the log.
+    except FileValidationError as exc:
+        # I8: raw exception text stays out of client responses (it goes to the
+        # log); only the static, curated public_detail set at the raise site is
+        # returned so the client can still act on the rejection reason.
         logger.warning("File validation failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File validation failed",
+            detail=exc.public_detail or "File validation failed",
         )
     except FileStorageError:
         logger.error("File upload failed", exc_info=True)
