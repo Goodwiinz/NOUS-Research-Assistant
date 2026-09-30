@@ -20,10 +20,18 @@ from pydantic import BaseModel, Field, validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from src.auth.rbac_decorator import require_permission
 from src.core.database import get_db
-from src.core.dependencies import get_current_user, is_active_user
+from src.core.dependencies import is_active_user
 from src.core.encryption import EncryptionError, EncryptionKeyType
+# audit I12: the analytics RBAC decorators module (deleted) expected an
+# AnalyticsPermission enum, not a list[str], and crashed (TypeError/500) for
+# every authenticated caller. Use the repo-canonical dependency instead — the
+# same one the compliance and RBAC-management routers use. No "encryption:*"
+# permission exists in SYSTEM_PERMISSIONS (src/models/permission.py), so the
+# closest existing permission, "system_admin", is required (sibling precedent:
+# compliance.py / rbac_management.py guard their most sensitive operations
+# with it).
+from src.middleware.rbac import require_permission_dep
 from src.models.organization import Organization
 from src.models.user import User
 from src.services.security.encryption_service import EncryptionService
@@ -174,17 +182,17 @@ class EncryptionValidationResponse(BaseModel):
 
 
 @router.post("/profiles/user", response_model=Dict[str, Any])
-@require_permission(["encryption:manage"])
 async def encrypt_user_profile(
     request: UserProfileEncryptionRequest,
     current_user: User = Depends(is_active_user),
     db: Session = Depends(get_db),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Encrypt user profile data
 
     This endpoint encrypts sensitive personal information in user profiles.
-    Requires encryption:manage permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
@@ -226,17 +234,18 @@ async def encrypt_user_profile(
 
 
 @router.post("/profiles/organization", response_model=Dict[str, Any])
-@require_permission(["encryption:manage", "organization:manage"])
 async def encrypt_organization_profile(
     request: OrganizationProfileEncryptionRequest,
     current_user: User = Depends(is_active_user),
     db: Session = Depends(get_db),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Encrypt organization profile data
 
     This endpoint encrypts sensitive business information in organization profiles.
-    Requires encryption:manage and organization:manage permissions.
+    Requires the system_admin permission (audit I12: no encryption:*
+    permission exists in SYSTEM_PERMISSIONS).
     """
     try:
         encryption_service = EncryptionService(db)
@@ -274,17 +283,17 @@ async def encrypt_organization_profile(
 
 
 @router.post("/decrypt", response_model=Dict[str, Any])
-@require_permission(["encryption:decrypt"])
 async def decrypt_data(
     request: DecryptionRequest,
     current_user: User = Depends(is_active_user),
     db: Session = Depends(get_db),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Decrypt sensitive data
 
     This endpoint decrypts sensitive data for authorized users.
-    Requires encryption:decrypt permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
@@ -356,18 +365,18 @@ async def decrypt_data(
 
 
 @router.post("/keys/rotate", response_model=KeyRotationResponse)
-@require_permission(["encryption:key_rotate"])
 async def rotate_encryption_key(
     request: KeyRotationRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(is_active_user),
     db: Session = Depends(get_db),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Rotate encryption keys
 
     This endpoint rotates encryption keys for enhanced security.
-    Requires encryption:key_rotate permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
@@ -398,19 +407,19 @@ async def rotate_encryption_key(
 
 
 @router.get("/status", response_model=EncryptionStatusResponse)
-@require_permission(["encryption:view"])
 async def get_encryption_status(
     organization_id: Optional[UUID] = Query(
         None, description="Organization scope (admin only)"
     ),
     current_user: User = Depends(is_active_user),
     db: Session = Depends(get_db),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Get encryption status and statistics
 
     This endpoint returns the current encryption status and statistics.
-    Requires encryption:view permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
@@ -436,17 +445,17 @@ async def get_encryption_status(
 
 
 @router.post("/validate", response_model=EncryptionValidationResponse)
-@require_permission(["encryption:validate"])
 async def validate_encryption_integrity(
     sample_size: int = Query(10, ge=1, le=100, description="Number of records to test"),
     current_user: User = Depends(is_active_user),
     db: Session = Depends(get_db),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Validate encryption integrity
 
     This endpoint validates the integrity of encrypted data by testing sample records.
-    Requires encryption:validate permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
@@ -470,7 +479,6 @@ async def validate_encryption_integrity(
 
 
 @router.get("/audit/logs", response_model=List[Dict[str, Any]])
-@require_permission(["encryption:audit"])
 async def get_encryption_audit_logs(
     limit: int = Query(50, ge=1, le=500, description="Number of logs to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -478,12 +486,13 @@ async def get_encryption_audit_logs(
     resource_type: Optional[str] = Query(None, description="Filter by resource type"),
     current_user: User = Depends(is_active_user),
     db: Session = Depends(get_db),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Get encryption audit logs
 
     This endpoint returns encryption operation audit logs.
-    Requires encryption:audit permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         from src.models.encrypted_user import EncryptionAuditLog
@@ -539,13 +548,15 @@ async def get_encryption_audit_logs(
 
 
 @router.get("/config/sensitive-fields", response_model=List[str])
-@require_permission(["encryption:view"])
-async def get_sensitive_fields_config(current_user: User = Depends(is_active_user)):
+async def get_sensitive_fields_config(
+    current_user: User = Depends(is_active_user),
+    _: str = Depends(require_permission_dep("system_admin")),
+):
     """
     Get list of configured sensitive field patterns
 
     This endpoint returns the list of field patterns that are automatically encrypted.
-    Requires encryption:view permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         from src.middleware.encryption_middleware import EncryptionMiddleware

@@ -7177,7 +7177,7 @@ export interface paths {
          * @description Get encryption audit logs
          *
          *     This endpoint returns encryption operation audit logs.
-         *     Requires encryption:audit permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         get: operations["get_encryption_audit_logs_api_v1_security_encryption_audit_logs_get"];
         put?: never;
@@ -7200,7 +7200,7 @@ export interface paths {
          * @description Get list of configured sensitive field patterns
          *
          *     This endpoint returns the list of field patterns that are automatically encrypted.
-         *     Requires encryption:view permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         get: operations["get_sensitive_fields_config_api_v1_security_encryption_config_sensitive_fields_get"];
         put?: never;
@@ -7225,7 +7225,7 @@ export interface paths {
          * @description Decrypt sensitive data
          *
          *     This endpoint decrypts sensitive data for authorized users.
-         *     Requires encryption:decrypt permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         post: operations["decrypt_data_api_v1_security_encryption_decrypt_post"];
         delete?: never;
@@ -7248,7 +7248,7 @@ export interface paths {
          * @description Rotate encryption keys
          *
          *     This endpoint rotates encryption keys for enhanced security.
-         *     Requires encryption:key_rotate permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         post: operations["rotate_encryption_key_api_v1_security_encryption_keys_rotate_post"];
         delete?: never;
@@ -7271,7 +7271,8 @@ export interface paths {
          * @description Encrypt organization profile data
          *
          *     This endpoint encrypts sensitive business information in organization profiles.
-         *     Requires encryption:manage and organization:manage permissions.
+         *     Requires the system_admin permission (audit I12: no encryption:*
+         *     permission exists in SYSTEM_PERMISSIONS).
          */
         post: operations["encrypt_organization_profile_api_v1_security_encryption_profiles_organization_post"];
         delete?: never;
@@ -7294,7 +7295,7 @@ export interface paths {
          * @description Encrypt user profile data
          *
          *     This endpoint encrypts sensitive personal information in user profiles.
-         *     Requires encryption:manage permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         post: operations["encrypt_user_profile_api_v1_security_encryption_profiles_user_post"];
         delete?: never;
@@ -7315,7 +7316,7 @@ export interface paths {
          * @description Get encryption status and statistics
          *
          *     This endpoint returns the current encryption status and statistics.
-         *     Requires encryption:view permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         get: operations["get_encryption_status_api_v1_security_encryption_status_get"];
         put?: never;
@@ -7340,7 +7341,7 @@ export interface paths {
          * @description Validate encryption integrity
          *
          *     This endpoint validates the integrity of encrypted data by testing sample records.
-         *     Requires encryption:validate permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         post: operations["validate_encryption_integrity_api_v1_security_encryption_validate_post"];
         delete?: never;
