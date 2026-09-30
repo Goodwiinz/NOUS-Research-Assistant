@@ -399,3 +399,14 @@ GOO-305 builds on this plan's names without renaming anything, and adds its migr
 - A shared `extraction_forms` table.
 
 Each has a `ponytail:` marker at its seam.
+
+## Amendment — 2026-09-30 (implementation of Task 7)
+
+**Mutation rows 1 and 2 were wrong as written.**
+- Disabling the `accept_value` tip check does not produce an `IntegrityError` for a same-cell stale accept. The partial unique index `uq_extraction_accepted_initial` and the `supersedes` unique constraint still reject it, and `_flush_or_conflict` turns that into the same 409 `Accepted value is stale; reload`.
+- The only case where the tip check alone matters is a `supersedes_accepted_value_id` naming **another cell's** tip. Such a row passes both indexes and forks the chain, which ledger replay would later reject as a 500. Task 7 therefore adds step 8b: a doc2 accept whose `supersedes` names doc1's tip must get 409. With the tip check removed, that accept is inserted (`DID NOT RAISE`).
+- The backstop re-raise fails only together with the tip check off (`UniqueViolationError` on `uq_extraction_accepted_initial`). On its own it survives, because the stream lock serializes accepts, so no writer reaches the index while the tip check is on.
+
+**Review follow-up.** Replay also rejects `extraction.staled` unless `actor_role == 'editor'` (`test_extraction_replay_rejects_staled_by_non_editor`).
+
+Recorded results: `docs/testing/agent-orchestration-mutation-checks.md`, GOO-304 section.

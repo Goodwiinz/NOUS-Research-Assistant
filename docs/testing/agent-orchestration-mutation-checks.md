@@ -1358,3 +1358,42 @@ not applied as written: the loader's request-attempt outer join
 (`prisma_service.py:231-243`) already has no `DISTINCT` or head filter, and
 heads are derived in the pure function. Doubled rows are therefore caught only
 by `_unique` and the chain-linearity checks, which is what was mutated.
+
+## GOO-304 extraction forms, observations and acceptance — 2026-09-30
+
+PostgreSQL proof: `backend/tests/integration/test_extraction_forms_postgres.py`.
+It runs on GOO-301's `screening_factory` schema, whose chain ends at
+`a3c5e7f9b1d4`. The test downgrades that revision, seeds legacy matrices and
+cells, then upgrades in place. Unit selectors run from `backend/`.
+
+Each mutant was applied by a scripted exact-string replacement that asserted
+exactly one match, run with `-x`, and then restored from a copy of the
+pre-mutation file. `filecmp` against that copy succeeded for every file, and
+every focused command passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 (working tree at the time of the run):
+
+- `backend/src/services/research/extraction_forms_service.py`
+  `682ba7cb16f14a204b5941927cb8d12b9f4d0ba987fddbaaeb4c9ae8b4ff40e6`
+- `backend/src/services/research/extraction_matrix_service.py`
+  `e4335da5f9281e74c827cd6b7976a26559a6e422b86876375909ebde40d26160`
+- `backend/src/services/research_decisions/ledger.py`
+  `3393d252f6d904493f052057a225f50855b990b549140075ea4164638ed52cb3`
+
+Commands (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_extraction_forms_postgres.py
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_research_decision_ledger.py -k worker_acceptance
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/api/test_extraction_forms_routes.py tests/unit/architecture/test_extraction_acceptance_boundary.py -k adjudicator
+```
+
+| Guard (line) | Mutation | Command | Observed mutant failure |
+|---|---|---|---|
+| Tip check in `accept_value` (`extraction_forms_service.py:620`) | condition prefixed with `False and` | PG test | `DID NOT RAISE HTTPException` at the doc2 accept whose `supersedes` names doc1's tip (test line 425). Same-cell stale accepts still get 409 from the index backstop (see the plan amendment). |
+| Tip check plus the `_flush_or_conflict` backstop (`:620`, `:340`) | tip check prefixed with `False and`; `raise HTTPException(409 ...)` replaced with bare `raise` | PG test | `UniqueViolationError: duplicate key value violates unique constraint "uq_extraction_accepted_initial"` on the second `supersedes=None` accept. |
+| Backstop alone (`:340`) | bare `raise` | PG test | **Survives** (1 passed). The stream lock plus the tip check mean no writer reaches the index. It is kept as the SQLSTATE backstop and proven only together with the tip check (row above). |
+| Worker pre-LLM idempotency lookup (`extraction_matrix_service.py:241`) | condition prefixed with `False and` | PG test | `assert (0, 1, 3) == (1, 0, 2)`: the task-1 retry re-pays the LLM, and its append is refused as an idempotency conflict (counted `failed`). No duplicate rows persist. |
+| Replay `extraction.accepted` actor role (`ledger.py:1236`) | condition prefixed with `False and` | `-k worker_acceptance` | `DID NOT RAISE DecisionReplayError` in `test_extraction_replay_rejects_worker_acceptance`. |
+| ADJUDICATOR check in `accept_value` (`extraction_forms_service.py:595`) | condition prefixed with `False and`, then separately deleted | `-k adjudicator` | `test_accept_service_requires_adjudicator_without_the_route` fails (no 403; it reaches the database). With the lines deleted, `test_accept_value_requires_the_adjudicator_role` (AST guard) also fails: `accept_value must check ResearchProjectRole.ADJUDICATOR`. |
+| AST boundary (`test_extraction_acceptance_boundary.py`) | `accept_value` added to the worker's `extraction_forms_service` import | architecture test | `test_workers_and_agents_cannot_reach_acceptance` fails, naming the import. |
