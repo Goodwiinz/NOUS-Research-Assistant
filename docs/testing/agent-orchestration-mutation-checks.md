@@ -1236,3 +1236,50 @@ the four checks (`create_queue`, `assign`, `revoke`, `submit`) was replaced
 with `pass` during fix-up `e864f9131`, and each mutant failed exactly that
 test.
 
+
+## GOO-302 blind dual review and adjudication — 2026-09-29
+
+Three guards were mutation-verified against
+`backend/tests/integration/test_screening_blind_review_postgres.py` on a
+disposable local PostgreSQL 14 database (schema-per-test; the screening
+tables are rebuilt through revisions `e1f3a5c7d9b2` then `f3b5d7e9a1c4`).
+Pre-mutation SHA-256:
+
+- `backend/src/services/research_engine/project_access.py`
+  `41e1b0635bf311534cee68bef1601d4ec3d78fa4c3f24b6f82b34f4fcff44d33`
+- `backend/src/services/research_decisions/ledger.py`
+  `c08d08ad5b0ea7fefb25a3d993e47d28a5fd7de30f05f3cdf7d00bf1cedffcd0`
+- `backend/src/services/research_engine/screening_service.py`
+  `1f1b65817e47c2559bd723550bdbb648cedef99dfbb2baa27e88546bbcf7b94d`
+
+Each mutant was applied with a scripted string replacement, run, then restored
+from a copy of the pre-mutation file. `git diff --quiet` succeeded on the
+restored files, and the same command passed again (`1 passed`). No mutant was
+committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_screening_blind_review_postgres.py -k <selector>
+```
+
+| Guard (line) | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| GOO-301 lock order: Collection `UPDATE` (`project_access.py:173`) and stream `FOR UPDATE` (`ledger.py:490`) | both `.with_for_update(...)` lines deleted | `simultaneous` | `assert 'FOR UPDATE OF collections' in 'INSERT INTO research_decision_streams ... ON CONFLICT ... DO NOTHING'`: session 2 no longer waits in `resolve_project` before reading screening state. |
+| Stale-input comparison in `adjudicate` (`screening_service.py:1286`) | condition prefixed with `False and` | `stale` | `DID NOT RAISE HTTPException`: the pre-reopen tip and its superseded input ids were adjudicated. |
+| Per-viewer redaction in `history` (`screening_service.py:1137`) | raw payload and note put back after `redacted = True` | `redaction` | `assert 'R2-SENTINEL-7f3' not in ...`: a reviewer read a peer's hidden note. |
+
+**Why the lock-order test asserts where session 2 waits.** With only the two
+`FOR UPDATE` clauses removed, session 2 still blocks: the ledger's stream
+upsert (`INSERT ... ON CONFLICT DO NOTHING`) waits on the stream row that
+session 1 already updated (`next_seq`). Because that wait also happens before
+`_derive_and_record`, and each READ COMMITTED statement takes a fresh
+snapshot, the mutant still produced exactly one resolution. A test that only
+counted resolutions would therefore survive the plan's mutant. The test now
+also reads `pg_stat_activity.query` for the waiting backend and requires the
+Collection `FOR UPDATE`, which is the documented lock order (Workspace
+`SHARE` -> Collection `UPDATE` -> stream).
+
+The post-lock role reload in `resolve_project` (the role-revocation race in
+`-k stale`) is already mutation-verified in
+`test_research_authorization_concurrency.py` and is not repeated here.
