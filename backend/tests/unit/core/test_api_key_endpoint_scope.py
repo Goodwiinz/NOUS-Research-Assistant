@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,6 +28,7 @@ from src.api.auth.api_keys import create_api_key
 from src.core.api_key_auth import (
     APIKey,
     APIKeyCreate,
+    APIKeyData,
     _endpoint_allowed,
     _parse_allowed_endpoints,
     generate_api_key,
@@ -36,8 +38,10 @@ from src.models.user import User
 
 pytestmark = pytest.mark.unit
 
+Env = tuple[APIKey, str, MagicMock, MagicMock, AsyncMock]
 
-def _make_key(allowed_endpoints=None) -> tuple[APIKey, str]:
+
+def _make_key(allowed_endpoints: Optional[str] = None) -> tuple[APIKey, str]:
     raw_key, key_hash = generate_api_key()
     record = APIKey(
         id="test-id",
@@ -55,8 +59,12 @@ def _make_key(allowed_endpoints=None) -> tuple[APIKey, str]:
     return record, raw_key
 
 
-def _make_env(allowed_endpoints=None, record=None, raw_key=None):
-    """Return (record, raw_key, request, credentials, db, result) wired so
+def _make_env(
+    allowed_endpoints: Optional[str] = None,
+    record: Optional[APIKey] = None,
+    raw_key: Optional[str] = None,
+) -> Env:
+    """Return (record, raw_key, request, credentials, db) wired so
     the DB lookup resolves the key record."""
     if record is None or raw_key is None:
         record, raw_key = _make_key(allowed_endpoints)
@@ -76,7 +84,9 @@ def _make_env(allowed_endpoints=None, record=None, raw_key=None):
     return record, raw_key, request, credentials, db
 
 
-async def _validate(env, path=None):
+async def _validate(
+    env: Env, path: Optional[str] = None
+) -> tuple[APIKeyData, str, MagicMock]:
     record, raw_key, request, credentials, db = env
     if path is not None:
         request.url.path = path
@@ -91,46 +101,46 @@ async def _validate(env, path=None):
 # --- _endpoint_allowed matching semantics -------------------------------
 
 
-def test_endpoint_allowed_none_allows_everything():
+def test_endpoint_allowed_none_allows_everything() -> None:
     assert _endpoint_allowed(None, "/any/path") is True
 
 
-def test_endpoint_allowed_empty_list_denies_everything():
+def test_endpoint_allowed_empty_list_denies_everything() -> None:
     assert _endpoint_allowed([], "/any/path") is False
 
 
-def test_endpoint_allowed_exact_match():
+def test_endpoint_allowed_exact_match() -> None:
     assert _endpoint_allowed(["/api/v1/search"], "/api/v1/search") is True
 
 
-def test_endpoint_allowed_prefix_entry_permits_subpaths():
+def test_endpoint_allowed_prefix_entry_permits_subpaths() -> None:
     assert (
         _endpoint_allowed(["/api/v1/search"], "/api/v1/search/authenticated/hybrid")
         is True
     )
 
 
-def test_endpoint_allowed_prefix_entry_does_not_match_similar_prefix():
+def test_endpoint_allowed_prefix_entry_does_not_match_similar_prefix() -> None:
     assert _endpoint_allowed(["/api/v1/search"], "/api/v1/searchx") is False
     assert _endpoint_allowed(["/api/v1/search"], "/api/v1/other") is False
 
 
-def test_endpoint_allowed_trailing_slash_entry_normalized():
+def test_endpoint_allowed_trailing_slash_entry_normalized() -> None:
     assert _endpoint_allowed(["/api/v1/search/"], "/api/v1/search/hybrid") is True
 
 
-def test_endpoint_allowed_trailing_slash_entry_allows_exact_path():
+def test_endpoint_allowed_trailing_slash_entry_allows_exact_path() -> None:
     assert _endpoint_allowed(["/api/v1/search/"], "/api/v1/search") is True
 
 
-def test_endpoint_allowed_degenerate_root_entry_denies_everything():
+def test_endpoint_allowed_degenerate_root_entry_denies_everything() -> None:
     """A ``/`` entry normalizes to an empty prefix — it must never become
     an allow-all wildcard."""
     assert _endpoint_allowed(["/"], "/") is False
     assert _endpoint_allowed(["/"], "/api/v1/search") is False
 
 
-def test_endpoint_allowed_blank_entry_denies_everything():
+def test_endpoint_allowed_blank_entry_denies_everything() -> None:
     assert _endpoint_allowed([""], "/api/v1/search") is False
 
 
@@ -138,7 +148,9 @@ def test_endpoint_allowed_blank_entry_denies_everything():
 
 
 @pytest.mark.parametrize("raw", [json.dumps([""]), json.dumps(["  "])])
-async def test_blank_entries_deny_all_and_log_error(raw, caplog):
+async def test_blank_entries_deny_all_and_log_error(
+    raw: str, caplog: pytest.LogCaptureFixture
+) -> None:
     assert _parse_allowed_endpoints(raw, key_prefix="ragabcd12") == []
     assert any(
         rec.levelname == "ERROR"
@@ -148,7 +160,7 @@ async def test_blank_entries_deny_all_and_log_error(raw, caplog):
     )
 
 
-async def test_blank_entry_config_denies_request():
+async def test_blank_entry_config_denies_request() -> None:
     env = _make_env(json.dumps(["  "]))
     with pytest.raises(HTTPException) as excinfo:
         await _validate(env)
@@ -158,13 +170,13 @@ async def test_blank_entry_config_denies_request():
 # --- enforcement inside get_api_key_data --------------------------------
 
 
-async def test_scoped_key_exact_match_allowed():
+async def test_scoped_key_exact_match_allowed() -> None:
     env = _make_env(json.dumps(["/api/v1/search/authenticated/hybrid"]))
     _, endpoint, _ = await _validate(env)
     assert endpoint == "/api/v1/search/authenticated/hybrid"
 
 
-async def test_scoped_key_prefix_allows_subpath_and_denies_other():
+async def test_scoped_key_prefix_allows_subpath_and_denies_other() -> None:
     env = _make_env(json.dumps(["/api/v1/search"]))
     _, endpoint, _ = await _validate(env)
     assert endpoint == "/api/v1/search/authenticated/hybrid"
@@ -176,20 +188,22 @@ async def test_scoped_key_prefix_allows_subpath_and_denies_other():
     assert excinfo.value.detail == "API key not permitted for this endpoint"
 
 
-async def test_unscoped_key_none_allows_all():
+async def test_unscoped_key_none_allows_all() -> None:
     env = _make_env(None)
     _, endpoint, _ = await _validate(env)
     assert endpoint == "/api/v1/search/authenticated/hybrid"
 
 
-async def test_empty_list_denies_all():
+async def test_empty_list_denies_all() -> None:
     env = _make_env(json.dumps([]))
     with pytest.raises(HTTPException) as excinfo:
         await _validate(env)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
 
 
-async def test_malformed_json_denies_all_and_logs_error(caplog):
+async def test_malformed_json_denies_all_and_logs_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     env = _make_env("not-json{{")
     record, raw_key, _, _, _ = env
     with pytest.raises(HTTPException) as excinfo:
@@ -203,14 +217,16 @@ async def test_malformed_json_denies_all_and_logs_error(caplog):
     )
 
 
-async def test_non_list_json_denies_all():
+async def test_non_list_json_denies_all() -> None:
     env = _make_env(json.dumps({"endpoints": "/api/v1/search"}))
     with pytest.raises(HTTPException) as excinfo:
         await _validate(env)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
 
 
-async def test_denied_request_does_not_consume_rate_limit_quota(caplog):
+async def test_denied_request_does_not_consume_rate_limit_quota(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Enforcement sits before the rate-limit check: denied requests must
     not touch the limiter (no quota burn, no usage tracking, no DB write)."""
     env = _make_env(json.dumps(["/api/v1/search"]))
@@ -237,13 +253,13 @@ async def test_denied_request_does_not_consume_rate_limit_quota(caplog):
     ]
     assert denial_logs, "expected a denial warning log"
     assert all(raw_key not in msg for msg in denial_logs)
-    assert any(record.key_prefix in msg for msg in denial_logs)
+    assert any(str(record.key_prefix) in msg for msg in denial_logs)
 
 
 # --- end-to-end: router-created scoped key is usable ---------------------
 
 
-async def test_router_created_scoped_key_enforced_end_to_end():
+async def test_router_created_scoped_key_enforced_end_to_end() -> None:
     """Create a key through the admin router with scope
     ``["/api/v1/search"]``, read the persisted column back, parse it, and
     verify the enforcement path: allowed path permitted, other path 403.
@@ -257,14 +273,14 @@ async def test_router_created_scoped_key_enforced_end_to_end():
     admin.organization_id = "org-1"
 
     db = AsyncMock(spec=AsyncSession)
-    added: dict = {}
+    added: dict[str, APIKey] = {}
 
-    def _capture_add(obj):
+    def _capture_add(obj: APIKey) -> None:
         added["record"] = obj
 
     db.add.side_effect = _capture_add
 
-    async def _fake_refresh(obj):
+    async def _fake_refresh(obj: APIKey) -> None:
         # Stand in for the DB-side defaults (PK, activity flag, counters).
         if obj.id is None:
             obj.id = "generated-key-id"
@@ -284,7 +300,8 @@ async def test_router_created_scoped_key_enforced_end_to_end():
 
     # 2. Parse the persisted value exactly as the auth path does.
     parsed = _parse_allowed_endpoints(
-        stored_record.allowed_endpoints, key_prefix=stored_record.key_prefix
+        cast(Optional[str], stored_record.allowed_endpoints),
+        key_prefix=str(stored_record.key_prefix),
     )
     assert parsed == ["/api/v1/search"]
 
