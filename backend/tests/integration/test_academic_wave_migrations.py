@@ -582,7 +582,7 @@ def test_screening_queue_migration_upgrade_downgrade_round_trip(
         connection.exec_driver_sql(f'DROP TABLE "{table}"')
     connection.exec_driver_sql("DROP INDEX idx_research_decision_event_idempotency")
     migration = _load_migration("e1f3a5c7d9b2_create_screening_queues.py")
-    assert migration.down_revision == "d4e6f8a0b2c3"
+    assert migration.down_revision == "aw02_artifact_lifecycle"
 
     _run_migration(connection, migration, "upgrade")
     inspector = inspect(connection)

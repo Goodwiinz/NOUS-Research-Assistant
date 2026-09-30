@@ -71,6 +71,7 @@ def test_public_vocabulary_is_exactly_the_design_set() -> None:
         "run.completed",
         "run.failed",
         "run.cancelled",
+        "artifact.version_created",
     }
 
 
@@ -154,6 +155,10 @@ def test_every_known_type_round_trips_through_the_envelope() -> None:
         RunEventType.RUN_COMPLETED: {"assistant_message_id": str(uuid.uuid4())},
         RunEventType.RUN_FAILED: {"code": "graph_error", "message": "The run failed."},
         RunEventType.RUN_CANCELLED: {"reason": "user_requested"},
+        RunEventType.ARTIFACT_VERSION_CREATED: {
+            "artifact_id": "a" * 36,
+            "version_id": "b" * 36,
+        },
     }
     assert set(samples) == set(RunEventType)
     for event_type, payload in samples.items():

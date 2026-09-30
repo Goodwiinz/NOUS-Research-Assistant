@@ -27,6 +27,7 @@ from starlette.middleware.gzip import GZipMiddleware
 logger = logging.getLogger(__name__)
 
 from src.api.agent import agent_router
+from src.api.artifacts import router as artifacts_router
 from src.api.arxiv import (
     arxiv_bulk_router,
     arxiv_change_router,
@@ -576,6 +577,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(cli_auth_router, prefix="/api/v1")
 app.include_router(integrations_router, prefix="/api/v1")
 app.include_router(harness_router, prefix="/api/v1")
+app.include_router(artifacts_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")

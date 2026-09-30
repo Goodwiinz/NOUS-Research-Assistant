@@ -33,6 +33,7 @@ from src.models.research_claim import ResearchClaimVersion
 from src.services.agent.job_store import get_redis
 from src.services.research.bibliography_service import BibliographyService
 from src.services.research.evidence_selection import select_relevant_passages
+from src.services.research_engine.report_rendering import publication_year
 
 logger = structlog.get_logger(__name__)
 
@@ -2494,7 +2495,10 @@ Key takeaways include the importance of continued investigation and the potentia
                     authors=DraftGenerationService._canonical_author_names(
                         citation.authors
                     ),
-                    year=citation.year,
+                    year=citation.year
+                    or publication_year(
+                        c.document.document_metadata if c.document else None
+                    ),
                     venue=citation.venue,
                     doi=citation.doi,
                     arxiv_id=citation.arxiv_id,
@@ -2508,7 +2512,7 @@ Key takeaways include the importance of continued investigation and the potentia
                     authors=DraftGenerationService._canonical_author_names(
                         metadata.get("authors")
                     ),
-                    year=metadata.get("year"),
+                    year=publication_year(metadata),
                     venue=metadata.get("venue"),
                     doi=metadata.get("doi") or metadata.get("DOI"),
                     arxiv_id=(

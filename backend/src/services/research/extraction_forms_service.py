@@ -1182,13 +1182,17 @@ async def cell_view(
             .order_by(ExtractionObservation.created_at, ExtractionObservation.id)
         )
     ).scalars():
-        key = (row.document_id, str(row.field_id))
+        key: tuple[Any, str] = (row.document_id, str(row.field_id))
         if row.missingness is None:
             values.setdefault(key, set()).add(rules.display(row.value) or "")
         if row.kind != "machine":
             continue
         machine.setdefault(key, []).append(_rule_obs(row))
-        status[key] = None if row.missingness else row.anchor_status or "unverified"
+        status[key] = (
+            None
+            if row.missingness
+            else cast(str | None, row.anchor_status) or "unverified"
+        )
     # ponytail: loads text to hash it; add a stored text hash if that ever
     # gets slow.
     pins: dict[Any, tuple[str, str]] = {

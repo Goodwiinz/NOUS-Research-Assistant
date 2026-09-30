@@ -179,17 +179,79 @@ def select_relevant_passages(
     )[:max_chars]
 
 
+# Verifier models wrap quotes in narrative ("The excerpt states: “…”"). Only
+# the inner span of a quote this long is trusted; shorter quoted fragments are
+# too generic to prove that the evidence came from the source.
+_MIN_QUOTED_SPAN_WORDS = 4
+_QUOTED_SPAN_RE = re.compile(r"[\"“«]([^\"“”«»]+)[\"”»]|‘([^‘’]+)’")
+_NARRATIVE_PREFIX_RE = re.compile(r"^[^:\"“”«»]{0,120}:\s*(.+)$", re.S)
+_QUOTE_CHARS = "\"'“”‘’«»`"
+_QUOTE_FOLD = str.maketrans(
+    {"“": '"', "”": '"', "«": '"', "»": '"', "‘": "'", "’": "'"}
+)
+
+
+def _normalize_for_match(text: str) -> str:
+    return " ".join(text.translate(_QUOTE_FOLD).lower().split())
+
+
+def _quote_candidates(evidence: str) -> list[str]:
+    """Verbatim-quote candidates in evidence, most literal first.
+
+    The whole evidence string (minus surrounding quote marks) comes first so a
+    bare quote keeps its old behaviour. Then each quoted span, then the text
+    after a short narrative prefix such as ``The excerpt explicitly states:``.
+    Spans are returned whole and never split on ellipses: every candidate must
+    still occur verbatim in the source, so paraphrase or fabricated evidence
+    keeps failing.
+    """
+    candidates = [evidence.strip().strip(_QUOTE_CHARS).strip()]
+    for match in _QUOTED_SPAN_RE.finditer(evidence):
+        span = (match.group(1) or match.group(2) or "").strip()
+        if len(span.split()) >= _MIN_QUOTED_SPAN_WORDS:
+            candidates.append(span)
+    prefixed = _NARRATIVE_PREFIX_RE.match(evidence.strip())
+    if prefixed:
+        tail = prefixed.group(1).strip().strip(_QUOTE_CHARS).strip()
+        if len(tail.split()) >= _MIN_QUOTED_SPAN_WORDS:
+            candidates.append(tail)
+    return [candidate for candidate in candidates if candidate]
+
+
+def contains_verbatim_quote(source: str | None, evidence: str | None) -> bool:
+    """Whether any verbatim-quote candidate of ``evidence`` occurs in ``source``."""
+    if not source or not evidence:
+        return False
+    haystack = _normalize_for_match(str(source))
+    return any(
+        _normalize_for_match(candidate) in haystack
+        for candidate in _quote_candidates(str(evidence))
+    )
+
+
 def evidence_location(
     source: str | None, evidence: str | None
 ) -> tuple[int | None, str]:
-    """Return an inspectable page/location for a decisive evidence quote."""
+    """Return an inspectable page/location for a decisive evidence quote.
+
+    ``"source excerpt"`` means no verbatim span of ``evidence`` was found in
+    ``source``; the draft persistence gate treats that as ungrounded.
+    """
     if not source or not evidence:
         return None, "source excerpt"
-    needle = " ".join(str(evidence).lower().split())
-    if not needle:
+    needles = [
+        needle
+        for needle in (
+            _normalize_for_match(candidate)
+            for candidate in _quote_candidates(str(evidence))
+        )
+        if needle
+    ]
+    if not needles:
         return None, "source excerpt"
     for passage in _passages(str(source)):
-        if needle in " ".join(passage.text.lower().split()):
+        text = _normalize_for_match(passage.text)
+        if any(needle in text for needle in needles):
             if passage.page is not None:
                 return passage.page, f"Page {passage.page}"
             return None, "legacy unanchored text"
