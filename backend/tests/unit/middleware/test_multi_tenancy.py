@@ -464,9 +464,7 @@ async def test_non_bearer_scheme_is_401_and_never_opens_db(auth_header):
     from starlette.testclient import TestClient
 
     db_factory = MagicMock(
-        side_effect=AssertionError(
-            "must not open a DB session for a non-Bearer scheme"
-        )
+        side_effect=AssertionError("must not open a DB session for a non-Bearer scheme")
     )
     with patch("src.middleware.multi_tenancy.AsyncSessionLocal", db_factory):
         app = _i7_app()
@@ -478,9 +476,7 @@ async def test_non_bearer_scheme_is_401_and_never_opens_db(auth_header):
             return {"ok": True}
 
         client = TestClient(app)
-        response = client.get(
-            "/api/v1/threads", headers={"Authorization": auth_header}
-        )
+        response = client.get("/api/v1/threads", headers={"Authorization": auth_header})
 
     assert response.status_code == 401
     assert hits == [], "protected route handler must not run without a Bearer token"
@@ -580,9 +576,9 @@ def test_public_path_exemptions_reachable_without_token(method, path, label):
     client = TestClient(app)
     response = getattr(client, method)(path)
 
-    assert response.status_code != 401, (
-        f"public route {path} must not be blocked by the fail-closed gate"
-    )
+    assert (
+        response.status_code != 401
+    ), f"public route {path} must not be blocked by the fail-closed gate"
     assert response.status_code == 200
     assert reached == [label], f"{path} must reach exactly its own handler"
 
@@ -745,12 +741,8 @@ def test_api_key_route_with_key_passes_middleware_to_endpoint(method, path, labe
     assert reached == [label], f"{path} must reach its own handler"
 
 
-@pytest.mark.parametrize(
-    "method,path", [(m, p) for m, p, _ in _API_KEY_ROUTE_STUBS]
-)
-def test_api_key_route_without_key_rejected_by_endpoint_not_middleware(
-    method, path
-):
+@pytest.mark.parametrize("method,path", [(m, p) for m, p, _ in _API_KEY_ROUTE_STUBS])
+def test_api_key_route_without_key_rejected_by_endpoint_not_middleware(method, path):
     """Without a key, the rejection must come from the ENDPOINT's own auth
     dependency, not the middleware tenant gate.
 

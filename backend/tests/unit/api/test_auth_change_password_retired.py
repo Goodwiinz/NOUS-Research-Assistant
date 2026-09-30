@@ -44,9 +44,7 @@ def test_openapi_schema_has_no_change_password_path() -> None:
     assert "PasswordChange" not in app.openapi()["components"]["schemas"]
 
 
-def test_posting_to_change_password_returns_404(
-    test_app, test_auth_headers
-) -> None:
+def test_posting_to_change_password_returns_404(test_app, test_auth_headers) -> None:
     """End-to-end proof: the path is unrouted, not merely unlisted."""
     from contextlib import asynccontextmanager
     from typing import Any, AsyncIterator
