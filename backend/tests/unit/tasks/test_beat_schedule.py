@@ -26,6 +26,8 @@ _EXPECTED_KEYS = {
     # Defined centrally in celery_app.py — a module-level full assignment would
     # clobber these too, so they belong in this guard.
     "sweep-stale-agent-runs",  # celery_app (task in agent_run_tasks)
+    "drain-integration-actions",  # celery_app (task in integration_action_tasks)
+    "sweep-stale-integration-actions",  # celery_app (integration_action_tasks)
     "sweep-stuck-processing-jobs",  # celery_app (task in processing_tasks)
     "retention-purge-soft-deleted-threads",  # celery_app (retention_tasks)
     "retention-purge-synthetic-threads",  # celery_app (retention_tasks)
@@ -56,6 +58,7 @@ def test_scheduled_tasks_resolve_to_registered_tasks():
     import src.tasks.agent_run_tasks  # noqa: F401
     import src.tasks.document_processing_tasks  # noqa: F401
     import src.tasks.evaluation_tasks  # noqa: F401
+    import src.tasks.integration_action_tasks  # noqa: F401
     import src.tasks.processing_tasks  # noqa: F401
     import src.tasks.reconcile_jobs  # noqa: F401
     import src.tasks.reconcile_tasks  # noqa: F401

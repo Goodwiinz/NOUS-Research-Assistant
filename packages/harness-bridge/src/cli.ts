@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { CredentialStore } from "./credentials.ts";
+import { GrantKeeper } from "./grants.ts";
 import { record } from "./rpc.ts";
 import { apiBase, type McpSession } from "./mcp/client.ts";
 import {
@@ -85,15 +86,20 @@ export async function connect(
     projectId: string;
     label: string;
     tools?: boolean;
+    publish?: boolean;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
   if (!uuid(options.projectId) || !options.label.trim())
     throw new Error("project UUID and device label required");
-  // tools:read is opt-in and shown on the browser consent page.
-  const scopes = options.tools
-    ? ["harness:execute", "tools:read"]
-    : ["harness:execute"];
+  // NOUS capabilities are opt-in and each scope is shown on the consent page.
+  if (options.publish && !options.tools)
+    throw new Error("--publish requires --tools");
+  const scopes = [
+    "harness:execute",
+    ...(options.tools ? ["tools:read"] : []),
+    ...(options.publish ? ["artifacts:publish"] : []),
+  ];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
   const login = await request(fetchFn, base, "/cli-auth/start", undefined, {});
@@ -160,15 +166,44 @@ export async function connect(
   const credentialHandle = await store.save({
     accessToken: auth.token,
     grantToken: grant.token,
+    ...(uuid(grant.grant_id)
+      ? { grantId: grant.grant_id, renewedAt: Date.now() }
+      : {}),
   });
+  // A reconnect (e.g. to add --publish) must not drop registered folders:
+  // re-register each root with the new device so managed runs and
+  // standalone installs keep working. Roots that vanished are skipped.
+  const previous = await store.readLocal("connection").catch(() => null);
+  const carried: LocalState["workspaces"] = [];
+  if (record(previous) && Array.isArray(previous.workspaces)) {
+    for (const old of previous.workspaces as LocalState["workspaces"]) {
+      if (typeof old?.root !== "string" || typeof old?.label !== "string") continue;
+      const root = await realpath(old.root).catch(() => null);
+      if (root === null) {
+        announce(`Skipped vanished workspace root ${old.root}; register it again if needed.`);
+        continue;
+      }
+      const workspaceId = randomUUID();
+      await request(
+        fetchFn,
+        base,
+        `/integrations/devices/${device.id}/workspaces`,
+        auth.token,
+        { workspace_id: workspaceId, label: old.label, project_id: options.projectId },
+      );
+      carried.push({ id: workspaceId, root, label: old.label, projectId: options.projectId });
+    }
+  }
   await store.writeLocal("connection", {
     apiUrl: base,
     deviceId: device.id,
     projectId: options.projectId,
     credentialHandle,
     scopes,
-    workspaces: [],
+    workspaces: carried,
   } satisfies LocalState);
+  if (carried.length)
+    announce(`Re-registered ${carried.length} workspace root(s) on the new device.`);
   return { deviceId: device.id, credentialHandle };
 }
 export async function addWorkspace(
@@ -246,6 +281,13 @@ export async function runBridge(
   };
   const url = new URL(apiBase(state.apiUrl) + "/harness/connect");
   url.protocol = "wss:";
+  // The socket re-checks the grant on every frame; keep it renewed before the
+  // 15-minute expiry. A renewal revokes the old token, so the open socket is
+  // closed on its next frame and the loop below reconnects with the new one.
+  const keeper = new GrantKeeper(store, state.credentialHandle, apiBase(state.apiUrl));
+  const stopRenewal = keeper.keepFresh((error) =>
+    console.error(error instanceof Error ? error.message : String(error)),
+  );
   try {
     while (!signal.aborted) {
       // Local native evidence and the expiry watchdog must work even while the
@@ -265,7 +307,7 @@ export async function runBridge(
         await connectBridge({
           url: url.href,
           deviceId: state.deviceId,
-          credentials: await store.load(state.credentialHandle),
+          credentials: await keeper.current(),
           journal,
           signal,
           adapterFor,
@@ -288,17 +330,26 @@ export async function runBridge(
         });
     }
   } finally {
+    stopRenewal();
     // No local unlock on shutdown: app-server children may outlive this process.
     for (const adapter of adapters.values()) await adapter.closeSession();
     journal.close();
   }
 }
-function mcpSession(stateDir: string, state: LocalState): McpSession {
+function mcpSession(
+  stateDir: string,
+  state: LocalState,
+  outputRoot?: string,
+): McpSession {
   return {
     apiOrigin: apiBase(state.apiUrl),
     credentialHandle: state.credentialHandle,
     // Codex launches the MCP child from the workspace cwd, never from here.
     stateDir: resolve(stateDir),
+    // Publication is bound to a registered root only; never to the cwd.
+    ...(outputRoot && state.scopes?.includes("artifacts:publish")
+      ? { outputRoot }
+      : {}),
   };
 }
 /** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
@@ -320,12 +371,19 @@ export function sessionOptionsFor(
       writableRoots: [workspace.root],
     },
     ...(state.scopes?.includes("tools:read")
-      ? { mcpConfig: buildManagedMcpConfig(mcpSession(stateDir, state)) }
+      ? {
+          mcpConfig: buildManagedMcpConfig(
+            mcpSession(stateDir, state, workspace.root),
+          ),
+        }
       : {}),
   };
 }
 /** Prints the standalone Codex registration; never edits global Codex config. */
-export async function mcpInstallCommand(stateDir: string): Promise<string> {
+export async function mcpInstallCommand(
+  stateDir: string,
+  options: { root?: string; announce?: (message: string) => void } = {},
+): Promise<string> {
   const value = await new CredentialStore(stateDir).readLocal("connection");
   if (
     !record(value) ||
@@ -336,7 +394,32 @@ export async function mcpInstallCommand(stateDir: string): Promise<string> {
   const state = value as LocalState;
   if (!state.scopes?.includes("tools:read"))
     throw new Error("reconnect with --tools to authorize NOUS tools");
-  return standaloneInstallCommand(mcpSession(stateDir, state));
+  // Publication binds one registered root, chosen explicitly when ambiguous.
+  let root: string | undefined;
+  if (!state.scopes.includes("artifacts:publish") && options.root !== undefined)
+    throw new Error(
+      "--root requires artifacts:publish; reconnect with nous-harness connect --tools --publish",
+    );
+  if (state.scopes.includes("artifacts:publish")) {
+    const roots = state.workspaces.map((w) => w.root);
+    if (options.root !== undefined) {
+      // Registered roots are stored realpath'd (e.g. /tmp -> /private/tmp).
+      const chosen = await realpath(options.root).catch(() => resolve(options.root!));
+      if (!roots.includes(chosen))
+        throw new Error("--root must name a registered workspace root");
+      root = chosen;
+    } else if (roots.length === 1) root = roots[0];
+    else if (roots.length > 1)
+      throw new Error(
+        `several workspaces are registered; pass --root with one of: ${roots.join(", ")}`,
+      );
+    (options.announce ?? console.error)(
+      root
+        ? `artifacts_publish will publish from ${root}`
+        : "no workspace registered; artifacts_publish will not be offered",
+    );
+  }
+  return standaloneInstallCommand(mcpSession(stateDir, state, root));
 }
 export function recoverInterrupt(
   stateDir: string,
@@ -358,9 +441,9 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools] | workspace add --root PATH [--label NAME] | run
-  nous-harness mcp install    Print the Codex command that registers NOUS read tools for a --tools connection.
-  nous-harness mcp --api URL --session HANDLE [--store PATH]    Serve NOUS read tools over stdio (Codex launches this).
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools [--publish]] | workspace add --root PATH [--label NAME] | run
+  nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
+  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.
@@ -379,6 +462,7 @@ async function main(): Promise<void> {
       command: { type: "string" },
       session: { type: "string" },
       tools: { type: "boolean" },
+      publish: { type: "boolean" },
       help: { type: "boolean" },
     },
   });
@@ -408,9 +492,10 @@ async function main(): Promise<void> {
       projectId: values.project,
       label: values.label,
       tools: values.tools,
+      publish: values.publish,
     });
   else if (positionals.join(" ") === "mcp install")
-    console.log(await mcpInstallCommand(stateDir));
+    console.log(await mcpInstallCommand(stateDir, { root: values.root }));
   else if (positionals.join(" ") === "mcp") {
     if (!values.session || !values.api)
       throw new Error("mcp requires --api and --session");
@@ -418,6 +503,7 @@ async function main(): Promise<void> {
       apiOrigin: apiBase(values.api),
       credentialHandle: values.session,
       stateDir: resolve(stateDir),
+      ...(values.root ? { outputRoot: resolve(values.root) } : {}),
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });

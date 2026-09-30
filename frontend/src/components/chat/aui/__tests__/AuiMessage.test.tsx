@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
   type RenderResult,
-} from '@testing-library/react';
+} from '@/test/test-utils';
 
 import { makeChatPageMessage } from '@/test/chatMessageFactory';
 import { ChatRuntimeProvider } from '../ChatRuntimeProvider';
