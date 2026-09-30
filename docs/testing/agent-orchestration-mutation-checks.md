@@ -1019,3 +1019,66 @@ this mutant from the real code. The plan expected scenario 4 to catch it;
 it does not. The unit test
 `test_completion_binds_the_task_own_draft` catches it. Scenario 4 catches
 the out-of-transaction variant, mutation B.
+## GOO-299 report identity guards — 2026-09-29
+
+Three guards in `backend/src/services/research_engine/identity_service.py`
+(pre-mutation SHA-256
+`9c0c0dd646430c4cc238ae23d1850d9fff811e5a8cb6f0e3e62a485baac7710a`) were
+mutation-verified against
+`backend/tests/integration/test_report_identity_postgres.py` on a disposable
+local PostgreSQL 14 database (schema-per-test; the four identity tables are
+created by revision `c9d2e4f6a8b1` itself). Each mutant was applied with
+`sed`, run, then restored from a copy of the pre-mutation file; `cmp -s` and
+`git diff --quiet` both succeeded and the same command passed again. No mutant
+was committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_report_identity_postgres.py -k <selector>
+```
+
+### Concurrent-import project lock
+
+- **Source and guard:** `observe_sources`, line 275, `await _lock(db,
+  collection_id)` (the per-Collection `research_identity` decision-stream row,
+  `FOR UPDATE`).
+- **Covering test:** `test_repeated_and_concurrent_imports_are_idempotent`
+  (`-k idempotent`). Importer one pauses at its first flush, after loading the
+  identifier index; importer two either finishes or is observed blocked via
+  `pg_blocking_pids` before importer one is released.
+- **Mutation:** replaced the line with `pass`.
+- **Observed mutant failure:** exit 1; `IntegrityError ... duplicate key value
+  violates unique constraint "uq_research_report_identifier_value"` — both
+  importers saw an empty index and minted the same DOI.
+- **Restored result:** `1 passed`.
+
+### Already-observed source guard (repeated import)
+
+- **Source and guard:** `observe_sources`, line 310, `if source.id in
+  observed: continue`, evaluated under the lock. This is the idempotency guard;
+  `on_conflict_do_nothing(index_elements=["source_id"])` is only the database
+  backstop and is unreachable for already-observed sources.
+- **Covering test:** same test, `-k idempotent`; the repeated import includes an
+  identifier-less source.
+- **Mutation:** replaced the condition with `if False:`.
+- **Observed mutant failure:** exit 1; `assert 3 == 2` on the report count — the
+  re-import created an orphan report for the identifier-less source before the
+  observation insert became a no-op.
+- **Restored result:** `1 passed`.
+
+### Concurrent-merge project lock
+
+- **Source and guard:** `merge_reports`, line 547, `stream = await _lock(db,
+  collection_id)`.
+- **Covering test:** `test_concurrent_merges_serialize_without_partial_rewiring`
+  (`-k concurrent_merges`). Project contexts are resolved and committed up
+  front so the Collection `UPDATE` lock taken by `resolve_project` cannot mask
+  the identity lock; merge one pauses in `append_decision`, merge two is
+  observed blocked, then merge one commits.
+- **Mutation:** replaced the line with a plain (non-`FOR UPDATE`) select of the
+  stream row.
+- **Observed mutant failure:** exit 1; `Failed: DID NOT RAISE HTTPException` —
+  the second merge rewired `r2` to `r3` instead of returning 409 "Report already
+  merged".
+- **Restored result:** `1 passed`.

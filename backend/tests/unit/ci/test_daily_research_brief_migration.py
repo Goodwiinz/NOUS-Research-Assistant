@@ -72,8 +72,8 @@ def test_revision_chains_from_agent_operations_and_is_the_only_head() -> None:
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     scripts = ScriptDirectory.from_config(config)
     heads = scripts.get_heads()
-    # Later migrations (e.g. GOO-297 draft_task_results) chain on top; the
-    # contract is one head whose history contains this merge.
+    # Later revisions (e.g. GOO-299 c9d2e4f6a8b1) may extend the chain; the
+    # contract is a single head that still descends from the daily-brief merge.
     assert len(heads) == 1
     revisions = {
         revision.revision

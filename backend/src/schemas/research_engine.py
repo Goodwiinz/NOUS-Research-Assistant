@@ -374,6 +374,72 @@ class ProtocolApprovalResponse(BaseModel):
     approved_at: datetime
 
 
+# --- Report / study identity (GOO-299) ------------------------------------
+
+StudyLinkStatus = Literal["proposed", "confirmed", "disputed"]
+
+
+class ReportObservationResponse(BaseModel):
+    source_id: UUID
+    run_id: UUID
+    match_method: str
+    evidence: Dict[str, Any]
+
+
+class ReportResponse(BaseModel):
+    id: UUID
+    title_snapshot: str
+    identifiers: Dict[str, List[str]]
+    study_id: Optional[UUID] = None
+    study_link_status: Optional[StudyLinkStatus] = None
+    study_link_rationale: Optional[str] = None
+    merged_into_report_id: Optional[UUID] = None
+    observations: List[ReportObservationResponse]
+
+
+class ReportSuggestion(BaseModel):
+    report_id: UUID
+    reason: Literal["title_year"]
+
+
+class ReportCandidatesResponse(BaseModel):
+    """Read-only suggestions; titles and years never equate reports."""
+
+    report_id: UUID
+    suggested: List[ReportSuggestion]
+    conflicts: List[Dict[str, Any]]
+
+
+class StudyLinkRequest(BaseModel):
+    study_id: Optional[UUID] = None
+    status: StudyLinkStatus
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class ReportMergeRequest(BaseModel):
+    surviving_report_id: UUID
+    merged_report_ids: List[UUID] = Field(..., min_length=1)
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class ReportSplitRequest(BaseModel):
+    source_ids: List[UUID] = Field(..., min_length=1)
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class IdentityEventResponse(BaseModel):
+    seq: int
+    event_type: str
+    actor_user_id: UUID
+    actor_role: str
+    reason: Optional[str] = None
+    payload: Dict[str, Any]
+    occurred_at: datetime
+
+
 class ProtocolRegistrationCreate(BaseModel):
     protocol_version_id: UUID
     protocol_version_hash: str = Field(..., min_length=64, max_length=64)

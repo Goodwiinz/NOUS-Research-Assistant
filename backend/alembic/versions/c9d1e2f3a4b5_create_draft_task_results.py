@@ -1,7 +1,7 @@
 """Create draft_task_results: retained terminal state of draft tasks (GOO-297).
 
 Revision ID: c9d1e2f3a4b5
-Revises: merge_daily_harness_20260928
+Revises: c9d2e4f6a8b1
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ from alembic import op  # type: ignore[attr-defined]
 from sqlalchemy.dialects import postgresql
 
 revision = "c9d1e2f3a4b5"
-down_revision = "merge_daily_harness_20260928"
+down_revision = "c9d2e4f6a8b1"
 branch_labels = None
 depends_on = None
 

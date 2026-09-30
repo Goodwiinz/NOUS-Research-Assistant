@@ -125,6 +125,12 @@ from .research_protocol import (
 )
 from .research_project import ResearchProject
 from .research_project_role import ResearchProjectRole, ResearchProjectRoleAssignment
+from .research_report import (
+    ResearchReport,
+    ResearchReportIdentifier,
+    ResearchReportObservation,
+    ResearchStudy,
+)
 from .research_run import ResearchRun, RunStatus
 from .research_source import ResearchSource
 from .research_stage_review import ResearchStageReview
@@ -283,6 +289,10 @@ __all__ = [
     "ExecutionMode",
     "ResearchSource",
     "ResearchStageReview",
+    "ResearchReport",
+    "ResearchReportIdentifier",
+    "ResearchReportObservation",
+    "ResearchStudy",
     # Research Pipeline
     "ResearchPipeline",
     # Evaluation models
