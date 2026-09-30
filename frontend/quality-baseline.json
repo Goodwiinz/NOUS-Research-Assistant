@@ -23,7 +23,7 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 115,
+    "errors": 112,
     "warnings": 2002,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
@@ -1149,10 +1149,6 @@
       "src/components/research/DraftGenerator.tsx": {
         "errors": 0,
         "warnings": 1
-      },
-      "src/components/research/DraftViewer.tsx": {
-        "errors": 3,
-        "warnings": 0
       },
       "src/components/research/ExtractionMatrix.tsx": {
         "errors": 0,

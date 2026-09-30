@@ -102,6 +102,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
         return w.document
 
     monkeypatch.setattr(svc, "_append", append)
+    monkeypatch.setattr(svc, "_invalidate_releases", AsyncMock())  # GOO-307
     monkeypatch.setattr(svc, "_matrix", AsyncMock(return_value=matrix))
     monkeypatch.setattr(svc, "_lock", AsyncMock(return_value=SimpleNamespace()))
     monkeypatch.setattr(svc, "_replayed_event", AsyncMock(return_value=None))

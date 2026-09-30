@@ -74,6 +74,7 @@ from .extraction_matrix import (
 )
 from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
+from .draft_release import DraftRelease
 from .draft_task_result import DraftTaskResult
 from .generated_draft import GeneratedDraft
 from .message_attachment import MessageAttachment
@@ -238,6 +239,7 @@ __all__ = [
     "ProjectSkillChangeRequest",
     "ProjectSkillVersionScan",
     "GeneratedDraft",
+    "DraftRelease",
     "DraftTaskResult",
     "DraftCitation",
     "DraftReview",
