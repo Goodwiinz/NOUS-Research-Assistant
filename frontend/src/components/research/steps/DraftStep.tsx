@@ -186,9 +186,12 @@ export const DraftStep: React.FC<DraftStepProps> = ({
                               );
                             setGenerationStatus(status);
                             if (
-                              !['completed', 'failed', 'cancelled'].includes(
-                                status.status
-                              )
+                              ![
+                                'completed',
+                                'failed',
+                                'cancelled',
+                                'interrupted',
+                              ].includes(status.status)
                             ) {
                               setTimeout(pollStatus, 1000);
                             } else {

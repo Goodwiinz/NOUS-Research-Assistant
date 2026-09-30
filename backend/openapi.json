@@ -5190,6 +5190,116 @@
         "title": "DraftReviewResponse",
         "type": "object"
       },
+      "DraftTaskStatusResponse": {
+        "additionalProperties": true,
+        "description": "Draft task status: live cache, or the retained ``draft_task_results`` row.",
+        "properties": {
+          "artifact_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Hash"
+          },
+          "artifact_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Version"
+          },
+          "current_step": {
+            "default": "",
+            "title": "Current Step",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "progress": {
+            "default": 0,
+            "title": "Progress",
+            "type": "integer"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "state_source": {
+            "enum": [
+              "cache",
+              "database"
+            ],
+            "title": "State Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "started_at",
+          "state_source"
+        ],
+        "title": "DraftTaskStatusResponse",
+        "type": "object"
+      },
       "DuplicateCheckRequest": {
         "properties": {
           "sha256": {
@@ -33963,7 +34073,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DraftTaskStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -34019,7 +34131,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DraftTaskStatusResponse"
+                }
               }
             },
             "description": "Successful Response"

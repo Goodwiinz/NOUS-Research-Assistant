@@ -68,6 +68,7 @@ from .entity import Entity, EntityType, ExtractionMethod, entity_relationships
 from .extraction_matrix import ExtractionCell, ExtractionMatrix
 from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
+from .draft_task_result import DraftTaskResult
 from .generated_draft import GeneratedDraft
 from .message_attachment import MessageAttachment
 from .organization import Organization, StorageTier
@@ -223,6 +224,7 @@ __all__ = [
     "ProjectSkillChangeRequest",
     "ProjectSkillVersionScan",
     "GeneratedDraft",
+    "DraftTaskResult",
     "DraftCitation",
     "DraftReview",
     "ProjectThread",
