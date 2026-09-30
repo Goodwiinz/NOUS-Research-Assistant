@@ -13,6 +13,7 @@ Two layers:
    uses of exception text are fine and must not trip the scan.
 """
 
+import ast
 import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -63,19 +64,96 @@ def _iter_python_files():
         yield from sorted(directory.rglob("*.py"))
 
 
+_EXC_NAMES = {"e", "exc"}
+
+
+def _embeds_exception_text(node: ast.AST) -> bool:
+    """True if ``node`` contains ``str(e)``/``str(exc)`` or an f-string ``{e}``."""
+    for sub in ast.walk(node):
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == "str"
+            and any(isinstance(a, ast.Name) and a.id in _EXC_NAMES for a in sub.args)
+        ):
+            return True
+        if (
+            isinstance(sub, ast.FormattedValue)
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id in _EXC_NAMES
+        ):
+            return True
+    return False
+
+
+def _scan_source(text: str) -> list[int]:
+    """Return 1-based line numbers of leaking detail constructions in ``text``."""
+    lines = set()
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        code = line.split("#", 1)[0]
+        if any(pattern.search(code) for pattern in LEAK_PATTERNS):
+            lines.add(line_no)
+    # The regexes are line-based, so a `detail=` kwarg on its own line inside a
+    # multiline call slips past them; the AST sees the call regardless of layout.
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "detail" and _embeds_exception_text(kw.value):
+                    lines.add(kw.value.lineno)
+    return sorted(lines)
+
+
 def _scan_hits():
     hits = []
     for path in _iter_python_files():
         text = path.read_text(encoding="utf-8")
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            code = line.split("#", 1)[0]
-            for pattern in LEAK_PATTERNS:
-                if pattern.search(code):
-                    hits.append(
-                        f"{path.relative_to(BACKEND_ROOT)}:{line_no}: {line.strip()}"
-                    )
-                    break
+        source_lines = text.splitlines()
+        for line_no in _scan_source(text):
+            hits.append(
+                f"{path.relative_to(BACKEND_ROOT)}:{line_no}: "
+                f"{source_lines[line_no - 1].strip()}"
+            )
     return hits
+
+
+_MULTILINE_LEAK = """
+try:
+    pass
+except Exception as exc:
+    raise HTTPException(
+        status_code=500,
+        detail=str(exc),
+    )
+"""
+
+_MULTILINE_FSTRING_LEAK = """
+try:
+    pass
+except Exception as e:
+    raise HTTPException(
+        status_code=500,
+        detail=f"failed: {e}",
+    )
+"""
+
+_LOCAL_DETAIL_VARIABLE = """
+try:
+    pass
+except Exception as e:
+    detail = str(e)
+    if "duplicate" in detail:
+        raise HTTPException(status_code=409, detail="Already exists")
+"""
+
+
+def test_tripwire_catches_multiline_detail_kwargs():
+    # Codex P2 on #1733: a kwarg on its own line must still be detected.
+    assert _scan_source(_MULTILINE_LEAK) == [7]
+    assert _scan_source(_MULTILINE_FSTRING_LEAK) == [7]
+
+
+def test_tripwire_ignores_local_detail_variable():
+    assert _scan_source(_LOCAL_DETAIL_VARIABLE) == []
 
 
 def test_no_raw_exception_text_in_client_details():
