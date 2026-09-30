@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScreeningQueuePanel } from '../ScreeningQueuePanel';
@@ -142,7 +142,11 @@ const role = (
 
 function renderPanel(
   roles: ProjectRoleAssignment[],
-  props: { readOnly?: boolean; approvedProtocolVersionId?: string } = {}
+  props: {
+    readOnly?: boolean;
+    approvedProtocolVersionId?: string;
+    canEdit?: boolean;
+  } = {}
 ): QueryClient {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -153,6 +157,12 @@ function renderPanel(
     </QueryClientProvider>
   );
   return client;
+}
+
+/** The full-text status line inside one report row. */
+async function fullTextStatus(title: string): Promise<HTMLElement> {
+  const row = (await screen.findByText(title)).closest('li') as HTMLElement;
+  return within(row).getByText(/^Full text: /).parentElement as HTMLElement;
 }
 
 describe('ScreeningQueuePanel', () => {
@@ -222,9 +232,15 @@ describe('ScreeningQueuePanel', () => {
     renderPanel([role('me', 'reviewer')]);
     const user = userEvent.setup();
 
+    const alpha = await fullTextStatus('Alpha trial');
+    await waitFor(() =>
+      expect(alpha).toHaveTextContent('Full text: retrieved')
+    );
+    // Retrieved lifts the gate: Include is live, Exclude waits only on a reason.
     expect(
-      await screen.findByLabelText('Full-text status for Alpha trial')
-    ).toHaveTextContent('Full text: retrieved');
+      screen.getByRole('button', { name: 'Include Alpha trial' })
+    ).toBeEnabled();
+    expect(screen.getAllByText('Full text not retrieved')).toHaveLength(1);
     const exclude = screen.getByRole('button', {
       name: 'Exclude Alpha trial',
     });
@@ -251,40 +267,62 @@ describe('ScreeningQueuePanel', () => {
     ]);
     renderPanel([role('me', 'reviewer')]);
 
-    const alpha = await screen.findByLabelText(
-      'Full-text status for Alpha trial'
-    );
+    const alpha = await fullTextStatus('Alpha trial');
     await waitFor(() =>
       expect(alpha).toHaveTextContent('Full text: unavailable')
     );
-    expect(alpha).toHaveAttribute('title', 'not held by library');
-    expect(
-      screen.getByLabelText('Full-text status for Beta cohort')
-    ).toHaveTextContent('Full text: pending');
+    // The reason is readable text, not a hover-only title.
+    expect(alpha).toHaveTextContent('(not held by library)');
+    expect(alpha).toHaveTextContent('for Alpha trial');
+    expect(await fullTextStatus('Beta cohort')).toHaveTextContent(
+      'Full text: pending'
+    );
   });
 
   it('requests full text for a row with one key per click', async () => {
     vi.mocked(requestFulltext).mockResolvedValue(fulltextState('pending'));
-    const client = renderPanel([role('me', 'reviewer')]);
+    const client = renderPanel([role('me', 'reviewer')], { canEdit: true });
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     const user = userEvent.setup();
+    const button = await screen.findByRole('button', {
+      name: 'Request full text for Alpha trial',
+    });
 
-    await user.click(
-      await screen.findByRole('button', {
-        name: 'Request full text for Alpha trial',
-      })
-    );
+    await user.click(button);
+    await waitFor(() => expect(requestFulltext).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+    await waitFor(() => expect(requestFulltext).toHaveBeenCalledTimes(2));
 
-    await waitFor(() => expect(requestFulltext).toHaveBeenCalled());
-    const [projectId, body] = vi.mocked(requestFulltext).mock.calls[0];
+    const [[projectId, first], [, second]] =
+      vi.mocked(requestFulltext).mock.calls;
     expect(projectId).toBe('project-1');
-    expect(body.report_id).toBe('report-1');
-    expect(body.idempotency_key).toBeTruthy();
-    await waitFor(() =>
+    expect(first.report_id).toBe('report-1');
+    expect(first.idempotency_key).toBeTruthy();
+    expect(second.idempotency_key).not.toBe(first.idempotency_key);
+    await waitFor(() => {
       expect(invalidate).toHaveBeenCalledWith({
         queryKey: ['prisma', 'project-1'],
-      })
-    );
+      });
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: ['fulltext', 'project-1'],
+      });
+    });
+  });
+
+  it('a reviewer without edit access sees a notice, not the actions', async () => {
+    vi.mocked(listFulltext).mockResolvedValue([fulltextState('requested')]);
+    renderPanel([role('me', 'reviewer')]);
+
+    expect(
+      await screen.findAllByText(
+        'Only project editors record full-text retrieval.'
+      )
+    ).toHaveLength(2);
+    expect(
+      screen.queryByRole('button', { name: /full text/i })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('marking unavailable requires a reason and names the head', async () => {
@@ -292,7 +330,7 @@ describe('ScreeningQueuePanel', () => {
     vi.mocked(recordFulltextAttempt).mockResolvedValue(
       fulltextState('unavailable')
     );
-    renderPanel([role('me', 'reviewer')]);
+    renderPanel([role('me', 'reviewer')], { canEdit: true });
     const user = userEvent.setup();
 
     await user.click(
@@ -348,7 +386,7 @@ describe('ScreeningQueuePanel', () => {
     vi.mocked(recordFulltextAttempt).mockResolvedValue(
       fulltextState('retrieved')
     );
-    renderPanel([role('me', 'reviewer')]);
+    renderPanel([role('me', 'reviewer')], { canEdit: true });
     const user = userEvent.setup();
 
     await user.click(
@@ -411,11 +449,10 @@ describe('ScreeningQueuePanel', () => {
 
   it('read-only hides full-text actions', async () => {
     vi.mocked(listFulltext).mockResolvedValue([fulltextState('requested')]);
-    renderPanel([role('me', 'reviewer')], { readOnly: true });
+    renderPanel([role('me', 'reviewer')], { readOnly: true, canEdit: true });
 
-    expect(
-      await screen.findByLabelText('Full-text status for Alpha trial')
-    ).toBeInTheDocument();
+    const alpha = await fullTextStatus('Alpha trial');
+    await waitFor(() => expect(alpha).toHaveTextContent('requested'));
     expect(
       screen.queryByRole('button', { name: /full text/i })
     ).not.toBeInTheDocument();

@@ -8,8 +8,11 @@ their own revisions in chain order (``c9d2e4f6a8b1`` -> ``d4e6f8a0b2c3`` ->
 migration on real PostgreSQL. Seed: owner/supervisor O (workspace owner, so
 EDIT), reviewers R and R2, adjudicator A, role-less viewer V, foreign-org F.
 
-Every exported count is compared with a value computed here by raw SQL that
-never imports ``prisma.py``.
+Every exported count is compared with an expected value computed here by raw
+SQL; the expected side never calls ``prisma`` (the module is imported only for
+its ``SCHEMA`` constant). The raw SQL applies the same universe (final reports
+that have records) and merged-report rules as the derivation, so it stays
+honest for seeds with merges that carry outcomes or requests.
 
 Mutation verification (docs/engineering/testing.md); full record in
 ``docs/testing/agent-orchestration-mutation-checks.md`` (GOO-303 section):
@@ -244,6 +247,13 @@ WITH RECURSIVE f(id, final) AS (
   UNION ALL
     SELECT r.id, f.final FROM research_reports r
     JOIN f ON r.merged_into_report_id = f.id
+),
+u AS (
+    SELECT DISTINCT f.final FROM f WHERE f.id IN (
+        SELECT report_id FROM research_report_observations
+        WHERE collection_id = :c
+        UNION SELECT report_id FROM research_import_records
+        WHERE collection_id = :c AND status = 'accepted')
 )
 """
 
@@ -273,32 +283,46 @@ async def _raw_counts(factory: Factory, collection_id: UUID) -> dict[str, Any]:
         )
         [(rejected,)] = await rows("""SELECT count(*) FROM research_import_records
             WHERE collection_id = :c AND status = 'rejected'""")
-        [(unique,)] = await rows(
-            _FINALS + """SELECT count(DISTINCT f.final) FROM f WHERE f.id IN (
-                SELECT report_id FROM research_report_observations
-                WHERE collection_id = :c
-                UNION SELECT report_id FROM research_import_records
-                WHERE collection_id = :c AND status = 'accepted')"""
-        )
-        tips = await rows(
-            _FINALS + """SELECT q.stage, f.final, t.outcome, t.exclusion_reason
-            FROM screening_resolutions t
-            JOIN screening_queues q ON q.id = t.queue_id
-            JOIN f ON f.id = t.report_id
-            WHERE q.collection_id = :c
-              AND NOT EXISTS (SELECT 1 FROM screening_resolutions l
-                              WHERE l.supersedes_resolution_id = t.id)
-              AND NOT EXISTS (SELECT 1 FROM screening_queues n
-                              WHERE n.supersedes_queue_id = q.id)
-              AND t.basis IN ('single', 'agreement', 'adjudicated')
-              AND t.outcome IN ('include', 'exclude')"""
-        )
+        [(unique,)] = await rows(_FINALS + "SELECT count(*) FROM u")
+        # One tip per (stage, final report) inside the universe: the
+        # survivor's own tip wins, else the latest; only decided tips count.
+        tips = [
+            t
+            for t in await rows(
+                _FINALS + """SELECT DISTINCT ON (q.stage, f.final) q.stage, f.final,
+                  CASE WHEN t.basis IN ('single', 'agreement', 'adjudicated')
+                        AND t.outcome IN ('include', 'exclude')
+                       THEN t.outcome END,
+                  t.exclusion_reason
+                FROM screening_resolutions t
+                JOIN screening_queues q ON q.id = t.queue_id
+                JOIN f ON f.id = t.report_id
+                JOIN u ON u.final = f.final
+                WHERE q.collection_id = :c
+                  AND NOT EXISTS (SELECT 1 FROM screening_resolutions l
+                                  WHERE l.supersedes_resolution_id = t.id)
+                  AND NOT EXISTS (SELECT 1 FROM screening_queues n
+                                  WHERE n.supersedes_queue_id = q.id)
+                ORDER BY q.stage, f.final, (t.report_id = f.final) DESC,
+                         t.created_at DESC, t.event_id::text DESC"""
+            )
+            if t[2] is not None
+        ]
+        # Chain heads (or bare requests) inside the universe, with the
+        # ledger seq of the event that wrote each.
         heads = await rows(
-            _FINALS + """SELECT f.final, a.outcome FROM research_fulltext_requests rq
+            _FINALS
+            + """SELECT f.final, a.outcome, e.seq FROM research_fulltext_requests rq
             JOIN f ON f.id = rq.report_id
+            JOIN u ON u.final = f.final
             LEFT JOIN research_fulltext_attempts a ON a.request_id = rq.id
               AND NOT EXISTS (SELECT 1 FROM research_fulltext_attempts n
                               WHERE n.previous_attempt_id = a.id)
+            JOIN research_decision_events e ON e.collection_id = :c
+              AND ((a.id IS NOT NULL AND e.event_type <> 'acquisition.requested'
+                    AND e.payload->>'attempt_id' = a.id::text)
+                OR (a.id IS NULL AND e.event_type = 'acquisition.requested'
+                    AND e.payload->>'request_id' = rq.id::text))
             WHERE rq.collection_id = :c"""
         )
         included = [
@@ -316,8 +340,9 @@ async def _raw_counts(factory: Factory, collection_id: UUID) -> dict[str, Any]:
     records = sum(n for _, n in providers) + sum(n for _, n in imports)
     screened = [t for t in tips if t[0] == "title_abstract"]
     assessed = [t for t in tips if t[0] == "full_text"]
+    # Retrieved if any request is; otherwise the latest request's head.
     state: dict[UUID, str] = {}
-    for final, outcome in heads:
+    for final, outcome, _seq in sorted(heads, key=lambda h: h[2]):
         if state.get(final) != "retrieved":
             state[final] = outcome or "pending"
     reasons: dict[str, int] = {}

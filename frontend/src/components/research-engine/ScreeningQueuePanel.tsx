@@ -30,6 +30,8 @@ interface ScreeningQueuePanelProps {
   approvedProtocolVersionId?: string;
   roles: ProjectRoleAssignment[];
   readOnly?: boolean;
+  /** Project EDIT access (`project.can_edit`): full-text acquisition needs it. */
+  canEdit?: boolean;
 }
 
 const DECISIONS: { value: ScreeningDecision; label: string }[] = [
@@ -125,6 +127,7 @@ function FullTextStatus({
   title,
   state,
   readOnly,
+  canEdit,
   onChanged,
 }: {
   projectId: string;
@@ -132,6 +135,7 @@ function FullTextStatus({
   title: string;
   state?: FulltextState;
   readOnly: boolean;
+  canEdit: boolean;
   onChanged: () => void;
 }): ReactElement {
   const [form, setForm] = useState<'unavailable' | 'retrieved' | null>(null);
@@ -173,18 +177,25 @@ function FullTextStatus({
   const ready =
     Boolean(attemptedOn) &&
     (form === 'unavailable' ? Boolean(reason.trim()) : Boolean(documentId));
+  // The server requires EDIT; a reviewer without it gets a notice, not a 404.
+  const actions = !readOnly && canEdit;
   return (
     <div className="space-y-2 text-xs">
-      <span
-        aria-label={`Full-text status for ${title}`}
-        title={
-          status === 'unavailable' ? (head?.reason ?? undefined) : undefined
-        }
-        className="inline-block rounded bg-muted px-2 py-0.5 text-muted-foreground"
-      >
-        {`Full text: ${status}`}
-      </span>
-      {!readOnly && !state && (
+      <p className="text-muted-foreground">
+        <span className="inline-block rounded bg-muted px-2 py-0.5">
+          {`Full text: ${status}`}
+        </span>
+        <span className="sr-only">{` for ${title}`}</span>
+        {status === 'unavailable' && head?.reason && (
+          <span className="ml-2">{`(${head.reason})`}</span>
+        )}
+      </p>
+      {!readOnly && !canEdit && status !== 'retrieved' && (
+        <p className="text-muted-foreground">
+          Only project editors record full-text retrieval.
+        </p>
+      )}
+      {actions && !state && (
         <button
           type="button"
           aria-label={`Request full text for ${title}`}
@@ -195,7 +206,7 @@ function FullTextStatus({
           Request
         </button>
       )}
-      {!readOnly && state && status !== 'retrieved' && (
+      {actions && state && status !== 'retrieved' && (
         <span className="ml-2 inline-flex gap-2">
           <button
             type="button"
@@ -282,6 +293,7 @@ export function ScreeningQueuePanel({
   approvedProtocolVersionId,
   roles,
   readOnly = false,
+  canEdit = false,
 }: ScreeningQueuePanelProps): ReactElement {
   const queryClient = useQueryClient();
   const queryKey = ['screening-queues', projectId] as const;
@@ -647,6 +659,7 @@ export function ScreeningQueuePanel({
                       title={title}
                       state={fulltextByReport.get(item.report_id)}
                       readOnly={readOnly}
+                      canEdit={canEdit}
                       onChanged={refresh}
                     />
                     {gated && (
