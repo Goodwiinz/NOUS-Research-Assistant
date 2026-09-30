@@ -67,8 +67,10 @@ function fakeClient() {
 }
 
 function workspace() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "nous-artifacts-")));
+  // The root is a child of `outside`, so `../secret.txt` names a real file.
   const outside = realpathSync(mkdtempSync(join(tmpdir(), "nous-outside-")));
+  const dir = join(outside, "root");
+  mkdirSync(dir);
   writeFileSync(join(dir, "report.md"), CONTENT);
   mkdirSync(join(dir, "nested"));
   writeFileSync(join(dir, "nested", "chart.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -78,7 +80,7 @@ function workspace() {
   writeFileSync(join(dir, "hard.md"), CONTENT);
   linkSync(join(dir, "hard.md"), join(outside, "hard-alias.md"));
   writeFileSync(join(dir, "big.bin"), Buffer.alloc(MAX_SNAPSHOT_BYTES + 1));
-  return { dir, outside, cleanup: () => { rmSync(dir, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); } };
+  return { dir, outside, cleanup: () => rmSync(outside, { recursive: true, force: true }) };
 }
 
 test("rejects escaping or unsafe paths before any upload", async () => {
