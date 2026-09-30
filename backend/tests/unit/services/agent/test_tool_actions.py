@@ -310,6 +310,7 @@ async def test_concurrent_identical_requests_replay_one_row(
         {**NOTE_ARGS, "tags": [""]},
         {**NOTE_ARGS, "tags": ["x" * 65]},
         {**NOTE_ARGS, "tags": [1]},
+        {**NOTE_ARGS, "tags": [f"t{i}" for i in range(21)]},
         {"content": "c"},
     ],
     ids=[
@@ -327,6 +328,7 @@ async def test_concurrent_identical_requests_replay_one_row(
         "tag-empty",
         "tag-long",
         "tag-int",
+        "too-many-tags",
         "missing-title",
     ],
 )

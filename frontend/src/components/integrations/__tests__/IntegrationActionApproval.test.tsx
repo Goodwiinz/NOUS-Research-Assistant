@@ -34,7 +34,7 @@ const review = (
   project_available: true,
   title: 'Findings',
   content: '# Findings\n**not bold here**',
-  tags: ['draft'],
+  tags: ['draft', 'review, urgent'],
   requested_at: '2026-09-30T00:00:00Z',
   decided_at: null,
   result: null,
@@ -66,9 +66,10 @@ describe('IntegrationActionApproval', () => {
       review('awaiting_approval')
     );
     render(<IntegrationActionApproval invocationId={ID} />);
-    expect(await screen.findByText('Thesis')).toBeInTheDocument();
+    expect(await screen.findByText(/Thesis \(p1\)/)).toBeInTheDocument();
     expect(screen.getByText('Findings')).toBeInTheDocument();
-    expect(screen.getByText('draft')).toBeInTheDocument();
+    expect(screen.getByText('“review, urgent”')).toBeInTheDocument();
+    expect(screen.getByText('“draft”')).toBeInTheDocument();
     // Markdown is not rendered: the raw markers stay visible.
     expect(screen.getByText(/\*\*not bold here\*\*/)).toBeInTheDocument();
     expect(screen.getByLabelText('Note content')).toHaveAttribute(
@@ -111,7 +112,7 @@ describe('IntegrationActionApproval', () => {
         review(state)
       );
       render(<IntegrationActionApproval invocationId={ID} />);
-      await screen.findByText('Thesis');
+      await screen.findByText(/Thesis/);
       expect(screen.getByRole('status')).toHaveTextContent(text);
       expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
     }
@@ -136,7 +137,7 @@ describe('IntegrationActionApproval', () => {
       review('failed', { last_error: 'denied by user' })
     );
     render(<IntegrationActionApproval invocationId={ID} />);
-    await screen.findByText('Thesis');
+    await screen.findByText(/Thesis/);
     expect(screen.getByRole('status')).toHaveTextContent(
       'Not created. denied by user.'
     );

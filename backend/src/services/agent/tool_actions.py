@@ -44,6 +44,7 @@ STALE_EXECUTION = timedelta(minutes=5)
 MAX_TITLE = 255
 MAX_CONTENT = 200_000
 MAX_TAG = 64
+MAX_TAGS = 20
 REQUIRED_SCOPE = "tools:write"
 
 
@@ -96,6 +97,8 @@ def _validate_note_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
         isinstance(t, str) and 0 < len(t) <= MAX_TAG for t in tags
     ):
         raise ToolActionArgumentError("tags must be strings of 1-64 characters")
+    if len(tags) > MAX_TAGS:
+        raise ToolActionArgumentError("at most 20 tags are accepted")
     return {"title": title, "content": content, "tags": tags}
 
 

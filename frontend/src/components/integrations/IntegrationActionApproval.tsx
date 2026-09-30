@@ -88,7 +88,7 @@ export function IntegrationActionApproval({
             <div>
               <dt className="font-semibold">Project</dt>
               <dd>
-                {revealHidden(action.project_label)}
+                {revealHidden(action.project_label)} ({action.project_id})
                 {!action.project_available && (
                   <span role="alert"> This project was deleted.</span>
                 )}
@@ -101,7 +101,19 @@ export function IntegrationActionApproval({
             {action.tags.length > 0 && (
               <div>
                 <dt className="font-semibold">Tags</dt>
-                <dd>{action.tags.map(revealHidden).join(', ')}</dd>
+                <dd>
+                  {/* One quoted item per tag so a comma inside a tag stays visible. */}
+                  <ul className="flex flex-wrap gap-2">
+                    {action.tags.map((tag, index) => (
+                      <li
+                        key={`${index}:${tag}`}
+                        className="rounded border px-2"
+                      >
+                        “{revealHidden(tag)}”
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
               </div>
             )}
             <div>

@@ -51,7 +51,7 @@ export function requestActionTool(client: ActionHttpClient): LocalTool {
           invocation_id: { type: "string", format: "uuid", description: "Client-generated UUID; identical retries return the same request" },
           title: { type: "string", maxLength: 255 },
           content: { type: "string", maxLength: 200000, description: "Markdown body" },
-          tags: { type: "array", items: { type: "string", minLength: 1, maxLength: 64 } },
+          tags: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 64 } },
         },
       },
     },
