@@ -25,11 +25,20 @@ vi.mock('../ProtocolPanel', () => ({
     <div>Protocol for {projectId}</div>
   ),
 }));
+vi.mock('../ReportIdentityPanel', () => ({
+  ReportIdentityPanel: ({ projectId }: { projectId: string }) => (
+    <div>Reports for {projectId}</div>
+  ),
+}));
 vi.mock('@/services/researchEngineService', () => ({
   createProject: vi.fn(),
   listProjectRoles: vi.fn(),
   assignProjectRole: vi.fn(),
   removeProjectRole: vi.fn(),
+  listReports: vi.fn(),
+  listReportHistory: vi.fn(),
+  linkStudy: vi.fn(),
+  mergeReports: vi.fn(),
 }));
 describe('ProjectWorkflow', () => {
   beforeEach(() => {
@@ -60,6 +69,7 @@ describe('ProjectWorkflow', () => {
     expect(
       screen.getByText('Blueprint for collection-1 (editable)')
     ).toBeInTheDocument();
+    expect(screen.getByText('Reports for collection-1')).toBeInTheDocument();
     await waitFor(() =>
       expect(listProjectRoles).toHaveBeenCalledWith('collection-1')
     );
