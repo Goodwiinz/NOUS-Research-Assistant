@@ -1,0 +1,68 @@
+{
+  "step": "F1-06-get-document-doc2",
+  "as": "owner",
+  "at": "2026-09-30T05:24:23.746475+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/documents/20492039-b419-48a5-80d8-b4d8c69dca6e",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "20492039-b419-48a5-80d8-b4d8c69dca6e",
+    "title": "Fixed Encoder Self-Attention Patterns in Transformer-Based Machine Translation",
+    "filename": "2002.10260v3.pdf",
+    "document_type": "pdf",
+    "file_size_bytes": 1118424,
+    "file_size_mb": 1.0666122436523438,
+    "mime_type": "application/pdf",
+    "processing_status": "indexed",
+    "tags": null,
+    "is_public": false,
+    "content_preview": "# Abstract\n\nTransformer-based models have brought a radical change to neural machine translation. A key feature of the Transformer architecture is the so-called multi-head attention mechanism, which allows the model to focus simultaneously on different parts of the input. However, recent works have shown that most attention heads learn simple, and often redundant, positional patterns. In this paper, we propose to replace all but one attention head of each encoder layer with simple fixed -- non-l...",
+    "content_summary": null,
+    "created_at": "2026-08-21T23:18:25.872225+00:00",
+    "updated_at": "2026-08-21T23:18:35.844514+00:00",
+    "uploaded_by_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "organization_id": "e050bd43-6b0b-4425-9848-1bc5ad9d5cc2",
+    "content_text": null,
+    "metadata": {
+      "title": "Fixed Encoder Self-Attention Patterns in Transformer-Based Machine Translation",
+      "description": "Transformer-based models have brought a radical change to neural machine translation. A key feature of the Transformer architecture is the so-called multi-head attention mechanism, which allows the model to focus simultaneously on different parts of the input. However, recent works have shown that most attention heads learn simple, and often redundant, positional patterns. In this paper, we propose to replace all but one attention head of each encoder layer with simple fixed -- non-learnable -- ...",
+      "authors": [
+        "Alessandro Raganato",
+        "Yves Scherrer",
+        "Jörg Tiedemann"
+      ],
+      "publication_date": "2020-02-24T13:53:06+00:00",
+      "categories": [
+        "cs.CL"
+      ],
+      "tags": [
+        "cs.CL"
+      ],
+      "arxiv_id": "2002.10260v3",
+      "arxiv_categories": [
+        "cs.CL"
+      ],
+      "arxiv_primary_category": "cs.CL",
+      "journal_reference": null,
+      "doi": null,
+      "comment": "Accepted to Findings of EMNLP 2020",
+      "source": "arxiv",
+      "language": "en",
+      "modality": "text",
+      "content_type": "academic_paper",
+      "num_pages": 13,
+      "pdf_path": "data/arxiv/2002.10260v3.pdf",
+      "has_full_text": true
+    },
+    "processing_started_at": null,
+    "processing_completed_at": null,
+    "processing_error": null,
+    "processing_retry_count": 0
+  }
+}
