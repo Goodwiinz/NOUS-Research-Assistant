@@ -537,3 +537,51 @@ async def test_cancel_route_falls_back_to_the_retained_row(
         with pytest.raises(HTTPException) as finished:
             await cancel("remote-done", ACTOR)
         assert finished.value.status_code == 409
+
+
+async def test_cancel_latest_route_falls_back_to_the_retained_row(
+    pipeline: tuple[async_sessionmaker[AsyncSession], UUID],
+) -> None:
+    """``POST /cancel`` without a task id on a replica that does not hold the
+    task: the scoped running row is found and cancelled; a foreign actor's or
+    another project's running row is never touched."""
+    from fastapi import HTTPException
+
+    from src.api.research import drafts as drafts_api
+
+    factory, _document_id = pipeline
+    other_actor = uuid4()
+    async with factory() as db:
+        await _start(db, "remote-latest")
+        await start_task(
+            db,
+            task_id="foreign-actor",
+            collection_id=PROJECT,
+            actor_user_id=other_actor,
+            request_fingerprint="f" * 64,
+        )
+        await db.commit()
+
+    async def cancel(user_id: UUID, project_id: UUID = PROJECT) -> Any:
+        async with factory() as db:
+            return await drafts_api.cancel_generation(
+                project_id=project_id,
+                task_id=None,
+                current_user=cast(Any, SimpleNamespace(id=user_id)),
+                db=db,
+            )
+
+    with patch.object(drafts_api, "_validate_project_ownership", new=AsyncMock()):
+        with pytest.raises(HTTPException) as elsewhere:
+            await cancel(ACTOR, project_id=uuid4())
+        assert elsewhere.value.status_code == 400
+
+        result = await cancel(ACTOR)
+        assert (result["task_id"], result["cancelled"]) == ("remote-latest", True)
+        row = await _db_state(factory, "remote-latest")
+        assert (row.state, row.error_code) == ("cancelled", "cancelled_by_user")
+        assert (await _db_state(factory, "foreign-actor")).state == "running"
+
+        with pytest.raises(HTTPException) as nothing_left:
+            await cancel(ACTOR)
+        assert nothing_left.value.status_code == 400

@@ -2032,6 +2032,18 @@ Key takeaways include the importance of continued investigation and the potentia
         """
         task_id = cls.cancel_latest_generation(project_id, user_id)
         if task_id is None:
+            # Another replica (or a restarted process) may own the task: the
+            # retained row is the record, with the same project/actor scope.
+            query = select(DraftTaskResult.task_id).where(
+                DraftTaskResult.collection_id == project_id,
+                DraftTaskResult.state == "running",
+            )
+            if user_id is not None:
+                query = query.where(DraftTaskResult.actor_user_id == user_id)
+            task_id = await db.scalar(
+                query.order_by(DraftTaskResult.started_at.desc()).limit(1)
+            )
+        if task_id is None:
             return None, None
         cancelled = await finish_task(
             db, task_id=task_id, state="cancelled", error_code="cancelled_by_user"
