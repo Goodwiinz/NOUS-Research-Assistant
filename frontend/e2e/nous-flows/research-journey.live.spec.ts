@@ -110,8 +110,10 @@ async function readJson(
     method: 'GET',
     path: route,
     status: response.status(),
-    ids: journey?.stages?.map((s) => `${s.key}:${s.status}`),
-    versions: { current: journey?.current ?? null },
+    versions: {
+      current: journey?.current ?? null,
+      stages: journey?.stages?.map((s) => `${s.key}:${s.status}`),
+    },
     hashes: { response_sha256: sha256(text) },
   });
   return { status: response.status(), body };
