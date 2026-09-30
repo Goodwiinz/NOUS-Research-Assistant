@@ -23,7 +23,7 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 116,
+    "errors": 115,
     "warnings": 2003,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
@@ -1155,7 +1155,7 @@
         "warnings": 0
       },
       "src/components/research/ExtractionMatrix.tsx": {
-        "errors": 1,
+        "errors": 0,
         "warnings": 11
       },
       "src/components/research/LinkThreadModal.tsx": {
