@@ -1194,13 +1194,17 @@ class _Extraction:
         }
 
     def validate(
-        self, event_type: str, payload: dict[str, object], reason: str | None = "ok"
+        self,
+        event_type: str,
+        payload: dict[str, object],
+        reason: str | None = "ok",
+        version: int = 1,
     ) -> None:
         _validate_event(
             aggregate_type="research_extraction",
             aggregate_id=self.matrix_id,
             event_type=event_type,
-            event_schema_version=1,
+            event_schema_version=version,
             subject_type="extraction_matrix",
             subject_id=self.matrix_id,
             subject_version_id=None,
@@ -1371,3 +1375,221 @@ def test_extraction_replay_rejects_staled_by_non_editor() -> None:
     for role in ("machine", "reviewer", "adjudicator"):
         with pytest.raises(DecisionReplayError, match="editor"):
             ex.replay(*base, ("extraction.staled", role, ex.staled(accepted)))
+
+
+# --- GOO-305: anchor fields as v2 extraction payloads -----------------------
+
+
+def _anchor(
+    ex: _Extraction,
+    status: str | None = "verified",
+    start: int | None = 10,
+    occurrences: list[int] | None = None,
+) -> dict[str, object]:
+    return {
+        "field_id": str(ex.field),
+        "anchor_status": status,
+        "citation_sha256": "e" * 64,
+        "start": start,
+        "end": None if start is None else start + 5,
+        "page": 3 if start is not None else None,
+        "occurrences": [start] if occurrences is None and start else occurrences or [],
+    }
+
+
+def _observed_v2(
+    ex: _Extraction, anchors: dict[UUID, dict[str, object]]
+) -> dict[str, object]:
+    return {
+        **ex.observed(),
+        "observations": {str(o): a for o, a in anchors.items()},
+        "text_sha256": "f" * 64,
+        "inspected_coverage": [[0, 100]],
+    }
+
+
+def _accepted_v2(
+    ex: _Extraction,
+    accepted: UUID,
+    obs: UUID,
+    resolution: str = "verified",
+    start: int | None = 10,
+    supersedes: UUID | None = None,
+) -> dict[str, object]:
+    return {
+        **ex.accepted(accepted, [obs], supersedes),
+        "anchor_observation_id": str(obs),
+        "anchor_resolution": resolution,
+        "anchor_start_char": start,
+        "text_sha256": "f" * 64,
+    }
+
+
+def _staled_v2(
+    ex: _Extraction, accepted: UUID, source: str = "d" * 64, text: str = "0" * 64
+) -> dict[str, object]:
+    return {
+        **ex.staled(accepted),
+        "new_form_version_id": None,
+        "reason": "source_changed",
+        "document_id": str(ex.document),
+        "new_source_hash": source,
+        "new_text_sha256": text,
+    }
+
+
+def test_observed_v2_requires_anchor_keys() -> None:
+    ex = _Extraction()
+    obs = uuid4()
+    payload = _observed_v2(ex, {obs: _anchor(ex)})
+    ex.validate("extraction.observed", payload, version=2)
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        ex.validate("extraction.observed", ex.observed(obs), version=2)
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        ex.validate("extraction.observed", payload, version=1)
+    bad_anchors: list[tuple[dict[str, object], str]] = [
+        ({**_anchor(ex), "extra": 1}, "anchor does not match"),
+        ({**_anchor(ex), "anchor_status": "fuzzy"}, "anchor_status"),
+        ({**_anchor(ex), "end": 10}, "0 <= start < end"),
+        ({**_anchor(ex), "end": None}, "0 <= start < end"),
+        (_anchor(ex, "unverified"), "only a verified"),
+        ({**_anchor(ex), "citation_sha256": "E" * 64}, "citation_sha256"),
+        ({**_anchor(ex), "occurrences": list(range(21))}, "occurrences"),
+    ]
+    for anchor, message in bad_anchors:
+        with pytest.raises(DecisionValidationError, match=message):
+            ex.validate(
+                "extraction.observed", _observed_v2(ex, {obs: anchor}), version=2
+            )
+    for coverage in ([[5, 5]], [[0, 10], [5, 20]], [[0, 10], [10, 20]], "x"):
+        with pytest.raises(DecisionValidationError, match="inspected_coverage"):
+            ex.validate(
+                "extraction.observed",
+                {**payload, "inspected_coverage": coverage},
+                version=2,
+            )
+    with pytest.raises(DecisionValidationError, match="text_sha256"):
+        ex.validate("extraction.observed", {**payload, "text_sha256": None}, version=2)
+    missing = _observed_v2(ex, {obs: _anchor(ex, None, None)})
+    ex.validate(
+        "extraction.observed", {**missing, "inspected_coverage": None}, version=2
+    )
+    accepted = _accepted_v2(ex, uuid4(), obs)
+    ex.validate("extraction.accepted", accepted, version=2)
+    with pytest.raises(DecisionValidationError, match="names its anchor"):
+        ex.validate(
+            "extraction.accepted", {**accepted, "anchor_start_char": None}, version=2
+        )
+    with pytest.raises(DecisionValidationError, match="must be cited"):
+        ex.validate(
+            "extraction.accepted",
+            {**accepted, "anchor_observation_id": str(uuid4())},
+            version=2,
+        )
+    with pytest.raises(DecisionValidationError, match="anchor_resolution"):
+        ex.validate(
+            "extraction.accepted", {**accepted, "anchor_resolution": "x"}, version=2
+        )
+    staled = _staled_v2(ex, uuid4())
+    ex.validate("extraction.staled", staled, version=2)
+    with pytest.raises(DecisionValidationError, match="new_text_sha256"):
+        ex.validate("extraction.staled", {**staled, "new_text_sha256": None}, version=2)
+    with pytest.raises(DecisionValidationError, match="reason"):
+        ex.validate("extraction.staled", {**staled, "reason": "bored"}, version=2)
+    form = {
+        **staled,
+        "reason": "form_changed",
+        "new_form_version_id": str(uuid4()),
+    }
+    with pytest.raises(DecisionValidationError, match="names no source"):
+        ex.validate("extraction.staled", form, version=2)
+    ex.validate(
+        "extraction.staled",
+        {**form, "document_id": None, "new_source_hash": None, "new_text_sha256": None},
+        version=2,
+    )
+
+
+def test_v1_extraction_history_still_replays() -> None:
+    ex = _Extraction()
+    old, new, first, second = uuid4(), uuid4(), uuid4(), uuid4()
+    ex.replay(
+        ("extraction.observed", "machine", ex.observed(old)),
+        ("extraction.accepted", "adjudicator", ex.accepted(first, [old])),
+        ("extraction.observed", "machine", _observed_v2(ex, {new: _anchor(ex)})),
+        (
+            "extraction.accepted",
+            "adjudicator",
+            _accepted_v2(ex, second, new, supersedes=first),
+        ),
+        ("extraction.staled", "editor", ex.staled(second)),
+    )
+
+
+def test_accepted_verified_on_unverified_observation_fails_replay() -> None:
+    ex = _Extraction()
+    obs, accepted = uuid4(), uuid4()
+    for anchor in (_anchor(ex, "unverified", None), _anchor(ex, start=11)):
+        with pytest.raises(DecisionReplayError, match="contradicts observation"):
+            ex.replay(
+                ("extraction.observed", "machine", _observed_v2(ex, {obs: anchor})),
+                ("extraction.accepted", "adjudicator", _accepted_v2(ex, accepted, obs)),
+            )
+    unverified = _accepted_v2(ex, accepted, obs, "accepted_unverified", None)
+    ex.replay(
+        (
+            "extraction.observed",
+            "machine",
+            _observed_v2(ex, {obs: _anchor(ex, "unverified", None)}),
+        ),
+        ("extraction.accepted", "adjudicator", unverified),
+    )
+
+
+def test_disambiguated_start_must_be_a_recorded_occurrence() -> None:
+    ex = _Extraction()
+    obs, accepted = uuid4(), uuid4()
+    observed = (
+        "extraction.observed",
+        "machine",
+        _observed_v2(ex, {obs: _anchor(ex, "ambiguous", None, [4, 37])}),
+    )
+    ex.replay(
+        observed,
+        (
+            "extraction.accepted",
+            "adjudicator",
+            _accepted_v2(ex, accepted, obs, "disambiguated", 37),
+        ),
+    )
+    with pytest.raises(DecisionReplayError, match="contradicts observation"):
+        ex.replay(
+            observed,
+            (
+                "extraction.accepted",
+                "adjudicator",
+                _accepted_v2(ex, accepted, obs, "disambiguated", 5),
+            ),
+        )
+
+
+def test_source_stale_requires_hash_change() -> None:
+    ex = _Extraction()
+    obs, accepted = uuid4(), uuid4()
+    base = (
+        ("extraction.observed", "machine", _observed_v2(ex, {obs: _anchor(ex)})),
+        ("extraction.accepted", "adjudicator", _accepted_v2(ex, accepted, obs)),
+    )
+    for role in ("adjudicator", "machine", "editor"):
+        ex.replay(*base, ("extraction.staled", role, _staled_v2(ex, accepted)))
+    ex.replay(
+        *base, ("extraction.staled", "machine", _staled_v2(ex, accepted, "a" * 64))
+    )
+    unchanged = _staled_v2(ex, accepted, "d" * 64, "f" * 64)
+    with pytest.raises(DecisionReplayError, match="stale without source change"):
+        ex.replay(*base, ("extraction.staled", "adjudicator", unchanged))
+    with pytest.raises(DecisionReplayError, match="actor"):
+        ex.replay(*base, ("extraction.staled", "reviewer", _staled_v2(ex, accepted)))
+    twice = ("extraction.staled", "machine", _staled_v2(ex, accepted))
+    with pytest.raises(DecisionReplayError, match="current tip"):
+        ex.replay(*base, twice, twice)

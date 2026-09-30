@@ -12298,6 +12298,13 @@ export interface components {
          */
         ExtractionAcceptCreate: {
             /**
+             * Accept Unverified
+             * @default false
+             */
+            accept_unverified: boolean;
+            /** Anchor Start */
+            anchor_start?: number | null;
+            /**
              * Document Id
              * Format: uuid
              */
@@ -12332,6 +12339,14 @@ export interface components {
              * Format: uuid
              */
             accepted_by_id: string;
+            /** Anchor End Char */
+            anchor_end_char?: number | null;
+            /** Anchor Observation Id */
+            anchor_observation_id?: string | null;
+            /** Anchor Resolution */
+            anchor_resolution?: ("verified" | "disambiguated" | "accepted_unverified" | "not_applicable" | "legacy") | null;
+            /** Anchor Start Char */
+            anchor_start_char?: number | null;
             /**
              * Created At
              * Format: date-time
@@ -12363,12 +12378,58 @@ export interface components {
             observation_ids: string[];
             /** Rationale */
             rationale: string;
+            /**
+             * Source Changed
+             * @default false
+             */
+            source_changed: boolean;
             /** Source Hash */
             source_hash: string;
             /** Supersedes Accepted Value Id */
             supersedes_accepted_value_id?: string | null;
+            /** Text Sha256 */
+            text_sha256?: string | null;
             /** Value */
             value?: unknown;
+        };
+        /**
+         * ExtractionAnchor
+         * @description Where an observation's verbatim citation sits in the retained text.
+         */
+        ExtractionAnchor: {
+            /** End Char */
+            end_char?: number | null;
+            /** Occurrence Contexts */
+            occurrence_contexts?: components["schemas"]["ExtractionAnchorOccurrence"][];
+            /** Occurrences */
+            occurrences?: number[];
+            /** Occurrences In Text */
+            occurrences_in_text?: number | null;
+            /** Page */
+            page?: number | null;
+            /** Start Char */
+            start_char?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "verified" | "ambiguous" | "unverified" | "location_unavailable";
+        };
+        /**
+         * ExtractionAnchorOccurrence
+         * @description One place a repeated citation occurs, sliced server-side (code points).
+         */
+        ExtractionAnchorOccurrence: {
+            /** Context After */
+            context_after: string;
+            /** Context Before */
+            context_before: string;
+            /** End Char */
+            end_char: number;
+            /** Page */
+            page?: number | null;
+            /** Start Char */
+            start_char: number;
         };
         /** ExtractionCellObservationsResponse */
         ExtractionCellObservationsResponse: {
@@ -12469,6 +12530,8 @@ export interface components {
          * @description A reviewer's value (or missingness reason) for one field of one document.
          */
         ExtractionObservationCreate: {
+            /** Anchor Start */
+            anchor_start?: number | null;
             /** Citation */
             citation?: string | null;
             /**
@@ -12500,8 +12563,15 @@ export interface components {
              * Format: uuid
              */
             actor_user_id: string;
+            anchor?: components["schemas"]["ExtractionAnchor"] | null;
             /** Citation */
             citation?: string | null;
+            /** Context After */
+            context_after?: string | null;
+            /** Context Before */
+            context_before?: string | null;
+            /** Coverage Complete */
+            coverage_complete?: boolean | null;
             /**
              * Created At
              * Format: date-time
@@ -12531,12 +12601,23 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Inspected Coverage */
+            inspected_coverage?: number[][] | null;
             /** Kind */
             kind: string;
             /** Missingness */
             missingness?: string | null;
+            /**
+             * Source Changed
+             * @default false
+             */
+            source_changed: boolean;
             /** Source Hash */
             source_hash: string;
+            /** Text Length */
+            text_length?: number | null;
+            /** Text Sha256 */
+            text_sha256?: string | null;
             /** Validation State */
             validation_state: string;
             /** Value */

@@ -1,7 +1,7 @@
 """Durable integration tool actions.
 
 Revision ID: it01_integration_actions
-Revises: a3c5e7f9b1d4
+Revises: b8d0f2a4c6e9
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "it01_integration_actions"
-down_revision = "a3c5e7f9b1d4"
+down_revision = "b8d0f2a4c6e9"
 branch_labels = None
 depends_on = None
 _POSTGREST_ROLES = ("anon", "authenticated")

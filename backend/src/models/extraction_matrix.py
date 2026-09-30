@@ -33,6 +33,15 @@ _MISSINGNESS_CHECK = (
 )
 _VALUE_XOR_MISSINGNESS = "(value IS NULL) <> (missingness IS NULL)"
 _INITIAL_ACCEPTED = "supersedes_accepted_value_id IS NULL"
+# GOO-305 (alembic b8d0f2a4c6e9 freezes the same literals).
+_ANCHOR_STATUS_CHECK = (
+    "anchor_status IS NULL OR anchor_status IN "
+    "('verified','ambiguous','unverified','location_unavailable')"
+)
+_ANCHOR_RESOLUTION_CHECK = (
+    "anchor_resolution IS NULL OR anchor_resolution IN "
+    "('verified','disambiguated','accepted_unverified','not_applicable')"
+)
 
 
 def _fk(target: str, *, nullable: bool = False) -> Column:
@@ -168,11 +177,42 @@ class ExtractionObservation(Base):
     validation_state = Column(String(16), nullable=False)
     citation = Column(Text, nullable=True)
     source_hash = Column(String(64), nullable=False)
+    # GOO-305 source anchor: offsets are code points into content_text as
+    # stored (text_sha256). NULL status on a value row means "pre-anchor".
+    anchor_status = Column(String(24), nullable=True)
+    anchor_start_char = Column(Integer, nullable=True)
+    anchor_end_char = Column(Integer, nullable=True)
+    anchor_page = Column(Integer, nullable=True)
+    anchor_occurrences = Column(JSONB, nullable=True)  # <=20 starts if ambiguous
+    occurrences_in_text = Column(Integer, nullable=True)
+    text_sha256 = Column(String(64), nullable=True)
+    inspected_coverage = Column(JSONB, nullable=True)  # [[start, end), ...]
+    text_length = Column(Integer, nullable=True)
     created_at = _created_at()
 
     __table_args__ = (
         CheckConstraint(
             "kind IN ('machine','human')", name="ck_extraction_observation_kind"
+        ),
+        CheckConstraint(
+            _ANCHOR_STATUS_CHECK, name="ck_extraction_observation_anchor_status"
+        ),
+        CheckConstraint(
+            "(anchor_start_char IS NULL) = (anchor_end_char IS NULL)",
+            name="ck_extraction_observation_anchor_pair",
+        ),
+        CheckConstraint(
+            "anchor_start_char IS NULL OR anchor_status IN ('verified','ambiguous')",
+            name="ck_extraction_observation_anchor_located",
+        ),
+        CheckConstraint(
+            "anchor_status IS NULL OR anchor_status <> 'verified'"
+            " OR (anchor_start_char IS NOT NULL AND text_sha256 IS NOT NULL)",
+            name="ck_extraction_observation_anchor_verified",
+        ),
+        CheckConstraint(
+            "missingness IS NULL OR anchor_status IS NULL",
+            name="ck_extraction_observation_anchor_missing",
         ),
         CheckConstraint(
             "(kind = 'machine') = (extractor_run_id IS NOT NULL)"
@@ -211,10 +251,24 @@ class ExtractionAcceptedValue(Base):
     supersedes_accepted_value_id: Column = _fk(
         "extraction_accepted_values", nullable=True
     )
+    # GOO-305 anchor-resolution snapshot; NULL on pre-anchor rows ("legacy").
+    anchor_observation_id = _fk("extraction_observations", nullable=True)
+    anchor_resolution = Column(String(24), nullable=True)
+    anchor_start_char = Column(Integer, nullable=True)
+    anchor_end_char = Column(Integer, nullable=True)
+    text_sha256 = Column(String(64), nullable=True)
     created_at = _created_at()
 
     __table_args__ = (
         CheckConstraint(_MISSINGNESS_CHECK, name="ck_extraction_accepted_missing"),
+        CheckConstraint(
+            _ANCHOR_RESOLUTION_CHECK, name="ck_extraction_accepted_anchor_resolution"
+        ),
+        CheckConstraint(
+            "anchor_resolution IS NULL OR anchor_resolution <> 'disambiguated'"
+            " OR anchor_start_char IS NOT NULL",
+            name="ck_extraction_accepted_anchor_disambiguated",
+        ),
         CheckConstraint(
             "missingness IS NULL OR missingness <> 'extraction_error'",
             name="ck_extraction_accepted_not_error",
