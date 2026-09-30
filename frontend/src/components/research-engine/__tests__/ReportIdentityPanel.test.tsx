@@ -140,6 +140,22 @@ describe('ReportIdentityPanel', () => {
     );
   });
 
+  it('offers Dispute only on a report that already has a study', async () => {
+    renderPanel();
+    await screen.findByText('Deep residual learning');
+
+    expect(
+      screen.getByRole('button', { name: 'Dispute Deep residual learning' })
+    ).toBeInTheDocument();
+    const preprint = 'Deep residual learning (preprint)';
+    expect(
+      screen.getByRole('button', { name: `Confirm ${preprint}` })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: `Dispute ${preprint}` })
+    ).not.toBeInTheDocument();
+  });
+
   it('merges into another report and surfaces the API error', async () => {
     vi.mocked(mergeReports).mockRejectedValue(
       new Error('adjudicator role required')

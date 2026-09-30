@@ -463,6 +463,9 @@ async def link_study(
         # A reviewer proposal must not downgrade or re-point an adjudicated link.
         raise HTTPException(status_code=409, detail="Study link is already adjudicated")
     study_id = data.study_id or cast(UUID | None, report.study_id)
+    if study_id is None and data.status == "disputed":
+        # Disputing needs an existing target; never mint a study to dispute.
+        raise HTTPException(status_code=409, detail="No study link to dispute")
     if study_id is None:
         study_id = uuid4()
         db.add(

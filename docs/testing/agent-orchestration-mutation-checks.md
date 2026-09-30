@@ -1058,3 +1058,23 @@ committed.
 - **Observed mutant failure:** exit 1; `assert {'doi': '10.1..., 'pmid': '1'}
   == {'pmid': '1'}` — the 600+-char DOI stayed an identity key.
 - **Restored result:** `cmp -s` exit 0; `1 passed`.
+
+### A dispute needs an existing study
+
+- **Source and guard:** `backend/src/services/research_engine/identity_service.py`,
+  `link_study`, line 466, `if study_id is None and data.status == "disputed":`
+  followed by a 409 "No study link to dispute" (pre-mutation SHA-256
+  `66132c771ddb81a0ea292054ef4937e1638314b9a25b0002baf8763177fd2495`).
+- **Covering test:**
+  `backend/tests/unit/services/test_research_identity_service.py::test_dispute_without_a_target_study_is_rejected`
+  (the mocked session's `add` raises, so minting a study fails loudly).
+- **Mutation:** replaced the condition with `if False:`.
+- **Command:**
+
+  ```sh
+  cd backend && .venv/bin/pytest -q tests/unit/services/test_research_identity_service.py -k dispute_without
+  ```
+
+- **Observed mutant failure:** exit 1; `AssertionError: dispute minted a new
+  study`.
+- **Restored result:** `cmp -s` exit 0; `1 passed`.
