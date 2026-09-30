@@ -172,3 +172,20 @@ def test_canonical_citation_row_without_year_falls_back_to_document() -> None:
 
     _, parsed = _parse_export(citation)
     assert parsed.entries["doc2"].fields["year"] == "2017"
+
+
+def test_agent_bibliography_export_derives_year_via_shared_helper() -> None:
+    """The agent export tool uses the same year helper as draft exports.
+
+    Mutation check (2026-09-30): setting ``year=None`` in
+    ``_citations_from_documents`` makes this test fail. Restoring
+    ``publication_year(meta)`` makes it pass.
+    """
+    from src.services.agent.tools_impl import _citations_from_documents
+
+    crossref = Document(
+        title="Crossref paper", document_metadata={"published": [[2019, 5, 1]]}
+    )
+    proxies = _citations_from_documents([_arxiv_document(), crossref])
+
+    assert [proxy.year for proxy in proxies] == [2017, 2019]

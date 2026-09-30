@@ -33,9 +33,9 @@ from src.services.agent._sanitize import _sanitize_prompt_field
 from src.services.agent.llm_factory import build_lightweight_llm
 from src.services.research.citation_extraction_service import CitationExtractionService
 from src.services.research.evidence_selection import (
-    contains_verbatim_quote,
     evidence_location,
     select_relevant_passages,
+    verbatim_evidence,
 )
 from src.services.research.release_rules import assertion_spans
 from src.shared.research_schemas import CitationCreate, CitationVerdict
@@ -77,11 +77,15 @@ class _LLMVerdict(BaseModel):
     """Structured output from the faithfulness LLM."""
 
     verdict: Literal["exact", "minor", "major"]
+    # Default "" so a model that omits the field degrades to the narrative
+    # fallback (which must still verbatim-locate) instead of a ValidationError
+    # that would mark the citation unverified.
     quote: str = Field(
+        default="",
         description=(
             "Verbatim span copied exactly from the source excerpt, without "
             "quotation marks or narrative; empty if no passage applies."
-        )
+        ),
     )
     evidence: str = Field(description="Short reasoning for the verdict.")
 
@@ -278,16 +282,17 @@ class CitationVerificationService:
             # verbatim span inside it before the gate accepts the verdict.
             evidence = llm_verdict.quote.strip() or llm_verdict.evidence
 
-        page_number, location = evidence_location(document.content_text, evidence)
-        if (
-            not escalated
-            and source_pass1 == document.content_summary
-            and (
-                _normalize_text(evidence) in _normalize_text(source_pass1)
-                or contains_verbatim_quote(source_pass1, evidence)
-            )
-        ):
-            location = "document summary"
+        page_number, location, grounded = evidence_location(
+            document.content_text, evidence
+        )
+        if not escalated and source_pass1 == document.content_summary:
+            summary_span = verbatim_evidence(source_pass1, evidence)
+            if summary_span is not None:
+                location, grounded = "document summary", summary_span
+        # Store exactly the located verbatim text, never the narrative around
+        # it. Unlocated evidence is kept as-is so reviewers can see why the
+        # gate rejected it.
+        evidence = grounded or evidence
 
         entry = {
             "doc_index": doc_index,
