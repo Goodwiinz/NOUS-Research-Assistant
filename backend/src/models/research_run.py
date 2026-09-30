@@ -67,3 +67,7 @@ class ResearchRun(BaseModel):
         back_populates="run",
         cascade="all, delete-orphan",
     )
+    reviews = relationship(
+        "ResearchStageReview",
+        back_populates="run",
+    )

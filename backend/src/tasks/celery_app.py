@@ -35,6 +35,7 @@ celery_app = Celery(
         "src.tasks.evaluation_tasks",
         "src.tasks.research_tasks",
         "src.tasks.agent_run_tasks",
+        "src.tasks.harness_dispatch",
         "src.tasks.retention_tasks",
         "src.tasks.reconcile_tasks",
         "src.tasks.reconcile_jobs",
@@ -123,6 +124,10 @@ celery_app.conf.update(
     # via conf.beat_schedule.update(...) — this assignment runs first, at
     # celery_app import time, so nothing is clobbered.
     beat_schedule={
+        "dispatch-harness": {
+            "task": "src.tasks.harness_dispatch.dispatch_harness",
+            "schedule": 5.0,
+        },
         "sweep-stale-agent-runs": {
             "task": "src.tasks.agent_run_tasks.sweep_stale_agent_runs",
             "schedule": 600.0,  # every 10 min; stale threshold is 30 min

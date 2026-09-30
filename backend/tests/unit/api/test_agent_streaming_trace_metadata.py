@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.models.user import User
+from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
 
 
@@ -22,6 +23,7 @@ def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
         "src.services.threads.workspace_access.get_thread",
         editable_thread_getter(),
     )
+    stub_durable_status_projection(monkeypatch)
 
 
 from src.services.agent.agent_submission_service import AcceptedSubmission
@@ -274,7 +276,7 @@ async def test_background_graph_config_uses_same_correlation_contract(
         patch.object(
             execution_mod,
             "AsyncSessionLocal",
-            return_value=_session_context(db),
+            side_effect=lambda: _session_context(db),
         ),
         patch.object(
             execution_mod,
@@ -305,11 +307,6 @@ async def test_background_graph_config_uses_same_correlation_contract(
         patch(
             "src.services.agent.observability.configure_langsmith",
             return_value=None,
-        ),
-        patch.object(
-            execution_mod,
-            "_set_job_async",
-            new=AsyncMock(return_value=None),
         ),
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -602,7 +599,7 @@ async def test_job_confirmation_root_uses_owned_durable_run_metadata(
 
     with (
         patch.object(
-            execution_mod, "AsyncSessionLocal", return_value=_session_context(db)
+            execution_mod, "AsyncSessionLocal", side_effect=lambda: _session_context(db)
         ),
         patch.object(
             execution_mod,
@@ -610,7 +607,6 @@ async def test_job_confirmation_root_uses_owned_durable_run_metadata(
             return_value={"request": body.model_dump()},
         ),
         patch.object(execution_mod, "get_run", new=AsyncMock(return_value=durable_run)),
-        patch.object(execution_mod, "_set_job_async", new=AsyncMock(return_value=None)),
         patch(
             "src.services.agent.checkpointer.get_checkpointer",
             new=AsyncMock(return_value=object()),

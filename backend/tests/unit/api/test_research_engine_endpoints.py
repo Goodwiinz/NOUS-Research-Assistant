@@ -458,6 +458,210 @@ class TestStartRun:
         assert body["protocol_version_id"] == str(protocol_version_id)
         assert "id" in body
 
+    def test_disabled_daily_brief_cannot_start_from_existing_blueprint(
+        self, client, mock_current_user, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", False
+        )
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(
+            id=blueprint_id,
+            template_source="daily_research_brief",
+            parameters={},
+        )
+        create_approved_run = AsyncMock()
+        with (
+            patch(
+                "src.api.research_engine.runs.require_blueprint",
+                AsyncMock(return_value=blueprint),
+            ),
+            patch(
+                "src.api.research_engine.runs.create_approved_run",
+                create_approved_run,
+            ),
+        ):
+            response = client.post(
+                f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+                json={"protocol_version_id": str(uuid.uuid4())},
+            )
+
+        assert response.status_code == 404
+        assert blueprint.is_immutable is False
+        create_approved_run.assert_not_awaited()
+
+    def test_daily_brief_requires_scope_confirmation(
+        self,
+        client,
+    ):
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(
+            id=blueprint_id,
+            version=1,
+            template_source="daily_research_brief",
+            parameters={
+                "contract_version": 1,
+                "research_question": "What changed in grounded generation?",
+                "inclusion_criteria": ["Peer-reviewed empirical work"],
+                "exclusion_criteria": [],
+                "providers": ["openalex", "crossref"],
+                "limit_per_provider": 25,
+                "notes": "",
+            },
+        )
+        create_approved_run = AsyncMock()
+        with (
+            patch(
+                "src.api.research_engine.runs.require_blueprint",
+                AsyncMock(return_value=blueprint),
+            ),
+            patch(
+                "src.api.research_engine.runs.create_approved_run",
+                create_approved_run,
+            ),
+        ):
+            response = client.post(
+                f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+                json={"protocol_version_id": str(uuid.uuid4())},
+            )
+
+        assert response.status_code == 422
+        assert (
+            response.json()["error"]["message"]
+            == "Daily Brief scope confirmation is required"
+        )
+        create_approved_run.assert_not_awaited()
+
+    def test_daily_brief_stores_confirmed_effective_scope_with_server_metadata(
+        self,
+        client,
+        mock_db,
+        mock_current_user,
+    ):
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(
+            id=blueprint_id,
+            version=1,
+            template_source="daily_research_brief",
+            parameters={
+                "contract_version": 1,
+                "research_question": "What changed in grounded generation?",
+                "inclusion_criteria": ["Peer-reviewed empirical work"],
+                "exclusion_criteria": ["Editorials"],
+                "providers": ["pubmed"],
+                "limit_per_provider": 10,
+                "notes": "Last 24 hours.",
+            },
+        )
+        run = _make_mock_run(blueprint_id=blueprint_id, blueprint_version=1)
+        protocol_version_id = uuid.uuid4()
+        run.protocol_version_id = protocol_version_id
+        confirmed_scope = {
+            "research_question": "What changed in grounded generation?",
+            "inclusion_criteria": ["Peer-reviewed empirical work"],
+            "exclusion_criteria": ["Editorials"],
+            "providers": ["pubmed"],
+            "limit_per_provider": 10,
+            "notes": "Last 24 hours.",
+        }
+        context = SimpleNamespace(
+            engine=SimpleNamespace(id=blueprint.project_id),
+            collection=SimpleNamespace(id=uuid.uuid4()),
+        )
+        create_approved_run = AsyncMock(return_value=run)
+        with (
+            patch(
+                "src.api.research_engine.runs.require_blueprint",
+                AsyncMock(return_value=blueprint),
+            ),
+            patch(
+                "src.api.research_engine.runs.resolve_engine_project_context",
+                AsyncMock(return_value=context),
+            ),
+            patch(
+                "src.api.research_engine.runs.create_approved_run",
+                create_approved_run,
+            ),
+        ):
+            response = client.post(
+                f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+                json={
+                    "protocol_version_id": str(protocol_version_id),
+                    "scope_confirmation": {**confirmed_scope, "confirmed": True},
+                },
+            )
+
+        assert response.status_code == 201, response.text
+        request = create_approved_run.await_args.args[3]
+        assert request.protocol_version_id == protocol_version_id
+        assert request.parameters_override == {}
+        manifest = create_approved_run.await_args.kwargs["manifest_metadata"]
+        confirmation = manifest["scope_confirmation"]
+        assert confirmation["contract_version"] == 1
+        for key, value in confirmed_scope.items():
+            assert confirmation[key] == value
+        assert confirmation["confirmed"] is True
+        assert confirmation["confirmed_by"] == str(mock_current_user.id)
+        assert len(confirmation["configuration_hash"]) == 64
+        assert datetime.fromisoformat(confirmation["confirmed_at"]).tzinfo is not None
+        assert [entry["id"] for entry in manifest["provider_manifest"]] == ["pubmed"]
+
+    def test_daily_brief_rejects_confirmation_that_differs_from_effective_scope(
+        self,
+        client,
+    ):
+        blueprint_id = uuid.uuid4()
+        blueprint = _make_mock_blueprint(
+            id=blueprint_id,
+            version=1,
+            template_source="daily_research_brief",
+            parameters={
+                "contract_version": 1,
+                "research_question": "What changed in grounded generation?",
+                "inclusion_criteria": ["Peer-reviewed empirical work"],
+                "exclusion_criteria": [],
+                "providers": ["openalex"],
+                "limit_per_provider": 10,
+                "notes": "",
+            },
+        )
+        submitted = {
+            "research_question": "What changed in grounded generation?",
+            "inclusion_criteria": ["Peer-reviewed empirical work"],
+            "exclusion_criteria": [],
+            "providers": ["openalex"],
+            "limit_per_provider": 10,
+            "notes": "",
+        }
+        create_approved_run = AsyncMock()
+        with (
+            patch(
+                "src.api.research_engine.runs.require_blueprint",
+                AsyncMock(return_value=blueprint),
+            ),
+            patch(
+                "src.api.research_engine.runs.create_approved_run",
+                create_approved_run,
+            ),
+        ):
+            response = client.post(
+                f"/api/v1/research-engine/blueprints/{blueprint_id}/runs",
+                json={
+                    "protocol_version_id": str(uuid.uuid4()),
+                    "scope_confirmation": {
+                        **submitted,
+                        "limit_per_provider": 11,
+                        "confirmed": True,
+                    },
+                },
+            )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["message"] == (
+            "Scope confirmation does not match effective Daily Brief parameters"
+        )
+        create_approved_run.assert_not_awaited()
+
     @pytest.mark.parametrize("request_options", [{}, {"json": {}}])
     def test_start_run_without_approved_protocol_returns_409(
         self, client, mock_db, mock_current_user, request_options

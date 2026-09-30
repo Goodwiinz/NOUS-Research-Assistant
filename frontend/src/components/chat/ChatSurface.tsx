@@ -15,6 +15,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ChatInput } from '@/components/chat';
 import { ChatDialogs } from '@/components/chat/ChatDialogs';
 import { ChatHeader } from '@/components/chat/ChatHeader';
+import { HarnessSelector } from '@/components/chat/HarnessSelector';
 import { ChatSidebar } from '@/components/chat/ChatSidebar';
 import { ChatTranscriptState } from '@/components/chat/ChatTranscriptState';
 import { ChatRuntimeProvider } from '@/components/chat/aui/ChatRuntimeProvider';
@@ -94,6 +95,8 @@ export function ChatSurface({
     storeIsRetrievingRag,
     streamingThreadId,
   } = streaming;
+  const harnessConnection = streaming.harnessConnection;
+  const harnessCanSend = harnessConnection?.canSend ?? true;
 
   const {
     renameDialog,
@@ -149,7 +152,11 @@ export function ChatSurface({
     ? pendingConfirmation
     : null;
 
-  const isBusy = isLoading || storeIsStreaming || !!activeConfirmation;
+  const isBusy =
+    isLoading ||
+    storeIsStreaming ||
+    !!activeConfirmation ||
+    Boolean(harnessConnection?.runId);
 
   // The first send starts before the server has assigned a thread id. Adopt
   // that id into the current runtime identity while an optimistic message is
@@ -363,9 +370,11 @@ export function ChatSurface({
           key={runtimeKey}
           messages={displayedMessages}
           isRunning={isBusy}
-          isSendDisabled={!!activeConfirmation || !isSessionInteractive}
+          isSendDisabled={
+            !!activeConfirmation || !isSessionInteractive || !harnessCanSend
+          }
           onSend={(text, attachmentIds) => {
-            if (isSessionInteractive) {
+            if (isSessionInteractive && harnessCanSend) {
               void handleSubmit(text, undefined, undefined, attachmentIds);
             }
           }}
@@ -388,6 +397,15 @@ export function ChatSurface({
             isStreaming={isTranscriptGrowing}
             onMobileSidebarToggle={toggleDrawer}
           />
+
+          <div className="relative flex min-h-10 shrink-0 items-center border-b border-(--nous-border-1) px-3 sm:px-4">
+            {harnessConnection && (
+              <HarnessSelector
+                controller={harnessConnection}
+                disabled={isBusy}
+              />
+            )}
+          </div>
 
           <ChatTranscriptState
             isAuthenticated={isAuthenticated}
@@ -436,7 +454,7 @@ export function ChatSurface({
               }
             }}
             isLoading={isBusy}
-            disabled={!isSessionInteractive}
+            disabled={!isSessionInteractive || !harnessCanSend}
             enableRAG={enableRAG}
             onRAGToggle={setEnableRAG}
             inputRef={chatInputRef}

@@ -69,21 +69,41 @@ def test_subgraph_routing_requires_descriptor_policy_and_scope(
     registry.has_policy_in_subgraph.return_value = False
     monkeypatch.setattr(research_agent, "TOOL_REGISTRY", registry)
     monkeypatch.setattr(writing_agent, "TOOL_REGISTRY", registry)
-    state = cast(
+    research_state = cast(
         AgentState,
         {
             "messages": [
                 AIMessage(
                     content="",
-                    tool_calls=[{"id": "call-1", "name": "execute_code", "args": {}}],
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "name": "ingest_arxiv_papers",
+                            "args": {},
+                        }
+                    ],
+                )
+            ],
+            "tool_loop_count": 0,
+        },
+    )
+    writing_state = cast(
+        AgentState,
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"id": "call-2", "name": "create_draft", "args": {}}],
                 )
             ],
             "tool_loop_count": 0,
         },
     )
 
-    assert research_agent.research_should_continue(state) == "research_tool_node"
-    assert writing_agent.writing_should_continue(state) == "writing_tool_node"
+    assert (
+        research_agent.research_should_continue(research_state) == "research_tool_node"
+    )
+    assert writing_agent.writing_should_continue(writing_state) == "writing_tool_node"
     assert registry.has_policy_in_subgraph.call_count == 2
 
 

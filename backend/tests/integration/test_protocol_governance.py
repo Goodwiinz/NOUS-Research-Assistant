@@ -1,6 +1,7 @@
 """Persisted authorization, lifecycle, and conflict proofs for protocols."""
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +27,92 @@ async def _event_count(engine: AsyncEngine) -> int:
         return int(
             await db.scalar(text("SELECT count(*) FROM research_decision_events")) or 0
         )
+
+
+@pytest.mark.asyncio
+async def test_protocol_response_exposes_manage_separately_from_edit(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    path = f"/api/v1/research-engine/protocols/{ids['protocol']}"
+    async with _client(protocol_engine, ids["author"]) as owner_client:
+        owner = await owner_client.get(path)
+    async with _client(protocol_engine, ids["supervisor"]) as editor_client:
+        editor = await editor_client.get(path)
+
+    assert owner.status_code == 200, owner.text
+    assert owner.json()["can_edit"] is True
+    assert owner.json()["can_manage"] is True
+    assert editor.status_code == 200, editor.text
+    assert editor.json()["can_edit"] is True
+    assert editor.json()["can_manage"] is False
+
+
+@pytest.mark.asyncio
+async def test_protocol_list_has_stable_creation_order(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    earlier_id = uuid4()
+    created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    async with protocol_engine.begin() as db:
+        await db.execute(
+            text("UPDATE research_protocols SET created_at=:created WHERE id=:id"),
+            {"created": created_at, "id": ids["protocol"]},
+        )
+        await db.execute(
+            text(
+                """INSERT INTO research_protocols
+                (id,collection_id,name,current_draft_version_id,
+                 current_approved_version_id,created_at,updated_at,is_deleted)
+                VALUES (:id,:collection,'Earlier',NULL,NULL,:created,:created,false)"""
+            ),
+            {
+                "id": earlier_id,
+                "collection": ids["collection"],
+                "created": created_at,
+            },
+        )
+
+    async with _client(protocol_engine, ids["author"]) as client:
+        response = await client.get(
+            f"/api/v1/research-engine/projects/{ids['collection']}/protocols"
+        )
+
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()] == [
+        str(protocol_id) for protocol_id in sorted((ids["protocol"], earlier_id))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_protocol_name_returns_conflict_under_concurrent_create(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    path = f"/api/v1/research-engine/projects/{ids['collection']}/protocols"
+    body = {
+        "name": "Concurrent protocol",
+        "question_version_id": str(ids["question_version"]),
+        "blueprint_id": str(ids["blueprint"]),
+        "snapshot": PROTOCOL_SNAPSHOT,
+    }
+
+    async def create_protocol() -> Any:
+        async with _client(protocol_engine, ids["author"]) as client:
+            return await client.post(path, json=body)
+
+    responses = await asyncio.gather(create_protocol(), create_protocol())
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    assert next(
+        response for response in responses if response.status_code == 409
+    ).json() == {"detail": "Protocol name already exists"}
+    async with AsyncSession(protocol_engine) as db:
+        count = await db.scalar(
+            text("SELECT count(*) FROM research_protocols WHERE collection_id=:id"),
+            {"id": ids["collection"]},
+        )
+    assert count == 2
 
 
 @pytest.mark.asyncio
@@ -139,6 +226,102 @@ async def test_foreign_organization_member_cannot_approve(
         )
     assert response.status_code == 404
     assert await _event_count(protocol_engine) == 0
+
+
+@pytest.mark.asyncio
+async def test_public_workspace_outsider_cannot_read_protocol(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    outsider = uuid4()
+    async with protocol_engine.begin() as db:
+        await db.execute(
+            text("""INSERT INTO users
+                (id,email,password_hash,first_name,last_name,role,is_active,
+                 login_count,organization_id,created_at,updated_at,is_deleted)
+                VALUES (:id,:email,'x','x','x','USER',true,0,:org,
+                        now(),now(),false)"""),
+            {
+                "id": outsider,
+                "email": f"outsider-{uuid4()}@test.invalid",
+                "org": ids["org"],
+            },
+        )
+        await db.execute(
+            text("UPDATE workspaces SET is_public=true WHERE id=:workspace"), ids
+        )
+    path = f"/api/v1/research-engine/protocols/{ids['protocol']}"
+    async with _client(protocol_engine, outsider) as client:
+        protocol = await client.get(path)
+        registrations = await client.get(f"{path}/registrations")
+    # Public visibility never reaches protocol artifacts: no body, so no
+    # can_edit/can_manage/can_approve flags (or any protocol data) to leak.
+    assert protocol.status_code == 404
+    assert protocol.json() == {"detail": "Project not found"}
+    assert registrations.status_code == 404
+    assert registrations.json() == {"detail": "Project not found"}
+
+
+@pytest.mark.asyncio
+async def test_workspace_viewer_read_has_no_capabilities(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    async with protocol_engine.begin() as db:
+        await db.execute(
+            text("""UPDATE workspace_members SET role='viewer'
+                WHERE workspace_id=:workspace AND user_id=:supervisor"""),
+            ids,
+        )
+        await db.execute(
+            text("""UPDATE research_project_role_assignments
+                SET is_deleted=true,deleted_at=now()
+                WHERE collection_id=:collection AND user_id=:supervisor"""),
+            ids,
+        )
+    path = f"/api/v1/research-engine/protocols/{ids['protocol']}"
+    async with _client(protocol_engine, ids["supervisor"]) as client:
+        protocol = await client.get(path)
+        registrations = await client.get(f"{path}/registrations")
+    assert protocol.status_code == 200, protocol.text
+    body = protocol.json()
+    assert body["versions"]  # a draft exists, so the per-version check is not vacuous
+    assert body["can_edit"] is False
+    assert body["can_manage"] is False
+    assert body["can_approve"] is False
+    assert [version["can_approve"] for version in body["versions"]] == [False] * len(
+        body["versions"]
+    )
+    assert registrations.status_code == 200, registrations.text
+    assert registrations.json() == []
+
+
+@pytest.mark.asyncio
+async def test_foreign_organization_member_cannot_read_protocol(
+    protocol_engine: AsyncEngine,
+) -> None:
+    ids = await _seed(protocol_engine)
+    foreign_org = uuid4()
+    async with protocol_engine.begin() as db:
+        await db.execute(
+            text("""INSERT INTO organizations
+                (id,name,storage_tier,storage_used_bytes,storage_limit_bytes,
+                 is_active,created_at,updated_at,is_deleted)
+                VALUES (:id,'foreign','FREE',0,1,true,now(),now(),false)"""),
+            {"id": foreign_org},
+        )
+        await db.execute(
+            text("UPDATE users SET organization_id=:org WHERE id=:supervisor"),
+            {**ids, "org": foreign_org},
+        )
+    path = f"/api/v1/research-engine/protocols/{ids['protocol']}"
+    async with _client(protocol_engine, ids["supervisor"]) as client:
+        protocol = await client.get(path)
+        registrations = await client.get(f"{path}/registrations")
+    assert protocol.status_code == 404
+    assert protocol.json() == {"detail": "Project not found"}
+    assert registrations.status_code == 404
+    assert registrations.json() == {"detail": "Project not found"}
 
 
 @pytest.mark.asyncio

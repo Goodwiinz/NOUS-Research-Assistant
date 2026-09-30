@@ -1,0 +1,32 @@
+CLASSIFICATION: FAILED/EXCLUDED ATTEMPTS RETAINED
+
+ATTEMPT 1
+SOURCE_SHA: 9b47ac79f52abdc5926f14c6115607dfbddb7ee8
+RAW_CAPTURE_SHA256: fdd616f8a5d2f825f5b059a35493bc07b7b094ac67db2e08df3e6ba0d25d3bc5
+RESULT: 1 failed, 9 not run
+CAUSE: the download assertion tried to inspect a response body after the
+browser download flow had consumed it. This was an executable test failure;
+the assertion was repaired and the source changed.
+
+ATTEMPT 2
+SOURCE_SHA: a20b3f04b761bebc27d5d7b9f239fd825376725c
+RAW_CAPTURE_SHA256: ca8dd47f26168e1d579f70ce0fa68b8be3c0e85baf1c4882f9622ac1dd69fca3
+RESULT: 5 passed, 1 failed, 4 not run
+CAUSE: the reconnect fixture disconnected before the UI had a stable
+observable resume boundary. The final test drives a deterministic transient
+resume failure, confirms durable running state through the real audit route,
+and pauses through the authenticated browser → Next → FastAPI boundary.
+
+FOCUSED MANUAL-RESUME ATTEMPTS
+RAW_CAPTURE_SHA256:
+  48a1c1a195583731f6d8f3aca7af2ffdd600c119a5a185b0ac9729c9c9a26342
+  2b3b8e3c18d9a17116e4473101e05c0d48e692c7b85f44d0e20f47198c4c94ca
+  a3158e2080ea36887f754e6ee44dccbfe7ef167718f291c19ea1825d1eace9ad
+RESULT: FAILED waiting for the Pause control while the page remained Pending.
+CAUSE: the local Next development proxy buffered the controlled SSE response
+body. These attempts led to the deterministic final boundary described above.
+
+An additional login-redirect run with an incomplete offline-auth environment
+and earlier host/channel interruptions are excluded environment evidence. They
+are not feature passes. The final PASS is recorded only in
+`exact-source-browser.txt` and is bound to source `9ca9d6a`.

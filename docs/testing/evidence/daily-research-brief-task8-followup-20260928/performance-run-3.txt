@@ -1,0 +1,15 @@
+CLASSIFICATION: PASS
+SOURCE_SHA: a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408
+RAW_CAPTURE_SHA256: a5f286c76b1c5813d79868be4a65809d955e194517c209a264a57fd7ac7eee36
+EXIT_STATUS: 0
+COMMAND:
+  PYTHONPATH=backend ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" DAILY_BRIEF_PERF_CAPTURE=1 .venv/bin/python -m pytest -c backend/pytest.ini -q -s backend/tests/performance/test_daily_research_brief_performance.py
+
+COLLECTED: 6 items
+DAILY_BRIEF_PERF_SIX_STAGE={"export_p50_ms": 0.504, "export_p95_ms": 0.555, "export_payload_bytes": 15294, "six_stage_p50_ms": 18.873, "six_stage_p95_ms": 19.402, "stage_p95_ms": [0.467, 0.702, 5.4, 0.753, 0.547, 0.555]}
+test_max_stage_sample_policy_uses_nearest_rank_p95 PASSED
+DAILY_BRIEF_PERF_FANOUT={"extract_batches": 25, "max_extract_p95_ms": 84.095, "max_screen_p95_ms": 28.162, "max_search_p95_ms": 13.839, "provider_fanout": {"1": {"candidate_rows": 50, "p50_ms": 3.153, "p95_ms": 3.393}, "2": {"candidate_rows": 100, "p50_ms": 6.351, "p95_ms": 6.763}, "4": {"candidate_rows": 200, "p50_ms": 12.737, "p95_ms": 13.415}}, "screen_batches": 25}
+DAILY_BRIEF_PERF_BOUNDS={"candidate_rows": 200, "max_stage_payload_bytes": 1152543, "max_stage_peak_bytes": 3034855, "review_payload_bytes": 24094, "review_projection_p50_ms": 4.882, "review_projection_p95_ms": 7.071}
+DAILY_BRIEF_PERF_HYDRATION={"cold_hydration_p50_ms": 2.722, "cold_hydration_p95_ms": 3.346}
+DAILY_BRIEF_PERF_SOAK={"completed": 10, "duplicate_stage_rows": 0, "iterations": 10, "lifecycle_p50_ms": 879.261, "lifecycle_p95_ms": 1251.171, "unique_review_rows": 30}
+SUMMARY: 6 passed, 1 warning in 19.13s

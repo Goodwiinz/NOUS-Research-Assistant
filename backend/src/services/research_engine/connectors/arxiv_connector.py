@@ -2,12 +2,17 @@
 
 import asyncio
 import logging
-from typing import Any, List
+from datetime import datetime, timezone
+from typing import Any, List, Optional
 
 import httpx
 from defusedxml import ElementTree as ET
 
-from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.research_engine.connectors.base import (
+    SearchTrace,
+    SourceConnector,
+    SourceDocument,
+)
 
 ATOM_NS = "http://www.w3.org/2005/Atom"
 
@@ -25,10 +30,18 @@ _REQUEST_TIMEOUT_S = 30.0
 class ArxivConnector(SourceConnector):
     """Connector for the arXiv API."""
 
+    endpoint = "https://export.arxiv.org/api/query"
+
     async def search(
-        self, query: str, max_results: int = 50, **kwargs: Any
+        self,
+        query: str,
+        max_results: int = 50,
+        *,
+        search_trace: Optional[SearchTrace] = None,
+        **kwargs: Any,
     ) -> List[SourceDocument]:
         """Search arXiv for papers matching the query."""
+        trace = search_trace
         from src.services.arxiv.arxiv_service import field_arxiv_query
 
         # Per-token all: AND fielding. The previous f"all:{query}" fielded
@@ -49,6 +62,9 @@ class ArxivConnector(SourceConnector):
         )
 
         response = None
+        request_attempts = []
+        if trace is not None:
+            await trace.begin_request(self.endpoint, params)
         for attempt in range(_MAX_ATTEMPTS):
             # Reserve a slot on the shared cross-pod gate before every attempt,
             # including retries — a retry that skips the gate is exactly the
@@ -60,11 +76,24 @@ class ArxivConnector(SourceConnector):
             async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S) as client:
                 # https, not http: the plain-HTTP endpoint redirects and sends
                 # the query in clear text on the way.
+                request_started_at = datetime.now(timezone.utc).isoformat()
                 response = await client.get(
-                    "https://export.arxiv.org/api/query",
+                    self.endpoint,
                     params=params,
                     follow_redirects=True,
                 )
+                request_attempts.append(
+                    {
+                        "attempt": attempt + 1,
+                        "requested_at": request_started_at,
+                        "status_code": response.status_code,
+                    }
+                )
+                response.extensions["search_request_started_at"] = request_started_at
+                response.extensions["search_request_attempt"] = attempt + 1
+                response.extensions["search_request_attempts"] = request_attempts
+                if trace is not None:
+                    await trace.record_response(response)
 
             if response.status_code == 429 and attempt < _MAX_ATTEMPTS - 1:
                 wait = _retry_after_seconds(response.headers, default=3.0)
@@ -76,7 +105,17 @@ class ArxivConnector(SourceConnector):
                 await asyncio.sleep(wait)
                 continue
 
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                if trace is not None:
+                    await trace.record_page(
+                        endpoint=self.endpoint,
+                        params=params,
+                        response=response,
+                        error_type="HTTPStatusError",
+                    )
+                raise
             break
 
         if response is None:  # pragma: no cover - loop always assigns
@@ -103,6 +142,25 @@ class ArxivConnector(SourceConnector):
                     abstract=summary,
                     url=entry_id,
                 )
+            )
+
+        total_text = root.findtext("{http://a9.com/-/spec/opensearch/1.1/}totalResults")
+        total_available = (
+            int(total_text) if total_text and total_text.isdigit() else None
+        )
+        if trace is not None:
+            await trace.record_page(
+                endpoint=self.endpoint,
+                params=params,
+                response=response,
+                documents=documents,
+                total_available=total_available,
+                has_more=(
+                    total_available > len(documents)
+                    if total_available is not None
+                    else None
+                ),
+                provider_count=len(documents),
             )
 
         return documents

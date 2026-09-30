@@ -1,7 +1,17 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunView } from '../RunView';
-import { getRun } from '@/services/researchEngineService';
+import {
+  getRun,
+  getRunManifest,
+  listSteps,
+} from '@/services/researchEngineService';
 import { useResearchEngineStore } from '@/store/research-engine-store';
 
 const push = vi.fn();
@@ -12,6 +22,8 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/services/researchEngineService', () => ({
   getRun: vi.fn(),
+  getRunManifest: vi.fn(),
+  listSteps: vi.fn(),
   pauseRun: vi.fn(),
   resumeRun: vi.fn(),
 }));
@@ -19,6 +31,8 @@ vi.mock('@/services/researchEngineService', () => ({
 describe('RunView canonical navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(listSteps).mockResolvedValue([]);
+    vi.mocked(getRunManifest).mockResolvedValue({});
     useResearchEngineStore.setState({
       activeRun: null,
       runEvents: [],
@@ -68,6 +82,7 @@ describe('RunView canonical navigation', () => {
       );
 
     const { rerender } = render(<RunView runId="old-run" />);
+    await waitFor(() => expect(getRun).toHaveBeenCalledWith('old-run'));
     rerender(<RunView runId="new-run" />);
     const newRun = {
       id: 'new-run',

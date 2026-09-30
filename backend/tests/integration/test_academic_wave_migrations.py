@@ -194,6 +194,28 @@ def _seed_pre_wave_rows(connection: Connection) -> dict[str, UUID]:
     return ids
 
 
+def test_agent_operation_migration_accepts_model_baseline_table(
+    pre_wave_connection: Connection,
+) -> None:
+    """The later raw-SQL migration must tolerate the model baseline table."""
+    connection = pre_wave_connection
+    migration = _load_migration("20260925_agent_tool_operation_results.py")
+
+    _run_migration(connection, migration, "upgrade")
+
+    assert inspect(connection).has_table("agent_tool_operations")
+    assert "ix_agent_tool_operations_thread_turn" in {
+        index["name"]
+        for index in inspect(connection).get_indexes("agent_tool_operations")
+    }
+    assert connection.execute(
+        text(
+            "SELECT relrowsecurity FROM pg_class "
+            "WHERE oid = to_regclass('agent_tool_operations')"
+        )
+    ).scalar_one()
+
+
 def _assert_backfill(connection: Connection, ids: dict[str, UUID]) -> None:
     rows = dict(
         connection.execute(
@@ -443,3 +465,84 @@ def test_academic_wave_migrations_upgrade_downgrade_round_trip(
     _assert_backfill(connection, ids)
     assert "draft_reviews" in inspect(connection).get_table_names()
     assert "research_project_role_assignments" in inspect(connection).get_table_names()
+
+
+_IMPORT_TABLES = ("research_import_records", "research_import_receipts")
+_IDENTITY_TABLES = (
+    "research_report_observations",
+    "research_report_identifiers",
+    "research_reports",
+    "research_studies",
+)
+
+
+def test_report_identity_migration_upgrade_downgrade_round_trip(
+    pre_wave_connection: Connection,
+) -> None:
+    """GOO-299 tables are created by the revision itself, with RLS enabled."""
+    connection = pre_wave_connection
+    for table in (*_IMPORT_TABLES, *_IDENTITY_TABLES):
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    migration = _load_migration("c9d2e4f6a8b1_create_report_identities.py")
+
+    _run_migration(connection, migration, "upgrade")
+    inspector = inspect(connection)
+    for table in _IDENTITY_TABLES:
+        assert inspector.has_table(table)
+        assert connection.execute(
+            text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
+            {"t": table},
+        ).scalar_one()
+    assert "uq_research_report_identifier_value" in {
+        c["name"]
+        for c in inspector.get_unique_constraints("research_report_identifiers")
+    }
+    assert "uq_research_report_observation_source" in {
+        c["name"]
+        for c in inspector.get_unique_constraints("research_report_observations")
+    }
+
+    _run_migration(connection, migration, "downgrade")
+    inspector = inspect(connection)
+    assert not any(inspector.has_table(table) for table in _IDENTITY_TABLES)
+
+
+def test_search_import_migration_upgrade_downgrade_round_trip(
+    pre_wave_connection: Connection,
+) -> None:
+    """GOO-300 tables are created by d4e6f8a0b2c3 itself, with RLS enabled."""
+    connection = pre_wave_connection
+    for table in _IMPORT_TABLES:
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    migration = _load_migration("d4e6f8a0b2c3_create_search_imports.py")
+    assert migration.down_revision == "c9d1e2f3a4b5"
+
+    _run_migration(connection, migration, "upgrade")
+    inspector = inspect(connection)
+    for table in _IMPORT_TABLES:
+        assert inspector.has_table(table)
+        assert connection.execute(
+            text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
+            {"t": table},
+        ).scalar_one()
+    assert {
+        "uq_research_import_receipt_dedup",
+        "uq_research_import_receipt_version",
+    } <= {
+        c["name"] for c in inspector.get_unique_constraints("research_import_receipts")
+    }
+    assert {
+        "ck_research_import_receipt_counts",
+        "ck_research_import_receipt_kind",
+        "ck_research_import_receipt_version",
+    } <= {
+        c["name"] for c in inspector.get_check_constraints("research_import_receipts")
+    }
+    assert {
+        "ck_research_import_record_rejection",
+        "ck_research_import_record_report",
+    } <= {c["name"] for c in inspector.get_check_constraints("research_import_records")}
+
+    _run_migration(connection, migration, "downgrade")
+    inspector = inspect(connection)
+    assert not any(inspector.has_table(table) for table in _IMPORT_TABLES)

@@ -1,0 +1,26 @@
+{
+  "step": "C3-01-foreign-draft-reviews",
+  "as": "foreign",
+  "at": "2026-09-29T10:27:28.651464+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/drafts/reviews",
+    "body": null
+  },
+  "status": 500,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "code": "DATABASE_ERROR",
+      "message": "A database error occurred. Please try again later.",
+      "details": {
+        "error_type": "DatabaseError"
+      },
+      "timestamp": null,
+      "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/drafts/reviews",
+      "method": "GET"
+    }
+  }
+}

@@ -10,9 +10,11 @@ STRING (adding ``category`` must not turn ``error`` into an object).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -45,10 +47,12 @@ class _ConfirmGraph:
 
     def __init__(self, snapshot: Any) -> None:
         self._snapshot = snapshot
+        self.resume_input: Any = None
 
     async def astream_events(
         self, *args: Any, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
+        self.resume_input = args[0] if args else None
         yield {"event": "on_chat_model_stream", "data": {}}
 
     async def aget_state(self, config: Any) -> Any:
@@ -96,12 +100,19 @@ async def _run_stream(graph: Any) -> list[str]:
         ]
 
 
-async def _run_confirm(graph: Any) -> list[str]:
+async def _run_confirm(
+    graph: Any,
+    *,
+    session: Any | None = None,
+    user_id: str = "user-1",
+    thread_id: str = "thread-confirm",
+) -> list[str]:
     from src.api.agent.streaming import stream_confirm_event_generator
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-confirm", confirmed=True)
-    current_user = Mock(id="user-1", organization_id="org-1")
+    body = SimpleNamespace(thread_id=thread_id, confirmed=True)
+    current_user = Mock(id=user_id, organization_id="org-1")
+    session = session or AsyncMock()
 
     with (
         # No Redis in unit CI: without this the emitter's start_stream sits on a
@@ -128,7 +139,10 @@ async def _run_confirm(graph: Any) -> list[str]:
             new=AsyncMock(return_value=object()),
         ),
         patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
-        patch("src.api.agent.streaming.AsyncSessionLocal", return_value=AsyncMock()),
+        patch(
+            "src.api.agent.streaming.AsyncSessionLocal",
+            new=Mock(return_value=session),
+        ),
         patch(
             "src.api.agent.streaming.get_active_run_for_thread",
             new=AsyncMock(
@@ -146,6 +160,18 @@ async def _run_confirm(graph: Any) -> list[str]:
             new=AsyncMock(return_value=True),
         ),
         patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
+            "src.api.agent.streaming._latest_user_client_message_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.services.agent.agent_execution_service._persist_assistant_message_safe",
+            new=AsyncMock(return_value="assistant-row"),
+        ),
+        patch(
             "src.api.agent.streaming._resolve_thread",
             new=AsyncMock(return_value=(SimpleNamespace(id="editable-thread"), None)),
         ),
@@ -156,6 +182,64 @@ async def _run_confirm(graph: Any) -> list[str]:
                 body, request, current_user
             )
         ]
+
+
+@pytest.mark.asyncio
+async def test_stream_confirm_hydrates_frozen_projection_into_resume_command() -> None:
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    user_id = uuid4()
+    runtime_snapshot_id = uuid4()
+    thread_id = uuid4()
+    registry_metadata = TOOL_REGISTRY.metadata_snapshot()
+    graph = _ConfirmGraph(
+        SimpleNamespace(
+            values={
+                "user_id": str(user_id),
+                "runtime_snapshot_id": str(runtime_snapshot_id),
+                "thread_id": str(thread_id),
+                "current_project_id": "",
+            },
+            tasks=(),
+            config={"configurable": {}},
+        )
+    )
+    row = SimpleNamespace(
+        id=runtime_snapshot_id,
+        user_id=user_id,
+        project_id=None,
+        thread_id=thread_id,
+        job_id="run-1",
+        tool_registry_hash=registry_metadata["hash"],
+        tool_registry_version=registry_metadata["version"],
+        tool_metadata={"descriptors": TOOL_REGISTRY.frozen_descriptor_metadata()},
+        skill_catalog=[],
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=row)
+
+    await _run_confirm(
+        graph,
+        session=session,
+        user_id=str(user_id),
+        thread_id=str(thread_id),
+    )
+
+    session.get.assert_awaited_once()
+    assert session.get.await_args is not None
+    assert session.get.await_args.args[1] == runtime_snapshot_id
+    assert graph.resume_input is not None
+    assert graph.resume_input.resume == {"confirmed": True}
+    assert graph.resume_input.update["runtime_tool_names"] == list(
+        TOOL_REGISTRY.available_descriptor_names()
+    )
+    assert graph.resume_input.update["tool_registry_hash"] == registry_metadata["hash"]
+    assert (
+        graph.resume_input.update["tool_registry_version"]
+        == registry_metadata["version"]
+    )
+    assert graph.resume_input.update["runtime_projection_unavailable"] is False
 
 
 def _error_payload(frames: list[str]) -> dict[str, Any]:

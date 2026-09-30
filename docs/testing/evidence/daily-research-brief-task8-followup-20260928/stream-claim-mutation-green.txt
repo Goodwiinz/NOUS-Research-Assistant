@@ -1,0 +1,16 @@
+CLASSIFICATION: PASS
+SOURCE_SHA: a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408
+RESTORED_PRODUCTION_FILE_SHA256: 7a96b08ab56709178bcff0fc23b74b164c16cf1ad13a53bafc235bb67df72ec6
+RESTORED_GUARD: `backend/src/services/research_engine/run_lifecycle.py:685`
+RAW_CAPTURE_SHA256: ef27e533c21959f57ca013b68b779ff70219b723ad39778766ccedae4af12b99
+EXIT_STATUS: 0
+COMMAND:
+  PYTHONPATH=backend ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" .venv/bin/python -m pytest -c backend/pytest.ini -q -vv backend/tests/integration/test_daily_research_brief_postgres.py::test_controlled_lifecycle_persists_each_stage_exactly_once
+
+SALIENT OUTPUT:
+  backend/tests/integration/test_daily_research_brief_postgres.py::test_controlled_lifecycle_persists_each_stage_exactly_once PASSED
+  1 passed, 1 warning in 2.70s
+
+The restored production file exactly matched its pre-mutation SHA-256. The
+test's `(200, 409)` assertion, exact stage/provider-call counts, unique review
+rows, and durable transitions all completed before pytest reported PASS.

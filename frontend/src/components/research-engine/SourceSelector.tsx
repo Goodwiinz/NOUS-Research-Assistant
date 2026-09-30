@@ -2,7 +2,10 @@
 
 import { FileText, Globe, HeartPulse, Search, Database } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { SourceConnectorType } from '@/types/scispace';
+import type { ReactElement } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getCapabilities } from '@/services/researchEngineService';
+import type { ConnectorCapability } from '@/services/researchEngineService';
 import { cn } from '@/lib/utils';
 import {
   Popover,
@@ -11,23 +14,17 @@ import {
 } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 
-interface SourceDefinition {
-  id: SourceConnectorType;
-  label: string;
-  icon: LucideIcon;
-}
-
-const SOURCES: SourceDefinition[] = [
-  { id: 'arxiv', label: 'ArXiv Preprints', icon: FileText },
-  { id: 'semantic_scholar', label: 'Semantic Scholar', icon: Search },
-  { id: 'openalex', label: 'OpenAlex', icon: Globe },
-  { id: 'crossref', label: 'Crossref', icon: Globe },
-  { id: 'pubmed', label: 'PubMed', icon: HeartPulse },
-];
+const SOURCE_ICONS: Record<string, LucideIcon> = {
+  arxiv: FileText,
+  semantic_scholar: Search,
+  openalex: Globe,
+  crossref: Globe,
+  pubmed: HeartPulse,
+};
 
 export interface SourceSelectorProps {
-  selected: SourceConnectorType[];
-  onChange: (sources: SourceConnectorType[]) => void;
+  selected: string[];
+  onChange: (sources: string[]) => void;
   disabled?: boolean;
 }
 
@@ -35,12 +32,32 @@ export function SourceSelector({
   selected,
   onChange,
   disabled = false,
-}: SourceSelectorProps) {
-  const handleToggle = (id: SourceConnectorType) => {
+}: SourceSelectorProps): ReactElement {
+  const capabilitiesQuery = useQuery({
+    queryKey: ['research-engine', 'capabilities'],
+    queryFn: getCapabilities,
+  });
+
+  const sources = Array.from(
+    (capabilitiesQuery.data ?? [])
+      .filter(
+        (capability) => capability.daily_brief_eligible && capability.available
+      )
+      .reduce((unique, capability) => {
+        if (!unique.has(capability.id)) {
+          unique.set(capability.id, capability);
+        }
+        return unique;
+      }, new Map<string, ConnectorCapability>())
+      .values()
+  );
+
+  const handleToggle = (id: string): void => {
     if (selected.includes(id)) {
       if (selected.length <= 1) return;
       onChange(selected.filter((s) => s !== id));
     } else {
+      if (selected.length >= 4) return;
       onChange([...selected, id]);
     }
   };
@@ -65,36 +82,60 @@ export function SourceSelector({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-56 bg-popover border-border p-2"
+        className="w-64 bg-popover border-border p-2"
       >
+        {capabilitiesQuery.isLoading && (
+          <p
+            role="status"
+            className="px-2.5 py-2 text-sm text-muted-foreground"
+          >
+            Loading sources
+          </p>
+        )}
+        {capabilitiesQuery.isError && (
+          <div role="alert" className="px-2.5 py-2">
+            <p className="text-sm text-foreground">
+              Failed to load available sources.
+            </p>
+            <button
+              type="button"
+              onClick={() => void capabilitiesQuery.refetch()}
+              className="mt-1 rounded text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         <div className="space-y-1">
-          {SOURCES.map((source) => {
+          {sources.map((source: ConnectorCapability) => {
             const isSelected = selected.includes(source.id);
             const isLastSelected = isSelected && selected.length <= 1;
+            const isAtMaximum = !isSelected && selected.length >= 4;
+            const optionDisabled = disabled || isLastSelected || isAtMaximum;
+            const SourceIcon = SOURCE_ICONS[source.id] ?? Database;
 
             return (
-              <button
-                type="button"
+              <label
                 key={source.id}
-                onClick={() => handleToggle(source.id)}
-                disabled={isLastSelected}
                 className={cn(
                   'flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-left text-sm transition-colors',
                   'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                   isSelected
                     ? 'text-foreground bg-muted/60'
                     : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground',
-                  isLastSelected && 'cursor-not-allowed opacity-60'
+                  optionDisabled
+                    ? 'cursor-not-allowed opacity-60'
+                    : 'cursor-pointer'
                 )}
               >
                 <Checkbox
                   checked={isSelected}
                   onCheckedChange={() => handleToggle(source.id)}
-                  disabled={isLastSelected}
+                  disabled={optionDisabled}
+                  aria-label={source.label}
                   className="h-3.5 w-3.5 rounded-sm border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground"
-                  onClick={(e) => e.stopPropagation()}
                 />
-                <source.icon
+                <SourceIcon
                   aria-hidden="true"
                   className={cn(
                     'h-3.5 w-3.5 shrink-0',
@@ -102,7 +143,7 @@ export function SourceSelector({
                   )}
                 />
                 <span className="truncate">{source.label}</span>
-              </button>
+              </label>
             );
           })}
         </div>

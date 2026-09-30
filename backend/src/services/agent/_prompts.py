@@ -24,8 +24,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.core.config import get_settings
-
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
 
@@ -143,6 +141,18 @@ INTENT_PROMPTS = {
 # specialized prompt.
 
 SHARED_AGENT_RULES = (
+    "## Workflow boundaries\n"
+    "Each chat turn runs through one selected branch: main, research, writing, or data. "
+    "The registered tools bound to that branch are the actual allowlist for this turn. "
+    "The router is not a cross-branch workflow planner and does not promise to detect "
+    "every request that combines workflows. Do not claim an automatic handoff or a "
+    "capability that is not in the current branch. Research can execute code but "
+    "cannot save a writing draft in that same turn; writing can save drafts but "
+    "cannot execute code. A user can request the next supported step in a separate "
+    "turn, which is routed independently. Research Engine blueprint workflows are "
+    "separate from this chat graph; do not claim that chat started or resumed a "
+    "blueprint run. Entity extraction returns extracted entities, not durable graph "
+    "IDs. Search the knowledge graph for canonical entity IDs before graph traversal.\n\n"
     "## Incomplete citations and unknown metadata\n"
     "Use only supplied or verified bibliographic details: authors, full title, "
     "date, venue, DOI, URL, publication type, and publication status. Keep missing "
@@ -198,7 +208,9 @@ SHARED_AGENT_RULES = (
     "behind an interrupt — you do not need to ask permission for them either).\n"
     "- Read-only (act now, do not propose-then-ask): search_arxiv, "
     "search_documents, do_kb_retrieve, search_knowledge_graph, "
-    "list_projects, list_project_documents, search_memory. When the user "
+    "list_projects, list_project_documents. Relevant past interactions and "
+    "project notes, when available, are supplied as bounded context; use that "
+    "context directly instead of asking for a separate memory lookup. When the user "
     "asks for any of these, run the tool straight away with sensible default "
     'arguments. Do NOT emit a "Proposed query … Shall I proceed?" dialog '
     "first — that doubles every interaction.\n"
@@ -389,21 +401,15 @@ def _runtime_model_line(model_override: str | None) -> str:
     nothing is configured the line is omitted; the static rule in
     ``SHARED_AGENT_RULES`` still steers the agent away from guessing.
     """
-    settings = get_settings()
-    deployment = (
-        model_override
-        or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
-        or settings.AZURE_OPENAI_DEPLOYMENT_NAME
-        or ""
-    )
+    from src.services.agent.llm_factory import resolve_chat_deployment
+
+    deployment = resolve_chat_deployment(model_override)
     if not deployment:
         return ""
     if deployment == "model-router":
         return (
-            "Runtime model: routed via Azure deployment `model-router`. "
-            "The underlying model (gpt-5, claude-*, llama-*, ...) is "
-            "selected per request by Azure model-router and is not "
-            "visible from this prompt."
+            "Runtime model: routed deployment `model-router`; "
+            "underlying model is selected per request and is unknown here."
         )
     return f"Runtime model: routed via Azure deployment `{deployment}`."
 
@@ -475,7 +481,7 @@ def _build_page_context_line(page_context: dict) -> str:
             "When the user says 'this paper', 'this document', 'summarize this', "
             "'analyze this', or asks about a paper without naming one, use this "
             "document_id directly. Do NOT ask which document — you already have it. "
-            "Call summarize_document, analyze_document, or extract_entities with "
+            "Call summarize_document or extract_entities with "
             f"document_id={paper_id}."
         )
 

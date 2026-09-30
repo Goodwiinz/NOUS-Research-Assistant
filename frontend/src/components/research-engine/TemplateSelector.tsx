@@ -1,46 +1,51 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { FileText, Sparkles } from 'lucide-react';
-import { listTemplates } from '@/services/researchEngineService';
-import type { BlueprintStepDef } from '@/services/researchEngineService';
-
-interface Template {
-  slug: string;
-  name: string;
-  description?: string;
-  step_count: number;
-  steps?: BlueprintStepDef[];
-  parameters?: Record<string, unknown>;
-}
+import { useState, type ReactElement } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { FileText, Loader2, Sparkles } from 'lucide-react';
+import {
+  getTemplateDetail,
+  listTemplates,
+} from '@/services/researchEngineService';
+import type {
+  BlueprintTemplateDetail,
+  BlueprintTemplateSummary,
+} from '@/services/researchEngineService';
 
 export interface TemplateSelectorProps {
-  onSelect: (template: Template | null) => void;
+  onSelect: (template: BlueprintTemplateDetail | null) => void;
 }
 
-export function TemplateSelector({ onSelect }: TemplateSelectorProps) {
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export function TemplateSelector({
+  onSelect,
+}: TemplateSelectorProps): ReactElement {
+  const queryClient = useQueryClient();
+  const templatesQuery = useQuery({
+    queryKey: ['research-engine', 'templates'],
+    queryFn: listTemplates,
+  });
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
+  const [failedSlug, setFailedSlug] = useState<string | null>(null);
 
-  const fetchTemplates = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const handleTemplateSelect = async (
+    template: BlueprintTemplateSummary
+  ): Promise<void> => {
+    setSelectedSlug(template.slug);
+    setFailedSlug(null);
     try {
-      const res = (await listTemplates()) as Template[];
-      setTemplates(res ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load templates');
+      const detail = await queryClient.fetchQuery({
+        queryKey: ['research-engine', 'templates', template.slug],
+        queryFn: () => getTemplateDetail(template.slug),
+      });
+      onSelect(detail);
+    } catch {
+      setFailedSlug(template.slug);
     } finally {
-      setLoading(false);
+      setSelectedSlug(null);
     }
-  }, []);
+  };
 
-  useEffect(() => {
-    fetchTemplates();
-  }, [fetchTemplates]);
-
-  if (loading) {
+  if (templatesQuery.isLoading) {
     return (
       <div>
         <div className="h-6 w-64 rounded bg-muted animate-pulse mb-2" />
@@ -60,17 +65,17 @@ export function TemplateSelector({ onSelect }: TemplateSelectorProps) {
     );
   }
 
-  if (error) {
+  if (templatesQuery.isError) {
     return (
       <div
         role="alert"
         className="flex items-start gap-3 p-4 rounded-xl border border-destructive/30 bg-destructive/5"
       >
         <div className="flex-1">
-          <p className="text-sm text-foreground">{error}</p>
+          <p className="text-sm text-foreground">Failed to load templates.</p>
           <button
             type="button"
-            onClick={fetchTemplates}
+            onClick={() => void templatesQuery.refetch()}
             className="mt-1 text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded"
           >
             Retry
@@ -89,11 +94,35 @@ export function TemplateSelector({ onSelect }: TemplateSelectorProps) {
         Select a template to get started, or create a blank blueprint.
       </p>
 
+      {failedSlug && (
+        <div
+          role="alert"
+          className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3"
+        >
+          <p className="text-sm text-foreground">
+            Failed to load the selected template.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              const template = templatesQuery.data?.find(
+                (item) => item.slug === failedSlug
+              );
+              if (template) void handleTemplateSelect(template);
+            }}
+            className="mt-1 rounded text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Blank blueprint option */}
         <button
           type="button"
           onClick={() => onSelect(null)}
+          disabled={selectedSlug !== null}
           className="group rounded-xl border border-dashed border-border bg-card p-5 text-left hover:border-primary/40 hover:bg-muted/30 transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <div className="flex items-center gap-2 mb-3">
@@ -112,12 +141,13 @@ export function TemplateSelector({ onSelect }: TemplateSelectorProps) {
         </button>
 
         {/* Template cards */}
-        {templates.map((tpl) => (
+        {(templatesQuery.data ?? []).map((tpl) => (
           <button
             type="button"
             key={tpl.slug}
-            onClick={() => onSelect(tpl)}
-            className="group rounded-xl border border-border bg-card p-5 text-left hover:border-primary/40 hover:shadow-md transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            onClick={() => void handleTemplateSelect(tpl)}
+            disabled={selectedSlug !== null}
+            className="group rounded-xl border border-border bg-card p-5 text-left hover:border-primary/40 hover:shadow-md transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
           >
             <div className="flex items-center gap-2 mb-3">
               <Sparkles
@@ -127,6 +157,12 @@ export function TemplateSelector({ onSelect }: TemplateSelectorProps) {
               <span className="font-medium text-foreground truncate">
                 {tpl.name}
               </span>
+              {selectedSlug === tpl.slug && (
+                <Loader2
+                  aria-hidden="true"
+                  className="ml-auto h-4 w-4 animate-spin"
+                />
+              )}
             </div>
             {tpl.description && (
               <p className="text-sm text-muted-foreground mb-3 line-clamp-2">

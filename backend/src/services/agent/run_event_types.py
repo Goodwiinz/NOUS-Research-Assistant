@@ -257,3 +257,15 @@ __all__ = [
     "TERMINAL_RUN_EVENTS",
     "validate_payload",
 ]
+
+# External producers cannot forge lifecycle or retrieval/plan projections.
+BRIDGE_PRODUCER_EVENTS = frozenset(
+    {
+        RunEventType.ASSISTANT_DELTA,
+        RunEventType.TOOL_STARTED,
+        RunEventType.TOOL_COMPLETED,
+        RunEventType.APPROVAL_REQUIRED,
+        RunEventType.APPROVAL_RESOLVED,
+        RunEventType.USAGE_UPDATED,
+    }
+)

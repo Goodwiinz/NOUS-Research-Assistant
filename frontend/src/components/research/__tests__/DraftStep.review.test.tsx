@@ -93,4 +93,53 @@ describe('DraftStep citation review', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('blocked');
     expect(screen.getAllByText(/Fabricated fact/)).toHaveLength(2);
   });
+
+  it('stops polling when the task is interrupted', async () => {
+    vi.mocked(projectService.listDrafts).mockResolvedValue({
+      drafts: [],
+      total: 0,
+      skip: 0,
+      limit: 50,
+    });
+    vi.mocked(projectService.listDraftReviews).mockResolvedValue({
+      reviews: [],
+    });
+    vi.mocked(projectService.generateDraft).mockResolvedValue({
+      task_id: 'task-1',
+      status: 'pending',
+      message: 'started',
+    });
+    vi.mocked(projectService.getGenerationStatus).mockResolvedValue({
+      task_id: 'task-1',
+      status: 'interrupted',
+      progress: 0,
+      current_step: '',
+      started_at: '',
+      error_code: 'process_lost',
+      state_source: 'database',
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <DraftStep
+          projectId="project-1"
+          documentCount={1}
+          onContinue={vi.fn()}
+          onBack={vi.fn()}
+        />
+      </QueryClientProvider>
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Generate now' })
+    );
+    // The terminal branch refetches reviews instead of scheduling a poll.
+    await waitFor(() =>
+      expect(projectService.listDraftReviews).toHaveBeenCalledTimes(2)
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(projectService.getGenerationStatus).toHaveBeenCalledTimes(1);
+  });
 });

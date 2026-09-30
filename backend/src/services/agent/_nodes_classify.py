@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
@@ -31,6 +32,12 @@ from langchain_core.runnables import RunnableConfig
 
 from src.services.agent._nodes_memory import memory_retrieval_node
 from src.services.agent._nodes_rag import _coerce_text, rag_node
+from src.services.agent.identity_ledger import (
+    MAX_HARVEST_MESSAGES,
+    MAX_REFERENCE_TEXT_CHARS,
+    harvest_legacy_tool_messages,
+    identity_references_from_text,
+)
 from src.services.agent.observability import (
     record_node_duration,
     tag_trace_intent,
@@ -208,6 +215,46 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
     - count this turn's first error against last turn's accumulated
       ``error_count``.
     """
+    messages = list(state.get("messages", []))
+    latest_human = next(
+        (
+            message
+            for message in reversed(messages[-MAX_HARVEST_MESSAGES:])
+            if isinstance(message, HumanMessage)
+        ),
+        None,
+    )
+    checkpointed_messages: list[Any] = []
+    operation_turn_id: str | None = None
+    if latest_human is not None:
+        message_id = getattr(latest_human, "id", None)
+        if not isinstance(message_id, str) or not message_id:
+            message_id = str(uuid.uuid4())
+            latest_human.id = message_id
+            checkpointed_messages = [latest_human]
+        if len(message_id) <= 128:
+            operation_turn_id = message_id
+
+    latest_user_text = (
+        latest_human.content[:MAX_REFERENCE_TEXT_CHARS]
+        if latest_human is not None and isinstance(latest_human.content, str)
+        else ""
+    )
+    identity_references = identity_references_from_text(
+        latest_user_text,
+        state.get("current_project_id"),
+        existing_ledger=state.get("identity_ledger"),
+    )
+    # Recover before any downstream LLM node trims the legacy message history.
+    # This is also run on resumed checkpoints, whose older ToolMessages may
+    # predate the ledger field.
+    recovered_identity_ledger = harvest_legacy_tool_messages(
+        messages,
+        state.get("identity_ledger"),
+        identity_references,
+        current_turn_id=operation_turn_id,
+    )
+
     results = await asyncio.gather(
         _timed_subtask("rag", rag_node(state, config)),
         _timed_subtask("classify", _classify_core(state, config)),
@@ -241,10 +288,22 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         # tool_calls "no response" exit). Reset both per turn.
         "compaction_count": 0,
         "_force_synthesis_fired": False,
+        # Never let a prior checkpoint's operation anchor authorize a legacy
+        # or unanchored new turn. Set the v1 pair again only when the current
+        # checkpointed HumanMessage has a stable id.
+        "tool_operation_protocol_version": 0,
+        "tool_operation_turn_id": "",
+        "identity_ledger": recovered_identity_ledger,
+        "identity_current_references": identity_references,
     }
+    if operation_turn_id is not None:
+        merged["tool_operation_protocol_version"] = 1
+        merged["tool_operation_turn_id"] = operation_turn_id
+    if checkpointed_messages:
+        merged["messages"] = checkpointed_messages
     removals = _prune_checkpoint_history(list(state.get("messages", [])))
     if removals:
-        merged["messages"] = removals
+        merged["messages"] = [*merged.get("messages", []), *removals]
     for result, default in zip(results, defaults):
         if isinstance(result, asyncio.CancelledError):
             # CancelledError is BaseException (not Exception) since 3.8, so the

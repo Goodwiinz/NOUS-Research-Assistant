@@ -1,0 +1,61 @@
+FINAL_SOURCE_SHA: 9ca9d6a2995ba8dd52328efd0e5cd93856138b4a
+EXECUTION_PROVENANCE:
+  These checks ran on the restored final candidate bytes later frozen in
+  FINAL_SOURCE_SHA. The exact committed-source browser and performance runs are
+  recorded separately. No executable change followed these focused results.
+
+AFFECTED BACKEND
+CLASSIFICATION: PASS
+RAW_CAPTURE_SHA256: f977fa063cdc0ee9ee87ed1dc5c1db5838e8bcc2383cbcbdadc854a80798f687
+RESULT: 148 passed, 1 warning in 7.58s
+
+BROADER FOCUSED BACKEND
+CLASSIFICATION: PASS
+RAW_CAPTURE_SHA256: 95741a2133cac2f5cc349fecfd418205e4ad587ea12192adbb9b975b18bbaee5
+RESULT: 277 passed, 2 warnings in 14.85s
+
+POSTGRESQL LIFECYCLE
+CLASSIFICATION: PASS
+RAW_CAPTURE_SHA256: e9e17a7d8b1269708a80d3b6cda729e125e7ba0d4413178ce7acc3f7fed56809
+COMMAND:
+  PYTHONPATH=backend ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" .venv/bin/python -m pytest -c backend/pytest.ini -q backend/tests/integration/test_daily_research_brief_postgres.py
+RESULT: 5 passed, 1 warning in 4.88s
+
+FRONTEND FOCUSED
+CLASSIFICATION: PASS
+RAW_CAPTURE_SHA256: 57bfa52411a0914d15d5fc5bc954e61b69d8777a73834ea96077c8626a300665
+RESULT: 5 files, 61 tests passed
+
+NODE TYPE-CHECK
+CLASSIFICATION: PASS
+NODE_VERSION: 24.20.0
+PNPM_VERSION: 10.18.2
+RAW_CAPTURE_SHA256: c5d2663a9e2a7d7af27e316b7c057dbaac1fa765ad140a412801ec551d6a4c79
+RESULT: tsc --noEmit exited 0
+
+OPENAPI AND GENERATED TYPES
+CLASSIFICATION: PASS
+OPENAPI RAW-CAPTURE DIGEST (SHA-256)
+  1bbee2667ac8220e82acd2cb019347f7a49f66c989f4c668989ec64f47d799a7
+TYPES_RAW_CAPTURE_SHA256: feaba43d68f62dc34fad053de9efa0f0fabdeba1db1a3f6f464e57acff3ab4ab
+RESULT: OpenAPI check passed; regenerated TypeScript produced no diff.
+
+SCOPED RUFF AND FORMAT
+CLASSIFICATION: PASS
+RUFF_RAW_CAPTURE_SHA256: 82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18
+FORMAT_RAW_CAPTURE_SHA256: a0a0f191878d553ae2b88299d5ead34d7a6367937ff1bd9e304fb73059c83f8a
+
+BANDIT 1.9.4
+CLASSIFICATION: PASS
+RAW_CAPTURE_SHA256: 69aeec7e8ec7964f7dcd937d8ee5570c5b18d503cf1147628b22bbeb2f97ea1a
+RESULT: no in-scope issues under the repository baseline and configured filters.
+
+STAGED GITLEAKS 8.30.1
+CLASSIFICATION: PASS
+RAW_CAPTURE_SHA256:
+  c4ee841a24b6a5c2c59510629d92e08eb1334079e64bd7b24a21c5304d7e346e
+  87a239a1bf78d8b6e2844ab1973b48c2b9acb99d10afb705a82c80ae3c7ea1bc
+RESULT: no leaks in the staged source candidate.
+
+These focused passes do not relabel the broad full frontend validation,
+dependency, anonymous Safety, or local-CI failures. Those remain FAILED.

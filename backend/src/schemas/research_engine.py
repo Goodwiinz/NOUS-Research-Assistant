@@ -1,12 +1,12 @@
 """Pydantic v2 schemas for the research engine API."""
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypeVar, Union
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # These limits are deliberately server-owned.  They protect both newly
 # validated blueprints and the legacy JSONB rows that are revalidated by the
@@ -14,9 +14,20 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 MAX_BLUEPRINT_STEPS = 32
 MAX_NESTED_PAYLOAD_BYTES = 32 * 1024
 MAX_PROMPT_TEMPLATE_CHARS = 16 * 1024
+MAX_REVIEW_ITEMS = 200
+MAX_REVIEW_ID_CHARS = 512
+MAX_REVIEW_SAFE_FIELD_CHARS = 64
+# A projected pending review retains two bounded identities and one bounded safe
+# field for every supported candidate. Six bytes per character covers JSON
+# control escaping; the per-item and envelope allowances cover keys/markers.
+MAX_PENDING_REVIEW_OUTPUT_BYTES = 4096 + MAX_REVIEW_ITEMS * (
+    (2 * MAX_REVIEW_ID_CHARS * 6) + (MAX_REVIEW_SAFE_FIELD_CHARS * 6) + 512
+)
+
+_PayloadT = TypeVar("_PayloadT")
 
 
-def _serialized_size(value: Any) -> int:
+def serialized_payload_size(value: Any) -> int:
     """Return the compact JSON size used for request/runtime accounting."""
     try:
         return len(
@@ -31,11 +42,13 @@ def _serialized_size(value: Any) -> int:
         raise ValueError("payload must be JSON serializable") from exc
 
 
-def _bounded_payload(value: Any, field_name: str) -> Any:
-    if _serialized_size(value) > MAX_NESTED_PAYLOAD_BYTES:
-        raise ValueError(
-            f"{field_name} exceeds the {MAX_NESTED_PAYLOAD_BYTES}-byte limit"
-        )
+def _bounded_payload(
+    value: _PayloadT,
+    field_name: str,
+    max_bytes: int = MAX_NESTED_PAYLOAD_BYTES,
+) -> _PayloadT:
+    if serialized_payload_size(value) > max_bytes:
+        raise ValueError(f"{field_name} exceeds the {max_bytes}-byte limit")
     return value
 
 
@@ -85,6 +98,14 @@ class StepType(str, Enum):
     EXPORT = "export"
 
 
+class ExportFormat(str, Enum):
+    """Portable formats supported by the audited research export endpoint."""
+
+    MARKDOWN = "markdown"
+    JSON = "json"
+    CSV = "csv"
+
+
 class ExecutionMode(str, Enum):
     """Execution mode for a blueprint step."""
 
@@ -108,6 +129,43 @@ class GroundingStatus(str, Enum):
     VERIFIED = "verified"
     UNVERIFIED = "unverified"
     FAILED = "failed"
+
+
+class ReviewKind(str, Enum):
+    """Durable review gates supported by the Daily Research Brief contract."""
+
+    SCREENING = "screening"
+    EXTRACTION = "extraction"
+    FINAL = "final"
+
+
+class ReviewDecision(str, Enum):
+    """Top-level reviewer disposition for a persisted stage output."""
+
+    APPROVE = "approve"
+    DECLINE = "decline"
+
+
+class ConnectorFeatures(BaseModel):
+    """Safe, behavioral search features for a research connector."""
+
+    model_config = {"extra": "forbid"}
+
+    full_text: bool
+    date_filter: bool
+    cursor: bool
+
+
+class ConnectorCapabilityResponse(BaseModel):
+    """Non-sensitive connector metadata returned to setup clients."""
+
+    model_config = {"extra": "forbid"}
+
+    id: str
+    label: str
+    daily_brief_eligible: bool
+    available: bool
+    features: ConnectorFeatures
 
 
 # ============================================================================
@@ -291,6 +349,7 @@ class ResearchProtocolResponse(BaseModel):
     current_approved_version_id: Optional[UUID] = None
     versions: List[ResearchProtocolVersionResponse] = Field(default_factory=list)
     can_edit: bool = False
+    can_manage: bool = False
     can_approve: bool = False
     created_at: datetime
     updated_at: datetime
@@ -313,6 +372,173 @@ class ProtocolApprovalResponse(BaseModel):
     actor_role: str
     reason: Optional[str] = None
     approved_at: datetime
+
+
+# --- Report / study identity (GOO-299) ------------------------------------
+
+StudyLinkStatus = Literal["proposed", "confirmed", "disputed"]
+
+
+class ReportObservationResponse(BaseModel):
+    source_id: UUID
+    run_id: UUID
+    match_method: str
+    evidence: Dict[str, Any]
+
+
+class ImportedRecordObservation(BaseModel):
+    """An externally imported record (GOO-300) attached to this report."""
+
+    import_record_id: UUID
+    receipt_id: UUID
+    match_method: str
+    evidence: Dict[str, Any]
+
+
+class ReportResponse(BaseModel):
+    id: UUID
+    title_snapshot: str
+    identifiers: Dict[str, List[str]]
+    study_id: Optional[UUID] = None
+    study_link_status: Optional[StudyLinkStatus] = None
+    study_link_rationale: Optional[str] = None
+    merged_into_report_id: Optional[UUID] = None
+    observations: List[ReportObservationResponse]
+    imported_records: List[ImportedRecordObservation] = []
+
+
+class ReportSuggestion(BaseModel):
+    report_id: UUID
+    reason: Literal["title_year"]
+
+
+class ReportCandidatesResponse(BaseModel):
+    """Read-only suggestions; titles and years never equate reports."""
+
+    report_id: UUID
+    suggested: List[ReportSuggestion]
+    conflicts: List[Dict[str, Any]]
+
+
+class StudyLinkRequest(BaseModel):
+    study_id: Optional[UUID] = None
+    status: StudyLinkStatus
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class ReportMergeRequest(BaseModel):
+    surviving_report_id: UUID
+    merged_report_ids: List[UUID] = Field(..., min_length=1)
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class ReportSplitRequest(BaseModel):
+    source_ids: List[UUID] = []
+    import_record_ids: List[UUID] = []
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def _moves_something(self) -> "ReportSplitRequest":
+        if not self.source_ids and not self.import_record_ids:
+            raise ValueError("name at least one source_id or import_record_id")
+        return self
+
+
+class IdentityEventResponse(BaseModel):
+    seq: int
+    event_type: str
+    actor_user_id: UUID
+    actor_role: str
+    reason: Optional[str] = None
+    payload: Dict[str, Any]
+    occurred_at: datetime
+
+
+# --- Search import / corpus (GOO-300) --------------------------------------
+
+
+class ImportDeclaration(BaseModel):
+    """What the importer declares about the search; never inferred from the file."""
+
+    database: str = Field(..., min_length=1, max_length=200)
+    query_text: Optional[str] = Field(default=None, min_length=1, max_length=20_000)
+    search_date: Optional[date] = None
+    exported_at: Optional[datetime] = None
+    redistribution: Literal["restricted", "allowed"] = "restricted"
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CitationChaseDeclaration(BaseModel):
+    """What a citation-chase receipt records as requested (server-set licence)."""
+
+    seed_report_id: UUID
+    direction: Literal["backward", "forward"]
+    requested_limit: int
+    redistribution: Literal["allowed"]
+
+
+class ImportReceiptResponse(BaseModel):
+    id: UUID
+    kind: Literal["file_import", "citation_chase"]
+    version: int
+    previous_receipt_id: Optional[UUID] = None
+    # Exactly the validated declaration: an import's, or a chase's request.
+    declared: Union[ImportDeclaration, CitationChaseDeclaration]
+    observed: Dict[str, Any]
+    parsed_count: int
+    accepted_count: int
+    rejected_count: int
+    replayed: bool = False
+    created_at: datetime
+
+
+class ImportRecordResponse(BaseModel):
+    id: UUID
+    record_index: int
+    status: Literal["accepted", "rejected"]
+    rejection_reason: Optional[str] = None
+    parsed: Dict[str, Any]
+    report_id: Optional[UUID] = None
+    # Omitted (null) when the receipt's redistribution is "restricted".
+    raw: Optional[str] = None
+
+
+class ImportReceiptDetail(ImportReceiptResponse):
+    records: List[ImportRecordResponse]
+
+
+class CitationChaseRequest(BaseModel):
+    seed_report_id: UUID
+    direction: Literal["backward", "forward"]
+    # 50 mirrors step_executor.MAX_CONNECTOR_RESULTS (pinned by a unit test).
+    max_results: int = Field(default=50, ge=1, le=50)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+COVERAGE_STATEMENT = (
+    "Coverage lists what was searched, imported and chased for this project. "
+    "It is not exhaustive and does not prove that no other relevant records exist."
+)
+
+
+class CoverageRequest(BaseModel):
+    """Known records to check, each ``{kind: value}`` (e.g. ``{"doi": "10.1/x"}``)."""
+
+    known: List[Dict[str, str]] = Field(default_factory=list, max_length=1000)
+
+
+class CoverageResponse(BaseModel):
+    found: List[Dict[str, Any]]
+    missing: List[Dict[str, str]]
+    recall: Optional[float] = None
+    searched: List[Dict[str, Any]]
+    not_searched: List[str]
+    citation_chasing: Optional[Dict[str, Any]] = None
+    exhaustive: Literal[False] = False
+    statement: str = COVERAGE_STATEMENT
 
 
 class ProtocolRegistrationCreate(BaseModel):
@@ -389,18 +615,15 @@ class BlueprintCreate(BaseModel):
     name: str
     template_source: Optional[str] = None
     steps: List[BlueprintStepDefinition] = Field(
-        ..., min_length=1, max_length=MAX_BLUEPRINT_STEPS
+        default_factory=list, max_length=MAX_BLUEPRINT_STEPS
     )
     parameters: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("steps")
-    @classmethod
-    def steps_not_empty(
-        cls, v: List[BlueprintStepDefinition]
-    ) -> List[BlueprintStepDefinition]:
-        if len(v) == 0:
+    @model_validator(mode="after")
+    def custom_blueprints_have_steps(self) -> "BlueprintCreate":
+        if not self.steps and not self.template_source:
             raise ValueError("steps must not be empty")
-        return v
+        return self
 
     @field_validator("parameters")
     @classmethod
@@ -445,9 +668,62 @@ class BlueprintResponse(BaseModel):
     updated_at: datetime
 
 
+class BlueprintTemplateDetailResponse(BaseModel):
+    """Validated full content of one server-owned blueprint template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=2000)
+    template_source: str = Field(min_length=1, max_length=100)
+    contract_version: int = Field(ge=1)
+    parameters: Dict[str, Any]
+    constraints: Dict[str, Any]
+    coverage: Dict[str, Any]
+    steps: List[BlueprintStepDefinition] = Field(
+        min_length=1, max_length=MAX_BLUEPRINT_STEPS
+    )
+
+
 # ============================================================================
 # Run Schemas
 # ============================================================================
+
+
+BoundedCriterion = Annotated[str, Field(min_length=1, max_length=500)]
+
+
+class DailyBriefScopeConfirmation(BaseModel):
+    """User-confirmed, bounded scope for a Daily Research Brief run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    research_question: str = Field(min_length=1, max_length=2000)
+    inclusion_criteria: List[BoundedCriterion] = Field(min_length=1, max_length=25)
+    exclusion_criteria: List[BoundedCriterion] = Field(
+        default_factory=list, max_length=25
+    )
+    providers: List[str] = Field(min_length=1, max_length=4)
+    limit_per_provider: int = Field(strict=True, ge=1, le=50)
+    notes: str = Field(default="", max_length=2000)
+    confirmed: Literal[True]
+
+    @field_validator("confirmed", mode="before")
+    @classmethod
+    def confirmation_is_actual_true(cls, value: Any) -> Any:
+        if type(value) is not bool or value is not True:
+            raise ValueError("confirmed must be the boolean true")
+        return value
+
+    @field_validator("providers")
+    @classmethod
+    def providers_are_canonical_and_eligible(cls, value: List[str]) -> List[str]:
+        from src.services.research_engine.connectors.registry import (
+            normalize_connector_selection,
+        )
+
+        return list(normalize_connector_selection(value, daily_brief_only=True))
 
 
 class RunCreate(BaseModel):
@@ -455,11 +731,233 @@ class RunCreate(BaseModel):
 
     protocol_version_id: Optional[UUID] = None
     parameters_override: Dict[str, Any] = Field(default_factory=dict)
+    scope_confirmation: Optional[DailyBriefScopeConfirmation] = None
 
     @field_validator("parameters_override")
     @classmethod
     def parameters_are_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
         return _bounded_payload(value, "run parameters")
+
+
+class RunResumeRequest(BaseModel):
+    """Bounded authorization supplied only for exceptional run continuation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    continue_unverified: bool = False
+    output_hash: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class ScreeningItemDecision(BaseModel):
+    """A review decision for exactly one persisted screening source part."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(strict=True, min_length=1, max_length=MAX_REVIEW_ID_CHARS)
+    part_id: str = Field(strict=True, min_length=1, max_length=MAX_REVIEW_ID_CHARS)
+    decision: Literal["include", "exclude", "unresolved"]
+    reason: Optional[str] = Field(
+        default=None, strict=True, min_length=1, max_length=500
+    )
+
+    @model_validator(mode="after")
+    def exclusion_has_a_reason(self) -> "ScreeningItemDecision":
+        if self.decision == "exclude" and not (self.reason and self.reason.strip()):
+            raise ValueError("exclude decisions require a reason")
+        return self
+
+
+class ExtractionItemDecision(BaseModel):
+    """A review decision for exactly one persisted extraction source part."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(strict=True, min_length=1, max_length=MAX_REVIEW_ID_CHARS)
+    part_id: str = Field(strict=True, min_length=1, max_length=MAX_REVIEW_ID_CHARS)
+    decision: Literal["accept", "reject", "unresolved"]
+    reason: Optional[str] = Field(
+        default=None, strict=True, min_length=1, max_length=500
+    )
+
+    @model_validator(mode="after")
+    def rejection_has_a_reason(self) -> "ExtractionItemDecision":
+        if self.decision == "reject" and not (self.reason and self.reason.strip()):
+            raise ValueError("reject decisions require a reason")
+        return self
+
+
+class ScreeningReviewDecisionPayload(BaseModel):
+    """Exact-set screening decisions submitted for one stage output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[ScreeningItemDecision] = Field(
+        min_length=1, max_length=MAX_REVIEW_ITEMS
+    )
+
+
+class ExtractionReviewDecisionPayload(BaseModel):
+    """Exact-set extraction decisions submitted for one stage output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[ExtractionItemDecision] = Field(
+        min_length=1, max_length=MAX_REVIEW_ITEMS
+    )
+
+
+class FinalReviewDecisionPayload(BaseModel):
+    """Final review carries no client-authored report or evidence fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+ReviewDecisionPayload = (
+    ScreeningReviewDecisionPayload
+    | ExtractionReviewDecisionPayload
+    | FinalReviewDecisionPayload
+)
+
+
+class StageReviewRequest(BaseModel):
+    """Strict exact-hash decision for one persisted review gate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    review_kind: ReviewKind
+    output_hash: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
+    decision: ReviewDecision
+    decision_payload: ReviewDecisionPayload
+    note: Optional[str] = Field(default=None, strict=True, max_length=2000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def select_payload_model(cls, value: Any) -> Any:
+        """Parse the payload with the model selected by the sibling kind."""
+
+        if not isinstance(value, dict) or "decision_payload" not in value:
+            return value
+        try:
+            review_kind = ReviewKind(value.get("review_kind"))
+        except (TypeError, ValueError):
+            return value
+        payload_model: type[BaseModel]
+        if review_kind == ReviewKind.SCREENING:
+            payload_model = ScreeningReviewDecisionPayload
+        elif review_kind == ReviewKind.EXTRACTION:
+            payload_model = ExtractionReviewDecisionPayload
+        else:
+            payload_model = FinalReviewDecisionPayload
+        selected = dict(value)
+        selected["decision_payload"] = payload_model.model_validate(
+            value["decision_payload"]
+        )
+        return selected
+
+    @model_validator(mode="after")
+    def payload_matches_review_kind(self) -> "StageReviewRequest":
+        expected: type[BaseModel]
+        if self.review_kind == ReviewKind.SCREENING:
+            expected = ScreeningReviewDecisionPayload
+        elif self.review_kind == ReviewKind.EXTRACTION:
+            expected = ExtractionReviewDecisionPayload
+        else:
+            expected = FinalReviewDecisionPayload
+        if not isinstance(self.decision_payload, expected):
+            raise ValueError("decision_payload does not match review_kind")
+        return self
+
+
+class ReviewDescriptor(BaseModel):
+    """Content-free durable descriptor for the current review gate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    step_index: int = Field(ge=0)
+    stage_type: Literal["screen", "extract", "export"]
+    review_kind: ReviewKind
+    contract_version: int = Field(ge=1)
+    output_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["pending", "approved"] = "pending"
+    created_at: Optional[datetime] = None
+    review_id: Optional[UUID] = None
+
+
+class StageReviewResponse(BaseModel):
+    """The immutable accepted ledger row plus replay metadata."""
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    step_index: int = Field(ge=0)
+    stage_type: Literal["screen", "extract", "export"]
+    review_kind: ReviewKind
+    reviewer_id: UUID
+    output_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decision: ReviewDecision
+    decision_payload: Dict[str, Any]
+    note: Optional[str] = Field(default=None, max_length=2000)
+    created_at: datetime
+    replay: bool = False
+
+
+class ReviewValidationVocabulary(BaseModel):
+    """Bounded decision vocabulary used to render a pending gate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_decisions: List[str] = Field(default_factory=list, max_length=3)
+    reason_required_for: List[str] = Field(default_factory=list, max_length=1)
+
+
+class PendingReviewResponse(BaseModel):
+    """Owned pending review state, optionally including bounded stage output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pending: bool
+    descriptor: Optional[ReviewDescriptor] = None
+    stage_output: Optional[Dict[str, Any]] = None
+    accepted_review: Optional[StageReviewResponse] = None
+    validation: Optional[ReviewValidationVocabulary] = None
+
+    @model_validator(mode="after")
+    def pending_fields_are_consistent(self) -> "PendingReviewResponse":
+        if self.pending and (self.descriptor is None or self.stage_output is None):
+            raise ValueError("pending reviews require a descriptor and stage output")
+        if not self.pending and any(
+            value is not None
+            for value in (
+                self.descriptor,
+                self.stage_output,
+                self.accepted_review,
+                self.validation,
+            )
+        ):
+            raise ValueError("non-pending review responses cannot carry gate data")
+        if self.stage_output is not None:
+            projection = self.stage_output.get("review_projection")
+            projected = (
+                isinstance(projection, dict)
+                and projection.get("projected") is True
+                and projection.get("truncated") is True
+                and projection.get("identity_complete") is True
+            )
+            _bounded_payload(
+                self.stage_output,
+                "pending stage output",
+                (
+                    MAX_PENDING_REVIEW_OUTPUT_BYTES
+                    if projected
+                    else MAX_NESTED_PAYLOAD_BYTES
+                ),
+            )
+        return self
 
 
 class RunResponse(BaseModel):
@@ -481,6 +979,82 @@ class RunResponse(BaseModel):
     total_tokens: int = 0
     created_at: datetime
     updated_at: datetime
+    pause_reason: Optional[
+        Literal["user_paused", "review_required", "verification_failed"]
+    ] = None
+    review_kind: Optional[ReviewKind] = None
+    step_index: Optional[int] = None
+    output_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def attach_content_free_pause_descriptor(cls, value: Any) -> Any:
+        """Project a durable manifest gate without serializing its content."""
+
+        from src.services.research_engine.run_lifecycle import (
+            ResearchRunLifecycleService,
+        )
+
+        manifest = (
+            value.get("reproducibility_manifest")
+            if isinstance(value, dict)
+            else getattr(value, "reproducibility_manifest", None)
+        )
+        status_value = (
+            value.get("status")
+            if isinstance(value, dict)
+            else getattr(value, "status", None)
+        )
+        run_id = (
+            value.get("id") if isinstance(value, dict) else getattr(value, "id", None)
+        )
+        projected: dict[str, Any] | None = None
+        if not isinstance(value, dict):
+            projected = {
+                field: getattr(value, field)
+                for field in (
+                    "id",
+                    "blueprint_id",
+                    "project_id",
+                    "research_engine_project_id",
+                    "protocol_version_id",
+                    "effective_plan_hash",
+                    "conformance_status",
+                    "blueprint_version",
+                    "status",
+                    "started_at",
+                    "completed_at",
+                    "total_tokens",
+                    "created_at",
+                    "updated_at",
+                )
+            }
+        if manifest is None or run_id is None:
+            return projected if projected is not None else value
+
+        descriptor = ResearchRunLifecycleService.pause_descriptor(
+            type(
+                "RunDescriptorProjection",
+                (),
+                {
+                    "id": run_id,
+                    "status": (
+                        status_value.value
+                        if isinstance(status_value, Enum)
+                        else status_value
+                    ),
+                    "reproducibility_manifest": manifest,
+                },
+            )()
+        )
+        if descriptor is None:
+            return projected if projected is not None else value
+
+        if isinstance(value, dict):
+            projected = dict(value)
+        assert projected is not None
+        projected.update(descriptor.to_dict())
+        return projected
 
 
 # ============================================================================

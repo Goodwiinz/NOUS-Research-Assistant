@@ -1,0 +1,45 @@
+CLASSIFICATION: EXPECTED RED / PASS
+BASE_EXECUTABLE_SOURCE: b334ec79861b438e8646ff75325cf4f5bdd75a30
+FINAL_EXECUTABLE_SOURCE: 2b98e23b25ad345a85059c4a4266721b7a293a7f
+
+REGRESSION SCOPE
+  The test runs real prepare_sources deduplication before JSON, Markdown, and
+  CSV report projection. Crossref supplies canonical published=[[2025,6,1]];
+  secondary same-DOI OpenAlex supplies publication_date=2024-01-02. The reverse
+  provider order is also asserted. Existing coverage retains the case where a
+  canonical source has no date and provenance is allowed to fill it.
+
+FOCUSED COMMAND
+  .venv/bin/python -m pytest -q -o addopts='' \
+    backend/tests/unit/services/test_report_rendering.py \
+    -k 'date_aliases_preserve_canonical_provider_across_reader_formats'
+
+EXPECTED RED
+  Production rendering still matched base source b334ec798; the working tree
+  contained only the new regression test for this finding.
+EXIT_STATUS: 1
+RAW_CAPTURE_SHA256: 5c93c25adcc64e21bf7e954d12905544735f0870d7557a443552270c482f5f97
+RAW_CAPTURE_BYTES: 4363
+RESULT: 1 failed, 1 passed, 7 deselected in 2.47s
+SALIENT FAILURE:
+  Crossref-first expected publication_year 2025 but received 2024. The
+  secondary OpenAlex publication_date alias had displaced the canonical
+  Crossref published alias. OpenAlex-first passed, demonstrating the
+  provider-order defect rather than a generic date parser failure.
+
+RESTORED GREEN
+  The renderer now treats publication_date, published, publication_year, and
+  year as one semantic bibliography field. Any populated canonical alias
+  blocks provenance fallback for the entire group. If the canonical group is
+  empty, the first retained provenance snapshot with a date may fill it.
+EXIT_STATUS: 0
+RAW_CAPTURE_SHA256: 548cc51e53a6e37504a188e2b702194d4c61567fa30e3f9ce39f4c771301e763
+RAW_CAPTURE_BYTES: 883
+RESULT: 2 passed, 7 deselected in 2.20s
+
+ASSERTED OUTPUT
+  Crossref-first preserves 2025 and [[2025,6,1]] in the JSON projection and
+  reports 2025, never 2024, in Markdown and CSV. OpenAlex-first preserves 2024
+  and 2024-01-02 in JSON and reports 2024, never 2025, in Markdown and CSV.
+  The broader exact-source run includes both these cases and the existing
+  missing-canonical-value fallback cases.
