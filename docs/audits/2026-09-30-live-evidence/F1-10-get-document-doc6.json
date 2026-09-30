@@ -1,0 +1,67 @@
+{
+  "step": "F1-10-get-document-doc6",
+  "as": "owner",
+  "at": "2026-09-30T05:24:24.577475+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/documents/1299ae5f-c4c2-4169-95b2-cf6b3206969c",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "1299ae5f-c4c2-4169-95b2-cf6b3206969c",
+    "title": "DTMT: A Novel Deep Transition Architecture for Neural Machine Translation",
+    "filename": "1812.07807v2.pdf",
+    "document_type": "pdf",
+    "file_size_bytes": 297319,
+    "file_size_mb": 0.28354549407958984,
+    "mime_type": "application/pdf",
+    "processing_status": "indexed",
+    "tags": null,
+    "is_public": false,
+    "content_preview": "# Abstract\n\nPast years have witnessed rapid developments in Neural Machine Translation (NMT). Most recently, with advanced modeling and training techniques, the RNN-based NMT (RNMT) has shown its potential strength, even compared with the well-known Transformer (self-attentional) model. Although the RNMT model can possess very deep architectures through stacking layers, the transition depth between consecutive hidden states along the sequential axis is still shallow. In this paper, we further en...",
+    "content_summary": null,
+    "created_at": "2026-08-21T23:18:27.852118+00:00",
+    "updated_at": "2026-08-21T23:18:35.844510+00:00",
+    "uploaded_by_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "organization_id": "e050bd43-6b0b-4425-9848-1bc5ad9d5cc2",
+    "content_text": null,
+    "metadata": {
+      "title": "DTMT: A Novel Deep Transition Architecture for Neural Machine Translation",
+      "description": "Past years have witnessed rapid developments in Neural Machine Translation (NMT). Most recently, with advanced modeling and training techniques, the RNN-based NMT (RNMT) has shown its potential strength, even compared with the well-known Transformer (self-attentional) model. Although the RNMT model can possess very deep architectures through stacking layers, the transition depth between consecutive hidden states along the sequential axis is still shallow. In this paper, we further enhance the RN...",
+      "authors": [
+        "Fandong Meng",
+        "Jinchao Zhang"
+      ],
+      "publication_date": "2018-12-19T08:35:38+00:00",
+      "categories": [
+        "cs.CL"
+      ],
+      "tags": [
+        "cs.CL"
+      ],
+      "arxiv_id": "1812.07807v2",
+      "arxiv_categories": [
+        "cs.CL"
+      ],
+      "arxiv_primary_category": "cs.CL",
+      "journal_reference": null,
+      "doi": null,
+      "comment": "Accepted at AAAI 2019. Code is available at: https://github.com/fandongmeng/DTMT_InDec",
+      "source": "arxiv",
+      "language": "en",
+      "modality": "text",
+      "content_type": "academic_paper",
+      "num_pages": 8,
+      "pdf_path": "data/arxiv/1812.07807v2.pdf",
+      "has_full_text": true
+    },
+    "processing_started_at": null,
+    "processing_completed_at": null,
+    "processing_error": null,
+    "processing_retry_count": 0
+  }
+}

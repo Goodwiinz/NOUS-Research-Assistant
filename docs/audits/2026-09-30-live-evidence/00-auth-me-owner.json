@@ -1,0 +1,51 @@
+{
+  "step": "00-auth-me-owner",
+  "as": "owner",
+  "at": "2026-09-30T05:21:15.261680+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/auth/me",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "user": {
+      "email": "allocs16@gmail.com",
+      "first_name": "abdel",
+      "last_name": "el ",
+      "role": "user",
+      "is_active": true,
+      "organization_id": "e050bd43-6b0b-4425-9848-1bc5ad9d5cc2",
+      "last_login": null,
+      "login_count": 0,
+      "id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "created_at": "2026-04-06T23:47:34.430011+00:00",
+      "updated_at": "2026-04-06T23:47:34.430011+00:00",
+      "is_deleted": false,
+      "deleted_at": null,
+      "full_name": "abdel el "
+    },
+    "organization": {
+      "name": "testing",
+      "storage_tier": "free",
+      "storage_used_bytes": 40997146,
+      "storage_limit_bytes": 10737418240,
+      "is_active": true,
+      "do_kb_uuid": "6343a77f-7987-11f1-aee4-4e013e2ddde4",
+      "do_kb_provisioned_at": "2026-07-06T22:09:42.020879+00:00",
+      "id": "e050bd43-6b0b-4425-9848-1bc5ad9d5cc2",
+      "created_at": "2026-04-06T23:47:34.430011+00:00",
+      "updated_at": "2026-09-25T03:30:23.365220+00:00",
+      "is_deleted": false,
+      "deleted_at": null,
+      "storage_limit_gb": 10.0,
+      "storage_used_gb": 0.03818156756460667,
+      "storage_available_gb": 9.961818432435393,
+      "storage_percentage_used": 0.38181567564606667,
+      "max_file_size_mb": 10.0
+    }
+  }
+}
