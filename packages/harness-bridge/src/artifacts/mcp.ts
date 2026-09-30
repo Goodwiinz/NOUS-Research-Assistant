@@ -1,3 +1,4 @@
+import { ReauthenticationRequired, ToolRequestRejected } from "../mcp/client.ts";
 import type { LocalTool } from "../mcp/server.ts";
 import { ArtifactPathError, type ArtifactPublisher } from "./contracts.ts";
 
@@ -33,7 +34,7 @@ export function artifactsPublishTool(publisher: ArtifactPublisher): LocalTool {
       const relativePath = args.relative_path;
       const title = args.title;
       const publicationId = args.publication_id;
-      if (typeof relativePath !== "string" || typeof title !== "string" || !title.trim() || !uuid(publicationId))
+      if (typeof relativePath !== "string" || !relativePath.trim() || typeof title !== "string" || !title.trim() || !uuid(publicationId))
         return { text: "artifacts_publish requires relative_path, title and a UUID publication_id", isError: true };
       const artifactId = args.artifact_id;
       const expected = args.expected_parent_version_id;
@@ -51,8 +52,34 @@ export function artifactsPublishTool(publisher: ArtifactPublisher): LocalTool {
       } catch (error) {
         if (error instanceof ArtifactPathError)
           return { text: `${error.code}: ${error.message}`, isError: true };
-        throw error;
+        if (error instanceof ToolRequestRejected || error instanceof ReauthenticationRequired)
+          throw error; // the server maps these to stable tool errors
+        // Network failure, 5xx or a malformed reply: the backend may or may not
+        // have committed. Tell the model how to find out without duplicating.
+        const reason = error instanceof Error ? error.message : String(error);
+        console.error(`artifacts_publish outcome unknown: ${reason}`);
+        return {
+          text: `publication outcome unknown: ${reason}. Retry with the same publication_id ${publicationId}; NOUS returns the committed version or finishes it.`,
+          isError: true,
+        };
       }
+    },
+  };
+}
+
+/** Advertised in place of artifacts_publish when the bound root cannot be used. */
+export function unavailablePublishTool(root: string, reason: string): LocalTool {
+  return {
+    descriptor: {
+      name: "artifacts_publish",
+      description: `Unavailable: the registered output folder ${root} cannot be used (${reason}). Re-register the folder, then re-run nous-harness mcp install.`,
+      inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    },
+    async call() {
+      return {
+        text: `artifacts_publish unavailable: ${reason}. Re-register ${root} with nous-harness workspace add and re-run nous-harness mcp install.`,
+        isError: true,
+      };
     },
   };
 }

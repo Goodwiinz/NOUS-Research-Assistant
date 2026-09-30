@@ -100,7 +100,12 @@ export async function throwForStatus(
     throw new ToolRequestRejected(
       (await detailOf(response)) ?? messages.disabled ?? DISABLED_MESSAGE,
     );
-  if (!response.ok) throw new Error(`NOUS request failed (${response.status})`);
+  if (!response.ok) {
+    const detail = await detailOf(response);
+    throw new Error(
+      `NOUS request failed (${response.status})` + (detail ? `: ${detail}` : ""),
+    );
+  }
 }
 
 /** Scoped HTTPS facade over the backend read gateway. Reads only; never retries. */

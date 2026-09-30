@@ -1,6 +1,6 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ArtifactHttpClient } from "../artifacts/client.ts";
-import { artifactsPublishTool } from "../artifacts/mcp.ts";
+import { artifactsPublishTool, unavailablePublishTool } from "../artifacts/mcp.ts";
 import { createArtifactPublisher } from "../artifacts/publisher.ts";
 import { grantedRoot } from "../artifacts/snapshot.ts";
 import { CredentialStore } from "../credentials.ts";
@@ -26,10 +26,10 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
         ),
       );
     } catch (error) {
-      // Read tools stay available; publication is simply not offered.
-      console.error(
-        `artifacts_publish unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      // Read tools stay available; the publish tool stays visible and says why.
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`artifacts_publish unavailable: ${reason}`);
+      local.push(unavailablePublishTool(session.outputRoot, reason));
     }
   }
   const server = createNousMcpServer(

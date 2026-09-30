@@ -37,7 +37,17 @@ export function createNousMcpServer(
   );
   const local = new Map(localTools.map((tool) => [tool.descriptor.name, tool]));
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const catalog = (await client.listTools()).filter((tool) => {
+    let listed: ToolDescriptor[] = [];
+    try {
+      listed = await client.listTools();
+    } catch (error) {
+      // A read-gateway outage must not hide tools served locally.
+      if (localTools.length === 0) throw error;
+      console.error(
+        `NOUS tool catalog unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const catalog = listed.filter((tool) => {
       if (!local.has(tool.name)) return true;
       // A local tool always wins; never advertise two tools with one name.
       console.error(`NOUS catalog tool ${tool.name} shadowed by the local tool`);
@@ -79,6 +89,9 @@ export function createNousMcpServer(
         console.error(error.message);
         return { content: [{ type: "text", text: error.message }], isError: true };
       }
+      console.error(
+        `tool ${request.params.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       throw error;
     }
   });

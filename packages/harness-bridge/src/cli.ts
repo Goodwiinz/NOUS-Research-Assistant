@@ -358,10 +358,15 @@ export async function mcpInstallCommand(
     throw new Error("reconnect with --tools to authorize NOUS tools");
   // Publication binds one registered root, chosen explicitly when ambiguous.
   let root: string | undefined;
+  if (!state.scopes.includes("artifacts:publish") && options.root !== undefined)
+    throw new Error(
+      "--root requires artifacts:publish; reconnect with nous-harness connect --tools --publish",
+    );
   if (state.scopes.includes("artifacts:publish")) {
     const roots = state.workspaces.map((w) => w.root);
     if (options.root !== undefined) {
-      const chosen = resolve(options.root);
+      // Registered roots are stored realpath'd (e.g. /tmp -> /private/tmp).
+      const chosen = await realpath(options.root).catch(() => resolve(options.root!));
       if (!roots.includes(chosen))
         throw new Error("--root must name a registered workspace root");
       root = chosen;

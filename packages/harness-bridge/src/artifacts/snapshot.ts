@@ -26,6 +26,14 @@ export async function grantedRoot(path: string): Promise<GrantedOutputRoot> {
 function unsafe(reason: string): ArtifactPathError {
   return new ArtifactPathError("unsafe_path", `unsafe artifact path: ${reason}`);
 }
+const errno = (error: unknown): string =>
+  (error as NodeJS.ErrnoException)?.code ?? "unknown error";
+/** ENOENT is a missing file the model can fix; every other errno is named. */
+function refuse(error: unknown, what: string): ArtifactPathError {
+  if (errno(error) === "ENOENT")
+    return new ArtifactPathError("not_found", `${what} does not exist`);
+  return unsafe(`${what} unreadable (${errno(error)})`);
+}
 
 /**
  * Read one regular file under the granted root as a stable byte snapshot.
@@ -58,9 +66,10 @@ export async function readSnapshot(
     throw unsafe("path may not traverse");
 
   // The granted root must still be the same directory it was when bound.
-  const rootNow = await stat(root.path).catch(() => null);
+  const rootNow = await stat(root.path).catch((error: unknown) => {
+    throw refuse(error, "output root");
+  });
   if (
-    !rootNow ||
     !rootNow.isDirectory() ||
     rootNow.dev !== root.device ||
     rootNow.ino !== root.inode
@@ -71,14 +80,18 @@ export async function readSnapshot(
   let current = root.path;
   for (const segment of segments.slice(0, -1)) {
     current = join(current, segment);
-    const info = await lstat(current).catch(() => null);
-    if (!info || info.isSymbolicLink() || !info.isDirectory())
+    const info = await lstat(current).catch((error: unknown) => {
+      throw refuse(error, `directory ${segment}`);
+    });
+    if (info.isSymbolicLink() || !info.isDirectory())
       throw unsafe("ancestor is not a directory");
   }
   const fullPath = join(current, segments[segments.length - 1]!);
   await hooks.afterAncestors?.();
-  const before = await lstat(fullPath).catch(() => null);
-  if (!before || before.isSymbolicLink() || !before.isFile())
+  const before = await lstat(fullPath).catch((error: unknown) => {
+    throw refuse(error, "file");
+  });
+  if (before.isSymbolicLink() || !before.isFile())
     throw unsafe("not a regular file");
   if (before.nlink !== 1) throw unsafe("hard-linked file");
   if (before.size > maxBytes)
@@ -90,8 +103,11 @@ export async function readSnapshot(
     constants.O_RDONLY |
     constants.O_NONBLOCK |
     (process.platform === "darwin" ? O_NOFOLLOW_ANY : constants.O_NOFOLLOW);
-  const handle = await open(fullPath, flags).catch(() => {
-    throw unsafe("cannot open file without following a symlink");
+  const handle = await open(fullPath, flags).catch((error: unknown) => {
+    // Only ELOOP means a symlink was refused; name any other errno honestly.
+    if (errno(error) === "ELOOP")
+      throw unsafe("cannot open file without following a symlink");
+    throw refuse(error, "file");
   });
   try {
     const opened = await handle.stat();
@@ -106,8 +122,12 @@ export async function readSnapshot(
       throw unsafe("file changed while opening");
     if (process.platform === "linux") {
       // Where the descriptor really points, independent of the path walked.
-      const target = await realpath(`/proc/self/fd/${handle.fd}`).catch(() => null);
-      if (target === null || !target.startsWith(root.path + "/"))
+      const target = await realpath(`/proc/self/fd/${handle.fd}`).catch(
+        (error: unknown) => {
+          throw unsafe(`cannot verify the descriptor path (/proc: ${errno(error)})`);
+        },
+      );
+      if (!target.startsWith(root.path + "/"))
         throw unsafe("descriptor resolved outside the root");
     }
     await hooks.afterOpen?.();

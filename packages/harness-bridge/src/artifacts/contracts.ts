@@ -28,8 +28,8 @@ export interface ArtifactPublisher {
 }
 
 export class ArtifactPathError extends Error {
-  readonly code: "unsafe_path" | "too_large";
-  constructor(code: "unsafe_path" | "too_large", message: string) {
+  readonly code: "unsafe_path" | "too_large" | "not_found";
+  constructor(code: "unsafe_path" | "too_large" | "not_found", message: string) {
     super(message);
     this.code = code;
   }
