@@ -1283,3 +1283,52 @@ Collection `FOR UPDATE`, which is the documented lock order (Workspace
 The post-lock role reload in `resolve_project` (the role-revocation race in
 `-k stale`) is already mutation-verified in
 `test_research_authorization_concurrency.py` and is not repeated here.
+
+## GOO-303 full-text acquisition and derived PRISMA flow — 2026-09-29
+
+Six guards were mutation-verified against
+`backend/tests/integration/test_acquisition_prisma_postgres.py` (and, for the
+pure duplicate-row check, `backend/tests/unit/services/test_prisma_flow.py`)
+on a disposable local PostgreSQL 14.23 database. The fixture reuses GOO-301's
+`screening_factory`, which drops the acquisition, resolution, screening,
+import and identity tables and rebuilds them through revisions `c9d2e4f6a8b1`
+-> `d4e6f8a0b2c3` -> `e1f3a5c7d9b2` -> `f3b5d7e9a1c4` -> `f2a4c6e8b0d3`.
+Pre-mutation SHA-256:
+
+- `backend/src/services/research_engine/acquisition_service.py`
+  `72322987dd65a9122f878d06d08b089aef84afce696017cf3165c188c7ecdfa9`
+- `backend/src/services/research_engine/screening_service.py`
+  `8aa2bc7579247c2b1338c8cb20ab24e52a33959b71fa8e1d3ba16d1ee96286ff`
+- `backend/src/services/research_engine/prisma.py`
+  `e858d6b409571d2c6d82d1ec1eb8a64ce67b61484b3d82e3342a6310b9efe7f2`
+- `backend/src/services/research_engine/prisma_service.py`
+  `b4103b0f134da8582b2cb1f25b93fb4065edf14c040fe7835dce4cb2e894bf65`
+
+Each mutant was applied with a scripted string replacement (the script
+asserted the exact match count), run, then restored from a copy of the
+pre-mutation file. `cmp` against that copy and `git diff --quiet` succeeded
+for every restored file, and the full file passed again (`4 passed`). No
+mutant was committed.
+
+Command (connection URL supplied from the environment, value omitted):
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/integration/test_acquisition_prisma_postgres.py -k <selector>
+```
+
+| Guard (line) | Mutation | Selector | Observed mutant failure |
+|---|---|---|---|
+| Head check in `record_attempt` (`acquisition_service.py:314`) | condition prefixed with `False and` | `concurrent` | `IntegrityError ... duplicate key value violates unique constraint "uq_research_fulltext_attempt_head"` in the blocked writer, instead of 409 `Attempt is stale; reload acquisition state`. The partial unique index is the backstop; the service check is what turns it into a stable 409. |
+| Idempotent replay in `request_fulltext` and `record_attempt` (`acquisition_service.py:230,290`) | both conditions prefixed with `False and` | `recomputes` | `HTTPException: 409: Full text already requested` on the replayed request. |
+| Idempotent replay in `record_attempt` only (`acquisition_service.py:290`) | condition prefixed with `False and` | `recomputes` | `HTTPException: 409: Full text already retrieved` on the replayed r3 retry. |
+| Full-text retrieved gate in `screening_service.submit` (`screening_service.py:1061`) | condition prefixed with `False and` | `concurrent` | `DID NOT RAISE HTTPException`: the full-text exclude on the `unavailable` report landed after the lock was released. |
+| Duplicate-row check `prisma._unique` (`prisma.py:102`) | body replaced with `return` | `duplicate` (unit file) | `test_duplicate_input_rows_raise[record]`: `DID NOT RAISE PrismaInconsistency`. The `attempt` and `outcome` cases still raise through the chain-linearity checks (`prisma.py:174,225`). |
+| `_begin_snapshot` writer refusal (`prisma_service.py:58`) | ` or wrote is not None` removed | `snapshot` | `DID NOT RAISE RuntimeError`: the loader ran inside a transaction that had already flushed an `UPDATE`. |
+| `_begin_snapshot` isolation (`prisma_service.py:61`) | `execution_options={"isolation_level": "REPEATABLE READ"}` removed | `snapshot` | `assert 'read committed' == 'repeatable read'` from `SHOW transaction_isolation`. |
+
+**Plan deviation.** The plan's fourth mutant ("make the loader join attempts
+without `DISTINCT`/head filtering; test 1 fails with inflated `sought`") was
+not applied as written: the loader's request-attempt outer join
+(`prisma_service.py:231-243`) already has no `DISTINCT` or head filter, and
+heads are derived in the pure function. Doubled rows are therefore caught only
+by `_unique` and the chain-linearity checks, which is what was mutated.
