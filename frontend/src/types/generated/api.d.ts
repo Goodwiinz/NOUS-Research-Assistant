@@ -3898,6 +3898,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Connections */
+        get: operations["get_connections_api_v1_integrations_connections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices": {
         parameters: {
             query?: never;
@@ -3910,6 +3927,23 @@ export interface paths {
         put?: never;
         /** Create Device */
         post: operations["create_device_api_v1_integrations_devices_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/devices/{device_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Disconnect Device */
+        post: operations["post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3996,6 +4030,23 @@ export interface paths {
         put?: never;
         /** Exchange Grant Request */
         post: operations["exchange_grant_request_api_v1_integrations_grant_requests__request_id__exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/grant-requests/{request_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Revoke Consent */
+        post: operations["post_revoke_consent_api_v1_integrations_grant_requests__request_id__revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11811,6 +11862,44 @@ export interface components {
              * @description Whether the user confirms the action
              */
             confirmed: boolean;
+        };
+        /** ConnectedDevice */
+        ConnectedDevice: {
+            /**
+             * Connected At
+             * Format: date-time
+             */
+            connected_at: string;
+            /** Consents */
+            consents: components["schemas"]["ConnectionConsent"][];
+            /**
+             * Device Id
+             * Format: uuid
+             */
+            device_id: string;
+            /** Device Label */
+            device_label: string;
+        };
+        /** ConnectionConsent */
+        ConnectionConsent: {
+            /** Approved At */
+            approved_at?: string | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Label */
+            project_label: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Scopes */
+            scopes: string[];
+            /** Status */
+            status: string;
         };
         /**
          * ConnectorCapabilityResponse
@@ -26091,6 +26180,26 @@ export interface operations {
             };
         };
     };
+    get_connections_api_v1_integrations_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedDevice"][];
+                };
+            };
+        };
+    };
     get_devices_api_v1_integrations_devices_get: {
         parameters: {
             query?: never;
@@ -26132,6 +26241,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DeviceDTO"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26328,6 +26466,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["IssuedGrant"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_revoke_consent_api_v1_integrations_grant_requests__request_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
