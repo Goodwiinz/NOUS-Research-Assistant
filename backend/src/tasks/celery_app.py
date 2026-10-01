@@ -42,6 +42,7 @@ celery_app = Celery(
         "src.tasks.research_run_tasks",
         "src.tasks.artifact_tasks",
         "src.tasks.integration_action_tasks",
+        "src.tasks.deposit_tasks",
     ],
 )
 
@@ -122,6 +123,7 @@ celery_app.conf.update(
         },
         "src.tasks.artifact_tasks.drain_artifacts": {"queue": "agent_runs"},
         "src.tasks.artifact_tasks.sweep_artifact_uploads": {"queue": "agent_runs"},
+        "src.tasks.deposit_tasks.drain_deposits": {"queue": "agent_runs"},
         "src.tasks.integration_action_tasks.drain_integration_actions": {
             "queue": "agent_runs"
         },
@@ -137,6 +139,10 @@ celery_app.conf.update(
         "drain-artifacts": {
             "task": "src.tasks.artifact_tasks.drain_artifacts",
             "schedule": 2.0,
+        },
+        "drain-deposits": {  # GOO-318: one phase per queued deposit
+            "task": "src.tasks.deposit_tasks.drain_deposits",
+            "schedule": 10.0,
         },
         "sweep-artifact-uploads": {
             "task": "src.tasks.artifact_tasks.sweep_artifact_uploads",
@@ -189,6 +195,10 @@ celery_app.conf.update(
             # R5-M17: worker death bricked runs in RUNNING forever.
             "task": "src.tasks.research_run_tasks.sweep_stale_research_runs",
             "schedule": 1800.0,  # every 30 min; stale threshold is 2h
+        },
+        "sweep-expired-reruns": {  # GOO-313: expired rerun leases
+            "task": "src.tasks.research_run_tasks.sweep_expired_reruns",
+            "schedule": 60.0,
         },
         "reconcile-lost-processing-jobs": {
             "task": "src.tasks.reconcile_jobs.reconcile_lost_processing_jobs",

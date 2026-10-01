@@ -17,6 +17,10 @@ import { useResearchEngineStore } from '@/store/research-engine-store';
 const push = vi.fn();
 const back = vi.fn();
 
+// GOO-312: the reproducibility section owns its own query; tested apart.
+vi.mock('../RunReproducibility', () => ({ RunReproducibility: () => null }));
+vi.mock('../RunRerun', () => ({ RunRerun: () => null }));
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push, back }),
 }));
