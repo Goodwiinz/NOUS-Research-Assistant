@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { CredentialStore } from "./credentials.ts";
+import { GrantKeeper } from "./grants.ts";
 import { record } from "./rpc.ts";
 import { apiBase, type McpSession } from "./mcp/client.ts";
 import {
@@ -165,6 +166,9 @@ export async function connect(
   const credentialHandle = await store.save({
     accessToken: auth.token,
     grantToken: grant.token,
+    ...(uuid(grant.grant_id)
+      ? { grantId: grant.grant_id, renewedAt: Date.now() }
+      : {}),
   });
   // A reconnect (e.g. to add --publish) must not drop registered folders:
   // re-register each root with the new device so managed runs and
@@ -277,6 +281,13 @@ export async function runBridge(
   };
   const url = new URL(apiBase(state.apiUrl) + "/harness/connect");
   url.protocol = "wss:";
+  // The socket re-checks the grant on every frame; keep it renewed before the
+  // 15-minute expiry. A renewal revokes the old token, so the open socket is
+  // closed on its next frame and the loop below reconnects with the new one.
+  const keeper = new GrantKeeper(store, state.credentialHandle, apiBase(state.apiUrl));
+  const stopRenewal = keeper.keepFresh((error) =>
+    console.error(error instanceof Error ? error.message : String(error)),
+  );
   try {
     while (!signal.aborted) {
       // Local native evidence and the expiry watchdog must work even while the
@@ -296,7 +307,7 @@ export async function runBridge(
         await connectBridge({
           url: url.href,
           deviceId: state.deviceId,
-          credentials: await store.load(state.credentialHandle),
+          credentials: await keeper.current(),
           journal,
           signal,
           adapterFor,
@@ -319,6 +330,7 @@ export async function runBridge(
         });
     }
   } finally {
+    stopRenewal();
     // No local unlock on shutdown: app-server children may outlive this process.
     for (const adapter of adapters.values()) await adapter.closeSession();
     journal.close();
