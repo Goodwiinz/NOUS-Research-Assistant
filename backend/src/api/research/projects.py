@@ -511,15 +511,20 @@ async def add_document_to_project(
             matrix_result = await db.execute(matrix_query)
             matrices = matrix_result.scalars().all()
 
+            from src.services.research.extraction_forms_service import (
+                extraction_task_kwargs,
+            )
+
             for m in matrices:
                 task_id = f"auto-doc-{uuid.uuid4().hex[:12]}"
+                try:
+                    kwargs = await extraction_task_kwargs(
+                        db, m, [document_id], current_user.id, task_id
+                    )
+                except HTTPException:  # no form version: nothing to extract into
+                    continue
                 run_extraction_matrix.apply_async(
-                    kwargs={
-                        "matrix_id": str(m.id),
-                        "document_ids": [str(document_id)],
-                        "columns": m.columns,
-                        "task_id": task_id,
-                    },
+                    kwargs=kwargs,
                     task_id=task_id,
                     queue="low_priority",
                 )

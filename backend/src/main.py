@@ -67,6 +67,7 @@ from src.api.realtime import (
 from src.api.research import (
     chat_router,
     citations_router,
+    claims_router,
     drafts_router,
     export_router,
     extraction_matrix_router,
@@ -79,6 +80,7 @@ from src.api.research import (
     writer_router,
 )
 from src.api.research_engine import (
+    research_engine_acquisition_router,
     research_engine_blueprints_router,
     research_engine_capabilities_router,
     research_engine_corpus_router,
@@ -87,6 +89,7 @@ from src.api.research_engine import (
     research_engine_protocols_router,
     research_engine_reviews_router,
     research_engine_runs_router,
+    research_engine_screening_router,
     research_engine_steps_router,
 )
 from src.api.search import knowledge_graph_router, search_quality_router, search_router
@@ -642,6 +645,7 @@ app.include_router(project_report_router)  # GET /api/v1/projects/{id}/report.ht
 app.include_router(project_skills_router)  # Project skill catalog and staged approvals
 app.include_router(project_chat_router)  # Project-Chat integration endpoints
 app.include_router(drafts_router)  # Research Assistant drafts endpoints
+app.include_router(claims_router)  # GOO-306 versioned claims and evidence links
 app.include_router(tone_engine_router)  # Scholarly Tone Engine endpoints
 app.include_router(extraction_matrix_router)  # Extraction Matrix endpoints
 app.include_router(writer_router)  # AI Writer endpoints
@@ -674,8 +678,14 @@ app.include_router(
     research_engine_identities_router, prefix="/api/v1"
 )  # Research Engine report/study identities (GOO-299)
 app.include_router(
+    research_engine_screening_router, prefix="/api/v1"
+)  # Research Engine screening queues (GOO-301)
+app.include_router(
     research_engine_corpus_router, prefix="/api/v1"
 )  # Research Engine search import, citation chase, corpus export (GOO-300)
+app.include_router(
+    research_engine_acquisition_router, prefix="/api/v1"
+)  # Research Engine full-text acquisition + PRISMA flow (GOO-303)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search

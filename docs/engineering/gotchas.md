@@ -5,8 +5,9 @@ These are hard-won invariants — verify against code before assuming one has ch
 
 ## Database & environment
 
-- Local compose DB = container `rag-postgres-1` / database `multimodal_rag_dev` (not `rag-db-dev`). DOKS `dev` cluster = **Supabase** managed (`SUPABASE_DB_URL` overrides `DATABASE_URL`).
-- Only `dev` is live (ArgoCD auto-sync from `develop`, namespace `rag-dev`). `staging` + `production` ArgoCD apps retired 2026-04-29 (PR #442); their values files remain and the gitops workflow still bumps staging tags nothing consumes.
+- Local compose DB = container `rag-postgres-1` / database `multimodal_rag_dev` (not `rag-db-dev`). AWS application SQL uses **RDS PostgreSQL** via `aws-database-credentials`; `SUPABASE_DB_URL` is deliberately blank in the AWS overlay so it cannot override `DATABASE_URL`. Supabase remains the auth/auxiliary service, with its own migrations.
+- Current deployment source (checked 2026-10-01 against `057681871797ac4c6c2f1804c2ab47f2b5fddba2`): [AWS Argo application](../../infrastructure/argocd/applications/aws-dev.yaml), `nous-dev-aws`, EKS `nous-dev-cluster` in `us-east-1`, namespace `multimodal-rag-system`, base values plus `values-aws.yaml`, tracking `develop`. API: `dev-api.goodwiinz.tech`; frontend: Vercel `goodwiinz.tech`. The old DOKS `rag-dev` context is retired rollback material. Staging/production Argo apps were retired 2026-04-29 (PR #442); their values files remain render fixtures.
+- The AWS migration rollout contract uses one digest-pinned Job in Argo wave 1; API, worker, beat and synthetic consumers advance in wave 2 only after success. Shared secrets/service accounts remain wave 0. A failed Job blocks rollout and is retained for diagnosis; deleting/retrying it requires explicit operational authorization. See the [chart migration contract](../../infrastructure/helm/knowledge-graph-analytics/README.md#database-migrations).
 - Qdrant is removed — retrieval migrated to DO KB (`backend/src/services/do_kb/`, behind `DO_KB_ENABLED`, currently off; live retrieval is PostgreSQL fulltext). Legacy non-ArgoCD charts/manifests still carry dead Qdrant refs; not deployed.
 
 ## API
@@ -33,7 +34,7 @@ These are hard-won invariants — verify against code before assuming one has ch
 
 ## Storage
 
-- `Document.storage_path` = bare object key; `file_path` = `s3://bucket/key` (or `supabase://...`, or a local path). Serving + deleting branch on `storage_backend` — s3 (DO Spaces) is the deployed default.
+- `Document.storage_path` = bare object key; `file_path` = `s3://bucket/key` (or `supabase://...`, or a local path). Serving + deleting branch on `storage_backend` — AWS S3 is the deployed default; DO Spaces belongs to the retired overlay.
 - Upload commits the object to storage _before_ the DB rows, so any post-upload failure must compensating-delete the object (`_best_effort_delete_object`) and revert quota, else it orphans the object and a PENDING row that content-hash dedup then blocks from re-upload.
 
 ## Agent (LangGraph)
