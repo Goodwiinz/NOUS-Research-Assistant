@@ -39,11 +39,14 @@ _BARE_CONVERSATION_RE = _bare(f"{_GREETING_WORDS}|{_ACK_WORDS}")
 
 # An assistant turn that asks or offers something: a bare ack after it may be
 # the user accepting a proposed tool action (R8-A4, trace 019f33ca), which a
-# tool-less Luna reply cannot carry out.
+# tool-less Luna reply cannot carry out. Declarative offers count too ("I can
+# ingest these for you.", "... if you'd like."); refusals ("I can't", "I
+# cannot", "I could not") do not.
 _AWAITS_REPLY_RE = re.compile(
     r"\?\s*$|\b(?:"
     r"shall i|should i|(?:do|would) you (?:like|want)|want me to|let me know|"
-    r"confirm|proceed"
+    r"confirm|proceed|i can(?!['\u2019]t)|i could(?! not)|happy to|"
+    r"if you(?:['\u2019]d| would)? (?:like|want|prefer)"
     r")\b",
     re.IGNORECASE,
 )

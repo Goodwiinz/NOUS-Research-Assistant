@@ -63,6 +63,11 @@ def test_ack_accepting_proposal_on_project_page_fails_closed():
         "I found 3 papers. Would you like me to add them? 1. A 2. B 3. C",
         "I can ingest these for you, just let me know.",
         "Want me to proceed with the import",
+        "I can search for more results if you'd like.",
+        "I can ingest these for you.",
+        "I could add them to your project.",
+        "Happy to summarize the second paper too.",
+        "If you\u2019d like, I\u2019ll compare them.",
     ],
 )
 @pytest.mark.parametrize("ack", ["ok", "Okay!", "great", "thanks"])
@@ -84,6 +89,24 @@ def test_ack_on_grounded_page_fails_closed(page_type):
 
     assert decision.eligible is False
     assert decision.reason == "grounded_page_context"
+
+
+@pytest.mark.parametrize(
+    "assistant",
+    [
+        "Here are the results.",
+        "I can't find that paper in your library.",
+        "I cannot access live sources.",
+        "I could not find a match.",
+    ],
+)
+def test_ack_after_statement_or_refusal_keeps_fast_path(assistant):
+    decision = _decide(
+        "thanks", use_rag=True, history=[_message("assistant", assistant)]
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "bare_conversation"
 
 
 def test_ack_after_plain_statement_keeps_fast_path():
