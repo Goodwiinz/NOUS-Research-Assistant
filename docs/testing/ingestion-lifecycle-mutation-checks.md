@@ -49,3 +49,29 @@ Verified on `741b3b637` against local PostgreSQL 2026-10-01.
   tests/integration/test_document_deletion_postgres.py::test_deleted_ingestion_is_not_claimed`
 - **Observed:** `assert <JobStatus.QUEUED> == <JobStatus.CANCELLED>`: the
   deleted document's job stayed queued.
+
+## GOO-357: a running worker cannot write after it lost the job
+
+Verified on `cded11004` against local PostgreSQL 2026-10-01. Task-level tests
+are in `tests/unit/tasks/test_ingestion_stage_guard_postgres.py` (here, not
+under `tests/integration/`, because that conftest mocks Redis, which breaks
+Celery's eager `.apply()`). The helper matrix is
+`tests/unit/tasks/test_processing_lifecycle.py`.
+
+**Red before the fix:** with the pre-fix `processing_tasks.py` from the GOO-356
+branch, 5 of 8 task-level tests fail. Cancelled, deleted and superseded
+attempts all finish `completed` with live entities; a cancel at finalize still
+completes; a crash after cancellation writes FAILED over CANCELLED.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G4 stage commits, `processing_tasks.py:318` `commit_if_active` | `return db.commit()` before the check | `test_cancel_after_extraction_blocks_stage_commit` (3 cases) | `assert 2 == 0` live entities |
+| G5 completion check, `processing_tasks.py:456` | check call replaced by a no-op | `test_cancel_before_final_completion_keeps_cancelled` | `KeyError: 'skipped'` (task completed) |
+| G6 failure-path ownership, `processing_tasks.py:516` | check replaced by plain `db.get` | `test_failure_after_cancellation_does_not_overwrite_cancelled` | `FAILED == CANCELLED` |
+| G7 `on_failure`, `processing_tasks.py:217` | `not job.is_finished` → `True` | same | `FAILED == CANCELLED` |
+| G8 task-id check, `processing_lifecycle.py:92` | `if False:` | `[_newer_retry-superseded]` + `test_lost_attempt_is_stopped[_supersede-*]` | completed / `DID NOT RAISE` |
+| G9 explicit flush, `processing_lifecycle.py:54` | removed | `test_live_attempt_passes_and_keeps_pending_stage_changes` | `assert None == 'extracted'` (refresh discarded the stage result) |
+
+An earlier G6 mutant (`rollback` → `raise`) survived because the raise landed
+in the outer `except` and wrote nothing. It was not a guard removal, so it was
+replaced by the plain-`db.get` mutant above.
