@@ -444,9 +444,9 @@ async def accepted_delta(
 
 async def _baseline_digest(db: AsyncSession, result: Any, execution: Any) -> str:
     if result.baseline_execution_id is not None:
-        previous = await db.get(R, result.baseline_execution_id)
+        previous: Any = await db.get(R, result.baseline_execution_id)
         return cast(str, previous.corpus_snapshot["digest"])
-    root = await db.get(S, execution.schedule_id)
+    root: Any = await db.get(S, execution.schedule_id)
     return cast(str, root.baseline_digest)
 
 
@@ -845,7 +845,7 @@ async def _start(
     if started and now - started[-1].created_at < STALE_EXECUTION:
         await db.rollback()
         return "running", None
-    version = await db.get(S, execution.schedule_version_id)
+    version: Any = await db.get(S, execution.schedule_version_id)
     tip = (
         await db.execute(_tips().where(S.schedule_id == execution.schedule_id))
     ).scalar_one()
@@ -1082,7 +1082,7 @@ async def _baseline(
     ).scalar_one_or_none()
     if previous is not None:
         return cast(UUID, previous.execution_id), dict(previous.corpus_snapshot)
-    root = await db.get(S, job["schedule_id"])
+    root: Any = await db.get(S, job["schedule_id"])
     return None, dict(root.baseline_snapshot)
 
 
@@ -1168,7 +1168,7 @@ async def _chase(
                 outcome["receipt_id"] = str(receipt.id)
             except HTTPException as error:
                 await db.rollback()
-                detail = error.detail
+                detail: Any = error.detail
                 outcome["error"] = (
                     detail.get("code") if isinstance(detail, dict) else str(detail)
                 )
