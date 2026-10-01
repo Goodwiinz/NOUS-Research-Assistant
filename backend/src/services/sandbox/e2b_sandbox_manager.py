@@ -79,7 +79,8 @@ MAX_EXECUTIONS_PER_RUN = 5
 
 # GOO-312: one-shot isolated execution for the research ``analyze`` step.
 ISOLATED_WORKDIR = "/work"
-_REQUIREMENTS_PATH = "/tmp/nous-requirements.txt"
+# Path inside the throwaway E2B sandbox, never on this host.
+_REQUIREMENTS_PATH = "/tmp/nous-requirements.txt"  # nosec B108
 
 
 @dataclass(frozen=True)
