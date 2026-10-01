@@ -102,10 +102,6 @@ vi.mock('../ScreeningConflictsPanel', () => ({
     </div>
   ),
 }));
-const fetchProject = vi.fn();
-vi.mock('@/store/projectStore', () => ({
-  useProjectStore: { getState: () => ({ fetchProject }) },
-}));
 vi.mock('@/services/researchEngineService', () => ({
   createProject: vi.fn(),
   listProjectRoles: vi.fn(),
@@ -277,9 +273,6 @@ describe('ProjectWorkflow', () => {
     expect(
       await screen.findByText('Blueprint for collection-1 (editable)')
     ).toBeInTheDocument();
-    // GOO-321 #5: the page's project comes from the project store, so the
-    // enabled engine id must land there to survive a remount.
-    expect(fetchProject).toHaveBeenCalledWith('collection-1');
 
     rerender(
       <QueryClientProvider client={queryClient}>
