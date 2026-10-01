@@ -853,7 +853,8 @@ async def _clear_stale_pending_confirmation(
     resets these on a normal turn entry, but clearing them here makes the
     invariant local to this function so future graph refactors that bypass
     ``preprocessing_node`` cannot silently inherit a stale counter from the
-    abandoned turn.
+    abandoned turn. Separate from ``turn_reset_fields`` because a pending
+    interrupt task survives any input dict; only a checkpoint write clears it.
 
     Returns the list of dropped tool name(s) when state was cleared, or None
     when nothing needed clearing, so callers can observe the drop.
@@ -2551,6 +2552,7 @@ async def _run_agent_graph(
                 create_runtime_snapshot,
                 runtime_config_fields,
                 runtime_state_fields,
+                turn_reset_fields,
             )
 
             runtime_snapshot = await create_runtime_snapshot(
@@ -2564,34 +2566,18 @@ async def _run_agent_graph(
             initial_state = {
                 "messages": messages,
                 "page_context": page_context,
-                "retrieved_contexts": [],
+                **turn_reset_fields(),
                 "attachment_ids": [
                     str(document_id)
                     for document_id in (getattr(request, "attachment_ids", None) or [])
                 ],
-                "attachment_status": [],
-                "tool_executions": [],
                 "thread_id": request.thread_id or "",
                 "thread_persistence": (
                     THREAD_PERSISTENCE_DURABLE
                     if resolved_thread_id is not None
                     else THREAD_PERSISTENCE_EPHEMERAL
                 ),
-                "turn_index": 0,
-                "tool_loop_count": 0,
-                "error_count": 0,
-                "last_error": "",
-                "pending_confirmation": {},
-                "user_confirmed": False,
-                "intent": "",
-                "user_memories": [],
                 "project_memories": project_memories,
-                "plan": [],
-                "plan_reasoning": "",
-                "reflection_count": 0,
-                "compaction_count": 0,
-                "intent_confidence": 0.0,
-                "last_error_info": {},
                 "user_id": str(current_user.id),
                 "model": request.model,
                 "use_rag": request.use_rag,
