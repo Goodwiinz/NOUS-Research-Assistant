@@ -140,7 +140,7 @@ async def _seed_draft(w: Any) -> tuple[UUID, dict[str, UUID]]:
 async def _download(client: AsyncClient, base: str, fmt: str) -> bytes:
     response = await client.get(f"{base}?format={fmt}")
     assert response.status_code == 200, response.text
-    return response.content
+    return cast(bytes, response.content)
 
 
 async def test_release_and_draft_reference_exports_reconcile_and_stay_immutable(
