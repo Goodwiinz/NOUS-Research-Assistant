@@ -34,7 +34,8 @@ FIRST_VERSION_CHECK = "(supersedes_claim_version_id IS NULL) = (version_no = 1)"
 SPAN_CHECK = "0 <= start_char AND start_char < end_char"
 INITIAL_VERSION = "supersedes_claim_version_id IS NULL"
 LINK_KIND_CHECK = (
-    "kind IN ('extraction','source_span','legacy_unanchored','synthesis_result')"
+    "kind IN ('extraction','source_span','legacy_unanchored','synthesis_result',"
+    "'figure')"
 )
 LINK_STATUS_CHECK = "status IN ('linked','withdrawn')"
 LINK_WITHDRAWAL_CHECK = "status <> 'withdrawn' OR supersedes_link_id IS NOT NULL"
@@ -42,23 +43,30 @@ LINK_SHAPE_CHECK = (
     "(kind = 'extraction' AND accepted_value_id IS NOT NULL"
     " AND document_id IS NOT NULL AND source_hash IS NOT NULL"
     " AND draft_citation_id IS NULL AND start_char IS NULL"
-    " AND end_char IS NULL AND quote IS NULL AND synthesis_result_id IS NULL)"
+    " AND end_char IS NULL AND quote IS NULL AND synthesis_result_id IS NULL"
+    " AND figure_id IS NULL)"
     " OR (kind = 'source_span' AND document_id IS NOT NULL"
     " AND source_hash IS NOT NULL AND text_sha256 IS NOT NULL"
     " AND start_char IS NOT NULL AND end_char IS NOT NULL"
     " AND 0 <= start_char AND start_char < end_char AND quote IS NOT NULL"
     " AND accepted_value_id IS NULL AND draft_citation_id IS NULL"
-    " AND synthesis_result_id IS NULL)"
+    " AND synthesis_result_id IS NULL AND figure_id IS NULL)"
     " OR (kind = 'legacy_unanchored' AND draft_citation_id IS NOT NULL"
     " AND accepted_value_id IS NULL AND source_hash IS NULL"
     " AND text_sha256 IS NULL AND start_char IS NULL AND end_char IS NULL"
-    " AND quote IS NULL AND synthesis_result_id IS NULL)"
+    " AND quote IS NULL AND synthesis_result_id IS NULL AND figure_id IS NULL)"
     # GOO-311: a pooled estimate cites a synthesis result, never a source.
     " OR (kind = 'synthesis_result' AND synthesis_result_id IS NOT NULL"
     " AND accepted_value_id IS NULL AND document_id IS NULL"
     " AND source_hash IS NULL AND text_sha256 IS NULL"
     " AND draft_citation_id IS NULL AND start_char IS NULL"
-    " AND end_char IS NULL AND quote IS NULL)"
+    " AND end_char IS NULL AND quote IS NULL AND figure_id IS NULL)"
+    # GOO-312: a manuscript figure cites one exact run output.
+    " OR (kind = 'figure' AND figure_id IS NOT NULL"
+    " AND accepted_value_id IS NULL AND document_id IS NULL"
+    " AND source_hash IS NULL AND text_sha256 IS NULL"
+    " AND draft_citation_id IS NULL AND start_char IS NULL"
+    " AND end_char IS NULL AND quote IS NULL AND synthesis_result_id IS NULL)"
 )
 STANCE_CHECK = "stance IN ('supporting','opposing','neutral','not_addressed')"
 ASSESSMENT_STANCE_CHECK = (
@@ -188,6 +196,7 @@ class ResearchClaimEvidenceLink(Base):
     end_char = Column(Integer, nullable=True)
     quote = Column(Text, nullable=True)
     synthesis_result_id = _fk("synthesis_results", nullable=True)
+    figure_id = _fk("research_figures", nullable=True)
     status = Column(String(16), nullable=False, default="linked")
     supersedes_link_id: Column = _fk("research_claim_evidence_links", nullable=True)
     created_by_id = _fk("users")

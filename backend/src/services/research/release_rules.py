@@ -32,7 +32,10 @@ BLOCKER_CODES = (
     "retracted_source",
 )
 # GOO-311: a pooled estimate cites its synthesis result, which pins its inputs.
-ANCHORED_LINK_KINDS = frozenset({"extraction", "source_span", "synthesis_result"})
+# GOO-312: a manuscript figure cites one exact run output, which pins its run.
+ANCHORED_LINK_KINDS = frozenset(
+    {"extraction", "source_span", "synthesis_result", "figure"}
+)
 Status = Literal["candidate", "verified", "stale"]
 Node = tuple[str, str]
 

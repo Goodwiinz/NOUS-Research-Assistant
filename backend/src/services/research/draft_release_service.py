@@ -169,6 +169,8 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
             )
         elif row.kind == "synthesis_result":  # GOO-311
             parent = rules.node("synthesis", row.synthesis_result_id)
+        elif row.kind == "figure":  # GOO-312
+            parent = rules.node("figure", row.figure_id)
         else:
             continue
         edges.append((parent, rules.node("link", row.id)))
@@ -189,11 +191,15 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
     # GOO-309: appraisals hang off accepted values, sources and protocols.
     # GOO-310: evidence tables, contradictions and certainty hang off accepted
     # values, protocols and appraisals. GOO-311: synthesis results hang off
-    # evidence tables and protocols. Local imports: these services read this
-    # graph for their stale flags.
+    # evidence tables and protocols. GOO-312: figures hang off runs, which
+    # hang off their input revisions. Local imports: these services read this
+    # graph for their stale flags. GOO-315: verified manuscript releases hang
+    # off their draft release.
+    from src.services.research import manuscript_release_service
     from src.services.research_engine import (
         appraisal_service,
         evidence_service,
+        experiment_service,
         synthesis_service,
     )
 
@@ -202,6 +208,8 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
         appraisal_service.graph_part,
         evidence_service.graph_part,
         synthesis_service.graph_part,
+        experiment_service.graph_part,
+        manuscript_release_service.graph_part,
     ):
         more_edges, more_changed = await part(db, collection_id)
         edges += more_edges

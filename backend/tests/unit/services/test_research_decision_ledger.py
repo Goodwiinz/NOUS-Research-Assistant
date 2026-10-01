@@ -12,12 +12,18 @@ from src.services.research_decisions.ledger import (
     _validate_acquisition_transitions,
     _validate_appraisal_transitions,
     _validate_claims_transitions,
+    _validate_deposit_transitions,
     _validate_event,
     _validate_evidence_transitions,
+    _validate_experiment_transitions,
     _validate_extraction_transitions,
     _validate_identity_transitions,
+    _validate_manuscript_transitions,
+    _validate_peer_review_transitions,
     _validate_release_transitions,
+    _validate_reproduction_transitions,
     _validate_screening_transitions,
+    _validate_statements_transitions,
     _validate_synthesis_transitions,
     decision_request_fingerprint,
     replay_screening_resolutions,
@@ -2638,3 +2644,865 @@ def test_release_staled_accepts_synthesis_cause() -> None:
     payload["cause"] = {**payload["cause"], "family": "research_nonsense"}
     with pytest.raises(DecisionValidationError, match="cause"):
         r.validate("release.staled", payload, r.collection_id)
+
+
+# --- GOO-312: research_experiment and claim.linked v3 -------------------------
+
+
+class _Experiment:
+    """Hand-built events for one Collection's research_experiment stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+
+    def manifest(
+        self, run: UUID, manifest: UUID, outputs: list[UUID]
+    ) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "run_id": str(run),
+            "manifest_id": str(manifest),
+            "manifest_hash": "a" * 64,
+            "completeness": "complete",
+            "missing": [],
+            "status": "completed",
+            "output_artifact_ids": [str(o) for o in outputs],
+        }
+
+    def figure(
+        self,
+        figure: UUID,
+        run: UUID,
+        manifest: UUID,
+        output: UUID,
+        supersedes: UUID | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "figure_id": str(figure),
+            "figure_key": "fig-1",
+            "kind": "figure",
+            "output_artifact_id": str(output),
+            "run_id": str(run),
+            "manifest_id": str(manifest),
+            "supersedes_figure_id": None if supersedes is None else str(supersedes),
+        }
+
+    def validate(self, event_type: str, payload: dict[str, Any]) -> None:
+        subject = payload["manifest_id" if "missing" in payload else "figure_id"]
+        _validate_event(
+            aggregate_type="research_experiment",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="experiment",
+            subject_id=UUID(subject),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="d" * 64,
+        )
+
+    def replay(self, *events: tuple[str, str, dict[str, Any]]) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_experiment_transitions(stored, self.collection_id)
+
+
+def test_experiment_payloads_validate() -> None:
+    e = _Experiment()
+    run, manifest, output = uuid4(), uuid4(), uuid4()
+    recorded = e.manifest(run, manifest, [output])
+    e.validate("run.manifest_recorded", recorded)
+    e.validate("figure.registered", e.figure(uuid4(), run, manifest, output))
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        e.validate("run.manifest_recorded", {**recorded, "storage_key": "k"})
+    with pytest.raises(DecisionValidationError, match="disagrees"):
+        e.validate("run.manifest_recorded", {**recorded, "missing": ["seed"]})
+    with pytest.raises(DecisionValidationError, match="kind"):
+        e.validate(
+            "figure.registered",
+            {**e.figure(uuid4(), run, manifest, output), "kind": "chart"},
+        )
+
+
+def test_experiment_replay_rejects_second_manifest_for_run() -> None:
+    e = _Experiment()
+    run = uuid4()
+    first = ("run.manifest_recorded", "machine", e.manifest(run, uuid4(), []))
+    e.replay(first)
+    with pytest.raises(DecisionReplayError, match="already has a manifest"):
+        e.replay(
+            first, ("run.manifest_recorded", "machine", e.manifest(run, uuid4(), []))
+        )
+    with pytest.raises(DecisionReplayError, match="machine"):
+        e.replay(("run.manifest_recorded", "editor", e.manifest(run, uuid4(), [])))
+
+
+def test_figure_replay_requires_prior_manifest() -> None:
+    e = _Experiment()
+    run, manifest, output, fig = uuid4(), uuid4(), uuid4(), uuid4()
+    recorded = ("run.manifest_recorded", "machine", e.manifest(run, manifest, [output]))
+    registered = (
+        "figure.registered",
+        "editor",
+        e.figure(fig, run, manifest, output),
+    )
+    successor = e.figure(uuid4(), run, manifest, output, supersedes=fig)
+    e.replay(recorded, registered, ("figure.registered", "editor", successor))
+    with pytest.raises(DecisionReplayError, match="no prior manifest"):
+        e.replay(registered, recorded)
+    with pytest.raises(DecisionReplayError, match="not in its manifest"):
+        e.replay(
+            recorded,
+            ("figure.registered", "editor", e.figure(fig, run, manifest, uuid4())),
+        )
+    with pytest.raises(DecisionReplayError, match="non-tip"):
+        e.replay(
+            recorded,
+            registered,
+            ("figure.registered", "editor", e.figure(uuid4(), run, manifest, output)),
+        )
+    with pytest.raises(DecisionReplayError, match="editor"):
+        e.replay(recorded, ("figure.registered", "machine", registered[2]))
+
+
+def test_claim_linked_v3_requires_figure_id_for_figure_kind() -> None:
+    c = _Claims()
+    version, link = uuid4(), uuid4()
+
+    def validate_v3(payload: dict[str, Any]) -> None:
+        _validate_event(
+            aggregate_type="research_claims",
+            aggregate_id=c.collection_id,
+            event_type="claim.linked",
+            event_schema_version=3,
+            subject_type="research_claim",
+            subject_id=c.claim,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+        )
+
+    figure = {
+        **c.linked(version, link, "legacy_unanchored"),
+        "draft_citation_id": None,
+        "document_id": None,
+        "kind": "figure",
+        "synthesis_result_id": None,
+        "figure_id": str(uuid4()),
+    }
+    validate_v3(figure)
+    validate_v3(
+        {**c.linked(version, link), "synthesis_result_id": None, "figure_id": None}
+    )
+    with pytest.raises(DecisionValidationError, match="claim link"):
+        validate_v3({**figure, "figure_id": None})
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        validate_v3({**c.linked(version, link), "synthesis_result_id": None})
+    # A figure link is live for assessment but carries no model stance.
+    versioned = ("claim.versioned", "editor", c.versioned(version))
+    c.replay(
+        versioned,
+        ("claim.linked", "editor", figure),
+        ("claim.assessed", "adjudicator", c.assessed(version, uuid4(), [link])),
+    )
+    with pytest.raises(DecisionReplayError, match="live link"):
+        c.replay(
+            versioned,
+            ("claim.linked", "editor", figure),
+            ("claim.observed", "machine", c.observed(link, uuid4())),
+        )
+
+
+# --- GOO-313: research_reproduction ------------------------------------------
+
+
+class _Reproduction:
+    """Hand-built events for one Collection's research_reproduction stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.rerun = uuid4()
+
+    def admitted(self) -> tuple[str, str, dict[str, Any]]:
+        return (
+            "rerun.admitted",
+            "reviewer",
+            {
+                "collection_id": str(self.collection_id),
+                "rerun_id": str(self.rerun),
+                "run_id": str(uuid4()),
+                "manifest_id": str(uuid4()),
+                "manifest_hash": "a" * 64,
+                "rule_hash": "b" * 64,
+            },
+        )
+
+    def started(self, attempt: int) -> tuple[str, str, dict[str, Any]]:
+        return (
+            "rerun.attempt_started",
+            "machine",
+            {
+                "collection_id": str(self.collection_id),
+                "rerun_id": str(self.rerun),
+                "attempt": attempt,
+                "lease_expires_at": "2026-10-01T00:07:00+00:00",
+            },
+        )
+
+    def finished(
+        self, attempt: int, status: str, reproduction: str | None = None
+    ) -> tuple[str, str, dict[str, Any]]:
+        return (
+            "rerun.attempt_finished",
+            "machine",
+            {
+                "collection_id": str(self.collection_id),
+                "rerun_id": str(self.rerun),
+                "attempt": attempt,
+                "status": status,
+                "reproduction": reproduction,
+                "comparison_hash": "c" * 64 if reproduction else None,
+                "output_sha256s": ["d" * 64] if reproduction else [],
+                "reasons": [] if reproduction else ["sandbox_unavailable"],
+            },
+        )
+
+    def validate(self, event: tuple[str, str, dict[str, Any]]) -> None:
+        event_type, _, payload = event
+        _validate_event(
+            aggregate_type="research_reproduction",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="experiment_rerun",
+            subject_id=self.rerun,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="e" * 64,
+        )
+
+    def replay(self, *events: tuple[str, str, dict[str, Any]]) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_reproduction_transitions(stored, self.collection_id)
+
+
+def test_reproduction_payloads_validate() -> None:
+    r = _Reproduction()
+    for event in (
+        r.admitted(),
+        r.started(1),
+        r.finished(1, "executed", "reproduced"),
+        r.finished(1, "cancelled"),
+    ):
+        r.validate(event)
+    with pytest.raises(DecisionValidationError, match="executed"):
+        r.validate(r.finished(1, "restoration_failed", "reproduced"))
+    with pytest.raises(DecisionValidationError, match="lease"):
+        event_type, role, payload = r.started(1)
+        r.validate((event_type, role, {**payload, "lease_expires_at": "soon"}))
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        event_type, role, payload = r.admitted()
+        r.validate((event_type, role, {**payload, "storage_key": "k"}))
+
+
+def test_reproduction_replay_rejects_second_finish() -> None:
+    r = _Reproduction()
+    r.replay(r.admitted(), r.started(1), r.finished(1, "interrupted"))
+    with pytest.raises(DecisionReplayError, match="out of order"):
+        r.replay(
+            r.admitted(),
+            r.started(1),
+            r.finished(1, "cancelled"),
+            r.finished(1, "interrupted"),
+        )
+    # Cancelled before the worker claimed it: a finish without a start.
+    r.replay(r.admitted(), r.finished(1, "cancelled"), r.started(2))
+    with pytest.raises(DecisionReplayError, match="out of order"):
+        r.replay(r.admitted(), r.finished(1, "cancelled"), r.started(1))
+    with pytest.raises(DecisionReplayError, match="reviewer"):
+        _, _, payload = r.admitted()
+        r.replay(("rerun.admitted", "machine", payload))
+
+
+def test_reproduction_replay_rejects_reproduced_without_executed() -> None:
+    r = _Reproduction()
+    event_type, role, payload = r.finished(1, "restoration_failed")
+    with pytest.raises(DecisionReplayError, match="executed"):
+        r.replay(
+            r.admitted(),
+            r.started(1),
+            (event_type, role, {**payload, "reproduction": "reproduced"}),
+        )
+
+
+def test_reproduction_replay_rejects_attempt_after_executed() -> None:
+    r = _Reproduction()
+    r.replay(
+        r.admitted(),
+        r.started(1),
+        r.finished(1, "execution_failed"),
+        r.started(2),
+        r.finished(2, "executed", "not_reproduced"),
+    )
+    with pytest.raises(DecisionReplayError, match="after an executed"):
+        r.replay(
+            r.admitted(),
+            r.started(1),
+            r.finished(1, "executed", "reproduced"),
+            r.started(2),
+        )
+
+
+# --- GOO-314: research_peer_review -------------------------------------------
+
+Event = tuple[str, str, dict[str, Any]]
+
+
+class _PeerReview:
+    """Hand-built events for one Collection's research_peer_review stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.round = uuid4()
+        self.root = uuid4()
+
+    def _base(self) -> dict[str, Any]:
+        return {"collection_id": str(self.collection_id)}
+
+    def round_recorded(self) -> Event:
+        return (
+            "review_round.recorded",
+            "editor",
+            self._base()
+            | {
+                "round_id": str(self.round),
+                "draft_id": str(uuid4()),
+                "draft_content_hash": "a" * 64,
+                "reviewer_ids": [str(uuid4())],
+            },
+        )
+
+    def comment(self) -> Event:
+        return (
+            "review_comment.versioned",
+            "editor",
+            self._base()
+            | {
+                "round_id": str(self.round),
+                "comment_id": str(self.root),
+                "comment_root_id": str(self.root),
+                "supersedes_comment_id": None,
+                "reviewer_id": str(uuid4()),
+                "draft_content_hash": "a" * 64,
+                "anchored": True,
+                "quote_sha256": "b" * 64,
+            },
+        )
+
+    def response(self, response_id: UUID, supersedes: UUID | None = None) -> Event:
+        return (
+            "review_response.versioned",
+            "editor",
+            self._base()
+            | {
+                "comment_root_id": str(self.root),
+                "response_id": str(response_id),
+                "supersedes_response_id": (
+                    None if supersedes is None else str(supersedes)
+                ),
+                "kind": "change",
+                "revised_draft_id": str(uuid4()),
+                "diff_sha256": "c" * 64,
+                "evidence_claim_version_ids": [],
+            },
+        )
+
+    def decision(self, kind: str, role: str, response_id: UUID | None = None) -> Event:
+        return (
+            "review_decision.recorded",
+            role,
+            self._base()
+            | {
+                "comment_root_id": str(self.root),
+                "decision_id": str(uuid4()),
+                "kind": kind,
+                "assignee_id": str(uuid4()) if kind == "assigned" else None,
+                "response_id": None if response_id is None else str(response_id),
+                "supersedes_decision_id": None,
+            },
+        )
+
+    def validate(self, event: Event) -> None:
+        event_type, _, payload = event
+        subject = self.round if event_type == "review_round.recorded" else self.root
+        _validate_event(
+            aggregate_type="research_peer_review",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="peer_review_comment",
+            subject_id=subject,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="e" * 64,
+        )
+
+    def replay(self, *events: Event) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_peer_review_transitions(stored, self.collection_id)
+
+
+def test_peer_review_payloads_validate() -> None:
+    p = _PeerReview()
+    response = uuid4()
+    for event in (
+        p.round_recorded(),
+        p.comment(),
+        p.response(response),
+        p.decision("assigned", "editor"),
+        p.decision("resolved", "adjudicator", response),
+    ):
+        p.validate(event)
+    event_type, role, payload = p.response(response)
+    with pytest.raises(DecisionValidationError, match="revision and diff"):
+        p.validate((event_type, role, {**payload, "diff_sha256": None}))
+    event_type, role, payload = p.decision("resolved", "adjudicator")
+    with pytest.raises(DecisionValidationError, match="accepted response"):
+        p.validate((event_type, role, payload))
+
+
+def test_peer_review_replay_rejects_editor_resolution() -> None:
+    p = _PeerReview()
+    response = uuid4()
+    head = (p.round_recorded(), p.comment(), p.response(response))
+    p.replay(*head, p.decision("resolved", "adjudicator", response))
+    with pytest.raises(DecisionReplayError, match="adjudicator"):
+        p.replay(*head, p.decision("resolved", "editor", response))
+    with pytest.raises(DecisionReplayError, match="editor"):
+        p.replay(*head, p.decision("assigned", "adjudicator"))
+
+
+def test_peer_review_replay_rejects_resolution_of_unknown_response() -> None:
+    p = _PeerReview()
+    with pytest.raises(DecisionReplayError, match="unknown response"):
+        p.replay(
+            p.round_recorded(),
+            p.comment(),
+            p.response(uuid4()),
+            p.decision("resolved", "adjudicator", uuid4()),
+        )
+
+
+def test_peer_review_replay_rejects_forked_response_chain() -> None:
+    p = _PeerReview()
+    first, second = uuid4(), uuid4()
+    head = (p.round_recorded(), p.comment(), p.response(first))
+    p.replay(*head, p.response(second, supersedes=first))
+    with pytest.raises(DecisionReplayError, match="forked"):
+        p.replay(
+            *head, p.response(second, supersedes=first), p.response(uuid4(), first)
+        )
+    with pytest.raises(DecisionReplayError, match="forked"):
+        p.replay(*head, p.response(second))
+    event_type, role, payload = p.response(first)
+    with pytest.raises(DecisionReplayError, match="without a diff"):
+        p.replay(
+            p.round_recorded(),
+            p.comment(),
+            (event_type, role, {**payload, "diff_sha256": None}),
+        )
+
+
+# --- GOO-315: research_manuscript --------------------------------------------
+
+
+class _Manuscript:
+    """Hand-built events for one Collection's research_manuscript stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.candidate = uuid4()
+
+    def created(self, role: str = "editor") -> Event:
+        return (
+            "manuscript.candidate_created",
+            role,
+            {
+                "collection_id": str(self.collection_id),
+                "release_id": str(self.candidate),
+                "draft_id": str(uuid4()),
+                "draft_version": 1,
+                "content_hash": "a" * 64,
+                "snapshot_hash": "b" * 64,
+                "checks_hash": "c" * 64,
+                "package_sha256": "d" * 64,
+            },
+        )
+
+    def verified(self, role: str = "adjudicator", package: str = "d" * 64) -> Event:
+        return (
+            "manuscript.verified",
+            role,
+            {
+                "collection_id": str(self.collection_id),
+                "release_id": str(uuid4()),
+                "candidate_release_id": str(self.candidate),
+                "draft_release_id": str(uuid4()),
+                "content_hash": "a" * 64,
+                "snapshot_hash": "b" * 64,
+                "package_sha256": package,
+                "obligations": {"claim_support": "pass", "peer_review": "pass"},
+            },
+        )
+
+    def validate(self, event: Event) -> None:
+        event_type, _, payload = event
+        _validate_event(
+            aggregate_type="research_manuscript",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="manuscript_release",
+            subject_id=UUID(str(payload["release_id"])),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="e" * 64,
+        )
+
+    def replay(self, *events: Event) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_manuscript_transitions(stored, self.collection_id)
+
+
+def test_manuscript_payloads_validate() -> None:
+    m = _Manuscript()
+    m.validate(m.created())
+    m.validate(m.verified())
+    event_type, role, payload = m.verified()
+    with pytest.raises(DecisionValidationError, match="passing obligations"):
+        m.validate(
+            (event_type, role, {**payload, "obligations": {"claim_support": "fail"}})
+        )
+
+
+def test_manuscript_replay_rejects_verified_with_changed_package() -> None:
+    m = _Manuscript()
+    m.replay(m.created(), m.verified())
+    with pytest.raises(DecisionReplayError, match="differs from its candidate"):
+        m.replay(m.created(), m.verified(package="f" * 64))
+    with pytest.raises(DecisionReplayError, match="no recorded candidate"):
+        m.replay(m.verified())
+
+
+def test_manuscript_replay_rejects_double_promotion() -> None:
+    m = _Manuscript()
+    with pytest.raises(DecisionReplayError, match="already verified"):
+        m.replay(m.created(), m.verified(), m.verified("supervisor"))
+
+
+def test_manuscript_replay_rejects_editor_promotion() -> None:
+    m = _Manuscript()
+    with pytest.raises(DecisionReplayError, match="adjudicator or supervisor"):
+        m.replay(m.created(), m.verified("editor"))
+    with pytest.raises(DecisionReplayError, match="editor's"):
+        m.replay(m.created("adjudicator"))
+
+
+# --- GOO-316: research_statements --------------------------------------------
+
+
+class _Statements:
+    """Hand-built events for one Collection's research_statements stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.v1, self.v2 = uuid4(), uuid4()
+
+    def versioned(self, set_id: UUID, supersedes: UUID | None, digest: str) -> Event:
+        return (
+            "statements.versioned",
+            "editor",
+            {
+                "collection_id": str(self.collection_id),
+                "statement_set_id": str(set_id),
+                "supersedes_set_id": None if supersedes is None else str(supersedes),
+                "set_hash": digest,
+                "author_keys": ["a", "b"],
+                "missing_fields": ["limitations"],
+            },
+        )
+
+    def approved(self, set_id: UUID, author: str, digest: str) -> Event:
+        return (
+            "statements.approved",
+            "editor",
+            {
+                "collection_id": str(self.collection_id),
+                "statement_set_id": str(set_id),
+                "author_key": author,
+                "set_hash": digest,
+                "method": "recorded_attestation",
+                "approval_id": str(uuid4()),
+            },
+        )
+
+    def checked(self, status: str = "fail") -> Event:
+        check_id = uuid4()
+        return (
+            "venue.checked",
+            "editor",
+            {
+                "collection_id": str(self.collection_id),
+                "venue_check_id": str(check_id),
+                "release_id": str(uuid4()),
+                "profile_id": "generic-icmje-credit",
+                "profile_version": 1,
+                "package_sha256": "d" * 64,
+                "anonymized_sha256": "e" * 64,
+                "status": status,
+                "failing_rules": ["required"] if status == "fail" else [],
+            },
+        )
+
+    def validate(self, event: Event) -> None:
+        event_type, _, payload = event
+        subject = payload.get("venue_check_id") or payload["statement_set_id"]
+        _validate_event(
+            aggregate_type="research_statements",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="statement_set",
+            subject_id=UUID(str(subject)),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="f" * 64,
+        )
+
+    def replay(self, *events: Event) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_statements_transitions(stored, self.collection_id)
+
+
+def test_statements_payloads_validate() -> None:
+    s = _Statements()
+    s.validate(s.versioned(s.v1, None, "a" * 64))
+    s.validate(s.approved(s.v1, "a", "a" * 64))
+    s.validate(s.checked())
+    s.validate(s.checked("pass"))
+    event_type, role, payload = s.checked("pass")
+    with pytest.raises(DecisionValidationError, match="contradict"):
+        s.validate((event_type, role, {**payload, "failing_rules": ["required"]}))
+    event_type, role, payload = s.approved(s.v1, "a", "a" * 64)
+    with pytest.raises(DecisionValidationError, match="method"):
+        s.validate((event_type, role, {**payload, "method": "name_match"}))
+
+
+def test_statements_replay_rejects_approval_with_other_set_hash() -> None:
+    s = _Statements()
+    v1, v2 = s.versioned(s.v1, None, "a" * 64), s.versioned(s.v2, s.v1, "b" * 64)
+    s.replay(v1, v2, s.approved(s.v2, "a", "b" * 64), s.checked())
+    with pytest.raises(DecisionReplayError, match="another set hash"):
+        s.replay(v1, v2, s.approved(s.v2, "a", "a" * 64))
+    with pytest.raises(DecisionReplayError, match="no recorded"):
+        s.replay(v1, s.approved(s.v2, "a", "b" * 64))
+    with pytest.raises(DecisionReplayError, match="no author"):
+        s.replay(v1, s.approved(s.v1, "z", "a" * 64))
+    with pytest.raises(DecisionReplayError, match="extend the tip"):
+        s.replay(v1, s.versioned(s.v2, None, "b" * 64))
+
+
+def test_statements_replay_rejects_duplicate_author_approval() -> None:
+    s = _Statements()
+    v1 = s.versioned(s.v1, None, "a" * 64)
+    with pytest.raises(DecisionReplayError, match="already approved"):
+        s.replay(v1, s.approved(s.v1, "a", "a" * 64), s.approved(s.v1, "a", "a" * 64))
+    event_type, _, payload = s.approved(s.v1, "a", "a" * 64)
+    with pytest.raises(DecisionReplayError, match="editor's"):
+        s.replay(v1, (event_type, "adjudicator", payload))
+
+
+# --- GOO-318: research_deposit ------------------------------------------------
+
+
+class _Deposit:
+    """Hand-built events for one Collection's research_deposit stream.
+    Each event carries its actor so the self-approval rule can be replayed."""
+
+    ACCOUNT = "zenodo_sandbox:nous-fixture"
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.release = uuid4()
+        self.operation = uuid4()
+        self.approver, self.requester = uuid4(), uuid4()
+        self.approval = uuid4()
+
+    def _scope(self) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "release_id": str(self.release),
+            "package_sha256": "a" * 64,
+            "repository": "zenodo_sandbox",
+            "account_ref": self.ACCOUNT,
+        }
+
+    def approved(self, kind: str = "approved", approval: UUID | None = None) -> Any:
+        payload = {
+            **self._scope(),
+            "approval_id": str(approval or self.approval),
+            "action": "publish",
+        }
+        return (f"deposit.{kind}", "adjudicator", payload, self.approver)
+
+    def requested(self, actor: UUID | None = None) -> Any:
+        payload = {
+            **self._scope(),
+            "operation_id": str(self.operation),
+            "approval_id": str(self.approval),
+            "file_count": 2,
+        }
+        return ("deposit.requested", "supervisor", payload, actor or self.requester)
+
+    def phase(
+        self, phase: str, previous: UUID, attempt: UUID, outcome: str = "succeeded"
+    ) -> Any:
+        payload = {
+            "collection_id": str(self.collection_id),
+            "operation_id": str(self.operation),
+            "attempt_id": str(attempt),
+            "previous_id": str(previous),
+            "approval_id": str(self.approval),
+            "phase": phase,
+            "outcome": outcome,
+            "remote_deposition_id": "42",
+            "remote_record_id": None,
+            "doi": None,
+        }
+        return ("deposit.phase_recorded", "machine", payload, self.requester)
+
+    def validate(self, event: Any) -> None:
+        event_type, _, payload, _actor = event
+        subject = {
+            "deposit.phase_recorded": "attempt_id",
+            "deposit.requested": "operation_id",
+        }.get(event_type, "approval_id")
+        _validate_event(
+            aggregate_type="research_deposit",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="archive_deposit",
+            subject_id=UUID(str(payload[subject])),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="e" * 64,
+            reason="Approved for the sandbox",
+        )
+
+    def replay(self, *events: Any) -> None:
+        stored = []
+        for event_type, role, payload, actor in events:
+            self.validate((event_type, role, payload, actor))
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            event.actor_user_id = actor
+            stored.append(event)
+        _validate_deposit_transitions(stored, self.collection_id)
+
+
+def test_deposit_replay_rejects_publish_before_upload() -> None:
+    d = _Deposit()
+    draft, upload, publish = uuid4(), uuid4(), uuid4()
+    happy = [
+        d.approved(),
+        d.requested(),
+        d.phase("draft_created", d.operation, draft),
+        d.phase("files_uploaded", draft, upload),
+        d.phase("published", upload, publish),
+        d.phase("verified", publish, uuid4()),
+    ]
+    d.replay(*happy)
+    with pytest.raises(DecisionReplayError, match="before its files uploaded"):
+        d.replay(*happy[:3], d.phase("published", draft, publish))
+    # A failed upload attempt does not count as uploaded.
+    with pytest.raises(DecisionReplayError, match="before its files uploaded"):
+        d.replay(
+            *happy[:3],
+            d.phase("files_uploaded", draft, upload, "unknown"),
+            d.phase("published", upload, publish),
+        )
+    with pytest.raises(DecisionReplayError, match="chain tip"):
+        d.replay(*happy[:3], d.phase("files_uploaded", d.operation, upload))
+    # A revocation before publish voids the approval the publish names.
+    with pytest.raises(DecisionReplayError, match="no approval in force"):
+        d.replay(*happy[:4], d.approved("revoked", uuid4()), happy[4])
+    event_type, _, payload, actor = happy[2]
+    with pytest.raises(DecisionReplayError, match="worker's"):
+        d.replay(*happy[:2], (event_type, "supervisor", payload, actor))
+
+
+def test_deposit_replay_rejects_self_approval() -> None:
+    d = _Deposit()
+    with pytest.raises(DecisionReplayError, match="approved their own"):
+        d.replay(d.approved(), d.requested(actor=d.approver))
+    with pytest.raises(DecisionReplayError, match="no approval in force"):
+        d.replay(d.requested())
+    with pytest.raises(DecisionReplayError, match="no approval in force"):
+        d.replay(d.approved(), d.approved("revoked", uuid4()), d.requested())
+    event_type, _, payload, actor = d.approved()
+    with pytest.raises(DecisionReplayError, match="adjudicator or supervisor"):
+        d.replay((event_type, "editor", payload, actor))
+
+
+def test_deposit_payload_has_no_secret_keys() -> None:
+    from src.services.research import deposit_rules
+    from src.services.research_decisions.ledger import _DEPOSIT_PAYLOAD_KEYS
+
+    keys = {k for names in _DEPOSIT_PAYLOAD_KEYS.values() for k in names}
+    assert deposit_rules.redact({k: "x" for k in keys}) == {k: "x" for k in keys}
+    d = _Deposit()
+    event_type, role, payload, actor = d.requested()
+    with pytest.raises(DecisionValidationError, match="does not match"):
+        d.validate((event_type, role, {**payload, "access_token": "x"}, actor))
+    approved = d.approved()
+    with pytest.raises(DecisionValidationError, match="rationale"):
+        _validate_event(
+            aggregate_type="research_deposit",
+            aggregate_id=d.collection_id,
+            event_type=approved[0],
+            event_schema_version=1,
+            subject_type="archive_deposit",
+            subject_id=d.approval,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(approved[2]),
+            payload=approved[2],
+            request_fingerprint="e" * 64,
+        )

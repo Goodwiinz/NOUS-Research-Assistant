@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.services.research_engine import manifest_rules
+
 # These limits are deliberately server-owned.  They protect both newly
 # validated blueprints and the legacy JSONB rows that are revalidated by the
 # execution path before a paid call is made.
@@ -68,11 +70,20 @@ def validate_blueprint_runtime(blueprint: Dict[str, Any]) -> None:
     if not isinstance(steps, list) or len(steps) > MAX_BLUEPRINT_STEPS:
         raise ValueError(f"blueprint exceeds the {MAX_BLUEPRINT_STEPS}-step limit")
     _bounded_payload(blueprint.get("parameters") or {}, "blueprint parameters")
+    analyze_steps = 0
     for step in steps:
         if not isinstance(step, dict):
             raise ValueError("blueprint step must be an object")
         params = step.get("params") or step.get("parameters") or {}
         _bounded_payload(params, "step parameters")
+        if step.get("type") == manifest_rules.STEP_TYPE:
+            # GOO-312: a bad experiment plan fails before any sandbox runs.
+            manifest_rules.parse_analyze_step(params)
+            analyze_steps += 1
+        # ponytail: one manifest binds one analyze step; chains of experiments
+        # in one run wait for a pilot that needs them.
+        if analyze_steps > 1:
+            raise ValueError("multiple_analyze_steps")
         prompt = step.get("system_prompt_template")
         if prompt is None:
             prompt = params.get("system_prompt_template")
@@ -96,6 +107,8 @@ class StepType(str, Enum):
     SYNTHESIZE = "synthesize"
     VERIFY = "verify"
     EXPORT = "export"
+    # GOO-312: a computational experiment bound to the approved plan.
+    ANALYZE = "analyze"
 
 
 class ExportFormat(str, Enum):
@@ -1509,6 +1522,12 @@ class BlueprintStepDefinition(BaseModel):
     def parameters_are_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
         return _bounded_step_parameters(value)
 
+    @model_validator(mode="after")
+    def analyze_plan_is_valid(self) -> "BlueprintStepDefinition":
+        if self.type == StepType.ANALYZE:  # GOO-312
+            manifest_rules.parse_analyze_step(self.parameters)
+        return self
+
 
 class BlueprintCreate(BaseModel):
     """Schema for creating a research blueprint."""
@@ -2033,3 +2052,182 @@ class EvidenceResponse(BaseModel):
     confidence: Optional[float] = None
     grounding_status: GroundingStatus
     page_reference: Optional[str] = None
+
+
+# --- Run manifests and figures (GOO-312) ------------------------------------
+
+ManifestCompleteness = Literal["complete", "incomplete"]
+FigureKind = Literal["figure", "table"]
+
+
+class RunManifestV2Response(BaseModel):
+    """A run's ``nous.run-manifest/2`` (or the legacy view when absent).
+    ``completeness`` is derived from ``missing``; it is never asserted."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str = Field(..., alias="schema")
+    manifest: Optional[Dict[str, Any]] = None
+    manifest_hash: Optional[str] = None
+    completeness: ManifestCompleteness
+    missing: List[str]
+    legacy: Optional[Dict[str, Any]] = None
+
+
+class RunArtifactResponse(BaseModel):
+    """A retained run file; its bytes stream through the artifact route."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    role: str
+    name: str
+    media_type: str
+    sha256: str
+    byte_size: int
+
+
+class FigureCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    figure_key: str = Field(
+        ..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+    kind: FigureKind
+    caption: str = Field(..., min_length=1, max_length=4000)
+    output_artifact_id: UUID
+    supersedes_figure_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+
+
+class FigureResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    figure_key: str
+    kind: FigureKind
+    caption: str
+    output_artifact_id: UUID
+    run_id: UUID
+    manifest_id: UUID
+    supersedes_figure_id: Optional[UUID] = None
+    created_by_id: UUID
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class FigureListResponse(BaseModel):
+    figures: List[FigureResponse]
+
+
+class FigureLineageResponse(BaseModel):
+    """output -> run -> code/environment/data -> hypothesis/protocol."""
+
+    figure: FigureResponse
+    output: RunArtifactResponse
+    run_id: UUID
+    run_status: str
+    manifest_id: UUID
+    manifest_hash: str
+    completeness: ManifestCompleteness
+    missing: List[str]
+    code: Dict[str, Any]
+    environment: Optional[Dict[str, Any]] = None
+    inputs: List[Dict[str, Any]]
+    parameters: Dict[str, Any]
+    seed: Optional[int] = None
+    question_version_id: Optional[str] = None
+    hypothesis_sha256: Optional[str] = None
+    protocol_version_id: Optional[str] = None
+    protocol_content_hash: Optional[str] = None
+    effective_plan_hash: Optional[str] = None
+
+
+# --- Fresh reruns (GOO-313) ----------------------------------------------------
+
+RerunAttemptStatus = Literal[
+    "queued",
+    "running",
+    "restoration_failed",
+    "environment_unavailable",
+    "execution_failed",
+    "cancelled",
+    "interrupted",
+    "executed",
+]
+RerunReproduction = Literal["reproduced", "not_reproduced"]
+
+
+class RerunCreate(BaseModel):
+    """``rule`` is a ``nous.rerun-rule/1`` naming every manifest output once;
+    omitted, byte equality for every output. It is hashed before enqueue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule: Optional[Dict[str, Any]] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=128)
+
+
+class RerunEligibilityResponse(BaseModel):
+    eligible: bool
+    reasons: List[str]
+    default_rule: Optional[Dict[str, Any]] = None
+
+
+class RerunComparisonRow(BaseModel):
+    name: str
+    mode: Literal["bytes", "json_numeric"]
+    expected_sha256: Optional[str] = None
+    actual_sha256: Optional[str] = None
+    equal: bool
+    numeric: Optional[List[Dict[str, Any]]] = None
+    reason: Optional[str] = None
+
+
+class RerunOutputResponse(BaseModel):
+    """A retained rerun output; its bytes stream through the output route."""
+
+    name: str
+    sha256: str
+    byte_size: int
+
+
+class RerunAttemptResponse(BaseModel):
+    """``queued``/``running``/``interrupted`` without ``finished_at`` are
+    derived (no terminal row yet); every other status is a terminal row.
+    ``reproduction`` exists iff ``status == "executed"``."""
+
+    attempt: int
+    status: RerunAttemptStatus
+    reproduction: Optional[RerunReproduction] = None
+    reasons: List[str] = Field(default_factory=list)
+    environment_validation: Dict[str, Any] = Field(default_factory=dict)
+    input_validation: Dict[str, Any] = Field(default_factory=dict)
+    comparison: Optional[List[RerunComparisonRow]] = None
+    comparison_hash: Optional[str] = None
+    outputs: List[RerunOutputResponse] = Field(default_factory=list)
+    template_id: Optional[str] = None
+    sandbox_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    lease_expires_at: Optional[datetime] = None
+
+
+class RerunResponse(BaseModel):
+    id: UUID
+    collection_id: UUID
+    run_id: UUID
+    manifest_id: UUID
+    manifest_hash: str
+    rule: Dict[str, Any]
+    rule_hash: str
+    requested_by_id: UUID
+    created_at: datetime
+    attempts: List[RerunAttemptResponse]
+
+
+class RerunListResponse(BaseModel):
+    reruns: List[RerunResponse]
