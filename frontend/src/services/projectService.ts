@@ -22,6 +22,43 @@ import type {
   ApiReleaseCheck,
   ApiReleaseStatus,
 } from '@/types/api/research-release-contract';
+import type {
+  ApiDraftDiff,
+  ApiPeerReviewDecision,
+  ApiPeerReviewDecisionCreate,
+  ApiPeerReviewResponse,
+  ApiPeerReviewResponseCreate,
+  ApiPeerReviewRoundDetail,
+  ApiPeerReviewRoundList,
+} from '@/types/api/peer-review-contract';
+import type {
+  ApiCandidateCreate,
+  ApiManuscriptRelease,
+  ApiManuscriptReleaseList,
+  ApiPromoteRequest,
+  ApiReferenceFormat,
+  ApiReferenceReport,
+  ApiReleaseVerification,
+} from '@/types/api/manuscript-release-contract';
+import type {
+  ApiApproval,
+  ApiApprovalCreate,
+  ApiOrcidAuthentication,
+  ApiOrcidStart,
+  ApiStatementSet,
+  ApiStatementSetCreate,
+  ApiStatementsList,
+  ApiVenueCheck,
+  ApiVenueCheckList,
+} from '@/types/api/statements-contract';
+import type {
+  ApiDeposit,
+  ApiDepositApproval,
+  ApiDepositApprovalCreate,
+  ApiDepositApprovalRevoke,
+  ApiDepositCreate,
+  ApiDepositList,
+} from '@/types/api/research-deposit-contract';
 
 // Types
 export interface Project {
@@ -177,6 +214,22 @@ export interface ProjectBibliography {
   citation_count: number;
   generated_at: string;
 }
+
+/** Draft export formats; GOO-317 adds the references-only files. */
+export type DraftExportFormat = 'markdown' | 'latex' | 'csl-json' | 'ris';
+
+const REFERENCE_FILENAMES: Record<ApiReferenceFormat, string> = {
+  bibtex: 'references.bib',
+  'csl-json': 'references.json',
+  ris: 'references.ris',
+};
+
+const DRAFT_EXPORT_FILENAMES: Record<DraftExportFormat, string> = {
+  markdown: 'draft.md',
+  latex: 'draft.zip',
+  'csl-json': REFERENCE_FILENAMES['csl-json'],
+  ris: REFERENCE_FILENAMES.ris,
+};
 
 export const projectService = {
   // =========================================================================
@@ -639,13 +692,275 @@ export const projectService = {
     );
   },
 
+  /** GOO-314: sentence-level anchored diff between two saved versions. */
+  async diffDrafts(
+    projectId: string,
+    fromDraftId: string,
+    toDraftId: string
+  ): Promise<ApiDraftDiff> {
+    const qs = new URLSearchParams({
+      from_draft_id: fromDraftId,
+      to_draft_id: toDraftId,
+    }).toString();
+    return api.get<ApiDraftDiff>(`/projects/${projectId}/drafts/diff?${qs}`);
+  },
+
+  /** GOO-314: the project's external peer-review rounds. */
+  async listPeerReviewRounds(
+    projectId: string
+  ): Promise<ApiPeerReviewRoundList> {
+    return api.get<ApiPeerReviewRoundList>(
+      `/projects/${projectId}/peer-review/rounds`
+    );
+  },
+
+  /** GOO-314: one round, anchors checked against the target version. */
+  async getPeerReviewRound(
+    projectId: string,
+    roundId: string,
+    targetDraftId?: string
+  ): Promise<ApiPeerReviewRoundDetail> {
+    const qs = targetDraftId
+      ? `?${new URLSearchParams({ target_draft_id: targetDraftId })}`
+      : '';
+    return api.get<ApiPeerReviewRoundDetail>(
+      `/projects/${projectId}/peer-review/rounds/${roundId}${qs}`
+    );
+  },
+
+  /** GOO-314: a response version (409 when the tip moved). */
+  async respondToPeerReviewComment(
+    projectId: string,
+    commentRootId: string,
+    data: ApiPeerReviewResponseCreate
+  ): Promise<ApiPeerReviewResponse> {
+    return api.post<ApiPeerReviewResponse>(
+      `/projects/${projectId}/peer-review/comments/${commentRootId}/responses`,
+      data
+    );
+  },
+
+  /** GOO-314: assign (EDIT) or resolve/reopen (ADJUDICATE) a comment. */
+  async decidePeerReviewComment(
+    projectId: string,
+    commentRootId: string,
+    data: ApiPeerReviewDecisionCreate
+  ): Promise<ApiPeerReviewDecision> {
+    return api.post<ApiPeerReviewDecision>(
+      `/projects/${projectId}/peer-review/comments/${commentRootId}/decisions`,
+      data
+    );
+  },
+
+  /** GOO-314: the response export (Markdown or JSON attachment). */
+  async downloadPeerReviewExport(
+    projectId: string,
+    roundId: string,
+    format: 'markdown' | 'json'
+  ): Promise<void> {
+    await api.download(
+      `/projects/${projectId}/peer-review/rounds/${roundId}/export?format=${format}`
+    );
+  },
+
+  /** GOO-315: package one exact draft version as a candidate release. */
+  async createCandidateRelease(
+    projectId: string,
+    data: ApiCandidateCreate
+  ): Promise<ApiManuscriptRelease> {
+    return api.post<ApiManuscriptRelease>(
+      `/projects/${projectId}/manuscript-releases`,
+      data
+    );
+  },
+
+  /** GOO-315: every manuscript release with derived status and checks. */
+  async listManuscriptReleases(
+    projectId: string
+  ): Promise<ApiManuscriptReleaseList> {
+    return api.get<ApiManuscriptReleaseList>(
+      `/projects/${projectId}/manuscript-releases`
+    );
+  },
+
+  /** GOO-315: promote one exact candidate (409 lists failing obligations). */
+  async promoteManuscriptRelease(
+    projectId: string,
+    releaseId: string,
+    data: ApiPromoteRequest
+  ): Promise<ApiManuscriptRelease> {
+    return api.post<ApiManuscriptRelease>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/promote`,
+      data
+    );
+  },
+
+  /** GOO-315: the stored package zip (GOO-316: or its anonymized variant). */
+  async downloadManuscriptPackage(
+    projectId: string,
+    releaseId: string,
+    variant: 'identified' | 'anonymized' = 'identified'
+  ): Promise<void> {
+    const suffix = variant === 'identified' ? '' : `-${variant}`;
+    await api.download(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/package?variant=${variant}`,
+      `manuscript-release-${releaseId}${suffix}.zip`
+    );
+  },
+
+  /** GOO-316: statement set tip and history, with ORCID states. */
+  async listStatements(projectId: string): Promise<ApiStatementsList> {
+    return api.get<ApiStatementsList>(`/projects/${projectId}/statements`);
+  },
+
+  /** GOO-316: a new statement set version (409 on a stale tip). */
+  async createStatementSet(
+    projectId: string,
+    data: ApiStatementSetCreate
+  ): Promise<ApiStatementSet> {
+    return api.post<ApiStatementSet>(`/projects/${projectId}/statements`, data);
+  },
+
+  /** GOO-316: one author's approval of the set's exact hash. */
+  async approveStatementSet(
+    projectId: string,
+    setId: string,
+    data: ApiApprovalCreate
+  ): Promise<ApiApproval> {
+    return api.post<ApiApproval>(
+      `/projects/${projectId}/statements/${setId}/approvals`,
+      data
+    );
+  },
+
+  /** GOO-316: run generic-icmje-credit/1 on a release's stored package. */
+  async runVenueCheck(
+    projectId: string,
+    releaseId: string
+  ): Promise<ApiVenueCheck> {
+    return api.post<ApiVenueCheck>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/venue-checks`,
+      { idempotency_key: crypto.randomUUID() }
+    );
+  },
+
+  /** GOO-316: venue check results with actionable items. */
+  async listVenueChecks(
+    projectId: string,
+    releaseId: string
+  ): Promise<ApiVenueCheckList> {
+    return api.get<ApiVenueCheckList>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/venue-checks`
+    );
+  },
+
+  /** GOO-316: the ORCID authorize URL (503 when ORCID is not configured). */
+  async orcidStart(): Promise<ApiOrcidStart> {
+    return api.get<ApiOrcidStart>('/auth/orcid/start');
+  },
+
+  /** GOO-316: finish the ORCID flow; returns the non-secret receipt. */
+  async completeOrcid(params: {
+    code?: string | null;
+    state?: string | null;
+    error?: string | null;
+  }): Promise<ApiOrcidAuthentication> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) query.set(key, value);
+    }
+    return api.get<ApiOrcidAuthentication>(
+      `/auth/orcid/callback?${query.toString()}`
+    );
+  },
+
+  /** GOO-315: recompute every package hash and the reference mapping. */
+  async verifyManuscriptRelease(
+    projectId: string,
+    releaseId: string
+  ): Promise<ApiReleaseVerification> {
+    return api.get<ApiReleaseVerification>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/verify`
+    );
+  },
+
+  /** GOO-318: every archive deposit with its derived status and approvals. */
+  async listDeposits(projectId: string): Promise<ApiDepositList> {
+    return api.get<ApiDepositList>(`/projects/${projectId}/deposits`);
+  },
+
+  /** GOO-318: approve depositing one exact release package (RELEASE). */
+  async approveDeposit(
+    projectId: string,
+    data: ApiDepositApprovalCreate
+  ): Promise<ApiDepositApproval> {
+    return api.post<ApiDepositApproval>(
+      `/projects/${projectId}/deposits/approvals`,
+      data
+    );
+  },
+
+  /** GOO-318: revoke the approval in force (insert-only). */
+  async revokeDepositApproval(
+    projectId: string,
+    approvalId: string,
+    data: ApiDepositApprovalRevoke
+  ): Promise<ApiDepositApproval> {
+    return api.post<ApiDepositApproval>(
+      `/projects/${projectId}/deposits/approvals/${approvalId}/revoke`,
+      data
+    );
+  },
+
+  /** GOO-318: queue the Zenodo sandbox deposit of a verified release. */
+  async requestDeposit(
+    projectId: string,
+    data: ApiDepositCreate
+  ): Promise<ApiDeposit> {
+    return api.post<ApiDeposit>(`/projects/${projectId}/deposits`, data);
+  },
+
+  /** GOO-318: put a stopped deposit back on the worker's queue. */
+  async requeueDeposit(
+    projectId: string,
+    operationId: string
+  ): Promise<ApiDeposit> {
+    return api.post<ApiDeposit>(
+      `/projects/${projectId}/deposits/${operationId}/requeue`,
+      {}
+    );
+  },
+
+  /** GOO-317: a release's references (BibTeX, CSL JSON or RIS) from its
+   * immutable snapshot. */
+  async downloadReleaseReferences(
+    projectId: string,
+    releaseId: string,
+    format: ApiReferenceFormat
+  ): Promise<void> {
+    await api.download(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/references?format=${format}`,
+      REFERENCE_FILENAMES[format]
+    );
+  },
+
+  /** GOO-317: record count and the fields the reference files omit. */
+  async getReleaseReferenceReport(
+    projectId: string,
+    releaseId: string
+  ): Promise<ApiReferenceReport> {
+    return api.get<ApiReferenceReport>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/references?format=csl-json&report=true`
+    );
+  },
+
   /**
    * Export draft to file format
    */
   async exportDraft(
     projectId: string,
     draftId: string,
-    format: 'markdown' | 'latex' = 'markdown',
+    format: DraftExportFormat = 'markdown',
     includeBibliography: boolean = true,
     bibliographyFormat: 'bibtex' | 'biblatex' = 'bibtex'
   ): Promise<void> {
@@ -659,12 +974,13 @@ export const projectService = {
   },
 
   /**
-   * Download draft export as file (markdown or latex zip)
+   * Download draft export as file (markdown, latex zip, or GOO-317's
+   * references-only CSL JSON / RIS)
    */
   async downloadDraftExport(
     projectId: string,
     draftId: string,
-    format: 'markdown' | 'latex' = 'markdown',
+    format: DraftExportFormat = 'markdown',
     includeBibliography: boolean = true,
     bibliographyFormat: 'bibtex' | 'biblatex' = 'bibtex'
   ): Promise<void> {
@@ -675,7 +991,7 @@ export const projectService = {
     }).toString();
     await api.download(
       `/projects/${projectId}/drafts/${draftId}/export?${qs}`,
-      format === 'latex' ? 'draft.zip' : 'draft.md'
+      DRAFT_EXPORT_FILENAMES[format]
     );
   },
 
