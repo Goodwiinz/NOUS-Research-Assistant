@@ -31,7 +31,9 @@ def _service_module() -> Any:
 
 
 @pytest.fixture
-def review_client(test_app: FastAPI) -> Iterator[ReviewClient]:
+def review_client(
+    test_app: FastAPI, test_auth_headers: dict[str, str]
+) -> Iterator[ReviewClient]:
     user = SimpleNamespace(
         id=uuid4(), organization_id=uuid4(), email="owner@example.test"
     )
@@ -46,7 +48,9 @@ def review_client(test_app: FastAPI) -> Iterator[ReviewClient]:
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app, raise_server_exceptions=False) as client:
+        with TestClient(
+            test_app, headers=test_auth_headers, raise_server_exceptions=False
+        ) as client:
             yield client, user, db
     finally:
         test_app.router.lifespan_context = original_lifespan

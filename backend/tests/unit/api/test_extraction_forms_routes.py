@@ -59,7 +59,11 @@ class _Harness(SimpleNamespace):
 
 
 @pytest.fixture
-def harness(test_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Harness]:
+def harness(
+    test_app: FastAPI,
+    test_auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[_Harness]:
     user = SimpleNamespace(id=uuid4(), organization_id=uuid4())
     db = AsyncMock()
     db.add = MagicMock()
@@ -90,7 +94,9 @@ def harness(test_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Har
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app, raise_server_exceptions=False) as client:
+        with TestClient(
+            test_app, headers=test_auth_headers, raise_server_exceptions=False
+        ) as client:
             yield _Harness(
                 client=client, user=user, db=db, roles=roles, project_id=project_id
             )
