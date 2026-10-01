@@ -37,6 +37,7 @@ from src.services.research.draft_generation_service import DraftGenerationServic
 from src.services.research_engine import (
     appraisal_service,
     corpus_export,
+    evidence_service,
     identity_service,
     prisma,
 )
@@ -303,6 +304,14 @@ async def _appraisal(db: AsyncSession, context: ProjectContext) -> list[Part]:
     ]
 
 
+async def _evidence(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-310's export: every table version, chain and certainty row."""
+    package = await evidence_service.export_package(db, context)
+    body = package["body"]
+    empty = not any(o["tables"] for o in body["outcomes"])
+    return [_sealed_part("evidence.json", evidence_service.EXPORT_SCHEMA, body, empty)]
+
+
 async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
     """The builders, in a fixed order (looked up at call time). PRISMA reads
     last: without the caller's snapshot, ``load_inputs`` would open its own
@@ -315,6 +324,7 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _methods,
         _extraction,
         _appraisal,
+        _evidence,
         _prisma,
     ):
         parts.extend(await build(db, context))

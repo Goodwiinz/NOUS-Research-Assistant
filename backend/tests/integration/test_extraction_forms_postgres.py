@@ -71,6 +71,7 @@ MIGRATION = (
 )
 ANCHORS_MIGRATION = MIGRATION.with_name("b8d0f2a4c6e9_add_extraction_source_anchors.py")
 CLAIMS_MIGRATION = MIGRATION.with_name("c4e6a8b0d2f5_create_research_claims.py")
+EVIDENCE_MIGRATION = MIGRATION.with_name("f4b6d8a0c2e3_create_evidence_certainty.py")
 
 
 class _LLM:
@@ -97,26 +98,28 @@ def _module(path: Path) -> Any:
 async def _migration(factory: Factory, *steps: str) -> None:
     """Run a3c5e7f9b1d4's steps. Its upgrade also re-applies the GOO-305
     anchor columns (b8d0f2a4c6e9), which the ORM models now carry; the GOO-306
-    claim tables (c4e6a8b0d2f5) reference it, so they come off first and go
-    back on last."""
+    claim tables (c4e6a8b0d2f5) and GOO-310's evidence tables (f4b6d8a0c2e3)
+    reference it, so they come off first and go back on last."""
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
 
     module, anchors = _module(MIGRATION), _module(ANCHORS_MIGRATION)
-    claims = _module(CLAIMS_MIGRATION)
+    claims, evidence = _module(CLAIMS_MIGRATION), _module(EVIDENCE_MIGRATION)
     async with factory() as db:
 
         def run(sync_connection: Any) -> None:
-            module.op = anchors.op = claims.op = Operations(
+            module.op = anchors.op = claims.op = evidence.op = Operations(
                 MigrationContext.configure(sync_connection)
             )
             for step in steps:
                 if step == "downgrade":
+                    evidence.downgrade()
                     claims.downgrade()
                 getattr(module, step)()
                 if step == "upgrade":
                     anchors.upgrade()
                     claims.upgrade()
+                    evidence.upgrade()
 
         await (await db.connection()).run_sync(run)
         await db.commit()
