@@ -14,6 +14,7 @@ CheckState = Literal["pass", "fail", "unknown", "not_applicable"]
 ReleaseStage = Literal["candidate", "verified"]
 ReleaseStatus = Literal["candidate", "verified", "stale"]
 PackageVariant = Literal["identified", "anonymized"]
+ReferenceFormat = Literal["bibtex", "csl-json", "ris"]
 _KEY = Field(..., min_length=1, max_length=255)
 _HASH = Field(..., min_length=64, max_length=64)
 
@@ -111,3 +112,22 @@ class ReleaseVerification(BaseModel):
     bundle_error: Optional[str] = None
     references_ok: bool
     reference_mapping: List[ReferenceMapping]
+
+
+class ReferenceOmission(BaseModel):
+    """A field a reference file leaves out because the record lacks it
+    (``absent``), or a record exported as a generic type (``type_unmapped``,
+    with the raw ``value``). GOO-317: never filled in or guessed."""
+
+    key: str
+    field: str
+    reason: Literal["absent", "type_unmapped"]
+    value: Optional[str] = None
+
+
+class ReferenceReport(BaseModel):
+    """``?report=true``: what a release reference file would contain."""
+
+    format: ReferenceFormat
+    records: int
+    omissions: List[ReferenceOmission]

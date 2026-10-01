@@ -30,6 +30,8 @@ from src.shared.manuscript_release_schemas import (
     ManuscriptReleaseResponse,
     PackageVariant,
     PromoteRequest,
+    ReferenceFormat,
+    ReferenceReport,
     ReleaseVerification,
 )
 from src.shared.statements_schemas import (
@@ -134,6 +136,54 @@ async def download_package(
                 f'attachment; filename="manuscript-release-{release_id}{suffix}.zip"'
             ),
             "X-Content-SHA256": sha256,
+        },
+    )
+
+
+@router.get(
+    "/{release_id:uuid}/references",
+    response_class=Response,
+    responses={
+        200: {
+            "model": ReferenceReport,
+            "content": {
+                "application/x-bibtex": {},
+                "application/vnd.citationstyles.csl+json": {},
+                "application/x-research-info-systems": {},
+            },
+        }
+    },
+)
+async def download_references(
+    project_id: UUID,
+    release_id: UUID,
+    format: ReferenceFormat = "bibtex",
+    report: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """GOO-317: the release's references as BibTeX, CSL JSON or RIS (VIEW),
+    built from its immutable snapshot only. ``report=true`` returns the
+    record count and omissions as JSON instead of the file."""
+    context = await resolve_project(db, project_id, _uid(current_user))
+    content, filename, mime_type, omissions, records = await service.release_references(
+        db, context, release_id, format
+    )
+    if report:
+        body = ReferenceReport.model_validate(
+            {
+                "format": format,
+                "records": records,
+                "omissions": omissions,
+            }
+        )
+        return JSONResponse(content=body.model_dump(mode="json"))
+    return Response(
+        content=content.encode("utf-8"),
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Reference-Omissions": str(len(omissions)),
         },
     )
 

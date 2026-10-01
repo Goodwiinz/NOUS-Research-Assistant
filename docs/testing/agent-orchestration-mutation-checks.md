@@ -2157,3 +2157,51 @@ Not performed: live ORCID OAuth (sandbox or production; needs a registered
 ORCID app and a sandbox account), the venue-profile expert review of the
 ICMJE/CRediT mapping (none is available), and the live journey (needs a
 deployed stack at `f6a8c0d2e4b5`).
+
+## GOO-317 validated CSL JSON and RIS reference exports — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_reference_exports.py` (CSL
+JSON validated by the vendored official CSL-data schema, RIS parsed by the
+independent `backend/tests/fixtures/references/ris_reader.py`). PostgreSQL
+proof: `backend/tests/integration/test_reference_exports_postgres.py`, run
+against a disposable local PostgreSQL 14 on GOO-301's `screening_factory`
+schema (chain head `f6a8c0d2e4b5`; connection URL from the environment,
+value omitted). Releases are built by the real `create_candidate`; the
+release and draft downloads go through the real routes.
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted a match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty, then rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_reference_exports.py -k corporate     # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_reference_exports.py -k absent_year   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_reference_exports.py -k snippet       # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_reference_exports.py -k ris           # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_reference_exports_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| No name splitting (`bibliography_service.py:88`) | a string author split on its last space into `{family, given}` | `-k corporate` (`test_reference_exports.py:138`): `[{'family': ..., 'given': 'World Health'}] == [{'literal': 'World Health Organization'}]`. |
+| Omit-not-invent dates (`bibliography_service.py:465`) | `PY  - n.d.` emitted when the year is absent | `-k absent_year` (`:151`): `assert 'PY' not in {...}` for `doc2`. |
+| Snippet exclusion (`bibliography_service.py:454`, RIS title) | `title = _get(record, "title") or _get(record, "snippet")` | `-k snippet` (`:167`): `assert 'TI' not in {... 'TI': ['This evidence snippet must never become a title.'] ...}`. |
+| RIS line grammar (`bibliography_service.py:448`) | `f"{tag} - {text}"` (one space before the hyphen) | `-k ris`: 3 failed; the independent reader raises `RisError: line 1: not 'TAG  - value': 'TY - JOUR'`, and `reference_mapping` rejects the `ID` lines (`references.ris ids do not match`). |
+| Snapshot-only release source (`manuscript_release_service.py:625`) | `release_references` rebuilds the references from the live draft citations (`_references(db, ..., live draft)`) | Proof step 3 (`test_reference_exports_postgres.py:229`): `AssertionError: csl-json`; after the `Citation` edit the release's CSL JSON bytes change. |
+
+All five selectors passed again after each restore. No mutant was
+committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/bibliography_service.py`
+  `ffef01dbaf89b7ebb0a130e8b882ebc3a33263928ce2c0fc40847bfafe96cf25`
+- `backend/src/services/research/manuscript_release_service.py`
+  `430e19966eecfb7a58260f17b5a169ff776baca0923abba6727944a3f772d83a`
+
+Not performed: import into a desktop reference manager (Zotero/EndNote; no
+desktop app available, and it never substitutes for the schema and reader
+checks), and the live journey (needs a deployed stack at `f6a8c0d2e4b5`).

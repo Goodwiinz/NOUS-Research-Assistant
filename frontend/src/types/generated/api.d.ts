@@ -5520,7 +5520,9 @@ export interface paths {
         put?: never;
         /**
          * Export Draft
-         * @description Export draft to LaTeX (.tex + .bib) or Markdown.
+         * @description Export draft to LaTeX (.tex + .bib) or Markdown, or its references
+         *     alone as CSL JSON or RIS (GOO-317; ``X-Reference-Omissions`` counts the
+         *     fields left out because the record lacks them).
          */
         post: operations["export_draft_api_v1_projects__project_id__drafts__draft_id__export_post"];
         delete?: never;
@@ -5627,6 +5629,28 @@ export interface paths {
          * @description Promote one exact candidate to verified (RELEASE).
          */
         post: operations["promote_api_v1_projects__project_id__manuscript_releases__release_id__promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/references": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download References
+         * @description GOO-317: the release's references as BibTeX, CSL JSON or RIS (VIEW),
+         *     built from its immutable snapshot only. ``report=true`` returns the
+         *     record count and omissions as JSON instead of the file.
+         */
+        get: operations["download_references_api_v1_projects__project_id__manuscript_releases__release_id__references_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -18385,6 +18409,40 @@ export interface components {
             key: string;
             /** Title */
             title?: string | null;
+        };
+        /**
+         * ReferenceOmission
+         * @description A field a reference file leaves out because the record lacks it
+         *     (``absent``), or a record exported as a generic type (``type_unmapped``,
+         *     with the raw ``value``). GOO-317: never filled in or guessed.
+         */
+        ReferenceOmission: {
+            /** Field */
+            field: string;
+            /** Key */
+            key: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "absent" | "type_unmapped";
+            /** Value */
+            value?: string | null;
+        };
+        /**
+         * ReferenceReport
+         * @description ``?report=true``: what a release reference file would contain.
+         */
+        ReferenceReport: {
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "bibtex" | "csl-json" | "ris";
+            /** Omissions */
+            omissions: components["schemas"]["ReferenceOmission"][];
+            /** Records */
+            records: number;
         };
         /** RejectRequest */
         RejectRequest: {
@@ -32276,7 +32334,7 @@ export interface operations {
     export_draft_api_v1_projects__project_id__drafts__draft_id__export_post: {
         parameters: {
             query?: {
-                /** @description Export format: markdown, latex */
+                /** @description Export format: markdown, latex, csl-json, ris */
                 format?: string;
                 /** @description Include bibliography */
                 include_bibliography?: boolean;
@@ -32513,6 +32571,44 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_references_api_v1_projects__project_id__manuscript_releases__release_id__references_get: {
+        parameters: {
+            query?: {
+                format?: "bibtex" | "csl-json" | "ris";
+                report?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                release_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceReport"];
+                    "application/vnd.citationstyles.csl+json": unknown;
+                    "application/x-bibtex": unknown;
+                    "application/x-research-info-systems": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

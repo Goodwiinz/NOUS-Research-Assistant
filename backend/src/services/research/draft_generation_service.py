@@ -39,7 +39,10 @@ from src.models.peer_review import (
 from src.models.research_claim import ResearchClaimVersion
 from src.services.agent.job_store import get_redis
 from src.services.research import peer_review_rules
-from src.services.research.bibliography_service import BibliographyService
+from src.services.research.bibliography_service import (
+    REFERENCE_FILES,
+    BibliographyService,
+)
 from src.services.research.evidence_selection import select_relevant_passages
 from src.services.research_engine.report_rendering import publication_year
 
@@ -2411,8 +2414,22 @@ Key takeaways include the importance of continued investigation and the potentia
         draft = await self.get_draft(project_id, draft_id)
         if not draft:
             return {"error": "Draft not found"}
-        if format not in ("markdown", "latex"):
+        if format not in ("markdown", "latex", *REFERENCE_FILES):
             return {"error": f"Unsupported format: {format}"}
+        if format in REFERENCE_FILES:
+            # GOO-317: a references-only file from the same canonical records
+            # as BibTeX; include_bibliography/bib_format do not apply.
+            records, keys = self._canonical_citation_records(
+                await self.get_draft_citations(project_id, draft_id)
+            )
+            serialize, filename, mime_type = REFERENCE_FILES[format]
+            return {
+                "format": format,
+                "filename": filename,
+                "content": serialize(records, keys),
+                "mime_type": mime_type,
+                "omissions": BibliographyService.omissions(records, keys),
+            }
         # GOO-307: the stored content is wrapped, never altered: a status
         # header plus the gate's unresolved and interpretation labels.
         from src.services.research import draft_release_service, release_rules
@@ -2567,6 +2584,7 @@ Key takeaways include the importance of continued investigation and the potentia
         for c in citations:
             if c.citation is not None:
                 citation = c.citation
+                linked = (c.document.document_metadata or {}) if c.document else {}
                 canonical = SimpleNamespace(
                     document_title=citation.document_title,
                     authors=DraftGenerationService._canonical_author_names(
@@ -2580,6 +2598,7 @@ Key takeaways include the importance of continued investigation and the potentia
                     doi=citation.doi,
                     arxiv_id=citation.arxiv_id,
                     abstract=citation.abstract,
+                    type=citation.document_type or linked.get("type"),
                 )
             else:
                 document = c.document
@@ -2597,6 +2616,7 @@ Key takeaways include the importance of continued investigation and the potentia
                         or (document.arxiv_id if document else None)
                     ),
                     abstract=metadata.get("abstract"),
+                    type=metadata.get("type"),
                 )
             canonical_citations.append(canonical)
             keys.append(f"doc{c.citation_index}")

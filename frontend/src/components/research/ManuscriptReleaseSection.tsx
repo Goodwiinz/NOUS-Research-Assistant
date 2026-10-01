@@ -9,6 +9,8 @@
  * never authorizes an external submission. GOO-316 adds the statements and
  * venue checks (obligations only when a statement set is bound), the
  * venue-check results with actionable items, and the anonymized download.
+ * GOO-317 adds per-release BibTeX / CSL JSON / RIS downloads from the
+ * immutable snapshot, with the count of omitted metadata fields.
  */
 
 import React from 'react';
@@ -23,6 +25,7 @@ import { projectService, type Draft } from '@/services/projectService';
 import type {
   ApiCheckState,
   ApiManuscriptRelease,
+  ApiReferenceFormat,
   ApiReleaseVerification,
 } from '@/types/api/manuscript-release-contract';
 import type { ApiVenueCheck } from '@/types/api/statements-contract';
@@ -36,6 +39,11 @@ const CHECKS: { key: string; label: string }[] = [
   { key: 'experiment_reproducibility', label: 'Experiment reproducibility' },
   { key: 'statements', label: 'Author statements' },
   { key: 'venue', label: 'Venue profile' },
+];
+const REFERENCE_DOWNLOADS: { format: ApiReferenceFormat; name: string }[] = [
+  { format: 'bibtex', name: 'BibTeX' },
+  { format: 'csl-json', name: 'CSL JSON' },
+  { format: 'ris', name: 'RIS' },
 ];
 const LABEL: Record<string, string> = Object.fromEntries(
   CHECKS.map((c) => [c.key, c.label])
@@ -157,6 +165,13 @@ const ReleaseCard: React.FC<{
       projectService.verifyManuscriptRelease(projectId, release.id),
     onSuccess: setVerification,
   });
+  // GOO-317: fields the reference files omit (never filled in).
+  const references = useQuery({
+    queryKey: ['manuscript-release-references', projectId, release.id],
+    queryFn: () =>
+      projectService.getReleaseReferenceReport(projectId, release.id),
+    staleTime: Infinity, // an immutable snapshot
+  });
   const failing = release.failing_obligations ?? [];
   const label = `${release.stage === 'verified' ? 'Verified' : 'Candidate'} release ${release.id.slice(0, 8)}`;
 
@@ -245,6 +260,23 @@ const ReleaseCard: React.FC<{
             Download anonymized package
           </button>
         )}
+        {REFERENCE_DOWNLOADS.map(({ format, name }) => (
+          <button
+            key={format}
+            type="button"
+            onClick={() =>
+              void projectService.downloadReleaseReferences(
+                projectId,
+                release.id,
+                format
+              )
+            }
+            className={BUTTON}
+          >
+            <Download className="h-3 w-3" />
+            {name}
+          </button>
+        ))}
         <button
           type="button"
           onClick={() => verify.mutate()}
@@ -273,6 +305,17 @@ const ReleaseCard: React.FC<{
           {promote.error instanceof Error
             ? promote.error.message
             : 'Promotion failed'}
+        </p>
+      )}
+      {references.data && (
+        <p className="text-xs text-muted-foreground">
+          {references.data.records} references;{' '}
+          {references.data.omissions.length === 0
+            ? 'no metadata omitted'
+            : `${references.data.omissions.length} missing ${
+                references.data.omissions.length === 1 ? 'field' : 'fields'
+              } omitted, never filled in`}
+          .
         </p>
       )}
       {verification && (

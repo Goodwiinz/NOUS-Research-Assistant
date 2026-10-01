@@ -273,6 +273,59 @@ def test_draft_export_route_unchanged(
     )
 
 
+def test_release_references_read_snapshot_only(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GOO-317: one query per download (the release row); every live
+    citation path raises."""
+    references = [
+        {
+            "key": "doc1",
+            "type": "journal_article",
+            "title": "Snapshotted title",
+            "authors": ["World Health Organization"],
+            "year": None,
+            "venue": "J",
+            "doi": "10.1/x",
+            "arxiv_id": None,
+        }
+    ]
+    row = SimpleNamespace(id=uuid4(), snapshot={"references": references})
+    found = MagicMock()
+    found.scalar_one_or_none.return_value = row
+    harness.db.execute = AsyncMock(return_value=found)
+
+    async def live(*_: object, **__: object) -> Any:
+        raise AssertionError("release references never read live citations")
+
+    monkeypatch.setattr(DraftGenerationService, "get_draft_citations", live)
+    monkeypatch.setattr(DraftGenerationService, "_canonical_citation_records", live)
+    monkeypatch.setattr(svc, "build_snapshot", live)
+    base = f"{_base()}/{row.id}/references"
+    csl = harness.client.get(f"{base}?format=csl-json")
+    assert csl.status_code == 200, csl.text
+    assert csl.headers["content-type"] == "application/vnd.citationstyles.csl+json"
+    assert csl.headers["x-reference-omissions"] == "1"  # year
+    assert [i["title"] for i in csl.json()] == ["Snapshotted title"]
+    ris = harness.client.get(f"{base}?format=ris")
+    assert ris.headers["content-disposition"] == 'attachment; filename="references.ris"'
+    assert "TI  - Snapshotted title\r\n" in ris.text
+    bib = harness.client.get(base)
+    assert bib.headers["content-type"] == "application/x-bibtex"
+    assert bib.text == svc.references_bib(row.snapshot)
+    report = harness.client.get(f"{base}?format=ris&report=true")
+    assert report.json() == {
+        "format": "ris",
+        "records": 1,
+        "omissions": [
+            {"key": "doc1", "field": "year", "reason": "absent", "value": None}
+        ],
+    }
+    assert harness.client.get(f"{base}?format=docx").status_code == 422
+    assert set(harness.actions) == {ResearchAction.VIEW}
+    assert harness.db.execute.await_count == 4  # one row query per download
+
+
 def test_no_outbound_http_in_service() -> None:
     banned = {"httpx", "requests", "aiohttp", "urllib", "http"}
     for path in SERVICE_FILES:

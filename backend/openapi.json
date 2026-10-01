@@ -18524,6 +18524,77 @@
         "title": "ReferenceMapping",
         "type": "object"
       },
+      "ReferenceOmission": {
+        "description": "A field a reference file leaves out because the record lacks it\n(``absent``), or a record exported as a generic type (``type_unmapped``,\nwith the raw ``value``). GOO-317: never filled in or guessed.",
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "absent",
+              "type_unmapped"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key",
+          "field",
+          "reason"
+        ],
+        "title": "ReferenceOmission",
+        "type": "object"
+      },
+      "ReferenceReport": {
+        "description": "``?report=true``: what a release reference file would contain.",
+        "properties": {
+          "format": {
+            "enum": [
+              "bibtex",
+              "csl-json",
+              "ris"
+            ],
+            "title": "Format",
+            "type": "string"
+          },
+          "omissions": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceOmission"
+            },
+            "title": "Omissions",
+            "type": "array"
+          },
+          "records": {
+            "title": "Records",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "format",
+          "records",
+          "omissions"
+        ],
+        "title": "ReferenceReport",
+        "type": "object"
+      },
       "RejectRequest": {
         "properties": {
           "audit_note": {
@@ -45366,7 +45437,7 @@
     },
     "/api/v1/projects/{project_id}/drafts/{draft_id}/export": {
       "post": {
-        "description": "Export draft to LaTeX (.tex + .bib) or Markdown.",
+        "description": "Export draft to LaTeX (.tex + .bib) or Markdown, or its references\nalone as CSL JSON or RIS (GOO-317; ``X-Reference-Omissions`` counts the\nfields left out because the record lacks them).",
         "operationId": "export_draft_api_v1_projects__project_id__drafts__draft_id__export_post",
         "parameters": [
           {
@@ -45390,13 +45461,13 @@
             }
           },
           {
-            "description": "Export format: markdown, latex",
+            "description": "Export format: markdown, latex, csl-json, ris",
             "in": "query",
             "name": "format",
             "required": false,
             "schema": {
               "default": "markdown",
-              "description": "Export format: markdown, latex",
+              "description": "Export format: markdown, latex, csl-json, ris",
               "title": "Format",
               "type": "string"
             }
@@ -45844,6 +45915,93 @@
           }
         ],
         "summary": "Promote",
+        "tags": [
+          "manuscript-releases"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/references": {
+      "get": {
+        "description": "GOO-317: the release's references as BibTeX, CSL JSON or RIS (VIEW),\nbuilt from its immutable snapshot only. ``report=true`` returns the\nrecord count and omissions as JSON instead of the file.",
+        "operationId": "download_references_api_v1_projects__project_id__manuscript_releases__release_id__references_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "bibtex",
+              "enum": [
+                "bibtex",
+                "csl-json",
+                "ris"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "report",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Report",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferenceReport"
+                }
+              },
+              "application/vnd.citationstyles.csl+json": {},
+              "application/x-bibtex": {},
+              "application/x-research-info-systems": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download References",
         "tags": [
           "manuscript-releases"
         ]

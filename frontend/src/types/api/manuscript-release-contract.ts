@@ -15,3 +15,5 @@ export type ApiPromoteRequest = Schemas['PromoteRequest'];
 export type ApiReleaseVerification = Schemas['ReleaseVerification'];
 export type ApiCheckResult = Schemas['CheckResult'];
 export type ApiCheckState = ApiCheckResult['state'];
+export type ApiReferenceReport = Schemas['ReferenceReport'];
+export type ApiReferenceFormat = ApiReferenceReport['format'];

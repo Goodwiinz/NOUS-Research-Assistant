@@ -36,6 +36,8 @@ import type {
   ApiManuscriptRelease,
   ApiManuscriptReleaseList,
   ApiPromoteRequest,
+  ApiReferenceFormat,
+  ApiReferenceReport,
   ApiReleaseVerification,
 } from '@/types/api/manuscript-release-contract';
 import type {
@@ -204,6 +206,22 @@ export interface ProjectBibliography {
   citation_count: number;
   generated_at: string;
 }
+
+/** Draft export formats; GOO-317 adds the references-only files. */
+export type DraftExportFormat = 'markdown' | 'latex' | 'csl-json' | 'ris';
+
+const REFERENCE_FILENAMES: Record<ApiReferenceFormat, string> = {
+  bibtex: 'references.bib',
+  'csl-json': 'references.json',
+  ris: 'references.ris',
+};
+
+const DRAFT_EXPORT_FILENAMES: Record<DraftExportFormat, string> = {
+  markdown: 'draft.md',
+  latex: 'draft.zip',
+  'csl-json': REFERENCE_FILENAMES['csl-json'],
+  ris: REFERENCE_FILENAMES.ris,
+};
 
 export const projectService = {
   // =========================================================================
@@ -858,13 +876,36 @@ export const projectService = {
     );
   },
 
+  /** GOO-317: a release's references (BibTeX, CSL JSON or RIS) from its
+   * immutable snapshot. */
+  async downloadReleaseReferences(
+    projectId: string,
+    releaseId: string,
+    format: ApiReferenceFormat
+  ): Promise<void> {
+    await api.download(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/references?format=${format}`,
+      REFERENCE_FILENAMES[format]
+    );
+  },
+
+  /** GOO-317: record count and the fields the reference files omit. */
+  async getReleaseReferenceReport(
+    projectId: string,
+    releaseId: string
+  ): Promise<ApiReferenceReport> {
+    return api.get<ApiReferenceReport>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/references?format=csl-json&report=true`
+    );
+  },
+
   /**
    * Export draft to file format
    */
   async exportDraft(
     projectId: string,
     draftId: string,
-    format: 'markdown' | 'latex' = 'markdown',
+    format: DraftExportFormat = 'markdown',
     includeBibliography: boolean = true,
     bibliographyFormat: 'bibtex' | 'biblatex' = 'bibtex'
   ): Promise<void> {
@@ -878,12 +919,13 @@ export const projectService = {
   },
 
   /**
-   * Download draft export as file (markdown or latex zip)
+   * Download draft export as file (markdown, latex zip, or GOO-317's
+   * references-only CSL JSON / RIS)
    */
   async downloadDraftExport(
     projectId: string,
     draftId: string,
-    format: 'markdown' | 'latex' = 'markdown',
+    format: DraftExportFormat = 'markdown',
     includeBibliography: boolean = true,
     bibliographyFormat: 'bibtex' | 'biblatex' = 'bibtex'
   ): Promise<void> {
@@ -894,7 +936,7 @@ export const projectService = {
     }).toString();
     await api.download(
       `/projects/${projectId}/drafts/${draftId}/export?${qs}`,
-      format === 'latex' ? 'draft.zip' : 'draft.md'
+      DRAFT_EXPORT_FILENAMES[format]
     );
   },
 
