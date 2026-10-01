@@ -40,6 +40,7 @@ from src.services.research_engine import (
     evidence_service,
     identity_service,
     prisma,
+    synthesis_service,
 )
 from src.services.research_engine.contracts import canonical_json_sha256
 from src.services.research_engine.prisma_service import load_inputs
@@ -312,6 +313,20 @@ async def _evidence(db: AsyncSession, context: ProjectContext) -> list[Part]:
     return [_sealed_part("evidence.json", evidence_service.EXPORT_SCHEMA, body, empty)]
 
 
+async def _synthesis(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-311's export: every result, failed and stale ones included."""
+    package = await synthesis_service.export_package(db, context)
+    body = package["body"]
+    return [
+        _sealed_part(
+            "synthesis.json",
+            synthesis_service.EXPORT_SCHEMA,
+            body,
+            not body["results"],
+        )
+    ]
+
+
 async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
     """The builders, in a fixed order (looked up at call time). PRISMA reads
     last: without the caller's snapshot, ``load_inputs`` would open its own
@@ -325,6 +340,7 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _extraction,
         _appraisal,
         _evidence,
+        _synthesis,
         _prisma,
     ):
         parts.extend(await build(db, context))

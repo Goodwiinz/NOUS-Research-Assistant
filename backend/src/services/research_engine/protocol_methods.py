@@ -70,3 +70,28 @@ def certainty_method(snapshot: Mapping[str, Any]) -> tuple[str, str]:
     if version not in _CERTAINTY_METHODS.get(str(key), ()):
         raise ValueError(NO_CERTAINTY)
     return str(key), str(version)
+
+
+NO_SYNTHESIS = "Protocol selects no quantitative synthesis"
+UNSUPPORTED_SYNTHESIS = "Protocol selects an unsupported synthesis method"
+# ponytail: one measure/model pair (GOO-311); another is a new pair here plus
+# a new synthesis_rules.ESTIMATOR_VERSION, never an edit to this one.
+_SYNTHESIS_METHODS = {("smd_hedges_g", "random_effects_dl")}
+
+
+def synthesis_selection(snapshot: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    """``appraisal_synthesis.synthesis`` as ``(measure, model, outcome,
+    timepoint)`` (GOO-311). A narrative-only section selects nothing."""
+    section = snapshot.get("appraisal_synthesis")
+    method = section.get("synthesis") if isinstance(section, Mapping) else None
+    if not isinstance(method, Mapping) or (
+        "measure" not in method and "model" not in method
+    ):
+        raise ValueError(NO_SYNTHESIS)
+    measure, model = method.get("measure"), method.get("model")
+    if (measure, model) not in _SYNTHESIS_METHODS:
+        raise ValueError(UNSUPPORTED_SYNTHESIS)
+    outcome, timepoint = method.get("outcome"), method.get("timepoint")
+    if not (_text(outcome) and _text(timepoint)):
+        raise ValueError(NO_SYNTHESIS)
+    return str(measure), str(model), str(outcome), str(timepoint)

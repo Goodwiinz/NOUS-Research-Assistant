@@ -384,6 +384,8 @@ _APPRAISAL_MIGRATION = "e2a4c6b8d0f1_create_appraisal_assessments.py"
 # GOO-310's triggers depend on the function this migration owns: step down
 # through it first and back up after.
 _EVIDENCE_MIGRATION = "f4b6d8a0c2e3_create_evidence_certainty.py"
+# GOO-311's synthesis results reference GOO-310's tables and use the function.
+_SYNTHESIS_MIGRATION = "a6c8e0b2d4f5_create_synthesis_results.py"
 
 
 def _migration(connection: Connection, direction: str, filename: str) -> None:
@@ -396,7 +398,7 @@ def _migration(connection: Connection, direction: str, filename: str) -> None:
 
 
 async def _run_migration(factory: Factory, direction: str) -> None:
-    order = [_EVIDENCE_MIGRATION, _APPRAISAL_MIGRATION]
+    order = [_SYNTHESIS_MIGRATION, _EVIDENCE_MIGRATION, _APPRAISAL_MIGRATION]
     if direction == "upgrade":
         order.reverse()
     async with factory() as db:

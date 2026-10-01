@@ -94,6 +94,7 @@ from src.api.research_engine import (
     research_engine_runs_router,
     research_engine_screening_router,
     research_engine_steps_router,
+    research_engine_synthesis_router,
 )
 from src.api.search import knowledge_graph_router, search_quality_router, search_router
 from src.api.security import compliance_router, encryption_router, rbac_router
@@ -698,6 +699,9 @@ app.include_router(
 app.include_router(
     research_engine_evidence_router, prefix="/api/v1"
 )  # Research Engine evidence tables, contradictions and certainty (GOO-310)
+app.include_router(
+    research_engine_synthesis_router, prefix="/api/v1"
+)  # Research Engine quantitative synthesis (GOO-311)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search

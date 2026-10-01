@@ -31,7 +31,8 @@ BLOCKER_CODES = (
     "identity_mismatch",
     "retracted_source",
 )
-ANCHORED_LINK_KINDS = frozenset({"extraction", "source_span"})
+# GOO-311: a pooled estimate cites its synthesis result, which pins its inputs.
+ANCHORED_LINK_KINDS = frozenset({"extraction", "source_span", "synthesis_result"})
 Status = Literal["candidate", "verified", "stale"]
 Node = tuple[str, str]
 

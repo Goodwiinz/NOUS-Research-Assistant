@@ -167,6 +167,8 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
             parent = rules.source_node(
                 row.document_id, row.source_hash, row.text_sha256
             )
+        elif row.kind == "synthesis_result":  # GOO-311
+            parent = rules.node("synthesis", row.synthesis_result_id)
         else:
             continue
         edges.append((parent, rules.node("link", row.id)))
@@ -186,12 +188,21 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
             edges.append((rules.node("claim_version", value), target))
     # GOO-309: appraisals hang off accepted values, sources and protocols.
     # GOO-310: evidence tables, contradictions and certainty hang off accepted
-    # values, protocols and appraisals. Local imports: both services read
-    # this graph for their stale flags.
-    from src.services.research_engine import appraisal_service, evidence_service
+    # values, protocols and appraisals. GOO-311: synthesis results hang off
+    # evidence tables and protocols. Local imports: these services read this
+    # graph for their stale flags.
+    from src.services.research_engine import (
+        appraisal_service,
+        evidence_service,
+        synthesis_service,
+    )
 
     part_changed: set[rules.Node] = set()
-    for part in (appraisal_service.graph_part, evidence_service.graph_part):
+    for part in (
+        appraisal_service.graph_part,
+        evidence_service.graph_part,
+        synthesis_service.graph_part,
+    ):
         more_edges, more_changed = await part(db, collection_id)
         edges += more_edges
         part_changed |= more_changed

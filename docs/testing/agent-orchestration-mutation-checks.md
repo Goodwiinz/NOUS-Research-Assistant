@@ -1824,3 +1824,47 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architectur
 | Organization filter on the stance query (`evidence_service.py:638`) | the `organization_id ==` clause removed | Step 2 (`:430`): the org-B row joins the suggestion group. |
 | Organization filter on the suggestion snapshot (`evidence_service.py:876`) | the `organization_id ==` clause removed | Step 4: `DID NOT RAISE HTTPException`; citing the org-B stance row is snapshotted instead of 404. |
 | Certainty/model-confidence separation (`evidence_rules.py:203`) | `values.append(ratings.get("confidence"))` in `certainty_level` | `test_evidence_boundary.py::test_certainty_rules_never_name_model_signals`: `evidence_rules.py:204 names 'confidence'`; the rules tests' level derivations fail too. |
+
+## GOO-311 one bounded quantitative synthesis (SMD Hedges' g, DerSimonian-Laird) — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_synthesis_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `a6c8e0b2d4f5`
+(connection URL from the environment; value omitted).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy.
+
+`diff -q` against the copy succeeded for every mutant, and `git diff --quiet
+backend/src` succeeded afterwards. The proof (1 test), the rules tests (15)
+and the boundary guard (4) passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/synthesis_rules.py`
+  `3e0701e9485dc03d0200361ea32130970dd9532cf9ac7454fbef7c4b980978f0`
+- `backend/src/services/research_engine/synthesis_service.py`
+  `5db24233599d375702031b6222bb38f7424e8281a747078f09b0acfd0a740cda`
+- `backend/src/services/research_engine/step_executor.py`
+  `dceca02850f5bcf6bb8c72140f238f7af16047a2291bdf36a559f91872c225c9`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_synthesis_rules.py -k "gold|homogeneous|duplicate|missing_variance"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_synthesis_boundary.py   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_synthesis_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Small-sample factor J in `hedges_g` (`synthesis_rules.py:230`) | `j = 1` | `-k gold`: 2 failed, gold comparison off by ~1e-3 (beyond the declared 1e-8). |
+| tau2 clamp in `pool_dl` (`synthesis_rules.py:252`) | `tau2 = (q - df) / c` | `-k homogeneous`: tau2 < 0 instead of the clamped 0. |
+| One input per table row in `select_inputs` (`synthesis_rules.py:204`) | one input per report id of each row | `-k duplicate`: study A weighted twice (1 failed). |
+| `invalid_variance` check (`synthesis_rules.py:169`) | `if False:` | `-k missing_variance`: unit G with sd_c = 0 enters the pool (1 failed). |
+| Unchanged-input short-circuit in `execute` (`synthesis_service.py:403`) | `if False:` | Proof step 4 (`:369`): the re-execution reaches the tip check and is refused `409 Synthesis result is stale; reload` instead of returning the tip with zero writes. |
+| `invalidate_dependents` on a successor (`synthesis_service.py:478`) | `if False:` | Proof step 7 (`:424`): release 1 is never stamped (`None == 'research_synthesis'`). |
+| `graph_part` edge selection (`synthesis_service.py:229`) | every result linked to every claim link | Proof step 7 (`:425`): the unrelated draft's release is stamped too (`'research_synthesis' is None`). |
+| Stdlib-only rules (`synthesis_rules.py` imports) | `import numpy` added | `test_synthesis_boundary.py::test_rules_import_only_stdlib` fails. |
+| Narrative step untouched (`step_executor.py`) | `from src.services.research_engine import synthesis_service` appended | 2 boundary tests fail (automation scan and narrative-step check). |

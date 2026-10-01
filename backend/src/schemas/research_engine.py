@@ -1230,6 +1230,134 @@ class EvidenceOutcomeListResponse(BaseModel):
     outcomes: List[EvidenceOutcome]
 
 
+# --- Quantitative synthesis (GOO-311) ----------------------------------------
+
+SynthesisStatus = Literal["computed", "validation_failed"]
+_SHA256 = r"^[0-9a-f]{64}$"
+
+
+class SynthesisRoles(BaseModel):
+    """Which evidence-table field carries each arm statistic."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mean_i: UUID
+    sd_i: UUID
+    n_i: UUID
+    mean_c: UUID
+    sd_c: UUID
+    n_c: UUID
+
+
+class SynthesisInputs(BaseModel):
+    mean_i: float
+    sd_i: float
+    n_i: int
+    mean_c: float
+    sd_c: float
+    n_c: int
+
+
+class SynthesisIncluded(BaseModel):
+    """One analysis unit; ``g``, ``v`` and weights only once computed."""
+
+    unit: str
+    report_ids: List[UUID]
+    accepted_value_ids: List[UUID]
+    inputs: SynthesisInputs
+    g: Optional[float] = None
+    v: Optional[float] = None
+    w_fixed: Optional[float] = None
+    w_random: Optional[float] = None
+
+
+class SynthesisExclusion(BaseModel):
+    """A structured reason; run-level failures name no unit."""
+
+    unit: Optional[str] = None
+    report_ids: List[str]
+    reason: str
+    detail: str
+
+
+class SynthesisSelection(BaseModel):
+    measure: str
+    model: str
+    outcome_key: str
+    timepoint: str
+
+
+class SynthesisPreview(BaseModel):
+    """Exactly the input set ``POST`` would use, with zero writes."""
+
+    selection: SynthesisSelection
+    table_version_id: UUID
+    protocol_version_id: UUID
+    config: Dict[str, Any]
+    config_hash: str
+    estimator_version: str
+    included: List[SynthesisIncluded]
+    excluded: List[SynthesisExclusion]
+    run_failures: List[SynthesisExclusion]
+    input_hash: str
+    tip_id: Optional[UUID] = None
+    tip_input_hash: Optional[str] = None
+
+
+class SynthesisExecute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table_version_id: UUID
+    roles: SynthesisRoles
+    expected_input_hash: str = Field(..., pattern=_SHA256)
+    supersedes_result_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class SynthesisResultResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    protocol_version_id: UUID
+    table_version_id: UUID
+    outcome_key: str
+    timepoint: str
+    measure: str
+    model: str
+    config: Dict[str, Any]
+    config_hash: str
+    estimator_version: str
+    software: Dict[str, Any]
+    status: SynthesisStatus
+    included: List[SynthesisIncluded]
+    excluded: List[SynthesisExclusion]
+    estimate: Optional[float] = None
+    se: Optional[float] = None
+    ci_low: Optional[float] = None
+    ci_high: Optional[float] = None
+    q: Optional[float] = None
+    df: Optional[int] = None
+    tau2: Optional[float] = None
+    i2: Optional[float] = None
+    input_hash: str
+    result_hash: str
+    executed_by_id: UUID
+    actor_role: str
+    supersedes_result_id: Optional[UUID] = None
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class SynthesisListResponse(BaseModel):
+    """Every result, stale and failed ones included; staleness is derived."""
+
+    selection: Optional[SynthesisSelection] = None
+    selection_error: Optional[str] = None
+    results: List[SynthesisResultResponse]
+
+
 # --- Search import / corpus (GOO-300) --------------------------------------
 
 
