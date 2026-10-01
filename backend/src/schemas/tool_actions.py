@@ -1,5 +1,6 @@
 """Transport shapes for durable, approval-gated tool actions."""
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -37,6 +38,26 @@ class ActionStatus(BaseModel):
     state: ActionState
     tool_name: str
     result: ToolResult | None = None
+    # Absolute browser link while the action waits for the user's decision.
+    approval_url: str | None = None
+
+
+class ActionReview(BaseModel):
+    """What the interactive owner sees before deciding: the exact stored target."""
+
+    invocation_id: UUID
+    state: ActionState
+    tool_name: str
+    project_id: UUID
+    project_label: str
+    project_available: bool
+    title: str
+    content: str
+    tags: list[str]
+    requested_at: datetime
+    decided_at: datetime | None = None
+    result: ToolResult | None = None
+    last_error: str | None = None
 
 
 class ActionDecision(BaseModel):
