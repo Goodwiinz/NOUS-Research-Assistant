@@ -70,7 +70,14 @@ def test_page_context_strings_are_capped(field: str) -> None:
         _request({field: "x" * 10_000})
 
 
-def test_execute_route_returns_422_for_oversized_metadata() -> None:
+def test_sanitized_metadata_still_over_8kb_is_rejected() -> None:
+    # 20 x 20 x 400-char leaves survive every sanitizer cap (~160 KB).
+    wide = {f"a{i}": {f"b{j}": "x" * 400 for j in range(20)} for i in range(20)}
+    with pytest.raises(ValidationError, match="metadata is too large"):
+        _request({"metadata": wide})
+
+
+def _post_execute(metadata: dict) -> Any:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -85,11 +92,52 @@ def test_execute_route_returns_422_for_oversized_metadata() -> None:
     app.dependency_overrides[get_db] = lambda: AsyncMock()
     body = {
         "messages": [{"role": "user", "content": "hi"}],
-        "page_context": {"metadata": {"blob": "x" * 1_000_000}},
+        "page_context": {"type": "project", "metadata": metadata},
     }
-    with TestClient(app) as client:
+    stored: list[dict] = []
+    with (
+        patch.object(
+            execute_mod, "_resolve_dispatch_backend", return_value="background"
+        ),
+        patch.object(
+            execute_mod, "_set_job", side_effect=lambda _id, p, **_k: stored.append(p)
+        ),
+        patch.object(
+            execute_mod._agent_rate_limiter,
+            "check_rate_limit",
+            new=AsyncMock(return_value=(True, 0)),
+        ),
+        patch.object(
+            execute_mod._agent_rate_limiter, "record_attempt", new=AsyncMock()
+        ),
+        patch.object(
+            execute_mod, "_resolve_thread", new=AsyncMock(return_value=(None, ""))
+        ),
+        patch(
+            "src.services.agent.agent_run_service.upsert_run",
+            new=AsyncMock(return_value=SimpleNamespace(job_id="j")),
+        ),
+        patch.object(execute_mod, "_run_agent_graph", new=AsyncMock()),
+        TestClient(app) as client,
+    ):
         response = client.post("/api/v1/agent/execute", json=body)
+    return response, stored
+
+
+def test_execute_route_returns_422_for_megabyte_metadata() -> None:
+    response, stored = _post_execute({"blob": "x" * 1_000_000})
     assert response.status_code == 422
+    assert stored == []
+
+
+def test_execute_route_accepts_a_long_project_description() -> None:
+    """usePageContext forwards the unbounded project description; it is
+    truncated by the sanitizer, never a 422 (Codex P2 on #1820)."""
+    response, stored = _post_execute({"activeTab": "docs", "description": "d" * 20_000})
+    assert response.status_code == 200, response.text
+    (payload,) = stored
+    description = payload["request"]["page_context"]["metadata"]["description"]
+    assert description.startswith("ddd") and len(description) <= 403
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.services.agent._sanitize import sanitize_page_context
 from src.services.agent._uuid import UUID_STRICT_PATTERN
 
 StrictUUIDString = Annotated[str, StringConstraints(pattern=UUID_STRICT_PATTERN)]
@@ -53,8 +54,16 @@ class AgentMessage(BaseModel):
 # R8-D4: page context is copied into the job cache (L1 + Redis) and the
 # Celery message, so it is bounded at the wire. String caps stay at or below
 # the sanitizer's 400-char field cap, which keeps a sanitized copy valid here.
+# Metadata is sanitized (strings truncated, keys/depth capped) before the 8 KB
+# bound applies, so a long project description is trimmed rather than
+# rejected; only a payload past the raw ceiling or the nesting cap is a 422.
 PAGE_CONTEXT_METADATA_MAX_BYTES = 8192
+PAGE_CONTEXT_METADATA_MAX_RAW_BYTES = 256 * 1024
 PAGE_CONTEXT_METADATA_MAX_DEPTH = 8
+
+
+def _json_size(value: Any) -> int:
+    return len(json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"))
 
 
 def _nested_deeper_than(value: Any, limit: int) -> bool:
@@ -93,8 +102,9 @@ class PageContextRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "Free-form page metadata; at most 8 KB as compact JSON and 8 "
-            "levels of nesting"
+            "Free-form page metadata, sanitized on receipt (long strings "
+            "truncated, keys and depth capped). Rejected above 256 KB raw, 8 "
+            "levels of nesting, or 8 KB once sanitized."
         ),
     )
 
@@ -107,10 +117,13 @@ class PageContextRequest(BaseModel):
             return value
         if _nested_deeper_than(value, PAGE_CONTEXT_METADATA_MAX_DEPTH):
             raise ValueError("metadata is nested too deeply")
-        encoded = json.dumps(value, separators=(",", ":"), default=str)
-        if len(encoded.encode("utf-8")) > PAGE_CONTEXT_METADATA_MAX_BYTES:
+        if _json_size(value) > PAGE_CONTEXT_METADATA_MAX_RAW_BYTES:
             raise ValueError("metadata is too large")
-        return value
+        # Same pass (and depth) _page_context_to_dict applies; idempotent.
+        cleaned = sanitize_page_context({"metadata": value})["metadata"]
+        if _json_size(cleaned) > PAGE_CONTEXT_METADATA_MAX_BYTES:
+            raise ValueError("metadata is too large")
+        return cleaned
 
 
 SupportedModel = Literal["", "model-router", "gpt-5-mini", "gpt-5.6-luna"]

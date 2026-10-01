@@ -43,7 +43,7 @@ from src.models.chat_message import ChatMessage
 from src.models.user import User
 from src.services.agent import stream_buffer as _stream_buffer
 from src.services.agent._pii_redact import redact_tool_executions
-from src.services.agent.agent_execution_service import (  # noqa: F401
+from src.services.agent.agent_execution_service import (
     MAX_JOBS,
     AgentThreadResolutionError,
     _actor_fields,
@@ -57,6 +57,9 @@ from src.services.agent.agent_execution_service import (  # noqa: F401
     _resume_agent_graph,
     _run_agent_graph,
     _set_job,
+)
+from src.services.agent.agent_execution_service import (  # noqa: F401
+    stored_request_payload as _stored_request_payload,
 )
 from src.services.agent.agent_run_service import (
     claim_awaiting_run_for_confirmation,
@@ -421,7 +424,7 @@ async def _celery_dispatch(
 
         run_agent_job.delay(
             job_id=job_id,
-            request_payload=job_payload["request"],
+            request_payload=_stored_request_payload(request),
             user_id=str(current_user.id),
         )
     except Exception:
@@ -443,22 +446,6 @@ async def _celery_dispatch(
         return "failed", job_id
 
     return "dispatched", job_id
-
-
-def _stored_request_payload(request: AgentExecuteRequest) -> Dict[str, Any]:
-    """The request as it is cached (L1, Redis 1h) and sent to Celery (R8-D4).
-
-    Page context is stored in its sanitized form (the same trust-boundary
-    pass every graph path applies), never the raw client blob. Sanitizing is
-    idempotent and only shrinks values, so the payload still re-validates as
-    an ``AgentExecuteRequest`` on the confirm and worker paths.
-    """
-    payload = request.model_dump(mode="json")
-    payload["page_context"] = {
-        **_page_context_to_dict(request.page_context),
-        "workspace_id": payload["page_context"].get("workspace_id"),
-    }
-    return payload
 
 
 @router.post("/execute", response_model=JobStartResponse)

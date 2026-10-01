@@ -17566,7 +17566,7 @@ export interface components {
             label?: string | null;
             /**
              * Metadata
-             * @description Free-form page metadata; at most 8 KB as compact JSON and 8 levels of nesting
+             * @description Free-form page metadata, sanitized on receipt (long strings truncated, keys and depth capped). Rejected above 256 KB raw, 8 levels of nesting, or 8 KB once sanitized.
              */
             metadata?: {
                 [key: string]: unknown;
