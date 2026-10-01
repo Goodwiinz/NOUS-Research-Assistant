@@ -17,6 +17,7 @@ from src.services.research_decisions.ledger import (
     _validate_experiment_transitions,
     _validate_extraction_transitions,
     _validate_identity_transitions,
+    _validate_peer_review_transitions,
     _validate_release_transitions,
     _validate_reproduction_transitions,
     _validate_screening_transitions,
@@ -2957,4 +2958,169 @@ def test_reproduction_replay_rejects_attempt_after_executed() -> None:
             r.started(1),
             r.finished(1, "executed", "reproduced"),
             r.started(2),
+        )
+
+
+# --- GOO-314: research_peer_review -------------------------------------------
+
+Event = tuple[str, str, dict[str, Any]]
+
+
+class _PeerReview:
+    """Hand-built events for one Collection's research_peer_review stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.round = uuid4()
+        self.root = uuid4()
+
+    def _base(self) -> dict[str, Any]:
+        return {"collection_id": str(self.collection_id)}
+
+    def round_recorded(self) -> Event:
+        return (
+            "review_round.recorded",
+            "editor",
+            self._base()
+            | {
+                "round_id": str(self.round),
+                "draft_id": str(uuid4()),
+                "draft_content_hash": "a" * 64,
+                "reviewer_ids": [str(uuid4())],
+            },
+        )
+
+    def comment(self) -> Event:
+        return (
+            "review_comment.versioned",
+            "editor",
+            self._base()
+            | {
+                "round_id": str(self.round),
+                "comment_id": str(self.root),
+                "comment_root_id": str(self.root),
+                "supersedes_comment_id": None,
+                "reviewer_id": str(uuid4()),
+                "draft_content_hash": "a" * 64,
+                "anchored": True,
+                "quote_sha256": "b" * 64,
+            },
+        )
+
+    def response(self, response_id: UUID, supersedes: UUID | None = None) -> Event:
+        return (
+            "review_response.versioned",
+            "editor",
+            self._base()
+            | {
+                "comment_root_id": str(self.root),
+                "response_id": str(response_id),
+                "supersedes_response_id": (
+                    None if supersedes is None else str(supersedes)
+                ),
+                "kind": "change",
+                "revised_draft_id": str(uuid4()),
+                "diff_sha256": "c" * 64,
+                "evidence_claim_version_ids": [],
+            },
+        )
+
+    def decision(self, kind: str, role: str, response_id: UUID | None = None) -> Event:
+        return (
+            "review_decision.recorded",
+            role,
+            self._base()
+            | {
+                "comment_root_id": str(self.root),
+                "decision_id": str(uuid4()),
+                "kind": kind,
+                "assignee_id": str(uuid4()) if kind == "assigned" else None,
+                "response_id": None if response_id is None else str(response_id),
+                "supersedes_decision_id": None,
+            },
+        )
+
+    def validate(self, event: Event) -> None:
+        event_type, _, payload = event
+        subject = self.round if event_type == "review_round.recorded" else self.root
+        _validate_event(
+            aggregate_type="research_peer_review",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="peer_review_comment",
+            subject_id=subject,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="e" * 64,
+        )
+
+    def replay(self, *events: Event) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_peer_review_transitions(stored, self.collection_id)
+
+
+def test_peer_review_payloads_validate() -> None:
+    p = _PeerReview()
+    response = uuid4()
+    for event in (
+        p.round_recorded(),
+        p.comment(),
+        p.response(response),
+        p.decision("assigned", "editor"),
+        p.decision("resolved", "adjudicator", response),
+    ):
+        p.validate(event)
+    event_type, role, payload = p.response(response)
+    with pytest.raises(DecisionValidationError, match="revision and diff"):
+        p.validate((event_type, role, {**payload, "diff_sha256": None}))
+    event_type, role, payload = p.decision("resolved", "adjudicator")
+    with pytest.raises(DecisionValidationError, match="accepted response"):
+        p.validate((event_type, role, payload))
+
+
+def test_peer_review_replay_rejects_editor_resolution() -> None:
+    p = _PeerReview()
+    response = uuid4()
+    head = (p.round_recorded(), p.comment(), p.response(response))
+    p.replay(*head, p.decision("resolved", "adjudicator", response))
+    with pytest.raises(DecisionReplayError, match="adjudicator"):
+        p.replay(*head, p.decision("resolved", "editor", response))
+    with pytest.raises(DecisionReplayError, match="editor"):
+        p.replay(*head, p.decision("assigned", "adjudicator"))
+
+
+def test_peer_review_replay_rejects_resolution_of_unknown_response() -> None:
+    p = _PeerReview()
+    with pytest.raises(DecisionReplayError, match="unknown response"):
+        p.replay(
+            p.round_recorded(),
+            p.comment(),
+            p.response(uuid4()),
+            p.decision("resolved", "adjudicator", uuid4()),
+        )
+
+
+def test_peer_review_replay_rejects_forked_response_chain() -> None:
+    p = _PeerReview()
+    first, second = uuid4(), uuid4()
+    head = (p.round_recorded(), p.comment(), p.response(first))
+    p.replay(*head, p.response(second, supersedes=first))
+    with pytest.raises(DecisionReplayError, match="forked"):
+        p.replay(
+            *head, p.response(second, supersedes=first), p.response(uuid4(), first)
+        )
+    with pytest.raises(DecisionReplayError, match="forked"):
+        p.replay(*head, p.response(second))
+    event_type, role, payload = p.response(first)
+    with pytest.raises(DecisionReplayError, match="without a diff"):
+        p.replay(
+            p.round_recorded(),
+            p.comment(),
+            (event_type, role, {**payload, "diff_sha256": None}),
         )
