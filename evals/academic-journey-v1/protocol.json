@@ -1,0 +1,73 @@
+{
+  "id": "academic-journey-v1",
+  "schema_version": "1.0",
+  "ticket": "GOO-308",
+  "baseline_status": "not_established",
+  "frozen_on": "2026-09-30",
+  "bundle_schema": "nous.academic.audit-bundle.v1",
+  "stages": ["plan", "discover", "select", "extract", "write"],
+  "stage_evidence": {
+    "plan": "methods.json",
+    "discover": "corpus.json",
+    "select": "prisma-flow.json",
+    "extract": "extraction.json",
+    "write": "drafts/release-checks.json"
+  },
+  "bundle_parts": [
+    "corpus.json",
+    "prisma-flow.json",
+    "claims.json",
+    "methods.json",
+    "extraction.json",
+    "drafts/release-checks.json",
+    "drafts/*.md"
+  ],
+  "projects": [
+    {"id": "real-1", "kind": "consenting_real"},
+    {"id": "real-2", "kind": "consenting_real"},
+    {
+      "id": "known-answer",
+      "kind": "held_out_known_answer",
+      "corpus": "corpora/known-answer.json",
+      "gold": "corpora/known-answer.gold.json"
+    }
+  ],
+  "principals": ["author", "supervisor", "reviewer_a", "reviewer_b", "adjudicator", "foreign", "viewer"],
+  "principal_roles": {
+    "author": [],
+    "supervisor": ["supervisor"],
+    "reviewer_a": ["reviewer"],
+    "reviewer_b": ["reviewer"],
+    "adjudicator": ["adjudicator"],
+    "foreign": [],
+    "viewer": []
+  },
+  "required_evidence": {
+    "all": ["trial.json", "transitions.jsonl", "audit-bundle.zip", "trace.zip", "roles.json", "independent-review.json"],
+    "consenting_real": ["consent.json"]
+  },
+  "measurements": {
+    "participant_count": "Distinct human actor_user_id across bundle identity decisions, claim assessments and accepted values with actor_role != machine, per declared principal, compared with the declared principals.",
+    "completion": "3 projects x 5 stages = 15 (project, stage) pairs. A pair counts only if the final /journey status is complete and that stage's bundle part verifies (status ok; write needs a verified release check). Published as k/15 plus per-stage k/3.",
+    "correction_burden": "Human rows that override or amend machine or earlier output: identity merges and splits (corpus.json decisions), accepted values whose value equals no cited machine observation, superseding claim versions and superseding assessments; raw and per included report. Adjudicated screening resolutions are not in bundle v1 and are published as null.",
+    "disputed_claim_resolution_time": "Per claim version whose first assessment stance is not supporting, or whose stance observation disagrees with its final tip: seconds from the first such row's created_at to the final tip's created_at; n, median, max.",
+    "export_completeness": "parts_ok/7 (present, checksum-verified, body hash recomputed) plus reconstruction: known-answer PRISMA counts, exclusion reasons, accepted values and claim support equal the gold; real projects: every full-text exclusion has a reason, every claim passage slices to its text, every run's effective_plan_hash recomputes from methods.json."
+  },
+  "outcome_dimensions": {
+    "reporting_completeness": ["passed", "failed", "not_run"],
+    "protocol_adherence": ["passed", "failed", "not_run"],
+    "claim_correctness": ["passed", "failed", "not_run", "judge_unavailable"],
+    "infrastructure": ["passed", "failed"]
+  },
+  "unscored": ["infrastructure:failed", "claim_correctness:judge_unavailable"],
+  "scenarios": [
+    {"id": "S1", "required": true, "scenario": "Full journey on each project", "induction": "principals drive Plan to Write in the UI", "expected": "15 pairs, the bundle and the transitions"},
+    {"id": "S2", "required": true, "scenario": "Reload at each stage, new context and re-login", "induction": "research-journey.live.spec.ts reloads; worker restart needs cluster authorization", "expected": "rail and ids identical before and after"},
+    {"id": "S3", "required": true, "scenario": "Provider outage", "induction": "a blueprint using a connector unavailable in dev", "expected": "non-ok execution receipt, Discover attention, nothing fabricated"},
+    {"id": "S4", "required": true, "scenario": "Missing full text", "induction": "the known-answer document without full text", "expected": "unavailable attempt in PRISMA not retrieved, never an exclusion"},
+    {"id": "S5", "required": true, "scenario": "Disputed evidence", "induction": "dual-review conflict plus an opposing assessment", "expected": "adjudicated conflict, 409 release_blocked, timed resolution"},
+    {"id": "S6", "required": true, "scenario": "Unauthorized, foreign or deleted access", "induction": "foreign and role-less probes; archived and deleted projects", "expected": "404 foreign and role-less, 403 reviewer assess/promote, deleted 404, archived bundle 200 and writes 409"},
+    {"id": "S7", "required": true, "scenario": "Approved-plan drift, override or legacy-unbound before paid execution", "induction": "edit the blueprint after approval; parameters_override; resume a legacy run", "expected": "409s, empty steps, no search receipts"},
+    {"id": "S8", "required": true, "scenario": "Source change after release", "induction": "change a cited document's text", "expected": "release.staled, Write attention, sibling release verified"}
+  ]
+}
