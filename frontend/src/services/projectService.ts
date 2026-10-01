@@ -6,7 +6,16 @@
 import { api } from '@/services/api-client';
 import { API_CONFIG } from '@/types/api';
 import type { components } from '@/types/generated/api';
-import type { ApiClaimListResponse } from '@/types/api/research-claims-contract';
+import type {
+  ApiClaimAssessment,
+  ApiClaimAssessmentCreate,
+  ApiClaimCreate,
+  ApiClaimLink,
+  ApiClaimLinkCreate,
+  ApiClaimListResponse,
+  ApiClaimResponse,
+  ApiStanceObservation,
+} from '@/types/api/research-claims-contract';
 import type {
   ApiDraftPromoteRequest,
   ApiDraftRelease,
@@ -503,6 +512,51 @@ export const projectService = {
   ): Promise<ApiClaimListResponse> {
     const qs = new URLSearchParams({ draft_id: draftId }).toString();
     return api.get<ApiClaimListResponse>(`/projects/${projectId}/claims?${qs}`);
+  },
+
+  /** GOO-308: a claim over the exact code-point span of a draft version. */
+  async createClaim(
+    projectId: string,
+    data: ApiClaimCreate
+  ): Promise<ApiClaimResponse> {
+    return api.post<ApiClaimResponse>(`/projects/${projectId}/claims`, data);
+  },
+
+  /** GOO-308: link the claim's tip version to evidence. */
+  async linkClaimEvidence(
+    projectId: string,
+    claimId: string,
+    data: ApiClaimLinkCreate
+  ): Promise<ApiClaimLink> {
+    return api.post<ApiClaimLink>(
+      `/projects/${projectId}/claims/${claimId}/links`,
+      data
+    );
+  },
+
+  /** GOO-308: snapshot the evidence meter's stance for one link. */
+  async observeClaimLink(
+    projectId: string,
+    claimId: string,
+    linkId: string,
+    idempotencyKey: string
+  ): Promise<ApiStanceObservation> {
+    return api.post<ApiStanceObservation>(
+      `/projects/${projectId}/claims/${claimId}/links/${linkId}/observations`,
+      { idempotency_key: idempotencyKey }
+    );
+  },
+
+  /** GOO-308: an adjudicator's judgement of the claim's tip version. */
+  async assessClaim(
+    projectId: string,
+    claimId: string,
+    data: ApiClaimAssessmentCreate
+  ): Promise<ApiClaimAssessment> {
+    return api.post<ApiClaimAssessment>(
+      `/projects/${projectId}/claims/${claimId}/assessments`,
+      data
+    );
   },
 
   /** GOO-306: the reconstructable claims evidence package for one draft. */

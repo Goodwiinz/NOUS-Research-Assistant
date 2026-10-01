@@ -36,6 +36,7 @@ import type {
   ApiImportReceipt,
   ApiImportReceiptDetail,
 } from '@/types/api/research-corpus-contract';
+import type { ApiJourneyResponse } from '@/types/api/research-journey-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -452,3 +453,12 @@ export const downloadCorpus = (
   api.download(
     `/research-engine/projects/${projectId}/corpus/export?${new URLSearchParams({ format })}`
   );
+
+// --- Plan-to-write journey + audit bundle (GOO-308) -------------------------
+
+export const getJourney = (projectId: string): Promise<ApiJourneyResponse> =>
+  api.get<ApiJourneyResponse>(`${BASE}/projects/${projectId}/journey`);
+
+/** One zip: every export, a manifest and SHA256SUMS (the server names it). */
+export const downloadAuditBundle = (projectId: string): Promise<void> =>
+  api.download(`/research-engine/projects/${projectId}/audit-bundle`);
