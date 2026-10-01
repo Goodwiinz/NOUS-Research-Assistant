@@ -2331,7 +2331,7 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
 | Accounting reconciliation (`review_update_rules.py:230`) | `if False:` | `-k reconciles` (`test_review_update_rules.py:292`): `DID NOT RAISE PrismaInconsistency`; a successor flow claiming 5 studies was accepted. |
 | `graph_part` edges only for changed/corrected reports (`review_update_service.py:741`) | `if True` (every delta report) | Step 7 (`:1032`): `('link', …) not in stale` fails; R1's claim link went stale. |
 | `UNIQUE(parent_review_version_id)` (`d4a6c8e0f2b3_create_review_versions.py:103`) | the constraint dropped from the migration | Step 5 (`:911`): `assert (2 == 1)`; both concurrent successors of the root were committed. |
-| Superseded-release check (`review_update_service.py:1373`) | `if False:` | Step 9 (`:1144`): `DID NOT RAISE HTTPException`; P2 linked to the successor without superseding P. |
+| Superseded-release check (`review_update_service.py:1381`) | `if False:` | Step 9 (`:1144`): `DID NOT RAISE HTTPException`; P2 linked to the successor without superseding P. |
 | Screening rows only through `screening_service` (guard `test_review_update_boundary.py:69`) | a `ScreeningQueue(id=uuid4())` helper in the service | `-k screening`: `assert ['builds ScreeningQueue:…'] == []`. |
 | No insert-only row mutation (guard `test_review_update_boundary.py:112`) | an `update(V)` helper in the service | `-k insert_only`: `assert ['services/re…y:update:…'] == []`. |
 

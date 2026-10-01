@@ -1249,11 +1249,17 @@ async def create_successor(
 
 
 async def _ensure(
-    db: AsyncSession, collection_id: UUID, actor_id: UUID, version_id: UUID
+    db: AsyncSession,
+    collection_id: UUID,
+    actor_id: UUID,
+    version_id: UUID,
+    *,
+    raise_errors: bool = False,
 ) -> ReviewVersionResponse:
     """Create and assign every missing targeted queue, each stage in its own
-    commit under a re-resolved SUPERVISE context; a refused stage is left
-    ``queue_missing`` for a retry."""
+    commit under a re-resolved SUPERVISE context. Right after a version
+    commit a refused stage is logged and left ``queue_missing`` (the version
+    stands); an explicit retry raises the refusal."""
     for stage in rules.STAGES:
         context = await resolve_project(
             db, collection_id, actor_id, ResearchAction.SUPERVISE
@@ -1302,6 +1308,8 @@ async def _ensure(
             await db.commit()
         except HTTPException as error:
             await db.rollback()
+            if raise_errors:
+                raise
             logger.warning(
                 "review work for %s %s not created: %s",
                 version_id,
@@ -1321,7 +1329,7 @@ async def ensure_work(
     state = await _state(db, collection_id)
     state.get(version_id)
     await db.rollback()
-    return await _ensure(db, collection_id, actor_id, version_id)
+    return await _ensure(db, collection_id, actor_id, version_id, raise_errors=True)
 
 
 async def link_release(
