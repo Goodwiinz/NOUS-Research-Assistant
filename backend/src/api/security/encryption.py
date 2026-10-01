@@ -226,6 +226,8 @@ async def encrypt_user_profile(
             "encrypted_fields": list(request.profile_data.keys()),
         }
 
+    except HTTPException:
+        raise
     except EncryptionError as e:
         logger.error(f"Encryption failed: {e}")
         raise HTTPException(status_code=500, detail="Encryption failed")
@@ -275,6 +277,8 @@ async def encrypt_organization_profile(
             "encrypted_fields": list(request.profile_data.keys()),
         }
 
+    except HTTPException:
+        raise
     except EncryptionError as e:
         logger.error(f"Encryption failed: {e}")
         raise HTTPException(status_code=500, detail="Encryption failed")
@@ -357,6 +361,8 @@ async def decrypt_data(
             ),
         }
 
+    except HTTPException:
+        raise
     except EncryptionError as e:
         logger.error(f"Decryption failed: {e}")
         raise HTTPException(status_code=500, detail="Decryption failed")
@@ -399,6 +405,8 @@ async def rotate_encryption_key(
 
         return KeyRotationResponse(**rotation_results)
 
+    except HTTPException:
+        raise
     except EncryptionError as e:
         logger.error(f"Key rotation failed: {e}")
         raise HTTPException(status_code=500, detail="Key rotation failed")
@@ -440,6 +448,8 @@ async def get_encryption_status(
 
         return EncryptionStatusResponse(**status)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Internal server error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -474,6 +484,8 @@ async def validate_encryption_integrity(
 
         return EncryptionValidationResponse(**validation_results)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Internal server error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -543,6 +555,8 @@ async def get_encryption_audit_logs(
             for log in logs
         ]
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Internal server error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -568,6 +582,8 @@ async def get_sensitive_fields_config(
         )  # Create instance to access default fields
         return middleware.sensitive_fields + middleware.sensitive_patterns
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Internal server error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

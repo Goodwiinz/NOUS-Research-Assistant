@@ -177,6 +177,24 @@ class TestEncryptionRouteWiring:
         assert len(db_deps) == 7
         assert {p: c for p, c in db_deps.items() if c is not get_db_sync} == {}
 
+    def test_validate_legacy_role_denial_is_403_not_500(self) -> None:
+        """RBAC grants system_admin but legacy User.role is not admin: the
+        in-handler legacy check must surface as 403, not be swallowed by the
+        broad ``except Exception`` into a 500."""
+        svc = MagicMock()
+        svc.user_has_permission.return_value = True
+        app = _build_app(authed_user=_fake_user(role="user"))
+        ctx = _tenant_ctx()
+        with (
+            ctx[0],
+            ctx[1],
+            patch("src.middleware.rbac.RBACService", return_value=svc),
+            patch("src.api.security.encryption.EncryptionService") as enc_svc_cls,
+        ):
+            resp = TestClient(app).post(f"{API_PREFIX}/validate")
+        assert resp.status_code == 403
+        enc_svc_cls.return_value.validate_encryption_integrity.assert_not_called()
+
 
 @pytest.mark.unit
 class TestDeletedGuardSources:
