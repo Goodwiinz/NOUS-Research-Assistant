@@ -69,6 +69,7 @@ from src.api.research import (
     chat_router,
     citations_router,
     claims_router,
+    deposits_router,
     drafts_router,
     export_router,
     extraction_matrix_router,
@@ -659,6 +660,7 @@ app.include_router(claims_router)  # GOO-306 versioned claims and evidence links
 app.include_router(peer_review_router)  # GOO-314 external peer-review responses
 app.include_router(manuscript_releases_router)  # GOO-315 manuscript releases
 app.include_router(statements_router)  # GOO-316 statement sets and approvals
+app.include_router(deposits_router)  # GOO-318 archive deposits
 app.include_router(orcid_router)  # GOO-316 ORCID /authenticate receipts
 app.include_router(tone_engine_router)  # Scholarly Tone Engine endpoints
 app.include_router(extraction_matrix_router)  # Extraction Matrix endpoints

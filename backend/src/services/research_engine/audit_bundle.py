@@ -398,10 +398,27 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _reproduction,
         _peer_review,
         _manuscript_releases,
+        _deposits,
         _prisma,
     ):
         parts.extend(await build(db, context))
     return parts
+
+
+async def _deposits(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-318: every archive deposit's attempt chain, derived status and
+    approvals (redacted rows; never a credential)."""
+    from src.services.research import deposit_service
+
+    body = await deposit_service.export_part(db, context)
+    return [
+        _sealed_part(
+            "deposits.json",
+            deposit_service.EXPORT_SCHEMA,
+            body,
+            not body["deposits"] and not body["approvals"],
+        )
+    ]
 
 
 async def _stream_heads(db: AsyncSession, cid: UUID) -> dict[str, int]:

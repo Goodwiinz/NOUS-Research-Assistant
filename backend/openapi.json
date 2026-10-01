@@ -8390,6 +8390,502 @@
         "title": "DecryptionRequest",
         "type": "object"
       },
+      "DepositApprovalCreate": {
+        "description": "Approve depositing this exact release package (RELEASE).",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "package_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Package Sha256",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "release_id": {
+            "format": "uuid",
+            "title": "Release Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "release_id",
+          "package_sha256",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "DepositApprovalCreate",
+        "type": "object"
+      },
+      "DepositApprovalResponse": {
+        "properties": {
+          "account_ref": {
+            "title": "Account Ref",
+            "type": "string"
+          },
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "approved_by_id": {
+            "format": "uuid",
+            "title": "Approved By Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "in_force": {
+            "default": false,
+            "title": "In Force",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "approved",
+              "revoked"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "package_sha256": {
+            "title": "Package Sha256",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "release_id": {
+            "format": "uuid",
+            "title": "Release Id",
+            "type": "string"
+          },
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "release_id",
+          "package_sha256",
+          "repository",
+          "account_ref",
+          "action",
+          "kind",
+          "approved_by_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "DepositApprovalResponse",
+        "type": "object"
+      },
+      "DepositApprovalRevoke": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "DepositApprovalRevoke",
+        "type": "object"
+      },
+      "DepositAttemptResponse": {
+        "description": "One phase attempt. Remote DOIs are withheld here (see ``doi``).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mismatch": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Mismatch",
+            "type": "array"
+          },
+          "outcome": {
+            "enum": [
+              "succeeded",
+              "failed",
+              "unknown"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "previous_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "remote_deposition_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Deposition Id"
+          },
+          "remote_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Record Id"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "phase",
+          "outcome",
+          "retryable",
+          "created_at"
+        ],
+        "title": "DepositAttemptResponse",
+        "type": "object"
+      },
+      "DepositCreate": {
+        "description": "Request the deposit of the release's exact package (RELEASE).",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "package_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Package Sha256",
+            "type": "string"
+          },
+          "release_id": {
+            "format": "uuid",
+            "title": "Release Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "release_id",
+          "package_sha256",
+          "idempotency_key"
+        ],
+        "title": "DepositCreate",
+        "type": "object"
+      },
+      "DepositFile": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "md5": {
+            "title": "Md5",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sha256",
+          "md5",
+          "bytes"
+        ],
+        "title": "DepositFile",
+        "type": "object"
+      },
+      "DepositListResponse": {
+        "properties": {
+          "account_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Ref"
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/DepositApprovalResponse"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "deposits": {
+            "items": {
+              "$ref": "#/components/schemas/DepositResponse"
+            },
+            "title": "Deposits",
+            "type": "array"
+          },
+          "repository": {
+            "const": "zenodo_sandbox",
+            "default": "zenodo_sandbox",
+            "title": "Repository",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured",
+          "approvals",
+          "deposits"
+        ],
+        "title": "DepositListResponse",
+        "type": "object"
+      },
+      "DepositResponse": {
+        "properties": {
+          "account_ref": {
+            "title": "Account Ref",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "approval_in_force": {
+            "default": false,
+            "title": "Approval In Force",
+            "type": "boolean"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/DepositAttemptResponse"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "doi_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi Url"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DepositFile"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "last_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Reason"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "package_sha256": {
+            "title": "Package Sha256",
+            "type": "string"
+          },
+          "queue_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Status"
+          },
+          "release_id": {
+            "format": "uuid",
+            "title": "Release Id",
+            "type": "string"
+          },
+          "remote_deposition_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Deposition Id"
+          },
+          "remote_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Record Id"
+          },
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "requested_by_id": {
+            "format": "uuid",
+            "title": "Requested By Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "prepared",
+              "draft_created",
+              "files_uploaded",
+              "published",
+              "verified",
+              "failed",
+              "ambiguous"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "release_id",
+          "package_sha256",
+          "repository",
+          "account_ref",
+          "requested_by_id",
+          "status",
+          "files",
+          "attempts",
+          "created_at"
+        ],
+        "title": "DepositResponse",
+        "type": "object"
+      },
       "DeterministicTrace": {
         "description": "Deterministic trace metadata for response auditing",
         "properties": {
@@ -14389,8 +14885,11 @@
             "type": "integer"
           },
           "external_submission": {
-            "const": "not_authorized",
             "default": "not_authorized",
+            "enum": [
+              "not_authorized",
+              "authorized"
+            ],
             "title": "External Submission",
             "type": "string"
           },
@@ -44401,6 +44900,303 @@
         "summary": "Create Claim Version",
         "tags": [
           "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/deposits": {
+      "get": {
+        "description": "Every deposit with its attempt chain, derived status and approvals.",
+        "operationId": "list_deposits_api_v1_projects__project_id__deposits_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Deposits",
+        "tags": [
+          "archive-deposits"
+        ]
+      },
+      "post": {
+        "description": "Queue the deposit of one verified release (RELEASE).",
+        "operationId": "request_deposit_api_v1_projects__project_id__deposits_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The existing operation (replay or same release)"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "No valid approval, or the release changed"
+          },
+          "422": {
+            "description": "The requester approved this deposit"
+          },
+          "503": {
+            "description": "Archive deposits are not configured"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Deposit",
+        "tags": [
+          "archive-deposits"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/deposits/approvals": {
+      "post": {
+        "description": "Approve depositing this exact release package (RELEASE).",
+        "operationId": "approve_api_v1_projects__project_id__deposits_approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositApprovalCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositApprovalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "The release is not verified or its package changed"
+          },
+          "422": {
+            "description": "The approver requested this deposit"
+          },
+          "503": {
+            "description": "Archive deposits are not configured"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve",
+        "tags": [
+          "archive-deposits"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/deposits/approvals/{approval_id}/revoke": {
+      "post": {
+        "description": "Revoke the approval in force (an insert-only revocation row).",
+        "operationId": "revoke_api_v1_projects__project_id__deposits_approvals__approval_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Approval Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositApprovalRevoke"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositApprovalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "The approval is not in force"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke",
+        "tags": [
+          "archive-deposits"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/deposits/{operation_id}/requeue": {
+      "post": {
+        "description": "Put a stopped deposit back on the worker's queue (RELEASE).",
+        "operationId": "requeue_api_v1_projects__project_id__deposits__operation_id__requeue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Requeue",
+        "tags": [
+          "archive-deposits"
         ]
       }
     },
