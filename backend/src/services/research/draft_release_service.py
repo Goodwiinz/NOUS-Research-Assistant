@@ -194,12 +194,14 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
     # evidence tables and protocols. GOO-312: figures hang off runs, which
     # hang off their input revisions. Local imports: these services read this
     # graph for their stale flags. GOO-315: verified manuscript releases hang
-    # off their draft release.
+    # off their draft release. GOO-320: the tip review version's changed or
+    # corrected reports hang their documents off the report.
     from src.services.research import manuscript_release_service
     from src.services.research_engine import (
         appraisal_service,
         evidence_service,
         experiment_service,
+        review_update_service,
         synthesis_service,
     )
 
@@ -210,10 +212,17 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
         synthesis_service.graph_part,
         experiment_service.graph_part,
         manuscript_release_service.graph_part,
+        review_update_service.graph_part,
     ):
         more_edges, more_changed = await part(db, collection_id)
         edges += more_edges
         part_changed |= more_changed
+    # GOO-320: a document reaches every source revision pinned from it.
+    if any(parent[0] == "document" for parent, _child in edges):
+        edges += [
+            (rules.node("document", rules.parse_source(source[1])[0]), source)
+            for source in sorted({p for p, _c in edges if p[0] == "source"})
+        ]
     changed = await _changed_sources(db, edges)
     changed |= part_changed
     changed |= {
