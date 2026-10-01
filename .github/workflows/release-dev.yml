@@ -55,11 +55,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          # Preserve GraphQL variables as literals instead of shell expressions.
+          GRAPHQL_QUERY: >-
+            query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: "refs/heads/develop") { branchProtectionRule { requiresStatusChecks requiresStrictStatusChecks requiredStatusChecks { context app { databaseId } } } } } }
         run: |
           OWNER="${GH_REPO%/*}"
           REPO="${GH_REPO#*/}"
           gh api graphql -f owner="$OWNER" -f name="$REPO" \
-            -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: "refs/heads/develop") { branchProtectionRule { requiresStatusChecks requiresStrictStatusChecks requiredStatusChecks { context app { databaseId } } } } } }' \
+            -f query="$GRAPHQL_QUERY" \
             --jq '.data.repository.ref.branchProtectionRule' | python3 scripts/ci/check_release_protection.py
 
   build:
@@ -89,11 +92,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          # Preserve GraphQL variables as literals instead of shell expressions.
+          GRAPHQL_QUERY: >-
+            query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: "refs/heads/develop") { branchProtectionRule { requiresStatusChecks requiresStrictStatusChecks requiredStatusChecks { context app { databaseId } } } } } }
         run: |
           OWNER="${GH_REPO%/*}"
           REPO="${GH_REPO#*/}"
           gh api graphql -f owner="$OWNER" -f name="$REPO" \
-            -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: "refs/heads/develop") { branchProtectionRule { requiresStatusChecks requiresStrictStatusChecks requiredStatusChecks { context app { databaseId } } } } } }' \
+            -f query="$GRAPHQL_QUERY" \
             --jq '.data.repository.ref.branchProtectionRule' | python3 scripts/ci/check_release_protection.py
 
       - name: Install yq
