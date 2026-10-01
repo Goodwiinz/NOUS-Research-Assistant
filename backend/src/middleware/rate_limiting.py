@@ -238,7 +238,7 @@ class _OutageLoggingRedisLimiter(CoreRedisRateLimiter):
             logger.error(
                 "Rate-limit store unavailable (%s); enforcing per-process "
                 "in-memory limits until it recovers",
-                exc,
+                type(exc).__name__,
             )
 
 
@@ -278,6 +278,7 @@ class ApiRateLimiter:
         store = self._store_for(limit, window)
         now = time.time()
         allowed = await store.is_allowed(key)
+        was_degraded = bool(getattr(store, "_in_fallback_window", lambda: False)())
 
         retry_after: Optional[int] = None
         current_requests: int
@@ -287,8 +288,16 @@ class ApiRateLimiter:
         reset_time = now + window
         if allowed:
             remaining = await store.get_remaining_attempts(key)
+            if (
+                not was_degraded
+                and getattr(store, "_in_fallback_window", lambda: False)()
+            ):
+                # A read stall after a successful Redis INCR starts a new
+                # fallback window. Count this request there exactly once too.
+                allowed = await store.is_allowed(key)
+                remaining = await store.get_remaining_attempts(key)
             current_requests = limit - remaining
-        else:
+        if not allowed:
             _, retry_after = await store.check_rate_limit(key)
             current_requests = limit
             if retry_after:

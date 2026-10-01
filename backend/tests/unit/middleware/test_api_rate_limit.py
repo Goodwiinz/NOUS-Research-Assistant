@@ -16,10 +16,13 @@ failing OPEN on Redis errors (I3). This module pins the replacement:
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI, Request
@@ -246,6 +249,21 @@ def test_auth_routes_count_against_default_bucket() -> None:
     assert response.headers["X-RateLimit-Limit"] == "600"
 
 
+@pytest.mark.parametrize("_repeat", range(2))
+def test_shared_app_limits_requests_without_leaking_between_tests(
+    test_client: TestClient, _repeat: int
+) -> None:
+    """Each test gets a fresh budget; requests within one test still count."""
+    path = "/api/v1/research-engine/capabilities"
+    for _ in range(60):
+        assert test_client.get(path).status_code == 200
+
+    response = test_client.get(path)
+    assert response.status_code == 429
+    assert response.headers["X-RateLimit-Limit"] == "60"
+    assert response.json()["error"]["type"] == "rate_limit_error"
+
+
 def test_health_and_docs_not_limited() -> None:
     app = _make_app(_memory_limiter())
 
@@ -284,6 +302,90 @@ def test_bucket_keyed_by_user_id_when_set_else_client_host() -> None:
     assert client.get("/api/v1/search").status_code == 200
 
 
+@pytest.mark.parametrize("scheme", ["bearer", "BEARER", "bEaReR"])
+def test_bearer_scheme_casing_cannot_create_a_second_quota(
+    monkeypatch: pytest.MonkeyPatch, scheme: str
+) -> None:
+    from types import SimpleNamespace
+
+    from fastapi import Depends
+    from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+    from src.core.security import create_cli_token, verify_token
+    from src.middleware import multi_tenancy as tenancy
+    from src.middleware.rate_limiting import ApiRateLimitMiddleware
+    from src.models.organization import Organization
+    from src.models.user import User, UserRole
+
+    monkeypatch.setattr(settings, "JWT_SECRET_KEY", "scheme-test-" + "x" * 32)
+    user = SimpleNamespace(
+        id=uuid.uuid4(), organization_id=uuid.uuid4(), role=UserRole.USER
+    )
+    organization = SimpleNamespace(id=user.organization_id, is_active=True)
+    db = AsyncMock()
+
+    async def execute(statement: Any) -> Mock:
+        entity = statement.column_descriptions[0]["entity"]
+        assert entity in (User, Organization)
+        result = Mock()
+        result.scalars.return_value.first.return_value = (
+            user if entity is User else organization
+        )
+        return result
+
+    db.execute.side_effect = execute
+    session = AsyncMock()
+    session.__aenter__.return_value = db
+    monkeypatch.setattr(tenancy, "AsyncSessionLocal", Mock(return_value=session))
+    monkeypatch.setattr(tenancy, "ensure_user_and_org", AsyncMock(return_value=None))
+    token, _ = create_cli_token(
+        str(user.id), "scheme@example.test", str(uuid.uuid4()), role="admin"
+    )
+    limiter = _memory_limiter()
+    app = FastAPI()
+    app.add_middleware(ApiRateLimitMiddleware, limiter=limiter)
+    app.add_middleware(tenancy.MultiTenancyMiddleware)
+
+    @app.get("/api/v1/search")
+    async def search(
+        request: Request,
+        credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer()),
+    ) -> dict[str, str]:
+        verified = verify_token(credentials.credentials)
+        assert verified is not None and verified.user_id == str(user.id)
+        return {
+            "user_id": getattr(request.state, "user_id", "missing"),
+            "organization_id": getattr(request.state, "tenant_id", "missing"),
+            "role": getattr(request.state, "user_role", "missing"),
+        }
+
+    client = TestClient(app)
+    for _ in range(SEARCH_LIMIT):
+        response = client.get(
+            "/api/v1/search", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "user_id": str(user.id),
+            "organization_id": str(user.organization_id),
+            "role": "user",  # DB context wins over the token's admin/org claims.
+        }
+
+    assert (
+        client.get(
+            "/api/v1/search", headers={"Authorization": f"Bearer {token}"}
+        ).status_code
+        == 429
+    )
+    assert (
+        client.get(
+            "/api/v1/search", headers={"Authorization": f"{scheme} {token}"}
+        ).status_code
+        == 429
+    )
+    assert set(limiter._store_for(60, 60).attempts) == {f"api:search:{user.id}"}
+
+
 def test_arxiv_bucket_limit_is_ten_per_minute() -> None:
     client = TestClient(_make_app(_memory_limiter()))
 
@@ -292,9 +394,193 @@ def test_arxiv_bucket_limit_is_ten_per_minute() -> None:
     assert client.post("/api/v1/arxiv/bulk/start").status_code == 429
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_redis", [False, True])
+async def test_facade_evicts_expired_identities_without_dropping_active_keys(
+    monkeypatch: pytest.MonkeyPatch, use_redis: bool
+) -> None:
+    """Exercise the active async store, including Redis's counted fallback."""
+    from src.core import rate_limit as core
+    from src.middleware.rate_limiting import ApiRateLimiter
+
+    clock = Mock()
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    clock.now.return_value = start
+    monkeypatch.setattr(core, "datetime", clock)
+    monkeypatch.setattr(
+        core.RedisRateLimiter,
+        "_get_redis",
+        AsyncMock(side_effect=ConnectionError("offline test store")),
+    )
+    limiter = ApiRateLimiter(use_redis=use_redis)
+    expired = {f"expired-{i}" for i in range(1000)}
+    for key in expired:
+        allowed, _ = await limiter.is_allowed(key, limit=2, window=60)
+        assert allowed
+
+    clock.now.return_value = start + timedelta(seconds=50)
+    assert (await limiter.is_allowed("active", limit=2, window=60))[0]
+    clock.now.return_value = start + timedelta(seconds=61)
+    fresh = {f"fresh-{i}" for i in range(1024)}
+    for key in fresh:
+        assert (await limiter.is_allowed(key, limit=2, window=60))[0]
+
+    store = limiter._store_for(2, 60)
+    memory = store._fallback if use_redis else store
+    assert expired.isdisjoint(memory.attempts), "idle expired identities leaked"
+    assert set(memory.attempts) == fresh | {"active"}
+    assert (await limiter.is_allowed("active", limit=2, window=60))[0]
+    assert not (await limiter.is_allowed("active", limit=2, window=60))[0]
+
+
 # --------------------------------------------------------------------------
 # Redis outage semantics (I3: never silently fail open)
 # --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_redis_client_has_finite_socket_timeouts() -> None:
+    from src.core.rate_limit import RedisRateLimiter
+
+    store = RedisRateLimiter(2, 1, redis_url="redis://unused")
+    client = await store._get_redis()  # Constructs the client without connecting.
+    options = client.connection_pool.connection_kwargs
+    for name in ("socket_connect_timeout", "socket_timeout"):
+        assert options.get(name) is not None, f"{name} is unbounded"
+        assert 0 < options[name] <= 1
+    await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "stall_at"),
+    [
+        ("is_allowed", "eval"),
+        ("check_rate_limit", "eval"),
+        ("record_attempt", "eval"),
+        ("get_remaining_attempts", "get"),
+        ("is_allowed", "acquire"),
+    ],
+)
+async def test_stalled_redis_operations_have_a_complete_deadline(
+    monkeypatch: pytest.MonkeyPatch, operation: str, stall_at: str
+) -> None:
+    from src.core.rate_limit import RedisRateLimiter
+
+    store = RedisRateLimiter(1, 1, redis_url="redis://unused")
+    store.operation_timeout = 0.01
+    cancelled = asyncio.Event()
+
+    async def stall(*_args: object, **_kwargs: object) -> Any:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    stalled = AsyncMock(side_effect=stall)
+    store._redis = Mock(eval=stalled, get=stalled)
+    if stall_at == "acquire":
+        monkeypatch.setattr(store, "_get_redis", stalled)
+
+    # A generous watchdog catches a missing deadline; no elapsed-time tolerance.
+    async with asyncio.timeout(1):
+        await getattr(store, operation)("identity")
+    assert cancelled.is_set(), "the stalled operation was not cancelled"
+    assert stalled.await_count == 1, "the outage must not enter a retry wait"
+    assert store._in_fallback_window()
+    if operation in ("check_rate_limit", "get_remaining_attempts"):
+        await store.record_attempt("identity")
+    assert not await store.is_allowed("identity"), "fallback must count attempts"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stall_at", ["eval", "get"])
+async def test_facade_read_stall_counts_the_current_request(
+    stall_at: str,
+) -> None:
+    limiter = _memory_limiter()
+    from src.middleware.rate_limiting import _OutageLoggingRedisLimiter
+
+    store = _OutageLoggingRedisLimiter(2, 1, redis_url="redis://unused")
+    store.operation_timeout = 0.01
+    cancelled = asyncio.Event()
+
+    async def stall(*_args: object, **_kwargs: object) -> Any:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    client = Mock(eval=AsyncMock(return_value=1), get=AsyncMock(return_value="1"))
+    setattr(client, stall_at, AsyncMock(side_effect=stall))
+    store._redis = client
+    limiter._stores[(2, 1)] = store
+
+    async with asyncio.timeout(1):
+        allowed, info = await limiter.is_allowed("identity", limit=2, window=60)
+    assert cancelled.is_set()
+    assert allowed and info["degraded"]
+    assert info["current_requests"] == 1
+    assert (await limiter.is_allowed("identity", limit=2, window=60))[0]
+    assert not (await limiter.is_allowed("identity", limit=2, window=60))[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_closed", [False, True])
+@pytest.mark.parametrize("stall_at", ["eval", "get"])
+async def test_read_stall_returns_counted_fallback_or_fail_closed_503(
+    monkeypatch: pytest.MonkeyPatch, fail_closed: bool, stall_at: str
+) -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    from src.middleware.rate_limiting import _OutageLoggingRedisLimiter
+
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_CLOSED", fail_closed)
+    store = _OutageLoggingRedisLimiter(60, 1, redis_url="redis://unused")
+    store.operation_timeout = 0.01
+
+    async def stall(*_args: object, **_kwargs: object) -> Any:
+        await asyncio.Event().wait()
+
+    redis = Mock(eval=AsyncMock(return_value=1), get=AsyncMock(return_value="1"))
+    stalled = AsyncMock(side_effect=stall)
+    setattr(redis, stall_at, stalled)
+    store._redis = redis
+    limiter = _memory_limiter()
+    limiter._stores[(60, 1)] = store
+    transport = ASGITransport(app=_make_app(limiter))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with asyncio.timeout(1):
+            first = await client.get("/api/v1/search")
+            second = await client.get("/api/v1/search")
+    assert stalled.await_count == 1
+    if fail_closed:
+        assert first.status_code == second.status_code == 503
+        assert first.json()["error"]["type"] == "service_unavailable"
+        assert first.headers["Retry-After"] == "60"
+    else:
+        assert first.status_code == second.status_code == 200
+        assert first.headers["X-RateLimit-Remaining"] == "59"
+        assert second.headers["X-RateLimit-Remaining"] == "58"
+
+
+@pytest.mark.asyncio
+async def test_outage_logs_redact_store_exception_details(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from src.middleware.rate_limiting import _OutageLoggingRedisLimiter
+
+    sentinel = "never-expose-store-credential"
+    store = _OutageLoggingRedisLimiter(1, 1, redis_url="redis://unused")
+    monkeypatch.setattr(
+        store, "_get_redis", AsyncMock(side_effect=ConnectionError(sentinel))
+    )
+    with caplog.at_level("WARNING"):
+        assert await store.is_allowed("identity")
+        assert not await store.is_allowed("identity")
+    assert sentinel not in caplog.text
+    assert "ConnectionError" in caplog.text
+    assert sum(record.levelname == "ERROR" for record in caplog.records) == 1
 
 
 @pytest.mark.asyncio

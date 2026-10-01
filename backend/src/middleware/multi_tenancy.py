@@ -27,6 +27,7 @@ from typing import Any, Callable, Optional
 
 import sentry_sdk
 from fastapi import HTTPException, Request, Response, status
+from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -135,9 +136,9 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
     ) -> Optional[dict]:
         """Extract tenant information by verifying the Bearer JWT and resolving org via DB."""
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
+        scheme, token = get_authorization_scheme_param(auth_header)
+        if scheme.lower() != "bearer" or not token:
             return None
-        token = auth_header[7:]
         try:
             token_data = verify_token(token)
         except Exception:
