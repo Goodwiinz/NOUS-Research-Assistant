@@ -38,6 +38,12 @@ import type {
 } from '@/types/api/research-corpus-contract';
 import type { ApiJourneyResponse } from '@/types/api/research-journey-contract';
 import type {
+  ApiRerun,
+  ApiRerunCreate,
+  ApiRerunEligibility,
+  ApiRerunList,
+} from '@/types/api/research-rerun-contract';
+import type {
   ApiAppraisal,
   ApiAppraisalAdjudicate,
   ApiAppraisalList,
@@ -689,3 +695,44 @@ export const getFigureLineage = (
   figureId: string
 ): Promise<ApiFigureLineage> =>
   api.get<ApiFigureLineage>(`${figures(projectId)}/${figureId}/lineage`);
+
+// --- Fresh reruns (GOO-313) ---------------------------------------------------
+
+export type {
+  ApiRerun as Rerun,
+  ApiRerunAttempt as RerunAttempt,
+  ApiRerunComparisonRow as RerunComparisonRow,
+  ApiRerunCreate as RerunCreate,
+  ApiRerunEligibility as RerunEligibility,
+  ApiRerunList as RerunList,
+} from '@/types/api/research-rerun-contract';
+
+/** Structured reasons (zero writes) and the byte-equality default rule. */
+export const getRerunEligibility = (
+  runId: string
+): Promise<ApiRerunEligibility> =>
+  api.get<ApiRerunEligibility>(`${BASE}/runs/${runId}/rerun-eligibility`);
+
+export const listReruns = (runId: string): Promise<ApiRerunList> =>
+  api.get<ApiRerunList>(`${BASE}/runs/${runId}/reruns`);
+
+/** REVIEW: the rule is hashed server-side before anything executes. */
+export const admitRerun = (
+  runId: string,
+  data: ApiRerunCreate
+): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/runs/${runId}/reruns`, data);
+
+export const getRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.get<ApiRerun>(`${BASE}/reruns/${rerunId}`);
+
+export const cancelRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/reruns/${rerunId}/cancel`, {});
+
+/** Attempt n+1 under the stored rule; the request carries no rule. */
+export const retryRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/reruns/${rerunId}/retry`, {});
+
+/** ``nous.rerun-comparison/1`` for every attempt; the server names the file. */
+export const downloadRerunComparison = (rerunId: string): Promise<void> =>
+  api.download(`/research-engine/reruns/${rerunId}/comparison`);
