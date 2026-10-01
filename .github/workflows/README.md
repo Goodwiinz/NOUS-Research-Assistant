@@ -36,10 +36,12 @@ repository, with organization approval if required. The secret is used only
 for `gh pr create`; Git pushes, PR lookups, superseded-proposal cleanup, and
 auto-merge continue to use `GITHUB_TOKEN`. No GitHub App private key is needed.
 
-Configure the required checks, including **Release Gate**, and **Require
-branches to be up to date before merging** on `develop` as an owner decision.
+`develop` requires **Release Gate** from GitHub Actions and **Require branches
+to be up to date before merging** (restored 2026-10-01). Release preparation
+and promotion each verify the effective branch rule with a read-only preflight;
+missing protection fails before image construction or proposal creation.
 The Lint Backend job checks each generated release branch against the current
-`develop` SHA. When that job is required, these guards reject a proposal if
+`develop` SHA. Release Gate includes that job; these guards reject a proposal if
 source advances during CI or before merge; updating the old branch does not
 make its old image eligible again. Auto-merge only waits for checks that are
 actually required by the repository.
@@ -55,9 +57,12 @@ actually required by the repository.
 | `workflow-lint.yml` | Workflow changes | Run `actionlint` across all workflows. |
 | `supabase-migrations.yml` | Push to `develop` touching `supabase/migrations/`, or manual dispatch | Apply pending Supabase migrations to the hosted project with `supabase db push` (repository secret `SUPABASE_DB_URL`; the job runs only on `develop`). |
 
-The frontend is deployed separately through Vercel. The backend, migration init
-container, Celery worker, Celery beat, and synthetic-traffic workloads share the
-same backend digest through the Helm image helper.
+The frontend deploys separately through Vercel. Its draft claims/release
+controls discover available operations from the deployed backend schema and
+stay unavailable until the required operations exist. The backend, AWS migration
+Job, Celery worker, Celery beat, and synthetic workloads share the same backend
+digest. AWS Argo waits for the wave-1 migration Job before wave-2 consumers;
+see the [chart contract](../../infrastructure/helm/knowledge-graph-analytics/README.md#database-migrations).
 
 The retired manual staging/production deploy paths and duplicate deployment
 workflow tree have been removed. `trigger-deploy.yml` remains unchanged; its
@@ -88,10 +93,11 @@ incomplete and does not lint on its own.
 
 ```bash
 chart=infrastructure/helm/knowledge-graph-analytics
-for env in dev staging production; do
+for env in dev staging production aws; do
   helm lint "$chart" -f "$chart/values.yaml" -f "$chart/values-$env.yaml"
   helm template rag "$chart" \
     -f "$chart/values.yaml" -f "$chart/values-$env.yaml" >/dev/null
 done
 bash "$chart/tests/backend_image_digest_render_test.sh"
+python3 "$chart/tests/deployment_consistency_render_test.py"
 ```
