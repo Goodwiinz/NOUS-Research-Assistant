@@ -21421,7 +21421,8 @@
           "extract",
           "synthesize",
           "verify",
-          "export"
+          "export",
+          "analyze"
         ],
         "title": "StepType",
         "type": "string"

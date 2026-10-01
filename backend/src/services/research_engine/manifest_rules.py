@@ -328,3 +328,8 @@ def assert_no_secrets(value: Any, *, secret_values: Iterable[str]) -> None:
     for text in _strings(value):
         if _SECRET_PATTERN.search(text) or any(s in text for s in secrets):
             raise ValueError("manifest_secret_detected")
+
+
+def artifact_key(organization_id: str, run_id: str, sha256: str) -> str:
+    """Content-addressed private key; never put in a manifest or a DTO."""
+    return f"artifacts/{organization_id}/research-runs/{run_id}/{sha256}"

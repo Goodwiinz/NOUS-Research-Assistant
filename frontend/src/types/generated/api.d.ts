@@ -19253,7 +19253,7 @@ export interface components {
          * @description Types of steps in a research blueprint.
          * @enum {string}
          */
-        StepType: "search" | "screen" | "extract" | "synthesize" | "verify" | "export";
+        StepType: "search" | "screen" | "extract" | "synthesize" | "verify" | "export" | "analyze";
         /** StreamCancelRequest */
         StreamCancelRequest: {
             /**

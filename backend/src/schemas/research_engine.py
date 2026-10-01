@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.services.research_engine import manifest_rules
+
 # These limits are deliberately server-owned.  They protect both newly
 # validated blueprints and the legacy JSONB rows that are revalidated by the
 # execution path before a paid call is made.
@@ -68,11 +70,20 @@ def validate_blueprint_runtime(blueprint: Dict[str, Any]) -> None:
     if not isinstance(steps, list) or len(steps) > MAX_BLUEPRINT_STEPS:
         raise ValueError(f"blueprint exceeds the {MAX_BLUEPRINT_STEPS}-step limit")
     _bounded_payload(blueprint.get("parameters") or {}, "blueprint parameters")
+    analyze_steps = 0
     for step in steps:
         if not isinstance(step, dict):
             raise ValueError("blueprint step must be an object")
         params = step.get("params") or step.get("parameters") or {}
         _bounded_payload(params, "step parameters")
+        if step.get("type") == manifest_rules.STEP_TYPE:
+            # GOO-312: a bad experiment plan fails before any sandbox runs.
+            manifest_rules.parse_analyze_step(params)
+            analyze_steps += 1
+        # ponytail: one manifest binds one analyze step; chains of experiments
+        # in one run wait for a pilot that needs them.
+        if analyze_steps > 1:
+            raise ValueError("multiple_analyze_steps")
         prompt = step.get("system_prompt_template")
         if prompt is None:
             prompt = params.get("system_prompt_template")
@@ -96,6 +107,8 @@ class StepType(str, Enum):
     SYNTHESIZE = "synthesize"
     VERIFY = "verify"
     EXPORT = "export"
+    # GOO-312: a computational experiment bound to the approved plan.
+    ANALYZE = "analyze"
 
 
 class ExportFormat(str, Enum):
@@ -1508,6 +1521,12 @@ class BlueprintStepDefinition(BaseModel):
     @classmethod
     def parameters_are_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
         return _bounded_step_parameters(value)
+
+    @model_validator(mode="after")
+    def analyze_plan_is_valid(self) -> "BlueprintStepDefinition":
+        if self.type == StepType.ANALYZE:  # GOO-312
+            manifest_rules.parse_analyze_step(self.parameters)
+        return self
 
 
 class BlueprintCreate(BaseModel):
