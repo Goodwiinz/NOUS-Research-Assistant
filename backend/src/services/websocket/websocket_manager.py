@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -36,6 +37,17 @@ from src.models.websocket_status import (
 from src.services.base import BaseService
 
 logger = logging.getLogger(__name__)
+
+# Inbound caps (audit I11). Client->server frames are tiny control messages
+# (ping / subscribe / unsubscribe / status_update, well under 1 KiB); 64 KiB is
+# far above any legit one and far below the server's 16 MiB ws_max_size, so an
+# oversized frame is closed with 1009 before it is ever json.loads'd.
+WS_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024
+# ponytail: per-connection fixed window, in-memory (connections are
+# process-local). Allows a 2x burst at a window edge; switch to a token bucket
+# (or a Redis counter keyed by user) if per-user fairness across workers matters.
+WS_MAX_INBOUND_MESSAGES_PER_WINDOW = 60
+WS_INBOUND_WINDOW_SECONDS = 10.0
 
 
 class MessageType(Enum):
@@ -112,6 +124,9 @@ class ConnectionInfo:
     # for callers that don't thread a token expiry through, e.g. the legacy
     # connect() path).
     expires_at: Optional[datetime] = None
+    # Inbound rate window (audit I11): monotonic start + frames seen in it.
+    inbound_window_start: float = 0.0
+    inbound_count: int = 0
 
     def update_heartbeat(self):
         """Update connection heartbeat timestamp"""
@@ -794,6 +809,38 @@ class EnhancedConnectionManager(BaseService):
             return
 
         connection_info = self.active_connections[connection_id]
+
+        # Inbound caps (audit I11) — checked before any parsing. Every frame
+        # (ping included) counts, which also bounds ping-flood -> PONG sends.
+        now = time.monotonic()
+        if now - connection_info.inbound_window_start >= WS_INBOUND_WINDOW_SECONDS:
+            connection_info.inbound_window_start = now
+            connection_info.inbound_count = 0
+        connection_info.inbound_count += 1
+        if connection_info.inbound_count > WS_MAX_INBOUND_MESSAGES_PER_WINDOW:
+            await self.send_message_to_connection(
+                connection_id,
+                WebSocketMessage(
+                    type=MessageType.ERROR,
+                    data={"error": "rate_limited", "reason": "too_many_messages"},
+                    timestamp=datetime.now(dt_timezone.utc),
+                ),
+            )
+            await self._close_inbound_violation(
+                connection_id, status.WS_1008_POLICY_VIOLATION, "Rate limit exceeded"
+            )
+            return
+        # len(str) <= UTF-8 byte length, so the cheap char check short-circuits
+        # huge frames without copying them; only <=64K-char frames get encoded.
+        if (
+            len(raw_message) > WS_MAX_INBOUND_MESSAGE_BYTES
+            or len(raw_message.encode("utf-8")) > WS_MAX_INBOUND_MESSAGE_BYTES
+        ):
+            await self._close_inbound_violation(
+                connection_id, status.WS_1009_MESSAGE_TOO_BIG, "Message too big"
+            )
+            return
+
         connection_info.update_heartbeat()
 
         try:
@@ -886,6 +933,18 @@ class EnhancedConnectionManager(BaseService):
                 timestamp=datetime.now(dt_timezone.utc),
             )
             await self.send_message_to_connection(connection_id, error_message)
+
+    async def _close_inbound_violation(
+        self, connection_id: str, code: int, reason: str
+    ) -> None:
+        connection_info = self.active_connections.get(connection_id)
+        if connection_info is None:
+            return
+        try:
+            await connection_info.websocket.close(code=code, reason=reason)
+        except Exception:
+            pass  # best-effort close, mirrors the token-expiry path
+        await self.disconnect(connection_id, reason)
 
     async def _handle_status_update(
         self, connection_id: str, status_data: Dict[str, Any]
