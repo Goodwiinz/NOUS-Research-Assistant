@@ -76,6 +76,11 @@ from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
 from .draft_release import DraftRelease
 from .research_appraisal import AppraisalAssessment
+from .research_evidence_table import (
+    EvidenceContradiction,
+    EvidenceTableVersion,
+    OutcomeCertaintyAssessment,
+)
 from .draft_task_result import DraftTaskResult
 from .generated_draft import GeneratedDraft
 from .message_attachment import MessageAttachment
@@ -242,6 +247,9 @@ __all__ = [
     "GeneratedDraft",
     "DraftRelease",
     "AppraisalAssessment",
+    "EvidenceContradiction",
+    "EvidenceTableVersion",
+    "OutcomeCertaintyAssessment",
     "DraftTaskResult",
     "DraftCitation",
     "DraftReview",

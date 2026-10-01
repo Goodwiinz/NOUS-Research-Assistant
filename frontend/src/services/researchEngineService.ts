@@ -43,6 +43,16 @@ import type {
   ApiAppraisalList,
   ApiAppraisalSubmit,
 } from '@/types/api/research-appraisal-contract';
+import type {
+  ApiCertainty,
+  ApiCertaintyCreate,
+  ApiContradiction,
+  ApiContradictionCreate,
+  ApiEvidenceOutcomeList,
+  ApiEvidenceTable,
+  ApiEvidenceTableCreate,
+  ApiEvidenceTablePreview,
+} from '@/types/api/research-evidence-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -504,3 +514,78 @@ export const adjudicateAppraisal = (
 /** The visible rows only; the server names the file. */
 export const exportAppraisals = (projectId: string): Promise<void> =>
   api.download(`/research-engine/projects/${projectId}/appraisals/export`);
+
+// --- Evidence tables, contradictions and certainty (GOO-310) ----------------
+
+export type {
+  ApiCertainty as Certainty,
+  ApiCertaintyCreate as CertaintyCreate,
+  ApiCertaintyLevel as CertaintyLevel,
+  ApiCertaintyRatings as CertaintyRatings,
+  ApiContradiction as Contradiction,
+  ApiContradictionCreate as ContradictionCreate,
+  ApiContradictionDissent as ContradictionDissent,
+  ApiEvidenceCell as EvidenceCell,
+  ApiEvidenceCellState as EvidenceCellState,
+  ApiEvidenceOutcome as EvidenceOutcome,
+  ApiEvidenceOutcomeList as EvidenceOutcomeList,
+  ApiEvidenceRow as EvidenceRow,
+  ApiEvidenceTable as EvidenceTable,
+  ApiEvidenceTableCreate as EvidenceTableCreate,
+  ApiEvidenceTablePreview as EvidenceTablePreview,
+  ApiEvidenceTip as EvidenceTip,
+  ApiEvidenceUnreviewedCell as EvidenceUnreviewedCell,
+  ApiStanceSuggestionGroup as StanceSuggestionGroup,
+} from '@/types/api/research-evidence-contract';
+
+const evidence = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/evidence`;
+
+export const listEvidence = (
+  projectId: string
+): Promise<ApiEvidenceOutcomeList> =>
+  api.get<ApiEvidenceOutcomeList>(evidence(projectId));
+
+export interface EvidencePreviewQuery {
+  outcome_key: string;
+  timepoint: string;
+  matrix_id: string;
+  field_ids: string[];
+}
+
+export const previewEvidenceTable = (
+  projectId: string,
+  query: EvidencePreviewQuery
+): Promise<ApiEvidenceTablePreview> => {
+  const params = new URLSearchParams({
+    outcome_key: query.outcome_key,
+    timepoint: query.timepoint,
+    matrix_id: query.matrix_id,
+  });
+  query.field_ids.forEach((id) => params.append('field_ids', id));
+  return api.get<ApiEvidenceTablePreview>(
+    `${evidence(projectId)}/tables/preview?${params.toString()}`
+  );
+};
+
+export const createEvidenceTable = (
+  projectId: string,
+  data: ApiEvidenceTableCreate
+): Promise<ApiEvidenceTable> =>
+  api.post<ApiEvidenceTable>(`${evidence(projectId)}/tables`, data);
+
+export const recordContradiction = (
+  projectId: string,
+  data: ApiContradictionCreate
+): Promise<ApiContradiction> =>
+  api.post<ApiContradiction>(`${evidence(projectId)}/contradictions`, data);
+
+export const assessCertainty = (
+  projectId: string,
+  data: ApiCertaintyCreate
+): Promise<ApiCertainty> =>
+  api.post<ApiCertainty>(`${evidence(projectId)}/certainty`, data);
+
+/** Every version, stale ones included; the server names the file. */
+export const exportEvidence = (projectId: string): Promise<void> =>
+  api.download(`/research-engine/projects/${projectId}/evidence/export`);

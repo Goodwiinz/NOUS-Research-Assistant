@@ -185,11 +185,16 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
         ]:
             edges.append((rules.node("claim_version", value), target))
     # GOO-309: appraisals hang off accepted values, sources and protocols.
-    # Local import: appraisal_service reads this graph for its stale flags.
-    from src.services.research_engine import appraisal_service
+    # GOO-310: evidence tables, contradictions and certainty hang off accepted
+    # values, protocols and appraisals. Local imports: both services read
+    # this graph for their stale flags.
+    from src.services.research_engine import appraisal_service, evidence_service
 
-    part_edges, part_changed = await appraisal_service.graph_part(db, collection_id)
-    edges += part_edges
+    part_changed: set[rules.Node] = set()
+    for part in (appraisal_service.graph_part, evidence_service.graph_part):
+        more_edges, more_changed = await part(db, collection_id)
+        edges += more_edges
+        part_changed |= more_changed
     changed = await _changed_sources(db, edges)
     changed |= part_changed
     changed |= {

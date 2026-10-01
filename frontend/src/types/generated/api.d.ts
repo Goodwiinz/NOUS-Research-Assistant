@@ -6419,6 +6419,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Evidence Route */
+        get: operations["list_evidence_route_api_v1_research_engine_projects__project_id__evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/evidence/certainty": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assess Certainty Route */
+        post: operations["assess_certainty_route_api_v1_research_engine_projects__project_id__evidence_certainty_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/evidence/contradictions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Contradiction Route */
+        post: operations["record_contradiction_route_api_v1_research_engine_projects__project_id__evidence_contradictions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/evidence/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Evidence Route */
+        get: operations["export_evidence_route_api_v1_research_engine_projects__project_id__evidence_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/evidence/tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Evidence Table Route */
+        post: operations["create_evidence_table_route_api_v1_research_engine_projects__project_id__evidence_tables_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/evidence/tables/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview Evidence Table Route */
+        get: operations["preview_evidence_table_route_api_v1_research_engine_projects__project_id__evidence_tables_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/fulltext": {
         parameters: {
             query?: never;
@@ -11184,6 +11286,124 @@ export interface components {
              */
             update_database: boolean;
         };
+        /** CertaintyCreate */
+        CertaintyCreate: {
+            /** Appraisal Assessment Ids */
+            appraisal_assessment_ids?: string[];
+            /** Contradiction Ids */
+            contradiction_ids?: string[];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Level */
+            level?: ("very_low" | "low" | "moderate" | "high") | null;
+            ratings: components["schemas"]["CertaintyRatings"];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Starting Level
+             * @enum {string}
+             */
+            starting_level: "high" | "low";
+            /** Supersedes Certainty Id */
+            supersedes_certainty_id?: string | null;
+            /**
+             * Table Version Id
+             * Format: uuid
+             */
+            table_version_id: string;
+        };
+        /**
+         * CertaintyRatings
+         * @description GRADE's five downgrade domains; ``None`` is unknown, never derived.
+         */
+        CertaintyRatings: {
+            /** Imprecision */
+            imprecision?: (0 | -1 | -2) | null;
+            /** Inconsistency */
+            inconsistency?: (0 | -1 | -2) | null;
+            /** Indirectness */
+            indirectness?: (0 | -1 | -2) | null;
+            /** Publication Bias */
+            publication_bias?: (0 | -1 | -2) | null;
+            /** Risk Of Bias */
+            risk_of_bias?: (0 | -1 | -2) | null;
+        };
+        /**
+         * CertaintyResponse
+         * @description Certainty only; agreement (contradictions) and model confidence live
+         *     elsewhere. Unresolved contradictions and dissent ride along, always.
+         */
+        CertaintyResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /** Appraisal Assessment Ids */
+            appraisal_assessment_ids: string[];
+            /**
+             * Assessed By Id
+             * Format: uuid
+             */
+            assessed_by_id: string;
+            /** Assessor Name */
+            assessor_name?: string | null;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Contradiction Ids */
+            contradiction_ids: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Dissent */
+            dissent?: components["schemas"]["ContradictionDissent"][];
+            /** Domains */
+            domains: {
+                [key: string]: (0 | -1 | -2) | null;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Input Hash */
+            input_hash: string;
+            /** Level */
+            level?: ("very_low" | "low" | "moderate" | "high") | null;
+            /** Method Key */
+            method_key: string;
+            /** Method Version */
+            method_version: string;
+            /** Outcome Key */
+            outcome_key: string;
+            /** Rationale */
+            rationale: string;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Starting Level */
+            starting_level: string;
+            /**
+             * Superseded
+             * @default false
+             */
+            superseded: boolean;
+            /** Supersedes Certainty Id */
+            supersedes_certainty_id?: string | null;
+            /**
+             * Table Version Id
+             * Format: uuid
+             */
+            table_version_id: string;
+            /** Timepoint */
+            timepoint: string;
+            /** Unresolved Contradictions */
+            unresolved_contradictions?: string[];
+        };
         /** ChangeRequestResponse */
         ChangeRequestResponse: {
             /** Action */
@@ -12285,6 +12505,158 @@ export interface components {
          */
         ConsensusLevel: "strong_agreement" | "moderate_agreement" | "mixed" | "low_agreement" | "insufficient_data";
         /**
+         * ContradictionCreate
+         * @description ``opened`` names a table version, a field and 2+ of its cell values;
+         *     every later row names its group and the chain tip it follows.
+         */
+        ContradictionCreate: {
+            /** Accepted Value Ids */
+            accepted_value_ids?: string[] | null;
+            /** Contradiction Id */
+            contradiction_id?: string | null;
+            /** Explanation */
+            explanation: string;
+            /** Field Id */
+            field_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "opened" | "resolved" | "acknowledged" | "dissent";
+            /** Previous Id */
+            previous_id?: string | null;
+            /** Stance Classification Ids */
+            stance_classification_ids?: string[];
+            /** Table Version Id */
+            table_version_id?: string | null;
+        };
+        /**
+         * ContradictionDissent
+         * @description A dissent row, or a resolution a later one superseded.
+         */
+        ContradictionDissent: {
+            /**
+             * Actor Id
+             * Format: uuid
+             */
+            actor_id: string;
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Contradiction Id
+             * Format: uuid
+             */
+            contradiction_id: string;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "opened" | "resolved" | "acknowledged" | "dissent";
+            /** Superseded */
+            superseded: boolean;
+        };
+        /**
+         * ContradictionResponse
+         * @description One group: the derived status, every row and the dissent kept visible.
+         */
+        ContradictionResponse: {
+            /**
+             * Contradiction Id
+             * Format: uuid
+             */
+            contradiction_id: string;
+            /** Dissent */
+            dissent: components["schemas"]["ContradictionDissent"][];
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /** Rows */
+            rows: components["schemas"]["ContradictionRowResponse"][];
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unresolved" | "resolved" | "acknowledged";
+            /**
+             * Table Version Id
+             * Format: uuid
+             */
+            table_version_id: string;
+        };
+        /** ContradictionRowResponse */
+        ContradictionRowResponse: {
+            /** Accepted Value Ids */
+            accepted_value_ids?: string[] | null;
+            /**
+             * Actor Id
+             * Format: uuid
+             */
+            actor_id: string;
+            /** Actor Name */
+            actor_name?: string | null;
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Contradiction Id
+             * Format: uuid
+             */
+            contradiction_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "opened" | "resolved" | "acknowledged" | "dissent";
+            /** Previous Id */
+            previous_id?: string | null;
+            /** Suggestion */
+            suggestion?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Table Version Id
+             * Format: uuid
+             */
+            table_version_id: string;
+        };
+        /**
          * ConversationCreate
          * @description Create conversation request
          */
@@ -13238,6 +13610,51 @@ export interface components {
             sources: components["schemas"]["StanceBreakdownItem"][];
         };
         /**
+         * EvidenceCell
+         * @description ``missing`` (no accepted value) is its own state, never a blank.
+         */
+        EvidenceCell: {
+            /** Missingness */
+            missingness?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "value" | "missingness" | "missing" | "conflict";
+            /** Tips */
+            tips: components["schemas"]["EvidenceTip"][];
+            /** Value */
+            value?: unknown;
+        };
+        /** EvidenceCertaintyMethod */
+        EvidenceCertaintyMethod: {
+            /** Domains */
+            domains: string[];
+            /** Levels */
+            levels: string[];
+            /** Method */
+            method: string;
+            /** Starting Levels */
+            starting_levels: string[];
+            /** Version */
+            version: string;
+        };
+        /** EvidenceExcluded */
+        EvidenceExcluded: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "study_link_unresolved" | "no_report_identity";
+            /** Report Id */
+            report_id?: string | null;
+        };
+        /**
          * EvidenceMeter
          * @description Evidence agreement meter summary
          */
@@ -13301,6 +13718,226 @@ export interface components {
              * @description Total number of evaluated sources
              */
             total_sources: number;
+        };
+        /** EvidenceOutcome */
+        EvidenceOutcome: {
+            /** Certainty */
+            certainty: components["schemas"]["CertaintyResponse"][];
+            /** Contradictions */
+            contradictions: components["schemas"]["ContradictionResponse"][];
+            /** Outcome Key */
+            outcome_key: string;
+            /** Tables */
+            tables: components["schemas"]["EvidenceTableResponse"][];
+            /** Timepoint */
+            timepoint: string;
+        };
+        /**
+         * EvidenceOutcomeListResponse
+         * @description Every version, chain and stale flag; staleness is derived on read.
+         */
+        EvidenceOutcomeListResponse: {
+            certainty_method?: components["schemas"]["EvidenceCertaintyMethod"] | null;
+            /** Outcomes */
+            outcomes: components["schemas"]["EvidenceOutcome"][];
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+        };
+        /**
+         * EvidenceRow
+         * @description Exactly one row per analysis unit (``study:<id>`` or ``report:<id>``).
+         */
+        EvidenceRow: {
+            /** Cells */
+            cells: {
+                [key: string]: components["schemas"]["EvidenceCell"];
+            };
+            /** Report Ids */
+            report_ids: string[];
+            /** Row Key */
+            row_key: string;
+            /** Unit */
+            unit: string;
+        };
+        /** EvidenceTableCreate */
+        EvidenceTableCreate: {
+            /** Field Ids */
+            field_ids: string[];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Matrix Id
+             * Format: uuid
+             */
+            matrix_id: string;
+            /** Outcome Key */
+            outcome_key: string;
+            /** Supersedes Table Id */
+            supersedes_table_id?: string | null;
+            /** Timepoint */
+            timepoint: string;
+        };
+        /** EvidenceTablePreview */
+        EvidenceTablePreview: {
+            /** Content Hash */
+            content_hash: string;
+            /** Differs From Tip */
+            differs_from_tip: boolean;
+            /** Excluded */
+            excluded: components["schemas"]["EvidenceExcluded"][];
+            /** Field Ids */
+            field_ids: string[];
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /**
+             * Matrix Id
+             * Format: uuid
+             */
+            matrix_id: string;
+            /** Outcome Key */
+            outcome_key: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rows */
+            rows: components["schemas"]["EvidenceRow"][];
+            /** Stance Suggestions */
+            stance_suggestions: components["schemas"]["StanceSuggestionGroup"][];
+            /** Timepoint */
+            timepoint: string;
+            /** Tip Id */
+            tip_id?: string | null;
+            /** Unreviewed Cells */
+            unreviewed_cells: components["schemas"]["EvidenceUnreviewedCell"][];
+        };
+        /** EvidenceTableResponse */
+        EvidenceTableResponse: {
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Excluded */
+            excluded: components["schemas"]["EvidenceExcluded"][];
+            /** Field Ids */
+            field_ids: string[];
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Matrix Id
+             * Format: uuid
+             */
+            matrix_id: string;
+            /** Outcome Key */
+            outcome_key: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rows */
+            rows: components["schemas"]["EvidenceRow"][];
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /**
+             * Superseded
+             * @default false
+             */
+            superseded: boolean;
+            /** Supersedes Table Id */
+            supersedes_table_id?: string | null;
+            /** Timepoint */
+            timepoint: string;
+        };
+        /**
+         * EvidenceTip
+         * @description One accepted value behind a cell, pinned to its source revision.
+         */
+        EvidenceTip: {
+            /**
+             * Accepted Value Id
+             * Format: uuid
+             */
+            accepted_value_id: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Missingness */
+            missingness?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Source Hash */
+            source_hash: string;
+            /** Text Sha256 */
+            text_sha256?: string | null;
+            /** Value */
+            value?: unknown;
+        };
+        /**
+         * EvidenceUnreviewedCell
+         * @description A machine or legacy matrix cell: shown, never written into a version.
+         */
+        EvidenceUnreviewedCell: {
+            /** Column Name */
+            column_name: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /** Missingness */
+            missingness?: string | null;
+            /**
+             * Review State
+             * @default unreviewed
+             * @constant
+             */
+            review_state: "unreviewed";
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "machine" | "legacy";
+            /** Value */
+            value?: unknown;
         };
         /**
          * ExecutionMode
@@ -18457,6 +19094,44 @@ export interface components {
             stance: "supporting" | "opposing" | "neutral" | "not_addressed";
             /** Stance Classification Id */
             stance_classification_id?: string | null;
+        };
+        /** StanceSuggestion */
+        StanceSuggestion: {
+            /** Confidence */
+            confidence: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Inference Model Version */
+            inference_model_version?: string | null;
+            /** Model Version */
+            model_version: string;
+            /**
+             * Source Id
+             * Format: uuid
+             */
+            source_id: string;
+            /** Stance */
+            stance: string;
+        };
+        /**
+         * StanceSuggestionGroup
+         * @description Model output grouped by claim; it never creates or resolves anything.
+         */
+        StanceSuggestionGroup: {
+            /** Claim Hash */
+            claim_hash: string;
+            /** Claim Text */
+            claim_text?: string | null;
+            /**
+             * Review State
+             * @constant
+             */
+            review_state: "unreviewed_model_suggestion";
+            /** Suggestions */
+            suggestions: components["schemas"]["StanceSuggestion"][];
         };
         /**
          * StartChatFromProjectRequest
@@ -31041,6 +31716,209 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                     "application/zip": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_evidence_route_api_v1_research_engine_projects__project_id__evidence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceOutcomeListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assess_certainty_route_api_v1_research_engine_projects__project_id__evidence_certainty_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CertaintyCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CertaintyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_contradiction_route_api_v1_research_engine_projects__project_id__evidence_contradictions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContradictionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContradictionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_evidence_route_api_v1_research_engine_projects__project_id__evidence_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description nous.academic.evidence.v1 package (every version) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_evidence_table_route_api_v1_research_engine_projects__project_id__evidence_tables_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvidenceTableCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceTableResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_evidence_table_route_api_v1_research_engine_projects__project_id__evidence_tables_preview_get: {
+        parameters: {
+            query: {
+                outcome_key: string;
+                timepoint: string;
+                matrix_id: string;
+                field_ids: string[];
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceTablePreview"];
                 };
             };
             /** @description Validation Error */

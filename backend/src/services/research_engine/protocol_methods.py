@@ -53,3 +53,20 @@ def declared_outcomes(snapshot: Mapping[str, Any]) -> dict[str, tuple[str, ...]]
             raise ValueError(NO_OUTCOMES)
         outcomes[str(key)] = tuple(str(t) for t in timepoints)
     return outcomes
+
+
+NO_CERTAINTY = "Protocol declares no certainty method"
+_CERTAINTY_METHODS = {"grade": ("handbook-2013",)}
+
+
+def certainty_method(snapshot: Mapping[str, Any]) -> tuple[str, str]:
+    """``appraisal_synthesis.certainty`` as ``(method, version)`` (GOO-310);
+    only structure-encoded methods are accepted."""
+    section = snapshot.get("appraisal_synthesis")
+    method = section.get("certainty") if isinstance(section, Mapping) else None
+    if not isinstance(method, Mapping):
+        raise ValueError(NO_CERTAINTY)
+    key, version = method.get("method"), method.get("version")
+    if version not in _CERTAINTY_METHODS.get(str(key), ()):
+        raise ValueError(NO_CERTAINTY)
+    return str(key), str(version)

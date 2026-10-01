@@ -13,6 +13,7 @@ from src.services.research_decisions.ledger import (
     _validate_appraisal_transitions,
     _validate_claims_transitions,
     _validate_event,
+    _validate_evidence_transitions,
     _validate_extraction_transitions,
     _validate_identity_transitions,
     _validate_release_transitions,
@@ -2206,3 +2207,263 @@ def test_appraisal_payload_keys_exact() -> None:
         r.validate(
             "appraisal.adjudicated", {**adjudicated, "resolves_assessment_ids": []}
         )
+
+
+class _Evidence:
+    """Hand-built events for one Collection's research_evidence stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.events: list[ResearchDecisionEvent] = []
+
+    def _add(self, event_type: str, role: str, payload: dict[str, Any]) -> None:
+        event = _stored(event_type, payload)
+        event.actor_role = role
+        event.actor_user_id = uuid4()
+        self.events.append(event)
+
+    def table_payload(
+        self,
+        table: UUID,
+        supersedes: UUID | None = None,
+        outcome: str = "depressive_symptoms",
+    ) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "table_version_id": str(table),
+            "supersedes_table_id": None if supersedes is None else str(supersedes),
+            "outcome_key": outcome,
+            "timepoint": "12 weeks",
+            "protocol_version_id": str(uuid4()),
+            "matrix_id": str(uuid4()),
+            "form_version_id": str(uuid4()),
+            "field_ids": [str(uuid4())],
+            "content_hash": "a" * 64,
+            "row_count": 2,
+            "excluded_count": 1,
+        }
+
+    def table(
+        self, supersedes: UUID | None = None, outcome: str = "depressive_symptoms"
+    ) -> UUID:
+        table = uuid4()
+        self._add(
+            "evidence.table_versioned",
+            "reviewer",
+            self.table_payload(table, supersedes, outcome),
+        )
+        return table
+
+    def contradiction_payload(
+        self,
+        kind: str,
+        table: UUID,
+        group: UUID | None = None,
+        previous: UUID | None = None,
+    ) -> dict[str, Any]:
+        row = uuid4()
+        opened = kind == "opened"
+        return {
+            "collection_id": str(self.collection_id),
+            "contradiction_id": str(row if opened else group),
+            "row_id": str(row),
+            "previous_id": None if previous is None else str(previous),
+            "kind": kind,
+            "table_version_id": str(table),
+            "field_id": str(uuid4()),
+            "accepted_value_ids": [str(uuid4()), str(uuid4())] if opened else None,
+            "suggestion_ids": [],
+        }
+
+    def contradiction(
+        self,
+        kind: str,
+        role: str,
+        table: UUID,
+        group: UUID | None = None,
+        previous: UUID | None = None,
+    ) -> UUID:
+        payload = self.contradiction_payload(kind, table, group, previous)
+        self._add("evidence.contradiction_recorded", role, payload)
+        return UUID(payload["row_id"])
+
+    def certainty_payload(
+        self,
+        table: UUID,
+        level: str | None = "moderate",
+        supersedes: UUID | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "certainty_id": str(uuid4()),
+            "supersedes_certainty_id": None if supersedes is None else str(supersedes),
+            "table_version_id": str(table),
+            "outcome_key": "depressive_symptoms",
+            "timepoint": "12 weeks",
+            "method_key": "grade",
+            "method_version": "handbook-2013",
+            "starting_level": "high",
+            "ratings": {
+                "risk_of_bias": -1,
+                "inconsistency": 0,
+                "indirectness": 0,
+                "imprecision": 0,
+                "publication_bias": 0,
+            },
+            "level": level,
+            "appraisal_assessment_ids": [str(uuid4())],
+            "contradiction_ids": [],
+            "input_hash": "b" * 64,
+        }
+
+    def certainty(self, table: UUID, level: str | None = "moderate") -> None:
+        self._add(
+            "evidence.certainty_assessed",
+            "reviewer",
+            self.certainty_payload(table, level),
+        )
+
+    def replay(self) -> None:
+        _validate_evidence_transitions(self.events, self.collection_id)
+
+    def validate(self, event_type: str, payload: dict[str, Any], subject: str) -> None:
+        _validate_event(
+            aggregate_type="research_evidence",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="evidence_outcome",
+            subject_id=UUID(payload[subject]),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="c" * 64,
+            reason="explained",
+        )
+
+
+def test_evidence_replay_rejects_reviewer_resolution() -> None:
+    r = _Evidence()
+    table = r.table()
+    group = r.contradiction("opened", "reviewer", table)
+    resolved = r.contradiction("resolved", "adjudicator", table, group, group)
+    r.contradiction("dissent", "reviewer", table, group, resolved)
+    r.replay()
+    bad = _Evidence()
+    table = bad.table()
+    group = bad.contradiction("opened", "reviewer", table)
+    bad.contradiction("resolved", "reviewer", table, group, group)
+    with pytest.raises(DecisionReplayError, match="needs an adjudicator"):
+        bad.replay()
+    fork = _Evidence()
+    table = fork.table()
+    group = fork.contradiction("opened", "reviewer", table)
+    fork.contradiction("dissent", "reviewer", table, group, group)
+    fork.contradiction("acknowledged", "adjudicator", table, group, group)
+    with pytest.raises(DecisionReplayError, match="non-tip"):
+        fork.replay()
+
+
+def test_evidence_replay_rejects_forked_table_chain() -> None:
+    r = _Evidence()
+    first = r.table()
+    r.table(supersedes=first)
+    r.table(outcome="mean_age")  # another outcome's chain starts fresh
+    r.replay()
+    r.table(supersedes=first)
+    with pytest.raises(DecisionReplayError, match="supersedes a non-tip"):
+        r.replay()
+    initial_twice = _Evidence()
+    initial_twice.table()
+    initial_twice.table()
+    with pytest.raises(DecisionReplayError, match="supersedes a non-tip"):
+        initial_twice.replay()
+    foreign = _Evidence()
+    foreign.certainty(foreign.table(outcome="mean_age"))
+    with pytest.raises(DecisionReplayError, match="another outcome"):
+        foreign.replay()
+
+
+def test_evidence_replay_rejects_level_not_derived() -> None:
+    r = _Evidence()
+    table = r.table()
+    r.certainty(table, "moderate")
+    r.replay()
+    wrong = _Evidence()
+    wrong.certainty(wrong.table(), "high")
+    with pytest.raises(DecisionReplayError, match="not derived"):
+        wrong.replay()
+
+
+def test_evidence_payload_keys_exact() -> None:
+    r = _Evidence()
+    table = uuid4()
+    cases = (
+        ("evidence.table_versioned", r.table_payload(table), "table_version_id"),
+        (
+            "evidence.contradiction_recorded",
+            r.contradiction_payload("opened", table),
+            "row_id",
+        ),
+        ("evidence.certainty_assessed", r.certainty_payload(table), "certainty_id"),
+    )
+    for event_type, payload, subject in cases:
+        r.validate(event_type, payload, subject)
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            r.validate(event_type, {**payload, "extra": 1}, subject)
+        trimmed = dict(payload)
+        trimmed.pop("collection_id")
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            r.validate(event_type, trimmed, subject)
+        with pytest.raises(DecisionValidationError, match="another collection"):
+            r.validate(event_type, {**payload, "collection_id": str(uuid4())}, subject)
+    certainty = r.certainty_payload(table)
+    bad = (
+        ({"level": "certain"}, "level"),
+        ({"starting_level": "moderate"}, "starting_level"),
+        ({"ratings": {**certainty["ratings"], "confidence": 0}}, "ratings"),
+        ({"ratings": {**certainty["ratings"], "imprecision": -3}}, "ratings"),
+        ({"input_hash": "x"}, "SHA-256"),
+    )
+    for change, message in bad:
+        with pytest.raises(DecisionValidationError, match=message):
+            r.validate(
+                "evidence.certainty_assessed", {**certainty, **change}, "certainty_id"
+            )
+    opened = r.contradiction_payload("opened", table)
+    with pytest.raises(DecisionValidationError, match="2\\+ unique"):
+        r.validate(
+            "evidence.contradiction_recorded",
+            {**opened, "accepted_value_ids": [str(uuid4())]},
+            "row_id",
+        )
+    dissent = r.contradiction_payload("dissent", table, uuid4(), uuid4())
+    with pytest.raises(DecisionValidationError, match="only an opened row"):
+        r.validate(
+            "evidence.contradiction_recorded",
+            {**dissent, "suggestion_ids": [str(uuid4())]},
+            "row_id",
+        )
+    table_payload = r.table_payload(table)
+    with pytest.raises(DecisionValidationError, match="field_ids"):
+        r.validate(
+            "evidence.table_versioned",
+            {**table_payload, "field_ids": []},
+            "table_version_id",
+        )
+    # A contradiction row and a certainty row always carry their explanation.
+    for event_type, payload, subject in cases[1:]:
+        with pytest.raises(DecisionValidationError, match="needs a rationale"):
+            _validate_event(
+                aggregate_type="research_evidence",
+                aggregate_id=r.collection_id,
+                event_type=event_type,
+                event_schema_version=1,
+                subject_type="evidence_outcome",
+                subject_id=UUID(payload[subject]),
+                subject_version_id=None,
+                subject_hash=decision_request_fingerprint(payload),
+                payload=payload,
+                request_fingerprint="c" * 64,
+                reason=None,
+            )
