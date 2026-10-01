@@ -246,3 +246,54 @@ def test_existing_bibtex_ieee_apa_mla_outputs_byte_identical() -> None:
     }
     for name, text in out.items():
         assert hashlib.sha256(text.encode()).hexdigest() == GOLDEN[name], name
+
+
+def _snapshot() -> dict[str, Any]:
+    keep = ("key", "type", "title", "authors", "year", "venue", "doi", "arxiv_id")
+    return {"references": [{k: r[k] for k in keep} for r in _records()]}
+
+
+def test_reference_mapping_reconciles_bib_csl_ris() -> None:
+    from src.services.research import manuscript_release_service as svc
+    from src.services.research import manuscript_rules as rules
+    from src.services.research_engine import audit_bundle
+
+    snapshot = _snapshot()
+    bib = svc.references_bib(snapshot)
+    csl = json.loads(svc.reference_file(snapshot, "csl-json")[0])
+    ris = svc.reference_file(snapshot, "ris")[0]
+    mapping = rules.reference_mapping(snapshot, bib, csl, ris)
+    assert [k for k, _sha in mapping] == _keys(_records())
+    with pytest.raises(ValueError, match="references.json"):
+        rules.reference_mapping(snapshot, bib, list(reversed(csl)), ris)
+    with pytest.raises(ValueError, match="references.ris"):
+        rules.reference_mapping(
+            snapshot, bib, csl, ris.replace("ID  - doc6", "ID  - x")
+        )
+    # The new members are valid bundle parts (every .json member sealed).
+    bib_bytes = bib.encode()
+    parts = [
+        audit_bundle.Part("references.bib", None, bib_bytes, svc._sha(bib_bytes)),
+        *svc._reference_parts(snapshot),
+    ]
+    data, _manifest = audit_bundle.write_zip(
+        parts,
+        project_id="p",
+        generated_at="2026-10-01T00:00:00+00:00",
+        deployment_sha=None,
+        protocol_version_id=None,
+        stream_heads={},
+        schema=rules.PACKAGE_SCHEMA,
+    )
+    listed = audit_bundle.verify_bundle(data, schema=rules.PACKAGE_SCHEMA)["parts"]
+    assert listed == [
+        "references.bib",
+        "references.json",
+        "references.omissions.json",
+        "references.ris",
+    ]
+    members = svc._members(data)
+    assert json.loads(members["references.json"])["body"] == csl
+    assert members["references.ris"].decode("utf-8") == ris
+    omissions = json.loads(members["references.omissions.json"])["body"]
+    assert omissions == svc.reference_omissions(snapshot)

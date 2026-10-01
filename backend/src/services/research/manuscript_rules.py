@@ -44,6 +44,7 @@ State = Literal["pass", "fail", "unknown", "not_applicable"]
 Prisma = Literal["consistent", "inconsistent", "none"]
 
 _BIB_ENTRY = re.compile(r"^@\w+\{([^,\s]+),", re.MULTILINE)
+_RIS_ID = re.compile(r"^ID  - (.*?)\r?$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -339,14 +340,23 @@ def bib_entries(bibtex: str) -> dict[str, str]:
 
 
 def reference_mapping(
-    snapshot: Mapping[str, Any], bibtex: str
+    snapshot: Mapping[str, Any],
+    bibtex: str,
+    csl: Sequence[Mapping[str, Any]] | None = None,
+    ris: str | None = None,
 ) -> list[tuple[str, str]]:
     """``docN`` -> sha256 of its ``references.bib`` entry, in snapshot order.
-    ``ValueError`` when the keys differ either way."""
+    ``ValueError`` when the keys differ either way. GOO-317: when the package
+    carries ``references.json`` (CSL items) and ``references.ris``, their
+    ``id``/``ID`` sequences must equal the snapshot keys in order too."""
     entries = bib_entries(bibtex)
     keys = [str(r["key"]) for r in snapshot.get("references") or []]
     if sorted(keys) != sorted(entries) or len(set(keys)) != len(keys):
         raise ValueError("references.bib keys do not match the snapshot references")
+    if csl is not None and [str(item.get("id")) for item in csl] != keys:
+        raise ValueError("references.json ids do not match the snapshot references")
+    if ris is not None and _RIS_ID.findall(ris) != keys:
+        raise ValueError("references.ris ids do not match the snapshot references")
     return [
         (key, hashlib.sha256(entries[key].encode("utf-8")).hexdigest()) for key in keys
     ]

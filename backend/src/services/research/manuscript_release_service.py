@@ -62,7 +62,10 @@ from src.services.research import (
     statements_service,
     venue_rules,
 )
-from src.services.research.bibliography_service import BibliographyService
+from src.services.research.bibliography_service import (
+    REFERENCE_FILES,
+    BibliographyService,
+)
 from src.services.research.draft_generation_service import DraftGenerationService
 from src.services.research_decisions import (
     DecisionIdempotencyConflict,
@@ -106,6 +109,9 @@ AGGREGATE_TYPE = "research_manuscript"
 SUBJECT_TYPE = "manuscript_release"
 CHECKS_SCHEMA = "nous.manuscript-checks/1"
 LINEAGE_SCHEMA = "nous.manuscript-figure-lineage/1"
+REFERENCES_CSL_SCHEMA = "nous.manuscript-references-csl/1"
+OMISSIONS_SCHEMA = "nous.manuscript-reference-omissions/1"
+BIBTEX_MIME = "application/x-bibtex"
 ANONYMIZATION_LEAK = "anonymization_leak"
 
 DRAFT_NOT_FOUND = "Draft not found"
@@ -573,6 +579,55 @@ def references_bib(snapshot: Mapping[str, Any]) -> str:
     )
 
 
+def reference_file(snapshot: Mapping[str, Any], fmt: str) -> tuple[str, str, str]:
+    """GOO-317: (content, filename, MIME) of one reference file built from
+    the snapshot records alone; a later citation edit changes nothing."""
+    if fmt == "bibtex":
+        return references_bib(snapshot), "references.bib", BIBTEX_MIME
+    references = list(snapshot.get("references") or [])
+    serialize, filename, mime_type = REFERENCE_FILES[fmt]
+    content = serialize(references, [str(r["key"]) for r in references])
+    return content, filename, mime_type
+
+
+def reference_omissions(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Every field the reference files leave out because the record lacks it."""
+    references = list(snapshot.get("references") or [])
+    return BibliographyService.omissions(
+        references, [str(r["key"]) for r in references]
+    )
+
+
+def _reference_parts(snapshot: Mapping[str, Any]) -> list[audit_bundle.Part]:
+    """GOO-317 members of new candidates. Every ``.json`` bundle member is a
+    sealed package, so ``references.json`` carries the CSL items as its
+    ``body`` (``reference_file`` gives the bare CSL file)."""
+    csl = json.loads(reference_file(snapshot, "csl-json")[0])
+    ris = reference_file(snapshot, "ris")[0].encode("utf-8")
+    return [
+        audit_bundle._sealed_part("references.json", REFERENCES_CSL_SCHEMA, csl, False),
+        audit_bundle.Part("references.ris", None, ris, _sha(ris)),
+        audit_bundle._sealed_part(
+            "references.omissions.json",
+            OMISSIONS_SCHEMA,
+            reference_omissions(snapshot),
+            False,
+        ),
+    ]
+
+
+async def release_references(
+    db: AsyncSession, context: ProjectContext, release_id: UUID, fmt: str
+) -> tuple[str, str, str, list[dict[str, Any]], int]:
+    """VIEW: one release's reference file, omissions and record count, from
+    its stored ``snapshot.references`` only (no ``Citation``/``Document``)."""
+    row = await _release(db, _cid(context), release_id)
+    snapshot = cast(Mapping[str, Any], row.snapshot)
+    content, filename, mime_type = reference_file(snapshot, fmt)
+    records = len(snapshot.get("references") or [])
+    return content, filename, mime_type, reference_omissions(snapshot), records
+
+
 async def _parts(
     db: AsyncSession,
     context: ProjectContext,
@@ -593,6 +648,7 @@ async def _parts(
         audit_bundle.Part("manuscript.md", None, labelled, _sha(labelled)),
         audit_bundle.Part("manuscript.source.md", None, source, _sha(source)),
         audit_bundle.Part("references.bib", None, bib, _sha(bib)),
+        *_reference_parts(snapshot),
         audit_bundle._sealed_part(
             "snapshot.json", rules.SNAPSHOT_SCHEMA, dict(snapshot), False
         ),
@@ -1278,13 +1334,32 @@ async def verify(
     try:
         snapshot = json.loads(members["snapshot.json"])["body"]
         bib = members["references.bib"].decode("utf-8")
+        # GOO-317 members exist only in packages built after it; older
+        # packages verify on references.bib alone.
+        csl = (
+            json.loads(members["references.json"])["body"]
+            if "references.json" in members
+            else None
+        )
+        ris = (
+            members["references.ris"].decode("utf-8")
+            if "references.ris" in members
+            else None
+        )
         titles = {r["key"]: r.get("title") for r in snapshot.get("references") or []}
         mapping = [
             ReferenceMapping(key=k, title=titles.get(k), entry_sha256=sha)
-            for k, sha in rules.reference_mapping(snapshot, bib)
+            for k, sha in rules.reference_mapping(snapshot, bib, csl, ris)
         ]
-        references_ok = references_bib(snapshot) == bib
-    except (KeyError, ValueError):
+        references_ok = (
+            references_bib(snapshot) == bib
+            and (
+                csl is None
+                or csl == json.loads(reference_file(snapshot, "csl-json")[0])
+            )
+            and (ris is None or ris == reference_file(snapshot, "ris")[0])
+        )
+    except (KeyError, ValueError, TypeError, AttributeError):
         mapping = []
     return ReleaseVerification(
         release_id=cast(UUID, row.id),
