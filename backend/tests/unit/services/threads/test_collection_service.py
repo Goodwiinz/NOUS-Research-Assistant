@@ -214,7 +214,23 @@ async def test_re_adding_removed_document_restores_link(
 ) -> None:
     """R6-M7 / R8-B3: remove then re-add revives the soft-deleted junction row
     on both the REST path and the agent link helper, instead of raising on
-    ``uq_collection_documents`` or reporting ``already_linked``."""
+    ``uq_collection_documents`` or reporting ``already_linked``.
+
+    Needs local PostgreSQL (``TEST_PG_ADMIN_DSN``); focused command:
+    ``pytest -q backend/tests/unit/services/threads/test_collection_service.py
+    -k re_adding_removed_document``. Three guards, one mutation at a time:
+
+    - ``services/threads/collection_service.py:add_documents_to_collection``
+      (~L278, ``elif existing.is_deleted: existing.restore()``): put
+      ``CollectionDocument.is_deleted == False`` back into the existing-row
+      select → fails on ``IntegrityError ... uq_collection_documents``.
+    - ``services/agent/tool_helpers.py:_link_documents_to_project`` (~L311):
+      swap ``on_conflict_do_update(...)`` for ``on_conflict_do_nothing(...)``
+      → fails on ``assert True is False`` (row stays ``is_deleted``).
+    - same function (~L291, ``dict.fromkeys`` dedupe): revert to
+      ``[str(d) for d in document_ids if d]`` → fails on ``DBAPIError``
+      (ON CONFLICT DO UPDATE cannot affect row a second time).
+    """
     from src.services.agent.tool_helpers import _link_documents_to_project
 
     owner = await user_factory()

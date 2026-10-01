@@ -2266,7 +2266,18 @@ async def test_postgres_uncertain_external_effect_blocks_new_call_id_replay(
 async def test_postgres_errored_external_replay_is_marked_and_counted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R8-B5: a new call id replaying a same-turn failure is marked and counted."""
+    """R8-B5: a new call id replaying a same-turn failure is marked and counted.
+
+    Focused command (needs ``ORCHESTRATION_TEST_DATABASE_URL``): ``pytest -q
+    backend/tests/integration/test_agent_tool_operation_concurrency.py -k
+    errored_external_replay``. Mutation checks, one at a time:
+
+    - ``services/agent/tools_impl.py:_execute_external_operation`` (~L2000):
+      change ``if not claim.same_identity and claim.result is not None:`` to
+      ``if False:`` → fails on ``assert 0 == 1`` (``error_increment``).
+    - ``services/agent/_nodes_tools.py:_execute_single_tool`` (~L759): delete
+      ``or result.get("replayed_from_operation")`` → fails on ``assert 0 == 1``.
+    """
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")

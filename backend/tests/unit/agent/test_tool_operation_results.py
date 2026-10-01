@@ -838,7 +838,15 @@ async def _run_external(tools_impl: Any, call_id: str) -> dict[str, Any]:
 async def test_external_barrier_replay_of_prior_error_is_marked_no_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R8-B5: a new call id replaying another call's error says so."""
+    """R8-B5: a new call id replaying another call's error says so.
+
+    Guard: ``services/agent/tools_impl.py:_execute_external_operation``
+    (~L2000, ``if not claim.same_identity and claim.result is not None:``).
+    Mutation check: change that condition to ``if False:`` and
+    ``pytest -q backend/tests/unit/agent/test_tool_operation_results.py -k
+    replay_of_prior_error_is_marked`` fails on
+    ``KeyError: 'replayed_from_operation'``.
+    """
     from src.services.agent.tool_operations import OperationClaim
 
     stored = {"error": "arXiv request timed out", "error_category": "transient"}
@@ -860,6 +868,15 @@ async def test_external_barrier_replay_of_prior_error_is_marked_no_retry(
 async def test_external_same_identity_replay_returns_saved_result_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Same-identity replay stays byte-identical (the R8-B5 marker must not leak).
+
+    Guard: ``services/agent/tools_impl.py:_execute_external_operation``
+    (~L2000, the ``not claim.same_identity`` half of the condition).
+    Mutation check: drop ``not claim.same_identity and`` and ``pytest -q
+    backend/tests/unit/agent/test_tool_operation_results.py -k
+    same_identity_replay_returns_saved`` fails on the dict equality (extra
+    ``replayed_from_operation`` / ``automatic_retry_allowed`` keys).
+    """
     from src.services.agent.tool_operations import OperationClaim
 
     stored = {"status": "success", "document_ids": ["d1"]}
@@ -891,7 +908,15 @@ async def test_replayed_transient_error_counts_toward_error_ceiling(
     payload: dict[str, Any],
     expected_increment: int,
 ) -> None:
-    """R8-B5: a fresh transient failure is free; its replay is not."""
+    """R8-B5: a fresh transient failure is free; its replay is not.
+
+    Guard: ``services/agent/_nodes_tools.py:_execute_single_tool`` (~L759,
+    ``or result.get("replayed_from_operation")`` in ``error_increment``).
+    Mutation check: delete that line and ``pytest -q
+    backend/tests/unit/agent/test_tool_operation_results.py -k
+    replayed_transient_error_counts`` fails on ``assert 0 == 1`` for the
+    ``payload1-1`` case.
+    """
     from src.services.agent import _nodes_tools, graph
 
     async def _execute(**_kwargs: Any) -> dict[str, Any]:

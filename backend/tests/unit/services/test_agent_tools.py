@@ -161,7 +161,17 @@ class TestAddDocumentToProject:
         assert result["status"] == "already_linked"
 
     async def test_soft_deleted_link_is_restored_not_already_linked(self):
-        """R8-B3: a soft-deleted link is revived by the upsert, never skipped."""
+        """R8-B3: a soft-deleted link is revived by the upsert, never skipped.
+
+        Guard: ``services/agent/tool_helpers.py:_link_documents_to_project``
+        (~L311, ``on_conflict_do_update(... is_deleted=False ...)``).
+        Mutation check: replace the ``on_conflict_do_update(...)`` call with
+        ``on_conflict_do_nothing(index_elements=["collection_id", "document_id"])``
+        and ``pytest -q backend/tests/unit/services/test_agent_tools.py -k
+        soft_deleted_link_is_restored`` fails on ``assert 'ON CONFLICT
+        (collection_id, document_id) DO UPDATE SET' in ...`` (pre-fix code
+        failed earlier on ``{'linked': 0, 'already_linked': 1} == ...``).
+        """
         from sqlalchemy.dialects import postgresql
 
         from src.services.agent.tool_helpers import _link_documents_to_project
