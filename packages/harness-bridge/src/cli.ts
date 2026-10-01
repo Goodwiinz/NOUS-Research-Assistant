@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { CredentialStore } from "./credentials.ts";
-import { GrantKeeper } from "./grants.ts";
+import { GrantExpired, GrantKeeper } from "./grants.ts";
 import { record } from "./rpc.ts";
 import { apiBase, type McpSession } from "./mcp/client.ts";
 import {
@@ -205,6 +205,67 @@ export async function connect(
   if (carried.length)
     announce(`Re-registered ${carried.length} workspace root(s) on the new device.`);
   return { deviceId: device.id, credentialHandle };
+}
+/**
+ * Revoke this device's grant (and its consent) in NOUS, then forget the local
+ * credentials. A grant NOUS already refuses is cleared locally with a pointer
+ * to the browser page; a network or server failure keeps everything so the
+ * command can be retried.
+ */
+export async function disconnect(
+  options: ClientOptions,
+): Promise<{ revoked: boolean }> {
+  const store = new CredentialStore(options.stateDir);
+  const value = await store.readLocal("connection").catch(() => null);
+  if (!record(value) || typeof value.apiUrl !== "string" || typeof value.credentialHandle !== "string")
+    throw new Error("this device is not connected");
+  const state = value as LocalState;
+  const base = apiBase(state.apiUrl);
+  const announce = options.announce ?? console.log;
+  const fetchFn = options.fetchFn ?? fetch;
+  const forget = async (): Promise<void> => {
+    await store.removeLocal(state.credentialHandle);
+    await store.removeLocal("connection");
+  };
+  let credentials;
+  try {
+    credentials = await new GrantKeeper(store, state.credentialHandle, base, fetchFn).current();
+  } catch (error) {
+    if (!(error instanceof GrantExpired)) throw error;
+    await forget();
+    announce(`This device's access had already ended; local credentials removed. Review devices in NOUS at /integrations/devices.`);
+    return { revoked: false };
+  }
+  if (!uuid(credentials.grantId)) {
+    await forget();
+    announce("This connection predates grant renewal and cannot revoke itself; local credentials removed. Revoke it in NOUS at /integrations/devices.");
+    return { revoked: false };
+  }
+  let response: Response;
+  try {
+    response = await fetchFn(`${base}/integrations/grants/${credentials.grantId}`, {
+      method: "DELETE",
+      redirect: "error",
+      headers: {
+        Authorization: `Bearer ${credentials.accessToken}`,
+        "X-NOUS-Integration-Grant": credentials.grantToken,
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    throw new Error(`could not reach NOUS to revoke this device; nothing was removed (${error instanceof Error ? error.message : String(error)})`);
+  }
+  if (response.status === 204) {
+    await forget();
+    announce("Disconnected: NOUS revoked this device's access and local credentials were removed.");
+    return { revoked: true };
+  }
+  if (response.status === 401 || response.status === 403 || response.status === 404) {
+    await forget();
+    announce("NOUS no longer accepts this device's grant; local credentials removed. Review devices in NOUS at /integrations/devices.");
+    return { revoked: false };
+  }
+  throw new Error(`NOUS could not revoke this device (${response.status}); nothing was removed, try again`);
 }
 export async function addWorkspace(
   options: ClientOptions & { root: string; label?: string },
@@ -442,6 +503,7 @@ export function recoverInterrupt(
   }
 }
 const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools [--publish]] | workspace add --root PATH [--label NAME] | run
+  nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
   nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
@@ -494,6 +556,8 @@ async function main(): Promise<void> {
       tools: values.tools,
       publish: values.publish,
     });
+  else if (positionals.join(" ") === "disconnect")
+    await disconnect({ stateDir });
   else if (positionals.join(" ") === "mcp install")
     console.log(await mcpInstallCommand(stateDir, { root: values.root }));
   else if (positionals.join(" ") === "mcp") {
