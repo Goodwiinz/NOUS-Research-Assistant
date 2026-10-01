@@ -246,6 +246,7 @@ def test_should_skip_tenant_validation_matches_mounted_paths(path):
     middleware = MultiTenancyMiddleware(app=None)
     mock_request = MagicMock(spec=Request)
     mock_request.url.path = path
+    mock_request.scope = {"path": path}
     assert (
         middleware._should_skip_tenant_validation(mock_request) is True
     ), f"expected skip for {path!r}"
@@ -305,6 +306,7 @@ def test_should_skip_tenant_validation_does_not_overmatch(path):
     middleware = MultiTenancyMiddleware(app=None)
     mock_request = MagicMock(spec=Request)
     mock_request.url.path = path
+    mock_request.scope = {"path": path}
     assert (
         middleware._should_skip_tenant_validation(mock_request) is False
     ), f"expected NO skip for {path!r}"

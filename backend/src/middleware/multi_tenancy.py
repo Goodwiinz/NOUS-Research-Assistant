@@ -140,9 +140,10 @@ def _bearer_token(request: Request) -> Optional[str]:
 def _is_cors_preflight(request: Request) -> bool:
     """A CORS preflight exactly as Starlette's ``CORSMiddleware`` defines it
     (OPTIONS + Origin + Access-Control-Request-Method). Browsers never attach
-    credentials to a preflight, and ``CORSMiddleware`` (registered inside this
-    middleware in main.py) answers it itself without dispatching to a route —
-    so letting it through exposes no tenant data. Any other OPTIONS request is
+    credentials to a preflight, and ``CORSMiddleware`` answers it itself
+    without dispatching to a route — so letting it through exposes no tenant
+    data. (In main.py CORS runs outside this middleware and answers preflights
+    first; this exemption keeps the gate correct under any ordering.) Any other OPTIONS request is
     still gated."""
     return (
         request.method == "OPTIONS"
@@ -279,10 +280,13 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         ``/api/v1/auth/refreshXYZ``, ...) can never bypass tenant validation.
         Probe paths stay an exact-match set lookup.
         """
-        if request.url.path in PROBE_EXEMPT_PATHS:
+        # Match the raw ``scope["path"]`` Starlette routes on, NOT
+        # ``request.url.path``: URL parsing drops tab/CR/LF, so a look-alike
+        # such as "/heal\tth" would otherwise match an exempt path.
+        path = request.scope["path"]
+        if path in PROBE_EXEMPT_PATHS:
             return True
 
-        path = request.url.path
         if any(pattern.match(path) for pattern in _SKIP_PATH_REGEXES):
             return True
         return any(pattern.match(path) for pattern in _MIDDLEWARE_EXEMPT_PATH_REGEXES)
