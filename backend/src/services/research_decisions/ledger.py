@@ -5,7 +5,7 @@ Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
 ``research_evidence``, ``research_synthesis``, ``research_experiment``,
 ``research_reproduction``, ``research_peer_review``, ``research_manuscript``,
-``research_statements``)
+``research_statements``, ``research_deposit``)
 registers its subject type, payload vocabulary, value validation and replay
 transition rules in ``_FAMILIES``.
 
@@ -649,12 +649,62 @@ _STATEMENTS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     ),
 }
 _APPROVAL_METHODS = ("in_app_self", "recorded_attestation")
+# GOO-318: archive deposits, one stream per Collection. Approvals bind the
+# exact release, package hash, repository, account label and action; the
+# worker records each phase attempt as ``machine`` on the requester's behalf.
+_DEPOSIT_AGGREGATE = "research_deposit"
+_DEPOSIT_SUBJECT = "archive_deposit"
+_DEPOSIT_APPROVAL_KEYS = frozenset(
+    {
+        "collection_id",
+        "approval_id",
+        "release_id",
+        "package_sha256",
+        "repository",
+        "account_ref",
+        "action",
+    }
+)
+_DEPOSIT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("deposit.approved", 1): _DEPOSIT_APPROVAL_KEYS,
+    ("deposit.revoked", 1): _DEPOSIT_APPROVAL_KEYS,
+    ("deposit.requested", 1): frozenset(
+        {
+            "collection_id",
+            "operation_id",
+            "release_id",
+            "package_sha256",
+            "repository",
+            "account_ref",
+            "approval_id",
+            "file_count",
+        }
+    ),
+    ("deposit.phase_recorded", 1): frozenset(
+        {
+            "collection_id",
+            "operation_id",
+            "attempt_id",
+            "previous_id",
+            "approval_id",
+            "phase",
+            "outcome",
+            "remote_deposition_id",
+            "remote_record_id",
+            "doi",
+        }
+    ),
+}
+_DEPOSIT_PHASES = ("draft_created", "files_uploaded", "published", "verified")
+_DEPOSIT_OUTCOMES = ("succeeded", "failed", "unknown")
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
     "extraction.accepted",
     "claim.assessed",
     "appraisal.adjudicated",
     "evidence.contradiction_recorded",
     "evidence.certainty_assessed",
+    "deposit.approved",
+    "deposit.revoked",
 }
 
 
@@ -2992,6 +3042,144 @@ def _validate_statements_transitions(
         approved.add((set_id, author))
 
 
+def _optional_text(value: Any, field: str, limit: int) -> None:
+    if value is not None and (
+        not isinstance(value, str) or not value or len(value) > limit
+    ):
+        raise DecisionValidationError(f"{field} is invalid")
+
+
+def _validate_deposit_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if event_type == "deposit.phase_recorded":
+        if _validated_payload_uuid(payload["attempt_id"], "attempt_id") != subject_id:
+            raise DecisionValidationError("deposit event subject is not its attempt")
+        _validated_payload_uuid(payload["operation_id"], "operation_id")
+        _validated_payload_uuid(payload["previous_id"], "previous_id")
+        _validated_optional_uuid(payload["approval_id"], "approval_id")
+        if payload["phase"] not in _DEPOSIT_PHASES:
+            raise DecisionValidationError("deposit phase is invalid")
+        if payload["outcome"] not in _DEPOSIT_OUTCOMES:
+            raise DecisionValidationError("deposit outcome is invalid")
+        _optional_text(payload["remote_deposition_id"], "remote_deposition_id", 64)
+        _optional_text(payload["remote_record_id"], "remote_record_id", 64)
+        _optional_text(payload["doi"], "doi", 255)
+        return
+    subject_key = (
+        "operation_id" if event_type == "deposit.requested" else ("approval_id")
+    )
+    if _validated_payload_uuid(payload[subject_key], subject_key) != subject_id:
+        raise DecisionValidationError("deposit event subject is not its row")
+    _validated_payload_uuid(payload["release_id"], "release_id")
+    _validated_payload_uuid(payload["approval_id"], "approval_id")
+    _validated_sha256(payload["package_sha256"], "package_sha256")
+    if payload["repository"] != "zenodo_sandbox":
+        raise DecisionValidationError("deposit repository is invalid")
+    _optional_text(payload["account_ref"], "account_ref", 128)
+    if payload["account_ref"] is None:
+        raise DecisionValidationError("account_ref is invalid")
+    if event_type == "deposit.requested":
+        if not _is_int(payload["file_count"]) or payload["file_count"] < 1:
+            raise DecisionValidationError("file_count must be positive")
+    elif payload["action"] != "publish":
+        raise DecisionValidationError("deposit action is invalid")
+
+
+def _validate_deposit_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Approvals and revocations are an adjudicator's or supervisor's; the
+    newest one per (release, repository, account) is in force. A request
+    names the approval in force for its exact package hash, and its
+    requester never approved it. Phase attempts are the worker's, extend
+    their operation's chain tip, never publish or verify before a succeeded
+    upload, and a succeeded draft or publish names the approval in force."""
+    approvals: dict[str, tuple[tuple[str, str, str], str, Any]] = {}
+    in_force: dict[tuple[str, str, str], str | None] = {}
+    operations: dict[str, dict[str, Any]] = {}
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.event_type in ("deposit.approved", "deposit.revoked"):
+            if event.actor_role not in _RELEASE_PROMOTERS:
+                raise DecisionReplayError(
+                    "deposit approval requires an adjudicator or supervisor"
+                )
+            scope = (
+                str(payload["release_id"]),
+                str(payload["repository"]),
+                str(payload["account_ref"]),
+            )
+            approvals[str(payload["approval_id"])] = (
+                scope,
+                str(payload["package_sha256"]),
+                event.actor_user_id,
+            )
+            approved = event.event_type == "deposit.approved"
+            in_force[scope] = str(payload["approval_id"]) if approved else None
+            continue
+        if event.event_type == "deposit.requested":
+            if event.actor_role not in _RELEASE_PROMOTERS:
+                raise DecisionReplayError(
+                    "deposit request requires an adjudicator or supervisor"
+                )
+            scope = (
+                str(payload["release_id"]),
+                str(payload["repository"]),
+                str(payload["account_ref"]),
+            )
+            approval = str(payload["approval_id"])
+            if in_force.get(scope) != approval or (
+                approvals[approval][1] != payload["package_sha256"]
+            ):
+                raise DecisionReplayError("deposit request has no approval in force")
+            if approvals[approval][2] == event.actor_user_id:
+                raise DecisionReplayError("the requester approved their own deposit")
+            operation = str(payload["operation_id"])
+            if operation in operations:
+                raise DecisionReplayError("deposit operation already requested")
+            operations[operation] = {
+                "scope": scope,
+                "sha": payload["package_sha256"],
+                "tip": operation,
+                "uploaded": False,
+            }
+            continue
+        if event.actor_role != "machine":
+            raise DecisionReplayError("deposit phase attempts are the worker's")
+        state = operations.get(str(payload["operation_id"]))
+        if state is None:
+            raise DecisionReplayError("deposit attempt names no requested operation")
+        if str(payload["previous_id"]) != state["tip"]:
+            raise DecisionReplayError("deposit attempt does not extend the chain tip")
+        state["tip"] = str(payload["attempt_id"])
+        if payload["outcome"] != "succeeded":
+            continue
+        phase = payload["phase"]
+        if phase in ("published", "verified") and not state["uploaded"]:
+            raise DecisionReplayError("deposit published before its files uploaded")
+        if phase in ("draft_created", "published"):
+            approval = payload["approval_id"]
+            if (
+                approval is None
+                or in_force.get(state["scope"]) != str(approval)
+                or approvals[str(approval)][1] != state["sha"]
+            ):
+                raise DecisionReplayError("deposit attempt has no approval in force")
+        if phase == "files_uploaded":
+            state["uploaded"] = True
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -3123,6 +3311,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_STATEMENTS_PAYLOAD_KEYS,
         validate_payload=_validate_statements_payload,
         validate_transitions=_validate_statements_transitions,
+        requires_subject_version=False,
+    ),
+    _DEPOSIT_AGGREGATE: _Family(
+        subject_type=_DEPOSIT_SUBJECT,
+        payload_keys=_DEPOSIT_PAYLOAD_KEYS,
+        validate_payload=_validate_deposit_payload,
+        validate_transitions=_validate_deposit_transitions,
         requires_subject_version=False,
     ),
 }

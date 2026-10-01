@@ -45,6 +45,7 @@ from src.models.generated_draft import GeneratedDraft
 from src.models.manuscript_release import ManuscriptRelease
 from src.models.manuscript_statements import VenueCheck
 from src.models.research_claim import ResearchClaimEvidenceLink
+from src.models.research_deposit import ArchiveDepositApproval
 from src.models.research_experiment import (
     ResearchFigure,
     ResearchRunArtifact,
@@ -54,7 +55,7 @@ from src.models.research_project_role import ResearchProjectRole
 from src.models.research_protocol import ProtocolDeviation, ResearchProtocolVersion
 from src.models.research_synthesis import SynthesisResult
 from src.services.artifacts.storage import get_artifact_storage
-from src.services.research import claim_rules, draft_release_service
+from src.services.research import claim_rules, deposit_rules, draft_release_service
 from src.services.research import manuscript_rules as rules
 from src.services.research import (
     peer_review_service,
@@ -62,6 +63,7 @@ from src.services.research import (
     statements_service,
     venue_rules,
 )
+from src.services.research.archives import zenodo
 from src.services.research.bibliography_service import (
     REFERENCE_FILES,
     BibliographyService,
@@ -808,6 +810,39 @@ async def _venue_states(
     return out
 
 
+async def _authorized(db: AsyncSession, rows: Sequence[Any]) -> set[Any]:
+    """GOO-318: verified rows with a deposit approval in force for their
+    exact package hash and the configured account (the only authorization
+    of an external submission)."""
+    verified = {r.id: r for r in rows if r.stage == "verified"}
+    if not verified:
+        return set()
+    by_release: dict[Any, list[dict[str, Any]]] = {}
+    for a in await _all(
+        db,
+        select(ArchiveDepositApproval)
+        .where(ArchiveDepositApproval.release_id.in_(list(verified)))
+        .order_by(ArchiveDepositApproval.created_at, ArchiveDepositApproval.id),
+    ):
+        by_release.setdefault(a.release_id, []).append(
+            {
+                "kind": a.kind,
+                "package_sha256": a.package_sha256,
+                "account_ref": a.account_ref,
+                "action": a.action,
+                "repository": a.repository,
+            }
+        )
+    account = zenodo.account_ref()
+    return {
+        release_id
+        for release_id, approvals in by_release.items()
+        if deposit_rules.approval_valid(
+            approvals, verified[release_id].package_sha256, account
+        )
+    }
+
+
 async def _responses(
     db: AsyncSession, collection_id: UUID, rows: Sequence[Any]
 ) -> list[ManuscriptReleaseResponse]:
@@ -815,6 +850,7 @@ async def _responses(
     verified = [r for r in rows if r.stage == "verified"]
     if not verified:
         return [_response(r, venue=venue.get(r.id)) for r in rows]
+    authorized = await _authorized(db, verified)
     stale_nodes = (await draft_release_service._graph(db, collection_id)).stale_nodes()
     stamped = {
         r.id
@@ -839,7 +875,10 @@ async def _responses(
             if row.stage == "candidate"
             else ("stale" if cause else "verified")
         )
-        out.append(_response(row, status, cause, venue.get(row.id)))
+        response = _response(row, status, cause, venue.get(row.id))
+        if status == "verified" and row.id in authorized:
+            response.external_submission = "authorized"
+        out.append(response)
     return out
 
 

@@ -33,7 +33,9 @@ class TemplateAPI:
 
 @pytest.fixture
 def template_api(
-    test_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+    test_app: FastAPI,
+    test_auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[TemplateAPI]:
     user = Mock(
         id=uuid.uuid4(),
@@ -114,7 +116,7 @@ def template_api(
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = no_lifespan
     try:
-        with TestClient(test_app) as client:
+        with TestClient(test_app, headers=test_auth_headers) as client:
             yield TemplateAPI(
                 client=client,
                 project=project,

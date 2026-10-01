@@ -2205,3 +2205,61 @@ Pre-mutation SHA-256 of each mutated file:
 Not performed: import into a desktop reference manager (Zotero/EndNote; no
 desktop app available, and it never substitutes for the schema and reader
 checks), and the live journey (needs a deployed stack at `f6a8c0d2e4b5`).
+
+## GOO-318 resumable archive deposit with verified receipts (Zenodo sandbox) — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_deposit_rules.py` (derived
+status, approval validity, read-back, redaction) and
+`backend/tests/unit/architecture/test_deposit_boundary.py`. PostgreSQL
+proof: `backend/tests/integration/test_archive_deposit_postgres.py`, run
+against a disposable local PostgreSQL 14 on GOO-301's `screening_factory`
+schema (chain head `b0e2a4c6d8f9`; connection URL from the environment,
+value omitted). The remote side is a fake Zenodo behind the real
+`ZenodoAdapter` (`httpx.MockTransport`); it times out after creating a
+draft, crashes the worker mid-upload, corrupts one read-back md5 and
+echoes the caller's token in link query strings. The live Zenodo sandbox
+run is NOT RUN (no `ZENODO_SANDBOX_TOKEN`).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted a single match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty, then rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_deposit_rules.py -k unpublished   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_deposit_rules.py -k redact        # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_deposit_boundary.py           # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_archive_deposit_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Lookup before the only remote create (`deposit_service.py:958`) | `found = None` (skip `find_by_operation`) | Proof step 4 (`test_archive_deposit_postgres.py:583`): `AssertionError: a retry created a second deposition`. |
+| Timeout is `unknown` (`deposit_service.py:825`) | `outcome = "failed"` (retryable kept) | Step 4 (`:579`): `assert ('prepared' == 'ambiguous' ...)`; the timed-out create never reads ambiguous. |
+| Published needs remote `submitted` + record id (`deposit_rules.py:50`) | `if False and attempt.phase == "published" ...` (trust our own publish call) | `-k unpublished` (`test_deposit_rules.py:33`): `assert 'published' == 'files_uploaded'`. |
+| Worker approval recheck before every remote call (`deposit_service.py:736`) | `if False and (approval is None ...)` | Step 6 (`:620`): `assert (None == 'approval_invalid')`; the worker went on to publish after the revocation. |
+| Requester is never the approver (`deposit_service.py:602`) | `if False:` | Step 2 (`:538`): `Failed: DID NOT RAISE HTTPException`; S's request on S's own approval was accepted. |
+| Read-back compare (`deposit_rules.py:143`) | `return []` before any comparison | Step 8 (`:671`): `assert ('verified' == 'failed' ...)`; the corrupted md5 verified. |
+| `redact` (`deposit_rules.py:170`) | `return obj` | `-k redact` (`test_deposit_rules.py:150`): token found in the redacted value; step 10 (`:689`): the echoed token found in `archive_deposit_attempts`. |
+| `uq_deposit_live` (`b0e2a4c6d8f9_create_archive_deposits.py:162`) | the `op.create_index("uq_deposit_live", ...)` call replaced by a no-op | Step 3 (`:549`): `assert UUID(...) == UUID(...)`; two concurrent requests created two operations. |
+| Only the adapter talks HTTP (`test_deposit_boundary.py`) | `import httpx` added to `deposit_service.py` | `-k http`: `['deposit_service.py', 'zenodo.py'] == ['zenodo.py']`. |
+| Evidence rows are insert-only in code (`test_deposit_boundary.py`) | a function running `update(ArchiveDepositAttempt)` appended to `deposit_service.py` | `-k evidence`: `assert ['update:1135'] == []`. |
+
+All selectors passed again after each restore. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/deposit_service.py`
+  `8ac2663c6ef7bc311c3b2e347024288b2cc110f498ad87f7a2d7f248c8582da0`
+- `backend/src/services/research/deposit_rules.py`
+  `67cfb1c39f4e82dfa0e3fd3d24e23d590fc07ebd45a4bbf7bf7d944466f91bbb`
+- `backend/alembic/versions/b0e2a4c6d8f9_create_archive_deposits.py`
+  `6938f9924d00d0a0f4a42a8ff533626b082f49ba7a2695d6cfd0ba73a22f471a`
+
+Not performed: the live Zenodo sandbox run (upload, interruption, resume,
+publish, `GET /records/{id}` read-back tied to the package hashes; needs
+`ZENODO_SANDBOX_TOKEN` with `deposit:write deposit:actions`), and the live
+journey (needs a deployed stack at `b0e2a4c6d8f9` with the token in
+Infisical). The fake adapter cannot close the ticket.

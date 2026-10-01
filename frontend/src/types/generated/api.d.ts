@@ -5208,6 +5208,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/deposits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Deposits
+         * @description Every deposit with its attempt chain, derived status and approvals.
+         */
+        get: operations["list_deposits_api_v1_projects__project_id__deposits_get"];
+        put?: never;
+        /**
+         * Request Deposit
+         * @description Queue the deposit of one verified release (RELEASE).
+         */
+        post: operations["request_deposit_api_v1_projects__project_id__deposits_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/deposits/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve
+         * @description Approve depositing this exact release package (RELEASE).
+         */
+        post: operations["approve_api_v1_projects__project_id__deposits_approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/deposits/approvals/{approval_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke
+         * @description Revoke the approval in force (an insert-only revocation row).
+         */
+        post: operations["revoke_api_v1_projects__project_id__deposits_approvals__approval_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/deposits/{operation_id}/requeue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue
+         * @description Put a stopped deposit back on the worker's queue (RELEASE).
+         */
+        post: operations["requeue_api_v1_projects__project_id__deposits__operation_id__requeue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/documents": {
         parameters: {
             query?: never;
@@ -8863,7 +8947,7 @@ export interface paths {
          * @description Get encryption audit logs
          *
          *     This endpoint returns encryption operation audit logs.
-         *     Requires encryption:audit permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         get: operations["get_encryption_audit_logs_api_v1_security_encryption_audit_logs_get"];
         put?: never;
@@ -8886,7 +8970,7 @@ export interface paths {
          * @description Get list of configured sensitive field patterns
          *
          *     This endpoint returns the list of field patterns that are automatically encrypted.
-         *     Requires encryption:view permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         get: operations["get_sensitive_fields_config_api_v1_security_encryption_config_sensitive_fields_get"];
         put?: never;
@@ -8911,7 +8995,7 @@ export interface paths {
          * @description Decrypt sensitive data
          *
          *     This endpoint decrypts sensitive data for authorized users.
-         *     Requires encryption:decrypt permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         post: operations["decrypt_data_api_v1_security_encryption_decrypt_post"];
         delete?: never;
@@ -8934,7 +9018,7 @@ export interface paths {
          * @description Rotate encryption keys
          *
          *     This endpoint rotates encryption keys for enhanced security.
-         *     Requires encryption:key_rotate permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         post: operations["rotate_encryption_key_api_v1_security_encryption_keys_rotate_post"];
         delete?: never;
@@ -8957,7 +9041,8 @@ export interface paths {
          * @description Encrypt organization profile data
          *
          *     This endpoint encrypts sensitive business information in organization profiles.
-         *     Requires encryption:manage and organization:manage permissions.
+         *     Requires the system_admin permission (audit I12: no encryption:*
+         *     permission exists in SYSTEM_PERMISSIONS).
          */
         post: operations["encrypt_organization_profile_api_v1_security_encryption_profiles_organization_post"];
         delete?: never;
@@ -8980,7 +9065,7 @@ export interface paths {
          * @description Encrypt user profile data
          *
          *     This endpoint encrypts sensitive personal information in user profiles.
-         *     Requires encryption:manage permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         post: operations["encrypt_user_profile_api_v1_security_encryption_profiles_user_post"];
         delete?: never;
@@ -9001,7 +9086,7 @@ export interface paths {
          * @description Get encryption status and statistics
          *
          *     This endpoint returns the current encryption status and statistics.
-         *     Requires encryption:view permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         get: operations["get_encryption_status_api_v1_security_encryption_status_get"];
         put?: never;
@@ -9026,7 +9111,7 @@ export interface paths {
          * @description Validate encryption integrity
          *
          *     This endpoint validates the integrity of encrypted data by testing sample records.
-         *     Requires encryption:validate permission.
+         *     Requires the system_admin permission (see module docstring, audit I12).
          */
         post: operations["validate_encryption_integrity_api_v1_security_encryption_validate_post"];
         delete?: never;
@@ -14043,6 +14128,210 @@ export interface components {
             resource_type: string;
         };
         /**
+         * DepositApprovalCreate
+         * @description Approve depositing this exact release package (RELEASE).
+         */
+        DepositApprovalCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Package Sha256 */
+            package_sha256: string;
+            /** Rationale */
+            rationale: string;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+        };
+        /** DepositApprovalResponse */
+        DepositApprovalResponse: {
+            /** Account Ref */
+            account_ref: string;
+            /** Action */
+            action: string;
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Approved By Id
+             * Format: uuid
+             */
+            approved_by_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * In Force
+             * @default false
+             */
+            in_force: boolean;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "approved" | "revoked";
+            /** Package Sha256 */
+            package_sha256: string;
+            /** Rationale */
+            rationale?: string | null;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+            /** Repository */
+            repository: string;
+        };
+        /** DepositApprovalRevoke */
+        DepositApprovalRevoke: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Rationale */
+            rationale: string;
+        };
+        /**
+         * DepositAttemptResponse
+         * @description One phase attempt. Remote DOIs are withheld here (see ``doi``).
+         */
+        DepositAttemptResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Mismatch */
+            mismatch?: string[];
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "succeeded" | "failed" | "unknown";
+            /** Phase */
+            phase: string;
+            /** Previous Id */
+            previous_id?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Remote Deposition Id */
+            remote_deposition_id?: string | null;
+            /** Remote Record Id */
+            remote_record_id?: string | null;
+            /** Retryable */
+            retryable: boolean;
+        };
+        /**
+         * DepositCreate
+         * @description Request the deposit of the release's exact package (RELEASE).
+         */
+        DepositCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Package Sha256 */
+            package_sha256: string;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+        };
+        /** DepositFile */
+        DepositFile: {
+            /** Bytes */
+            bytes: number;
+            /** Md5 */
+            md5: string;
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+        };
+        /** DepositListResponse */
+        DepositListResponse: {
+            /** Account Ref */
+            account_ref?: string | null;
+            /** Approvals */
+            approvals: components["schemas"]["DepositApprovalResponse"][];
+            /** Configured */
+            configured: boolean;
+            /** Deposits */
+            deposits: components["schemas"]["DepositResponse"][];
+            /**
+             * Repository
+             * @default zenodo_sandbox
+             * @constant
+             */
+            repository: "zenodo_sandbox";
+        };
+        /** DepositResponse */
+        DepositResponse: {
+            /** Account Ref */
+            account_ref: string;
+            /** Approval Id */
+            approval_id?: string | null;
+            /**
+             * Approval In Force
+             * @default false
+             */
+            approval_in_force: boolean;
+            /** Attempts */
+            attempts: components["schemas"]["DepositAttemptResponse"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Doi */
+            doi?: string | null;
+            /** Doi Url */
+            doi_url?: string | null;
+            /** Files */
+            files: components["schemas"]["DepositFile"][];
+            /** Last Reason */
+            last_reason?: string | null;
+            /**
+             * Operation Id
+             * Format: uuid
+             */
+            operation_id: string;
+            /** Package Sha256 */
+            package_sha256: string;
+            /** Queue Status */
+            queue_status?: string | null;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+            /** Remote Deposition Id */
+            remote_deposition_id?: string | null;
+            /** Remote Record Id */
+            remote_record_id?: string | null;
+            /** Repository */
+            repository: string;
+            /**
+             * Requested By Id
+             * Format: uuid
+             */
+            requested_by_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "prepared" | "draft_created" | "files_uploaded" | "published" | "verified" | "failed" | "ambiguous";
+        };
+        /**
          * DeterministicTrace
          * @description Deterministic trace metadata for response auditing
          */
@@ -16732,9 +17021,9 @@ export interface components {
             /**
              * External Submission
              * @default not_authorized
-             * @constant
+             * @enum {string}
              */
-            external_submission: "not_authorized";
+            external_submission: "not_authorized" | "authorized";
             /** Failing Obligations */
             failing_obligations?: string[];
             /**
@@ -31781,6 +32070,213 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClaimVersionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_deposits_api_v1_projects__project_id__deposits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_deposit_api_v1_projects__project_id__deposits_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositCreate"];
+            };
+        };
+        responses: {
+            /** @description The existing operation (replay or same release) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositResponse"];
+                };
+            };
+            /** @description No valid approval, or the release changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The requester approved this deposit */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Archive deposits are not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    approve_api_v1_projects__project_id__deposits_approvals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositApprovalCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositApprovalResponse"];
+                };
+            };
+            /** @description The release is not verified or its package changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The approver requested this deposit */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Archive deposits are not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revoke_api_v1_projects__project_id__deposits_approvals__approval_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                approval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepositApprovalRevoke"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositApprovalResponse"];
+                };
+            };
+            /** @description The approval is not in force */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    requeue_api_v1_projects__project_id__deposits__operation_id__requeue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepositResponse"];
                 };
             };
             /** @description Validation Error */

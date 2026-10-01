@@ -18,6 +18,7 @@ vi.mock('@/services/projectService', () => ({
     runVenueCheck: vi.fn(),
     downloadReleaseReferences: vi.fn(),
     getReleaseReferenceReport: vi.fn(),
+    listDeposits: vi.fn(),
   },
 }));
 
@@ -87,6 +88,14 @@ function withReleases(...releases: ApiManuscriptRelease[]): void {
 describe('ManuscriptReleaseSection (GOO-315)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // GOO-318: verified releases mount the deposit panel.
+    vi.mocked(projectService.listDeposits).mockResolvedValue({
+      repository: 'zenodo_sandbox',
+      configured: false,
+      account_ref: null,
+      approvals: [],
+      deposits: [],
+    });
     vi.mocked(projectService.getReleaseReferenceReport).mockResolvedValue({
       format: 'csl-json',
       records: 2,

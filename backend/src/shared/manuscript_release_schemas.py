@@ -1,7 +1,8 @@
 """Manuscript release contracts (GOO-315). Every POST carries an
 ``idempotency_key`` and the hashes the caller saw; status is derived on read.
-``external_submission`` is constant: packaging never authorizes a submission
-(GOO-318 owns deposits). GOO-316 adds the ``anonymized`` package variant:
+``external_submission``: packaging never authorizes a submission; only a
+GOO-318 deposit approval in force for the release's exact package makes it
+``authorized``. GOO-316 adds the ``anonymized`` package variant:
 ``package_files`` stays the identified variant's members."""
 
 from datetime import datetime
@@ -76,7 +77,7 @@ class ManuscriptReleaseResponse(BaseModel):
     created_by_id: UUID
     actor_role: str
     created_at: datetime
-    external_submission: Literal["not_authorized"] = "not_authorized"
+    external_submission: Literal["not_authorized", "authorized"] = "not_authorized"
 
     @field_validator("package_files", mode="before")
     @classmethod

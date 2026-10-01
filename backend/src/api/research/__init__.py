@@ -6,6 +6,7 @@ tone engine, extraction matrix, AI writer, and research pipeline
 from .chat import router as chat_router
 from .citations import router as citations_router
 from .claims import router as claims_router
+from .deposits import router as deposits_router
 from .drafts import router as drafts_router
 from .export import router as export_router
 from .extraction_matrix import router as extraction_matrix_router
@@ -30,6 +31,7 @@ __all__ = [
     "peer_review_router",
     "manuscript_releases_router",
     "statements_router",
+    "deposits_router",
     "chat_router",
     "export_router",
     "project_chat_router",

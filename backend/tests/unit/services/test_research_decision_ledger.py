@@ -12,6 +12,7 @@ from src.services.research_decisions.ledger import (
     _validate_acquisition_transitions,
     _validate_appraisal_transitions,
     _validate_claims_transitions,
+    _validate_deposit_transitions,
     _validate_event,
     _validate_evidence_transitions,
     _validate_experiment_transitions,
@@ -3345,3 +3346,163 @@ def test_statements_replay_rejects_duplicate_author_approval() -> None:
     event_type, _, payload = s.approved(s.v1, "a", "a" * 64)
     with pytest.raises(DecisionReplayError, match="editor's"):
         s.replay(v1, (event_type, "adjudicator", payload))
+
+
+# --- GOO-318: research_deposit ------------------------------------------------
+
+
+class _Deposit:
+    """Hand-built events for one Collection's research_deposit stream.
+    Each event carries its actor so the self-approval rule can be replayed."""
+
+    ACCOUNT = "zenodo_sandbox:nous-fixture"
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.release = uuid4()
+        self.operation = uuid4()
+        self.approver, self.requester = uuid4(), uuid4()
+        self.approval = uuid4()
+
+    def _scope(self) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "release_id": str(self.release),
+            "package_sha256": "a" * 64,
+            "repository": "zenodo_sandbox",
+            "account_ref": self.ACCOUNT,
+        }
+
+    def approved(self, kind: str = "approved", approval: UUID | None = None) -> Any:
+        payload = {
+            **self._scope(),
+            "approval_id": str(approval or self.approval),
+            "action": "publish",
+        }
+        return (f"deposit.{kind}", "adjudicator", payload, self.approver)
+
+    def requested(self, actor: UUID | None = None) -> Any:
+        payload = {
+            **self._scope(),
+            "operation_id": str(self.operation),
+            "approval_id": str(self.approval),
+            "file_count": 2,
+        }
+        return ("deposit.requested", "supervisor", payload, actor or self.requester)
+
+    def phase(
+        self, phase: str, previous: UUID, attempt: UUID, outcome: str = "succeeded"
+    ) -> Any:
+        payload = {
+            "collection_id": str(self.collection_id),
+            "operation_id": str(self.operation),
+            "attempt_id": str(attempt),
+            "previous_id": str(previous),
+            "approval_id": str(self.approval),
+            "phase": phase,
+            "outcome": outcome,
+            "remote_deposition_id": "42",
+            "remote_record_id": None,
+            "doi": None,
+        }
+        return ("deposit.phase_recorded", "machine", payload, self.requester)
+
+    def validate(self, event: Any) -> None:
+        event_type, _, payload, _actor = event
+        subject = {
+            "deposit.phase_recorded": "attempt_id",
+            "deposit.requested": "operation_id",
+        }.get(event_type, "approval_id")
+        _validate_event(
+            aggregate_type="research_deposit",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="archive_deposit",
+            subject_id=UUID(str(payload[subject])),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="e" * 64,
+            reason="Approved for the sandbox",
+        )
+
+    def replay(self, *events: Any) -> None:
+        stored = []
+        for event_type, role, payload, actor in events:
+            self.validate((event_type, role, payload, actor))
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            event.actor_user_id = actor
+            stored.append(event)
+        _validate_deposit_transitions(stored, self.collection_id)
+
+
+def test_deposit_replay_rejects_publish_before_upload() -> None:
+    d = _Deposit()
+    draft, upload, publish = uuid4(), uuid4(), uuid4()
+    happy = [
+        d.approved(),
+        d.requested(),
+        d.phase("draft_created", d.operation, draft),
+        d.phase("files_uploaded", draft, upload),
+        d.phase("published", upload, publish),
+        d.phase("verified", publish, uuid4()),
+    ]
+    d.replay(*happy)
+    with pytest.raises(DecisionReplayError, match="before its files uploaded"):
+        d.replay(*happy[:3], d.phase("published", draft, publish))
+    # A failed upload attempt does not count as uploaded.
+    with pytest.raises(DecisionReplayError, match="before its files uploaded"):
+        d.replay(
+            *happy[:3],
+            d.phase("files_uploaded", draft, upload, "unknown"),
+            d.phase("published", upload, publish),
+        )
+    with pytest.raises(DecisionReplayError, match="chain tip"):
+        d.replay(*happy[:3], d.phase("files_uploaded", d.operation, upload))
+    # A revocation before publish voids the approval the publish names.
+    with pytest.raises(DecisionReplayError, match="no approval in force"):
+        d.replay(*happy[:4], d.approved("revoked", uuid4()), happy[4])
+    event_type, _, payload, actor = happy[2]
+    with pytest.raises(DecisionReplayError, match="worker's"):
+        d.replay(*happy[:2], (event_type, "supervisor", payload, actor))
+
+
+def test_deposit_replay_rejects_self_approval() -> None:
+    d = _Deposit()
+    with pytest.raises(DecisionReplayError, match="approved their own"):
+        d.replay(d.approved(), d.requested(actor=d.approver))
+    with pytest.raises(DecisionReplayError, match="no approval in force"):
+        d.replay(d.requested())
+    with pytest.raises(DecisionReplayError, match="no approval in force"):
+        d.replay(d.approved(), d.approved("revoked", uuid4()), d.requested())
+    event_type, _, payload, actor = d.approved()
+    with pytest.raises(DecisionReplayError, match="adjudicator or supervisor"):
+        d.replay((event_type, "editor", payload, actor))
+
+
+def test_deposit_payload_has_no_secret_keys() -> None:
+    from src.services.research import deposit_rules
+    from src.services.research_decisions.ledger import _DEPOSIT_PAYLOAD_KEYS
+
+    keys = {k for names in _DEPOSIT_PAYLOAD_KEYS.values() for k in names}
+    assert deposit_rules.redact({k: "x" for k in keys}) == {k: "x" for k in keys}
+    d = _Deposit()
+    event_type, role, payload, actor = d.requested()
+    with pytest.raises(DecisionValidationError, match="does not match"):
+        d.validate((event_type, role, {**payload, "access_token": "x"}, actor))
+    approved = d.approved()
+    with pytest.raises(DecisionValidationError, match="rationale"):
+        _validate_event(
+            aggregate_type="research_deposit",
+            aggregate_id=d.collection_id,
+            event_type=approved[0],
+            event_schema_version=1,
+            subject_type="archive_deposit",
+            subject_id=d.approval,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(approved[2]),
+            payload=approved[2],
+            request_fingerprint="e" * 64,
+        )

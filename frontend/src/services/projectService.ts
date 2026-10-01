@@ -51,6 +51,14 @@ import type {
   ApiVenueCheck,
   ApiVenueCheckList,
 } from '@/types/api/statements-contract';
+import type {
+  ApiDeposit,
+  ApiDepositApproval,
+  ApiDepositApprovalCreate,
+  ApiDepositApprovalRevoke,
+  ApiDepositCreate,
+  ApiDepositList,
+} from '@/types/api/research-deposit-contract';
 
 // Types
 export interface Project {
@@ -873,6 +881,53 @@ export const projectService = {
   ): Promise<ApiReleaseVerification> {
     return api.get<ApiReleaseVerification>(
       `/projects/${projectId}/manuscript-releases/${releaseId}/verify`
+    );
+  },
+
+  /** GOO-318: every archive deposit with its derived status and approvals. */
+  async listDeposits(projectId: string): Promise<ApiDepositList> {
+    return api.get<ApiDepositList>(`/projects/${projectId}/deposits`);
+  },
+
+  /** GOO-318: approve depositing one exact release package (RELEASE). */
+  async approveDeposit(
+    projectId: string,
+    data: ApiDepositApprovalCreate
+  ): Promise<ApiDepositApproval> {
+    return api.post<ApiDepositApproval>(
+      `/projects/${projectId}/deposits/approvals`,
+      data
+    );
+  },
+
+  /** GOO-318: revoke the approval in force (insert-only). */
+  async revokeDepositApproval(
+    projectId: string,
+    approvalId: string,
+    data: ApiDepositApprovalRevoke
+  ): Promise<ApiDepositApproval> {
+    return api.post<ApiDepositApproval>(
+      `/projects/${projectId}/deposits/approvals/${approvalId}/revoke`,
+      data
+    );
+  },
+
+  /** GOO-318: queue the Zenodo sandbox deposit of a verified release. */
+  async requestDeposit(
+    projectId: string,
+    data: ApiDepositCreate
+  ): Promise<ApiDeposit> {
+    return api.post<ApiDeposit>(`/projects/${projectId}/deposits`, data);
+  },
+
+  /** GOO-318: put a stopped deposit back on the worker's queue. */
+  async requeueDeposit(
+    projectId: string,
+    operationId: string
+  ): Promise<ApiDeposit> {
+    return api.post<ApiDeposit>(
+      `/projects/${projectId}/deposits/${operationId}/requeue`,
+      {}
     );
   },
 
