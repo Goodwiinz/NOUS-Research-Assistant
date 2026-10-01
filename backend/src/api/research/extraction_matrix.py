@@ -13,7 +13,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from structlog import get_logger
 
 from src.core.database import get_db
@@ -22,15 +21,23 @@ from src.models import Collection, CollectionDocument, Workspace
 from src.models.document import Document
 from src.models.extraction_matrix import ExtractionCell, ExtractionMatrix
 from src.models.user import User
+from src.services.research import extraction_forms_service
 from src.services.research.extraction_matrix_service import ExtractionMatrixService
 from src.services.research_engine.project_access import (
+    ProjectContext,
     ResearchAction,
     project_documents_query,
     resolve_project,
 )
 from src.shared.scispace_schemas import (
     CreateMatrixRequest,
+    ExtractionAcceptCreate,
+    ExtractionAcceptedValueResponse,
+    ExtractionCellObservationsResponse,
     ExtractionCellResponse,
+    ExtractionFormVersionResponse,
+    ExtractionObservationCreate,
+    ExtractionObservationResponse,
     TriggerExtractionRequest,
     UpdateMatrixRequest,
 )
@@ -130,16 +137,16 @@ async def create_matrix(
     used to extract structured data from project documents.
     Automatically triggers extraction for all existing project documents.
     """
-    await _validate_project_ownership(project_id, current_user, db, ResearchAction.EDIT)
-
-    matrix = ExtractionMatrix(
-        project_id=project_id,
-        name=request.name,
-        columns=[col.model_dump() for col in request.columns],
+    context = await resolve_project(
+        db, project_id, current_user.id, ResearchAction.EDIT
     )
+    columns = [col.model_dump() for col in request.columns]
+    matrix = ExtractionMatrix(project_id=project_id, name=request.name, columns=columns)
     db.add(matrix)
-    await db.commit()
-    await db.refresh(matrix)
+    # GOO-304: v1 (authored) lands in the same transaction as the matrix.
+    await extraction_forms_service.create_version(
+        db, context, matrix, columns, current_user.id
+    )
 
     logger.info(
         "matrix_created",
@@ -156,13 +163,11 @@ async def create_matrix(
 
     if document_ids:
         extraction_task_id = f"auto-create-{uuid.uuid4().hex[:12]}"
+        kwargs = await extraction_forms_service.extraction_task_kwargs(
+            db, matrix, document_ids, current_user.id, extraction_task_id
+        )
         run_extraction_matrix.apply_async(
-            kwargs={
-                "matrix_id": str(matrix.id),
-                "document_ids": [str(document_id) for document_id in document_ids],
-                "columns": matrix.columns,
-                "task_id": extraction_task_id,
-            },
+            kwargs=kwargs,
             task_id=extraction_task_id,
             queue="low_priority",
         )
@@ -197,16 +202,15 @@ async def get_matrix(
     """Get an extraction matrix with all its cells.
 
     Returns the matrix definition and all extracted cell values,
-    organized for rendering as a comparison grid.
+    organized for rendering as a comparison grid. Columns are the current form
+    version's fields; each cell is the accepted value, else the latest machine
+    observation, else the frozen legacy cell (``source``), with ``stale``
+    derived at read time.
     """
-    query = (
-        select(ExtractionMatrix)
-        .options(selectinload(ExtractionMatrix.cells))
-        .where(
-            and_(
-                ExtractionMatrix.id == matrix_id,
-                ExtractionMatrix.is_deleted == False,
-            )
+    query = select(ExtractionMatrix).where(
+        and_(
+            ExtractionMatrix.id == matrix_id,
+            ExtractionMatrix.is_deleted == False,
         )
     )
     result = await db.execute(query)
@@ -232,23 +236,16 @@ async def get_matrix(
         .scalars()
         .all()
     )
-    cells = [
-        {
-            "document_id": str(cell.document_id),
-            "column_name": cell.column_name,
-            "value": cell.value,
-            "citation_snippet": cell.citation_snippet,
-            "confidence": cell.confidence,
-        }
-        for cell in matrix.cells
-        if not cell.is_deleted and cell.document_id in allowed_ids
-    ]
+    form_version, cells = await extraction_forms_service.cell_view(
+        db, matrix, sorted(allowed_ids, key=str)
+    )
 
     return {
         "id": str(matrix.id),
         "project_id": str(matrix.project_id),
         "name": matrix.name,
-        "columns": matrix.columns,
+        "columns": form_version["fields"] if form_version else matrix.columns,
+        "form_version": form_version,
         "cells": cells,
         "created_at": matrix.created_at.isoformat() if matrix.created_at else None,
         "updated_at": matrix.updated_at.isoformat() if matrix.updated_at else None,
@@ -269,17 +266,15 @@ async def update_matrix(
 ):
     """Update an extraction matrix (rename, add/remove/reorder columns).
 
-    When clear_stale_cells is true and columns changed, cells whose
-    column_name no longer matches any column are deleted.
+    A column change appends an immutable form version; identical columns
+    create nothing. Prior values are never deleted: when clear_stale_cells is
+    true and columns changed, stale_document_ids lists the documents holding
+    values on removed columns.
     """
-    query = (
-        select(ExtractionMatrix)
-        .options(selectinload(ExtractionMatrix.cells))
-        .where(
-            and_(
-                ExtractionMatrix.id == matrix_id,
-                ExtractionMatrix.is_deleted == False,
-            )
+    query = select(ExtractionMatrix).where(
+        and_(
+            ExtractionMatrix.id == matrix_id,
+            ExtractionMatrix.is_deleted == False,
         )
     )
     result = await db.execute(query)
@@ -291,8 +286,8 @@ async def update_matrix(
             detail="Matrix not found",
         )
 
-    await _validate_project_ownership(
-        matrix.project_id, current_user, db, ResearchAction.EDIT
+    context = await resolve_project(
+        db, matrix.project_id, current_user.id, ResearchAction.EDIT
     )
 
     columns_changed = False
@@ -301,27 +296,27 @@ async def update_matrix(
     if request.name is not None:
         matrix.name = request.name
 
-    if request.columns is not None:
+    if request.columns is None:
+        await db.commit()
+    else:
         old_col_names = {c["name"] for c in matrix.columns}
         new_col_names = {c.name for c in request.columns}
         columns_changed = old_col_names != new_col_names
 
-        matrix.columns = [col.model_dump() for col in request.columns]
-
         if request.clear_stale_cells and columns_changed:
-            stale_cells = [
-                cell
-                for cell in matrix.cells
-                if not cell.is_deleted and cell.column_name not in new_col_names
-            ]
-            stale_doc_set = set()
-            for cell in stale_cells:
-                cell.is_deleted = True
-                stale_doc_set.add(str(cell.document_id))
-            stale_document_ids = list(stale_doc_set)
-
-    await db.commit()
-    await db.refresh(matrix)
+            stale_document_ids = (
+                await extraction_forms_service.removed_field_document_ids(
+                    db, matrix, sorted(old_col_names - new_col_names)
+                )
+            )
+        # Commits the rename too, in the same transaction as the version.
+        await extraction_forms_service.create_version(
+            db,
+            context,
+            matrix,
+            [col.model_dump() for col in request.columns],
+            current_user.id,
+        )
 
     logger.info(
         "matrix_updated",
@@ -418,13 +413,11 @@ async def trigger_extraction(
             "total": len(request.document_ids),
         },
     )
+    kwargs = await extraction_forms_service.extraction_task_kwargs(
+        db, matrix, request.document_ids, current_user.id, task_id
+    )
     run_extraction_matrix.apply_async(
-        kwargs={
-            "matrix_id": str(matrix.id),
-            "document_ids": [str(document_id) for document_id in request.document_ids],
-            "columns": matrix.columns,
-            "task_id": task_id,
-        },
+        kwargs=kwargs,
         task_id=task_id,
         queue="low_priority",
     )
@@ -512,3 +505,85 @@ async def delete_matrix(
     )
 
     return {"message": "Matrix deleted", "matrix_id": str(matrix_id)}
+
+
+# ============================================================================
+# GOO-304: form versions, observations and accepted values
+# ============================================================================
+
+
+async def _matrix_context(
+    db: AsyncSession, matrix_id: UUID, current_user: User, action: ResearchAction
+) -> ProjectContext:
+    project_id = await extraction_forms_service.matrix_project_id(db, matrix_id)
+    return await resolve_project(db, project_id, current_user.id, action)
+
+
+@router.get(
+    "/matrices/{matrix_id}/form-versions",
+    response_model=List[ExtractionFormVersionResponse],
+)
+async def list_form_versions(
+    matrix_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> List[ExtractionFormVersionResponse]:
+    """Every immutable form version of a matrix, oldest first."""
+    context = await _matrix_context(db, matrix_id, current_user, ResearchAction.VIEW)
+    return await extraction_forms_service.list_versions(db, context, matrix_id)
+
+
+@router.get(
+    "/matrices/{matrix_id}/observations",
+    response_model=ExtractionCellObservationsResponse,
+)
+async def list_cell_observations(
+    matrix_id: UUID,
+    document_id: UUID,
+    field_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ExtractionCellObservationsResponse:
+    """All observations (any form version) and the accepted chain of one cell."""
+    context = await _matrix_context(db, matrix_id, current_user, ResearchAction.VIEW)
+    return await extraction_forms_service.list_observations(
+        db, context, matrix_id, document_id, field_id
+    )
+
+
+@router.post(
+    "/matrices/{matrix_id}/observations",
+    status_code=201,
+    response_model=ExtractionObservationResponse,
+)
+async def create_observation(
+    matrix_id: UUID,
+    request: ExtractionObservationCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ExtractionObservationResponse:
+    """Record a reviewer's own value or missingness reason (REVIEWER role)."""
+    context = await _matrix_context(db, matrix_id, current_user, ResearchAction.REVIEW)
+    return await extraction_forms_service.observe(
+        db, context, matrix_id, current_user.id, request
+    )
+
+
+@router.post(
+    "/matrices/{matrix_id}/accepted-values",
+    status_code=201,
+    response_model=ExtractionAcceptedValueResponse,
+)
+async def accept_extraction_value(
+    matrix_id: UUID,
+    request: ExtractionAcceptCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ExtractionAcceptedValueResponse:
+    """Accept a value that equals a cited observation (ADJUDICATOR role only)."""
+    context = await _matrix_context(
+        db, matrix_id, current_user, ResearchAction.ADJUDICATE
+    )
+    return await extraction_forms_service.accept_value(
+        db, context, matrix_id, current_user.id, request
+    )

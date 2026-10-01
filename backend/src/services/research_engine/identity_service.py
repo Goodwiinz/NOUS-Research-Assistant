@@ -53,6 +53,7 @@ from src.services.research_engine.report_identity import (
     assign_report,
     report_identifiers,
 )
+from src.services.research_engine.report_rendering import publication_year
 
 AGGREGATE_TYPE = "research_identity"
 SUBJECT_TYPE = "research_report"
@@ -458,14 +459,8 @@ def _normalized_title(title: str) -> str:
 
 
 def _year(metadata: dict[str, Any] | None) -> str | None:
-    metadata = metadata or {}
-    date = metadata.get("publication_date")
-    if isinstance(date, str) and re.match(r"\d{4}", date):
-        return date[:4]
-    published = metadata.get("published")  # Crossref date-parts [[Y, M, D]]
-    if isinstance(published, list) and published and isinstance(published[0], list):
-        return str(published[0][0]) if published[0] else None
-    return None
+    year = publication_year(metadata)
+    return str(year) if year is not None else None
 
 
 async def candidates(

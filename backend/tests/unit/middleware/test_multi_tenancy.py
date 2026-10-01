@@ -1,77 +1,108 @@
 """Tests for multi-tenancy middleware."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_dispatch_attaches_db_session_to_request_state():
-    """Middleware attaches validated db session to request.state."""
+class _TrackedSession:
+    """Stand-in AsyncSession that fails like SQLAlchemy does when it is closed
+    while another task still has a query in flight on it."""
+
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.closed = False
+
+    async def query(self) -> None:
+        if self.closed:
+            raise RuntimeError("session used after close")
+        self.in_flight += 1
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            self.in_flight -= 1
+
+    async def __aenter__(self) -> "_TrackedSession":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        await asyncio.sleep(0.01)
+        if self.in_flight:
+            raise RuntimeError("close() while a query is in progress")
+        self.closed = True
+        return False
+
+
+def test_streaming_body_does_not_share_the_middleware_session():
+    """Dev D-01: GET /research-engine/runs/{id}/stream returned 500 "Internal
+    server error during tenant validation" and left the claimed run RUNNING.
+
+    The middleware handed its ``async with`` session to routes via get_db. With
+    BaseHTTPMiddleware, ``call_next`` returns as soon as response headers are
+    sent, so the middleware closed that session while the StreamingResponse
+    body was still querying it; the close raised inside the middleware's
+    try/except and became the 500.
+
+    Mutation check (2026-09-30): restoring ``request.state.db = db`` in
+    MultiTenancyMiddleware.dispatch (src/middleware/multi_tenancy.py) plus the
+    reuse branch in ``get_db`` (src/core/database.py) makes this test fail with
+    ``500 != 200``. Command:
+    pytest -p no:cacheprovider -q backend/tests/unit/middleware/test_multi_tenancy.py
+    -k streaming_body
+    """
+    from fastapi import Depends, FastAPI
+    from fastapi.responses import StreamingResponse
     from starlette.testclient import TestClient
 
-    mock_db = AsyncMock()
-    mock_db.is_active = True
+    from src.core.database import get_db
+    from src.middleware.multi_tenancy import MultiTenancyMiddleware
+
+    sessions: list[_TrackedSession] = []
+
+    def factory() -> _TrackedSession:
+        sessions.append(_TrackedSession())
+        return sessions[-1]
 
     with (
-        patch(
-            "src.middleware.multi_tenancy.AsyncSessionLocal",
-            return_value=AsyncMock(
-                __aenter__=AsyncMock(return_value=mock_db),
-                __aexit__=AsyncMock(return_value=False),
+        patch("src.middleware.multi_tenancy.AsyncSessionLocal", side_effect=factory),
+        patch("src.core.database.AsyncSessionLocal", side_effect=factory),
+        patch.object(
+            MultiTenancyMiddleware,
+            "_extract_tenant_info",
+            new=AsyncMock(
+                return_value={
+                    "organization_id": "org-123",
+                    "user_id": "user-456",
+                    "role": "user",
+                }
             ),
         ),
-        patch(
-            "src.middleware.multi_tenancy.MultiTenancyMiddleware._should_skip_tenant_validation",
-            return_value=False,
-        ),
-        patch(
-            "src.middleware.multi_tenancy.MultiTenancyMiddleware._extract_tenant_info",
-            new_callable=AsyncMock,
-            return_value={
-                "organization_id": "org-123",
-                "user_id": "user-456",
-                "role": "user",
-            },
-        ),
-        patch(
-            "src.middleware.multi_tenancy.MultiTenancyMiddleware._validate_tenant_access",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch(
-            "src.middleware.multi_tenancy.verify_token",
-            return_value=MagicMock(user_id="user-456", role="user"),
+        patch.object(
+            MultiTenancyMiddleware,
+            "_validate_tenant_access",
+            new=AsyncMock(return_value=True),
         ),
     ):
-        from fastapi import FastAPI, Request
-
-        from src.middleware.multi_tenancy import MultiTenancyMiddleware
-
         app = FastAPI()
         app.add_middleware(MultiTenancyMiddleware)
 
-        captured = {}
+        @app.get("/api/v1/research-engine/runs/r1/stream")
+        async def stream(db=Depends(get_db)):
+            async def body():
+                await db.query()
+                yield "event: step_complete\ndata: {}\n\n"
 
-        @app.get("/test-db-attach")
-        async def test_endpoint(request: Request):
-            captured["has_db"] = hasattr(request.state, "db")
-            captured["db_is_async_mock"] = (
-                request.state.db is mock_db if hasattr(request.state, "db") else False
-            )
-            return {"ok": True}
+            return StreamingResponse(body(), media_type="text/event-stream")
 
-        client = TestClient(app)
-        response = client.get(
-            "/test-db-attach", headers={"Authorization": "Bearer fake-token"}
+        response = TestClient(app).get(
+            "/api/v1/research-engine/runs/r1/stream",
+            headers={"Authorization": "Bearer fake-token"},
         )
-        assert response.status_code == 200
-        assert (
-            captured.get("has_db") is True
-        ), "request.state.db should have been set by middleware"
-        assert (
-            captured.get("db_is_async_mock") is True
-        ), "request.state.db should be the same session"
+
+    assert response.status_code == 200, response.text
+    assert "step_complete" in response.text
+    assert all(s.closed for s in sessions)
 
 
 @pytest.mark.asyncio

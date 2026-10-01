@@ -1,0 +1,17 @@
+{
+  "step": "F1-03-export-markdown-apa",
+  "as": "owner",
+  "at": "2026-09-30T05:24:05.866739+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/projects/a7460d29-feee-456b-abf2-441a8008921a/drafts/1f01336d-2c57-44cd-a4a5-2924533ab12d/export?format=markdown&bib_format=apa",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "text/markdown; charset=utf-8",
+    "Content-Disposition": "attachment; filename=\"Literature_Review_-_Transformer_architecture_and_self-attention_as_introduced_in.md\""
+  },
+  "response_bytes": 14722,
+  "response_sha256": "8d34856e558ad6cf1a3dff25b3d971508f8312bdd8c1fbbefd221a94ff856708"
+}

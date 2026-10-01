@@ -61,3 +61,8 @@ jobs:
 
       - name: Pod disruption budget render assertions
         run: bash "$CHART/tests/pdb_render_test.sh"
+
+      - name: AWS rollout and environment assertions
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 "$CHART/tests/deployment_consistency_render_test.py"

@@ -7,6 +7,9 @@ import { record } from "./rpc.ts";
 export type IntegrationCredentials = {
   accessToken: string;
   grantToken: string;
+  // Present on connections made since grant renewal; see grants.ts.
+  grantId?: string;
+  renewedAt?: number;
 };
 export function integrationHeaders(
   credentials: IntegrationCredentials,
@@ -100,6 +103,16 @@ export class CredentialStore {
     const credentialHandle = randomUUID();
     await this.writeLocal(credentialHandle, credentials);
     return credentialHandle;
+  }
+  /** Replace stored credentials under the same handle (atomic rename). */
+  async update(
+    credentialHandle: string,
+    credentials: IntegrationCredentials,
+  ): Promise<void> {
+    if (!validHandle.test(credentialHandle))
+      throw new Error("invalid credential handle");
+    this.validate(credentials);
+    await this.writeLocal(credentialHandle, credentials);
   }
   async load(credentialHandle: string): Promise<IntegrationCredentials> {
     if (!validHandle.test(credentialHandle))

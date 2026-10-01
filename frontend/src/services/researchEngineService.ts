@@ -7,6 +7,27 @@ import type {
   ApiStudyLinkRequest,
 } from '@/types/api/research-identity-contract';
 import type {
+  ApiMyScreeningQueue,
+  ApiScreeningAdjudicateRequest,
+  ApiScreeningAssignment,
+  ApiScreeningAssignmentCreate,
+  ApiScreeningConflict,
+  ApiScreeningEvent,
+  ApiScreeningObservation,
+  ApiScreeningObservationCreate,
+  ApiScreeningQueue,
+  ApiScreeningQueueCreate,
+  ApiScreeningReopenRequest,
+  ApiScreeningResolution,
+  ApiScreeningRevokeRequest,
+} from '@/types/api/research-screening-contract';
+import type {
+  ApiFulltextAttemptCreate,
+  ApiFulltextRequestCreate,
+  ApiFulltextState,
+  ApiPrismaFlow,
+} from '@/types/api/research-acquisition-contract';
+import type {
   ApiCitationChaseRequest,
   ApiCoverage,
   ApiCoverageRequest,
@@ -235,6 +256,148 @@ export const mergeReports = (
   data: ApiReportMergeRequest
 ): Promise<ApiReport> =>
   api.post<ApiReport>(`${BASE}/projects/${projectId}/reports/merge`, data);
+
+// --- Screening queues (GOO-301) ------------------------------------------
+
+export type {
+  ApiMyScreeningItem as MyScreeningItem,
+  ApiMyScreeningQueue as MyScreeningQueue,
+  ApiScreeningConflict as ScreeningConflict,
+  ApiScreeningDecision as ScreeningDecision,
+  ApiScreeningEvent as ScreeningEvent,
+  ApiScreeningObservation as ScreeningObservation,
+  ApiScreeningQueue as ScreeningQueue,
+  ApiScreeningResolution as ScreeningResolution,
+} from '@/types/api/research-screening-contract';
+
+const screening = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/screening/queues`;
+
+export const listScreeningQueues = (
+  projectId: string
+): Promise<ApiScreeningQueue[]> =>
+  api.get<ApiScreeningQueue[]>(screening(projectId));
+
+export const createScreeningQueue = (
+  projectId: string,
+  data: ApiScreeningQueueCreate
+): Promise<ApiScreeningQueue> =>
+  api.post<ApiScreeningQueue>(screening(projectId), data);
+
+export const assignScreeningReviewer = (
+  projectId: string,
+  queueId: string,
+  data: ApiScreeningAssignmentCreate
+): Promise<ApiScreeningAssignment> =>
+  api.post<ApiScreeningAssignment>(
+    `${screening(projectId)}/${queueId}/assignments`,
+    data
+  );
+
+export const revokeScreeningAssignment = (
+  projectId: string,
+  queueId: string,
+  assignmentId: string,
+  data: ApiScreeningRevokeRequest
+): Promise<ApiScreeningAssignment> =>
+  api.post<ApiScreeningAssignment>(
+    `${screening(projectId)}/${queueId}/assignments/${assignmentId}/revoke`,
+    data
+  );
+
+export const getMyScreeningQueue = (
+  projectId: string,
+  queueId: string
+): Promise<ApiMyScreeningQueue> =>
+  api.get<ApiMyScreeningQueue>(`${screening(projectId)}/${queueId}/mine`);
+
+export const submitScreeningObservation = (
+  projectId: string,
+  queueId: string,
+  data: ApiScreeningObservationCreate
+): Promise<ApiScreeningObservation> =>
+  api.post<ApiScreeningObservation>(
+    `${screening(projectId)}/${queueId}/observations`,
+    data
+  );
+
+export const listScreeningHistory = (
+  projectId: string,
+  queueId: string
+): Promise<ApiScreeningEvent[]> =>
+  api.get<ApiScreeningEvent[]>(`${screening(projectId)}/${queueId}/history`);
+
+// GOO-302: adjudicator reads and events.
+export const listScreeningConflicts = (
+  projectId: string,
+  queueId: string
+): Promise<ApiScreeningConflict[]> =>
+  api.get<ApiScreeningConflict[]>(
+    `${screening(projectId)}/${queueId}/conflicts`
+  );
+
+export const adjudicateScreening = (
+  projectId: string,
+  queueId: string,
+  reportId: string,
+  data: ApiScreeningAdjudicateRequest
+): Promise<ApiScreeningResolution> =>
+  api.post<ApiScreeningResolution>(
+    `${screening(projectId)}/${queueId}/reports/${reportId}/adjudicate`,
+    data
+  );
+
+export const reopenScreening = (
+  projectId: string,
+  queueId: string,
+  reportId: string,
+  data: ApiScreeningReopenRequest
+): Promise<ApiScreeningResolution> =>
+  api.post<ApiScreeningResolution>(
+    `${screening(projectId)}/${queueId}/reports/${reportId}/reopen`,
+    data
+  );
+
+// --- Full-text acquisition + PRISMA flow (GOO-303) ------------------------
+
+export type {
+  ApiFulltextState as FulltextState,
+  ApiFulltextStatus as FulltextStatus,
+  ApiPrismaFlow as PrismaFlow,
+} from '@/types/api/research-acquisition-contract';
+
+const fulltext = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/fulltext`;
+
+export const listFulltext = (projectId: string): Promise<ApiFulltextState[]> =>
+  api.get<ApiFulltextState[]>(fulltext(projectId));
+
+export const requestFulltext = (
+  projectId: string,
+  data: ApiFulltextRequestCreate
+): Promise<ApiFulltextState> =>
+  api.post<ApiFulltextState>(`${fulltext(projectId)}/requests`, data);
+
+export const recordFulltextAttempt = (
+  projectId: string,
+  requestId: string,
+  data: ApiFulltextAttemptCreate
+): Promise<ApiFulltextState> =>
+  api.post<ApiFulltextState>(
+    `${fulltext(projectId)}/requests/${requestId}/attempts`,
+    data
+  );
+
+export const getPrismaFlow = (projectId: string): Promise<ApiPrismaFlow> =>
+  api.get<ApiPrismaFlow>(`${BASE}/projects/${projectId}/prisma`);
+
+export const downloadPrismaFlow = (
+  projectId: string,
+  format: 'json' | 'md'
+): Promise<void> =>
+  api.download(
+    `/research-engine/projects/${projectId}/prisma/export?${new URLSearchParams({ format })}`
+  );
 
 // --- Search import / citation chase / corpus export (GOO-300) --------------
 

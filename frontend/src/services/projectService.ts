@@ -6,6 +6,13 @@
 import { api } from '@/services/api-client';
 import { API_CONFIG } from '@/types/api';
 import type { components } from '@/types/generated/api';
+import type { ApiClaimListResponse } from '@/types/api/research-claims-contract';
+import type {
+  ApiDraftPromoteRequest,
+  ApiDraftRelease,
+  ApiReleaseCheck,
+  ApiReleaseStatus,
+} from '@/types/api/research-release-contract';
 
 // Types
 export interface Project {
@@ -489,6 +496,49 @@ export const projectService = {
     );
   },
 
+  /** GOO-306: claims whose version is pinned to this draft (read-only). */
+  async listClaims(
+    projectId: string,
+    draftId: string
+  ): Promise<ApiClaimListResponse> {
+    const qs = new URLSearchParams({ draft_id: draftId }).toString();
+    return api.get<ApiClaimListResponse>(`/projects/${projectId}/claims?${qs}`);
+  },
+
+  /** GOO-306: the reconstructable claims evidence package for one draft. */
+  async downloadClaimsExport(
+    projectId: string,
+    draftId: string
+  ): Promise<void> {
+    const qs = new URLSearchParams({ draft_id: draftId }).toString();
+    // The server names the file after the body hash.
+    await api.download(`/projects/${projectId}/claims/export?${qs}`);
+  },
+
+  /** GOO-307: release status, blockers and invalidation of one version. */
+  async getDraftRelease(
+    projectId: string,
+    draftId: string,
+    version: number
+  ): Promise<ApiReleaseCheck> {
+    return api.get<ApiReleaseCheck>(
+      `/projects/${projectId}/drafts/${draftId}/versions/${version}/release`
+    );
+  },
+
+  /** GOO-307: promote this exact version (adjudicator or supervisor). */
+  async promoteDraft(
+    projectId: string,
+    draftId: string,
+    version: number,
+    body: ApiDraftPromoteRequest
+  ): Promise<ApiDraftRelease> {
+    return api.post<ApiDraftRelease>(
+      `/projects/${projectId}/drafts/${draftId}/versions/${version}/promote`,
+      body
+    );
+  },
+
   /**
    * Get the current draft
    */
@@ -626,6 +676,9 @@ export interface Draft {
   generation_params?: Record<string, unknown>;
   is_current: boolean;
   created_at: string;
+  // GOO-307: the draft routes return untyped dicts, so these stay hand-written.
+  release_status?: ApiReleaseStatus;
+  content_hash?: string;
 }
 
 export interface DraftListResponse {
