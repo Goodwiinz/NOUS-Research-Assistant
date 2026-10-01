@@ -79,6 +79,12 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-314: peer-review tables reference drafts and each other only.
+    "peer_review_decisions",
+    "peer_review_responses",
+    "peer_review_comments",
+    "peer_review_reviewers",
+    "peer_review_rounds",
     # GOO-306: claim tables reference the extraction tables and (GOO-311's
     # column) synthesis results, so they come off first.
     "research_claim_assessments",
@@ -149,6 +155,7 @@ def _upgrade(connection: Connection) -> None:
         "a6c8e0b2d4f5_create_synthesis_results.py",
         "b8e0c2d4f6a7_create_run_manifests.py",
         "c0f2a4b6d8e9_create_experiment_reruns.py",
+        "d2a4c6e8f0b1_create_peer_review.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename
