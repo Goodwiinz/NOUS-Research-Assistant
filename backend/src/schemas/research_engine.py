@@ -2052,3 +2052,95 @@ class EvidenceResponse(BaseModel):
     confidence: Optional[float] = None
     grounding_status: GroundingStatus
     page_reference: Optional[str] = None
+
+
+# --- Run manifests and figures (GOO-312) ------------------------------------
+
+ManifestCompleteness = Literal["complete", "incomplete"]
+FigureKind = Literal["figure", "table"]
+
+
+class RunManifestV2Response(BaseModel):
+    """A run's ``nous.run-manifest/2`` (or the legacy view when absent).
+    ``completeness`` is derived from ``missing``; it is never asserted."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str = Field(..., alias="schema")
+    manifest: Optional[Dict[str, Any]] = None
+    manifest_hash: Optional[str] = None
+    completeness: ManifestCompleteness
+    missing: List[str]
+    legacy: Optional[Dict[str, Any]] = None
+
+
+class RunArtifactResponse(BaseModel):
+    """A retained run file; its bytes stream through the artifact route."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    role: str
+    name: str
+    media_type: str
+    sha256: str
+    byte_size: int
+
+
+class FigureCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    figure_key: str = Field(
+        ..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+    kind: FigureKind
+    caption: str = Field(..., min_length=1, max_length=4000)
+    output_artifact_id: UUID
+    supersedes_figure_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+
+
+class FigureResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    figure_key: str
+    kind: FigureKind
+    caption: str
+    output_artifact_id: UUID
+    run_id: UUID
+    manifest_id: UUID
+    supersedes_figure_id: Optional[UUID] = None
+    created_by_id: UUID
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class FigureListResponse(BaseModel):
+    figures: List[FigureResponse]
+
+
+class FigureLineageResponse(BaseModel):
+    """output -> run -> code/environment/data -> hypothesis/protocol."""
+
+    figure: FigureResponse
+    output: RunArtifactResponse
+    run_id: UUID
+    run_status: str
+    manifest_id: UUID
+    manifest_hash: str
+    completeness: ManifestCompleteness
+    missing: List[str]
+    code: Dict[str, Any]
+    environment: Optional[Dict[str, Any]] = None
+    inputs: List[Dict[str, Any]]
+    parameters: Dict[str, Any]
+    seed: Optional[int] = None
+    question_version_id: Optional[str] = None
+    hypothesis_sha256: Optional[str] = None
+    protocol_version_id: Optional[str] = None
+    protocol_content_hash: Optional[str] = None
+    effective_plan_hash: Optional[str] = None
