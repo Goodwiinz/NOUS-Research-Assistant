@@ -1,0 +1,5 @@
+# Audit I8's historical "S3CR3T-internal" marker is synthetic test data:
+# it only seeds mocked exceptions and verifies that client responses never echo it.
+# The current fixture uses LEAK_MARKER; the original commit remains in PR history.
+# Ignore only this commit/file/rule/line finding, not other credentials or tests.
+9a9684c51c04553ba4065474f37657d9941d2379:backend/tests/unit/api/test_i8_error_sanitization.py:generic-api-key:28

@@ -42,9 +42,10 @@ logger = logging.getLogger(__name__)
 class FileValidationError(Exception):
     """File validation related errors.
 
-    ``str(exc)`` is for logs only. ``public_detail`` is a static, client-safe
-    reason the upload endpoint may return (audit I8); without one the endpoint
-    falls back to a generic message.
+    ``str(exc)`` is for logs only. ``public_detail`` is a candidate reason:
+    the upload endpoint permits only exact members of its authoritative
+    ``_SAFE_FILE_VALIDATION_DETAILS`` allowlist (audit I8), otherwise returning
+    a generic message. Supplying a string does not make it client-safe.
     """
 
     def __init__(self, message: str, public_detail: str | None = None) -> None:

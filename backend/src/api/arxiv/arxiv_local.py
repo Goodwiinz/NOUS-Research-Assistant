@@ -308,14 +308,14 @@ async def extract_features_from_local_pdfs(
                 extraction_results.append(extraction_result)
                 processed_count += 1
 
-            except Exception as e:
-                logger.error(f"Failed to process {pdf_file}: {e}")
+            except Exception:
+                logger.error("Failed to process %s", pdf_file, exc_info=True)
                 extraction_results.append(
                     {
                         "paper_id": pdf_file.stem,
                         "filename": pdf_file.name,
                         "extraction_status": "failed",
-                        "error": str(e),
+                        "error": "Failed to process PDF",
                     }
                 )
 

@@ -20,7 +20,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from src.api.threads import thread_search as thread_search_module
 from src.health import endpoints as ep
@@ -94,13 +95,21 @@ def _scan_source(text: str) -> list[int]:
         code = line.split("#", 1)[0]
         if any(pattern.search(code) for pattern in LEAK_PATTERNS):
             lines.add(line_no)
-    # The regexes are line-based, so a `detail=` kwarg on its own line inside a
-    # multiline call slips past them; the AST sees the call regardless of layout.
+    # The regexes are line-based; the AST catches multiline calls and dictionaries
+    # even when the detail key and exception-bearing value are on separate lines.
     for node in ast.walk(ast.parse(text)):
         if isinstance(node, ast.Call):
             for kw in node.keywords:
                 if kw.arg == "detail" and _embeds_exception_text(kw.value):
                     lines.add(kw.value.lineno)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "detail"
+                    and _embeds_exception_text(value)
+                ):
+                    lines.add(value.lineno)
     return sorted(lines)
 
 
@@ -155,6 +164,29 @@ def test_tripwire_catches_multiline_detail_kwargs() -> None:
 
 def test_tripwire_ignores_local_detail_variable() -> None:
     assert _scan_source(_LOCAL_DETAIL_VARIABLE) == []
+
+
+@pytest.mark.parametrize("value", ["str(exc)", 'f"failed: {exc}"'])
+def test_tripwire_catches_multiline_detail_dict_values(value: str) -> None:
+    text = f"""
+try:
+    pass
+except Exception as exc:
+    return JSONResponse(content={{
+        "detail":
+            {value},
+    }})
+"""
+    assert _scan_source(text) == [7]
+
+
+def test_tripwire_ignores_commented_client_details() -> None:
+    text = """
+# return JSONResponse(content={"detail": str(exc)})
+# raise HTTPException(status_code=500, detail=f"failed: {e}")
+pass
+"""
+    assert _scan_source(text) == []
 
 
 def test_no_raw_exception_text_in_client_details() -> None:
@@ -437,3 +469,86 @@ async def test_readiness_leak_free(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exc.value.status_code == 503
     assert exc.value.detail == "Readiness check failed"
     assert LEAK_MARKER not in str(exc.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: JSON error fields in evidence health and local ArXiv extraction
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_health_json_error_leak_free(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from src.api.evidence.router import cache_service, router
+    from src.core.dependencies import get_current_user
+
+    monkeypatch.setattr(
+        cache_service,
+        "_ensure_connected",
+        MagicMock(side_effect=RuntimeError(LEAK_MARKER)),
+    )
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1/evidence")
+    app.dependency_overrides[get_current_user] = lambda: MagicMock()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/evidence/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "unhealthy", "error": "Health check failed"}
+    assert LEAK_MARKER not in response.text
+    assert any(
+        record.exc_info and str(record.exc_info[1]) == LEAK_MARKER
+        for record in caplog.records
+    )
+
+
+def test_arxiv_extraction_json_error_leak_free(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from src.api.arxiv import arxiv_local
+    from src.core.dependencies import get_current_user
+
+    (tmp_path / "paper.pdf").write_bytes(b"unused PDF content")
+    monkeypatch.setattr(arxiv_local, "ARXIV_DATA_PATH", tmp_path)
+    monkeypatch.setattr(
+        arxiv_local,
+        "_extract_topics_from_filename",
+        _raising_async(RuntimeError(LEAK_MARKER)),
+    )
+    app = FastAPI()
+    app.include_router(arxiv_local.router, prefix="/api/v1/arxiv/local")
+    app.dependency_overrides[get_current_user] = lambda: MagicMock()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/arxiv/local/extract-local-features",
+            json={
+                "process_full_content": False,
+                "extract_topics": True,
+                "extract_keyphrases": False,
+                "extract_summaries": False,
+                "update_knowledge_graph": False,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["total_files_found"] == 1
+    assert payload["processed_count"] == 0
+    assert payload["results"] == [
+        {
+            "paper_id": "paper",
+            "filename": "paper.pdf",
+            "extraction_status": "failed",
+            "error": "Failed to process PDF",
+        }
+    ]
+    assert LEAK_MARKER not in response.text
+    assert any(
+        record.exc_info and str(record.exc_info[1]) == LEAK_MARKER
+        for record in caplog.records
+    )

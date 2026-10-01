@@ -46,6 +46,19 @@ router = APIRouter(prefix="/files", tags=["files"])
 logger = logging.getLogger(__name__)
 
 
+# Authoritative I8 response-boundary allowlist. FileValidationError.public_detail
+# is a candidate, not trusted text: only these exact static reasons may reach
+# clients. The five service raise sites use four distinct reasons (quota repeats).
+_SAFE_FILE_VALIDATION_DETAILS = frozenset(
+    {
+        "File exceeds the maximum allowed size",
+        "Insufficient storage quota",
+        "Archive uploads are not supported; extract and upload the files",
+        "File type is not allowed",
+    }
+)
+
+
 def _escape_like(value: str) -> str:
     """Escape SQL LIKE special characters."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -251,12 +264,16 @@ async def upload_file(
         raise
     except FileValidationError as exc:
         # I8: raw exception text stays out of client responses (it goes to the
-        # log); only the static, curated public_detail set at the raise site is
-        # returned so the client can still act on the rejection reason.
+        # log); validate public_detail against the authoritative allowlist here,
+        # even if a future raise site supplies an arbitrary string.
         logger.warning("File validation failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=exc.public_detail or "File validation failed",
+            detail=(
+                exc.public_detail
+                if exc.public_detail in _SAFE_FILE_VALIDATION_DETAILS
+                else "File validation failed"
+            ),
         )
     except FileStorageError:
         logger.error("File upload failed", exc_info=True)

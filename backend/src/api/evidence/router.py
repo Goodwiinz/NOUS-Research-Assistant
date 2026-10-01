@@ -682,6 +682,6 @@ async def health_check(_current_user=Depends(get_current_user)):
             },
         }
 
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+    except Exception:
+        logger.error("Health check failed", exc_info=True)
+        return {"status": "unhealthy", "error": "Health check failed"}

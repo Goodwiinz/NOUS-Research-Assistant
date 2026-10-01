@@ -136,15 +136,30 @@ async def test_upload_preserves_safe_http_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_validation_error_returns_curated_public_detail() -> None:
+@pytest.mark.parametrize(
+    ("public_detail", "expected"),
+    [
+        ("i8-arbitrary-private-detail", "File validation failed"),
+        ("File type is not allowed", "File type is not allowed"),
+        (
+            "File exceeds the maximum allowed size",
+            "File exceeds the maximum allowed size",
+        ),
+        ("Insufficient storage quota", "Insufficient storage quota"),
+        (
+            "Archive uploads are not supported; extract and upload the files",
+            "Archive uploads are not supported; extract and upload the files",
+        ),
+    ],
+)
+async def test_upload_validation_error_returns_curated_public_detail(
+    public_detail: str, expected: str, caplog: pytest.LogCaptureFixture
+) -> None:
     """Codex P2 on #1733: actionable validation reasons survive via public_detail."""
     user = _user()
     service = SimpleNamespace(
         upload_file=AsyncMock(
-            side_effect=FileValidationError(
-                "internal: extension '.exe' rejected for org organization-id",
-                public_detail="File type is not allowed",
-            )
+            side_effect=FileValidationError("private", public_detail=public_detail)
         )
     )
 
@@ -164,8 +179,12 @@ async def test_upload_validation_error_returns_curated_public_detail() -> None:
         )
 
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
-    assert exc_info.value.detail == "File type is not allowed"
-    assert "internal" not in exc_info.value.detail
+    assert exc_info.value.detail == expected
+    assert "private" not in exc_info.value.detail
+    assert any(
+        record.exc_info and str(record.exc_info[1]) == "private"
+        for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize(
