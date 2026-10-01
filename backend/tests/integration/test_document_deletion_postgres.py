@@ -40,7 +40,7 @@ _FILE_SIZE = 100
 
 
 def _dsn(driver: str) -> str:
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL") or ""
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
     for prefix in ("postgresql+asyncpg://", "postgresql://"):
