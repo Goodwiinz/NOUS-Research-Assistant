@@ -21,10 +21,13 @@ import { useBackendCapabilities } from '@/hooks/useBackendCapabilities';
 import { draftClaimsQueryKey, useDraftClaims } from '@/hooks/useDraftClaims';
 import { projectService } from '@/services/projectService';
 import {
+  listFigures,
   listSynthesis,
+  type Figure,
   type ResearchProjectRole,
   type SynthesisResult,
 } from '@/services/researchEngineService';
+import { FigureLineage } from '@/components/research-engine/FigureLineage';
 import {
   getCellObservations,
   getMatrix,
@@ -43,7 +46,10 @@ const KIND_LABELS: Record<ApiClaimLinkKind, string> = {
   source_span: 'Source span',
   legacy_unanchored: 'Legacy (unanchored)',
   synthesis_result: 'Synthesis result',
+  figure: 'Figure',
 };
+// Links that cite a computed artifact carry no model stance (GOO-311/312).
+const NO_STANCE: ApiClaimLinkKind[] = ['synthesis_result', 'figure'];
 const PASSAGE_CHARS = 160;
 
 // ponytail: users are shown by short id; resolve names when a members
@@ -67,11 +73,32 @@ function Badge({ label }: { label: string }): ReactElement {
   );
 }
 
+/** GOO-312: a figure link opens its output -> run -> data -> protocol chain. */
+function FigureLink({
+  projectId,
+  figureId,
+}: {
+  projectId: string;
+  figureId: string;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="text-xs">
+      <Button size="sm" variant="ghost" onClick={() => setOpen(!open)}>
+        {open ? 'Hide' : 'Show'} figure lineage {figureId.slice(0, 8)}
+      </Button>
+      {open && <FigureLineage projectId={projectId} figureId={figureId} />}
+    </div>
+  );
+}
+
 function ClaimRow({
   claim,
+  projectId,
   children,
 }: {
   claim: ApiClaimSummary;
+  projectId: string;
   children?: ReactElement | false;
 }): ReactElement {
   const { version, links, assessment } = claim;
@@ -125,6 +152,15 @@ function ClaimRow({
           <Badge label="Unassessed" />
         )}
       </div>
+      {links
+        .filter((link) => link.kind === 'figure' && link.figure_id)
+        .map((link) => (
+          <FigureLink
+            key={link.id}
+            projectId={projectId}
+            figureId={link.figure_id as string}
+          />
+        ))}
       {children}
     </li>
   );
@@ -273,6 +309,7 @@ function ClaimControls({
   claim,
   targets,
   results,
+  figures,
   adjudicator,
 }: {
   projectId: string;
@@ -281,6 +318,8 @@ function ClaimControls({
   targets: LinkTarget[];
   /** GOO-311: current computed synthesis results a claim may cite. */
   results: SynthesisResult[];
+  /** GOO-312: current figure tips a claim may cite. */
+  figures: Figure[];
   adjudicator: boolean;
 }): ReactElement {
   const [linkKey, setLinkKey] = useState(newKey);
@@ -288,6 +327,7 @@ function ClaimControls({
   const [assessKey, setAssessKey] = useState(newKey);
   const [target, setTarget] = useState('');
   const [resultId, setResultId] = useState('');
+  const [figureId, setFigureId] = useState('');
   const [stance, setStance] = useState<ApiClaimAssessmentStance>('supporting');
   const [chosen, setChosen] = useState<string[]>([]);
   const [rationale, setRationale] = useState('');
@@ -331,6 +371,22 @@ function ClaimControls({
     () => {
       setLinkKey(newKey());
       setResultId('');
+    }
+  );
+  const linkFigure = useClaimWrite(
+    projectId,
+    draftId,
+    (picked: string) =>
+      projectService.linkClaimEvidence(projectId, claim.claim_id, {
+        claim_version_id: claim.version.id,
+        kind: 'figure',
+        figure_id: picked,
+        status: 'linked',
+        idempotency_key: linkKey,
+      }),
+    () => {
+      setLinkKey(newKey());
+      setFigureId('');
     }
   );
   const observe = useClaimWrite(
@@ -424,8 +480,36 @@ function ClaimControls({
             </Button>
           </>
         )}
+        {figures.length > 0 && (
+          <>
+            <label className="sr-only" htmlFor={`figure-${id}`}>
+              Figure to link
+            </label>
+            <select
+              id={`figure-${id}`}
+              value={figureId}
+              onChange={(event) => setFigureId(event.target.value)}
+              className="min-w-0 rounded-md border border-border bg-background px-2 py-1"
+            >
+              <option value="">Link a figure…</option>
+              {figures.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.figure_key} ({f.kind}): {f.caption}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!figureId || linkFigure.isPending}
+              onClick={() => linkFigure.mutate(figureId)}
+            >
+              Link figure
+            </Button>
+          </>
+        )}
         {live
-          .filter((row) => row.kind !== 'synthesis_result')
+          .filter((row) => !NO_STANCE.includes(row.kind))
           .map((row) => (
             <Button
               key={row.id}
@@ -438,7 +522,11 @@ function ClaimControls({
             </Button>
           ))}
       </div>
-      <WriteError error={link.error ?? linkResult.error ?? observe.error} />
+      <WriteError
+        error={
+          link.error ?? linkResult.error ?? linkFigure.error ?? observe.error
+        }
+      />
       {adjudicator && (
         <fieldset className="space-y-1 rounded-md border border-border p-2">
           <legend className="px-1">Assess</legend>
@@ -553,6 +641,15 @@ export function DraftClaimsPanel({
   const results = (synthesis.data?.results ?? []).filter(
     (r) => r.status === 'computed' && !r.stale && !r.superseded
   );
+  const figureList = useQuery({
+    queryKey: ['project', projectId, 'research-engine', 'figures'],
+    queryFn: () => listFigures(projectId),
+    enabled: authoring,
+    retry: false,
+  });
+  const figures = (figureList.data?.figures ?? []).filter(
+    (f) => !f.stale && !f.superseded
+  );
   if (!capabilities.draftClaims || !claims.data) return null;
   const { items, counts } = claims.data;
   return (
@@ -586,7 +683,7 @@ export function DraftClaimsPanel({
       ) : (
         <ul>
           {items.map((claim) => (
-            <ClaimRow key={claim.claim_id} claim={claim}>
+            <ClaimRow key={claim.claim_id} claim={claim} projectId={projectId}>
               {authoring && claim.is_tip && (
                 <ClaimControls
                   projectId={projectId}
@@ -594,6 +691,7 @@ export function DraftClaimsPanel({
                   claim={claim}
                   targets={targets.data ?? []}
                   results={results}
+                  figures={figures}
                   adjudicator={adjudicator}
                 />
               )}
