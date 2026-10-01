@@ -262,12 +262,15 @@ def test_ledger_redacts_plan_page_context_and_errors(ledger_dir: Path):
 
     ``plan``, ``page_context``, ``last_error``/``last_error_info`` and the
     reflection issues were written raw to iterations/, config.json and
-    final.json. The project id stays raw: ``project_report.py`` filters
-    final.json on it, and redact_pii would rewrite it to ``<uuid>``.
+    final.json. UUID ids stay raw at any depth: ``project_report.py``
+    filters final.json on current_project_id, and replay_ledger compares
+    page_context, so ``<uuid>`` everywhere would hide real drift.
     """
     from src.services.agent.iteration_ledger import write_iteration
 
     project_id = "6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab"
+    paper_id = "1d2e3f40-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+    ws_thread_id = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
     state = _state_with_one_turn()
     state["current_project_id"] = project_id
     state["plan"] = [
@@ -276,8 +279,14 @@ def test_ledger_redacts_plan_page_context_and_errors(ledger_dir: Path):
     state["page_context"] = {
         "type": "project",
         "project_id": project_id,
-        "metadata": {"selection": "ping dave@example.com"},
+        "paper_id": paper_id,
+        "label": "notes for dave@example.com",
+        "metadata": {
+            "workspace_thread_id": ws_thread_id,
+            "selection": "ping dave@example.com",
+        },
     }
+    state["tool_executions"][0]["args"] = {"document_id": "hal@example.com"}
     state["last_error"] = "SMTP rejected erin@example.com"
     state["last_error_info"] = {
         "category": "tool_error",
@@ -302,10 +311,18 @@ def test_ledger_redacts_plan_page_context_and_errors(ledger_dir: Path):
     record = json.loads(path.read_text())
     snapshot = record["state_snapshot"]
     assert snapshot["plan"][0]["args_hint"] == "mail <email>"
-    assert snapshot["page_context"]["type"] == "project"
+    page_context = snapshot["page_context"]
+    assert page_context["type"] == "project"
+    assert page_context["project_id"] == project_id
+    assert page_context["paper_id"] == paper_id
+    assert page_context["metadata"]["workspace_thread_id"] == ws_thread_id
+    assert page_context["metadata"]["selection"] == "ping <email>"
+    # Only UUIDs are kept under id keys; anything else is still redacted.
+    assert snapshot["tool_executions"][0]["args"]["document_id"] == "<email>"
     assert snapshot["current_project_id"] == project_id
     assert snapshot["retrieved_contexts"][0]["document_id"] == doc_id
     final = json.loads((thread_dir / "final.json").read_text())
     assert final["current_project_id"] == project_id
     config = json.loads((thread_dir / "config.json").read_text())
     assert config["current_project_id"] == project_id
+    assert config["page_context"]["metadata"]["workspace_thread_id"] == ws_thread_id

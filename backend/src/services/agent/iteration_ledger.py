@@ -25,7 +25,7 @@ Everything written here goes through ``_pii_redact`` first (R7-L4): the
 records are plain files on a shared volume that outlive the run, and they
 carry raw prompts, model output and tool arguments. ``state_snapshot`` and
 ``config.json`` are redacted whole (R8-C7), so a new field cannot slip past;
-only the server-owned ids in ``_UNREDACTED_KEYS`` stay raw.
+only UUID values under the id keys in ``_ID_KEYS`` stay raw.
 """
 
 from __future__ import annotations
@@ -40,25 +40,50 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.core.config import get_settings
-from src.services.agent._pii_redact import redact_nested_pii, redact_pii
+from src.services.agent._pii_redact import _UUID_RE, redact_nested_pii, redact_pii
 
 logger = logging.getLogger(__name__)
 
-# Server-owned identifiers, not user text. redact_pii rewrites any UUID to
-# "<uuid>", and project_report.py filters final.json on current_project_id.
-# retrieved_contexts is ids + scores; its one free-text field (title) is
-# redacted where the summary is built.
-_UNREDACTED_KEYS = frozenset(
-    {"thread_id", "user_id", "current_project_id", "retrieved_contexts"}
+# Identifier keys, at any depth. redact_pii rewrites every UUID to "<uuid>",
+# which would break project_report.py (it filters final.json on
+# current_project_id) and make distinct page contexts look identical to
+# replay_ledger. A UUID under one of these keys stays raw; anything else
+# under them (an email the model put in a tool arg) is still redacted.
+_ID_KEYS = frozenset(
+    {
+        "thread_id",
+        "user_id",
+        "current_project_id",
+        "project_id",
+        "paper_id",
+        "workspace_id",
+        "workspace_thread_id",
+        "document_id",
+        "document_ids",
+    }
 )
 
 
-def _redact_record_fields(fields: dict) -> dict:
-    """Redact every value except the raw identifier keys (R8-C7)."""
-    return {
-        key: value if key in _UNREDACTED_KEYS else redact_nested_pii(value)
-        for key, value in fields.items()
-    }
+def _is_uuid(value: Any) -> bool:
+    if isinstance(value, list):
+        return all(_is_uuid(item) for item in value)
+    return isinstance(value, str) and _UUID_RE.fullmatch(value) is not None
+
+
+def _redact_keeping_ids(value: Any) -> Any:
+    """``redact_nested_pii`` that keeps UUID identifiers readable (R8-C7)."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                item
+                if key in _ID_KEYS and _is_uuid(item)
+                else _redact_keeping_ids(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_keeping_ids(item) for item in value]
+    return redact_nested_pii(value)
 
 
 def _ledger_root() -> Path | None:
@@ -194,7 +219,7 @@ def _build_record(state: dict, turn: int) -> dict:
     retrieved_summary = [
         {
             "document_id": ctx.get("document_id"),
-            "title": redact_nested_pii(ctx.get("title")),
+            "title": ctx.get("title"),
             "score": ctx.get("score"),
         }
         for ctx in retrieved[:10]
@@ -221,7 +246,7 @@ def _build_record(state: dict, turn: int) -> dict:
             "tools_used": [te.get("tool_name") for te in tool_executions[-5:]],
             "ai_response_chars": len(ai_content),
         },
-        "state_snapshot": _redact_record_fields(
+        "state_snapshot": _redact_keeping_ids(
             {
                 "messages": [_serialize_message(m) for m in in_turn_msgs],
                 "page_context": state.get("page_context"),
@@ -267,7 +292,7 @@ def _maybe_write_config(thread_dir: Path, state: dict) -> None:
         if isinstance(m, HumanMessage) and m.content:
             first_user = redact_pii(m.content)[:1000]
             break
-    config = _redact_record_fields(
+    config = _redact_keeping_ids(
         {
             "thread_id": (state.get("thread_id") or thread_dir.name),
             "user_id": state.get("user_id"),
