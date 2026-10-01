@@ -30,6 +30,7 @@ from src.models.draft_release import DraftRelease
 from src.models.draft_review import DraftReview
 from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
+from src.models.manuscript_release import ManuscriptRelease
 from src.models.peer_review import (
     PeerReviewComment,
     PeerReviewResponse,
@@ -2219,12 +2220,17 @@ Key takeaways include the importance of continued investigation and the potentia
         # the RESTRICT FK on draft_releases.draft_id is the backstop.
         # GOO-314: reviewed and revised versions stay resolvable; the
         # peer-review RESTRICT FKs are the backstop.
+        # GOO-315: a packaged version stays resolvable; the RESTRICT FK on
+        # manuscript_releases.draft_id is the backstop.
         pinned = (
             await self.db.execute(
                 select(ResearchClaimVersion.id)
                 .where(ResearchClaimVersion.draft_id == draft_id)
                 .union_all(
                     select(DraftRelease.id).where(DraftRelease.draft_id == draft_id),
+                    select(ManuscriptRelease.id).where(
+                        ManuscriptRelease.draft_id == draft_id
+                    ),
                     select(PeerReviewRound.id).where(
                         PeerReviewRound.draft_id == draft_id
                     ),

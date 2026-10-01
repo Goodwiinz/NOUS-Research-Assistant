@@ -79,6 +79,8 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-315: manuscript releases reference drafts and draft releases only.
+    "manuscript_releases",
     # GOO-314: peer-review tables reference drafts and each other only.
     "peer_review_decisions",
     "peer_review_responses",
@@ -156,6 +158,7 @@ def _upgrade(connection: Connection) -> None:
         "b8e0c2d4f6a7_create_run_manifests.py",
         "c0f2a4b6d8e9_create_experiment_reruns.py",
         "d2a4c6e8f0b1_create_peer_review.py",
+        "e4c6a8b0d2f3_create_manuscript_releases.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename

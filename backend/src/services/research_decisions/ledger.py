@@ -4,7 +4,7 @@ Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
 ``research_evidence``, ``research_synthesis``, ``research_experiment``,
-``research_reproduction``, ``research_peer_review``)
+``research_reproduction``, ``research_peer_review``, ``research_manuscript``)
 registers its subject type, payload vocabulary, value validation and replay
 transition rules in ``_FAMILIES``.
 
@@ -577,6 +577,36 @@ _PEER_REVIEW_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
             "assignee_id",
             "response_id",
             "supersedes_decision_id",
+        }
+    ),
+}
+# GOO-315: manuscript releases, one stream per Collection; the subject of
+# both events is the release row the event inserts.
+_MANUSCRIPT_AGGREGATE = "research_manuscript"
+_MANUSCRIPT_SUBJECT = "manuscript_release"
+_MANUSCRIPT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("manuscript.candidate_created", 1): frozenset(
+        {
+            "collection_id",
+            "release_id",
+            "draft_id",
+            "draft_version",
+            "content_hash",
+            "snapshot_hash",
+            "checks_hash",
+            "package_sha256",
+        }
+    ),
+    ("manuscript.verified", 1): frozenset(
+        {
+            "collection_id",
+            "release_id",
+            "candidate_release_id",
+            "draft_release_id",
+            "content_hash",
+            "snapshot_hash",
+            "package_sha256",
+            "obligations",
         }
     ),
 }
@@ -2761,6 +2791,70 @@ def _validate_peer_review_transitions(
         )
 
 
+def _validate_manuscript_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["release_id"], "release_id") != subject_id:
+        raise DecisionValidationError("manuscript event subject is not its release")
+    for key in ("content_hash", "snapshot_hash", "package_sha256"):
+        _validated_sha256(payload[key], key)
+    if event_type == "manuscript.candidate_created":
+        _validated_payload_uuid(payload["draft_id"], "draft_id")
+        if not _is_int(payload["draft_version"]) or payload["draft_version"] < 1:
+            raise DecisionValidationError("draft_version must be a positive integer")
+        _validated_sha256(payload["checks_hash"], "checks_hash")
+        return
+    _validated_payload_uuid(payload["candidate_release_id"], "candidate_release_id")
+    _validated_payload_uuid(payload["draft_release_id"], "draft_release_id")
+    obligations = payload["obligations"]
+    if (
+        not isinstance(obligations, dict)
+        or not obligations
+        or not all(v in ("pass", "not_applicable") for v in obligations.values())
+    ):
+        raise DecisionValidationError("a verified release needs passing obligations")
+
+
+def _validate_manuscript_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Candidates are an editor's; a verification is an adjudicator's or
+    supervisor's, names a candidate created earlier with the same snapshot
+    and package hashes, and happens at most once per candidate."""
+    candidates: dict[str, tuple[str, str]] = {}
+    verified: set[str] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        hashes = (str(payload["snapshot_hash"]), str(payload["package_sha256"]))
+        if event.event_type == "manuscript.candidate_created":
+            if event.actor_role != "editor":
+                raise DecisionReplayError("a candidate release is an editor's")
+            candidates[str(payload["release_id"])] = hashes
+            continue
+        if event.actor_role not in _RELEASE_PROMOTERS:
+            raise DecisionReplayError(
+                "manuscript verification requires an adjudicator or supervisor"
+            )
+        candidate = str(payload["candidate_release_id"])
+        if candidate not in candidates:
+            raise DecisionReplayError("verification names no recorded candidate")
+        if candidates[candidate] != hashes:
+            raise DecisionReplayError("verified package differs from its candidate")
+        if candidate in verified:
+            raise DecisionReplayError("candidate already verified")
+        verified.add(candidate)
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -2878,6 +2972,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_PEER_REVIEW_PAYLOAD_KEYS,
         validate_payload=_validate_peer_review_payload,
         validate_transitions=_validate_peer_review_transitions,
+        requires_subject_version=False,
+    ),
+    _MANUSCRIPT_AGGREGATE: _Family(
+        subject_type=_MANUSCRIPT_SUBJECT,
+        payload_keys=_MANUSCRIPT_PAYLOAD_KEYS,
+        validate_payload=_validate_manuscript_payload,
+        validate_transitions=_validate_manuscript_transitions,
         requires_subject_version=False,
     ),
 }

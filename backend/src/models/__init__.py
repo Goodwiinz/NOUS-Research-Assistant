@@ -153,6 +153,7 @@ from .research_experiment import (
     ResearchRunManifest,
 )
 from .research_rerun import ExperimentRerun, ExperimentRerunAttempt
+from .manuscript_release import ManuscriptRelease
 from .peer_review import (
     PeerReviewComment,
     PeerReviewDecision,
@@ -332,6 +333,7 @@ __all__ = [
     "PeerReviewComment",
     "PeerReviewResponse",
     "PeerReviewDecision",
+    "ManuscriptRelease",
     "ResearchClaim",
     "ResearchClaimVersion",
     "ResearchClaimEvidenceLink",

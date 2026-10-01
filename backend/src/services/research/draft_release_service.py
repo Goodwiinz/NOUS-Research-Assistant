@@ -193,7 +193,9 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
     # values, protocols and appraisals. GOO-311: synthesis results hang off
     # evidence tables and protocols. GOO-312: figures hang off runs, which
     # hang off their input revisions. Local imports: these services read this
-    # graph for their stale flags.
+    # graph for their stale flags. GOO-315: verified manuscript releases hang
+    # off their draft release.
+    from src.services.research import manuscript_release_service
     from src.services.research_engine import (
         appraisal_service,
         evidence_service,
@@ -207,6 +209,7 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
         evidence_service.graph_part,
         synthesis_service.graph_part,
         experiment_service.graph_part,
+        manuscript_release_service.graph_part,
     ):
         more_edges, more_changed = await part(db, collection_id)
         edges += more_edges

@@ -31,6 +31,13 @@ import type {
   ApiPeerReviewRoundDetail,
   ApiPeerReviewRoundList,
 } from '@/types/api/peer-review-contract';
+import type {
+  ApiCandidateCreate,
+  ApiManuscriptRelease,
+  ApiManuscriptReleaseList,
+  ApiPromoteRequest,
+  ApiReleaseVerification,
+} from '@/types/api/manuscript-release-contract';
 
 // Types
 export interface Project {
@@ -716,6 +723,59 @@ export const projectService = {
   ): Promise<void> {
     await api.download(
       `/projects/${projectId}/peer-review/rounds/${roundId}/export?format=${format}`
+    );
+  },
+
+  /** GOO-315: package one exact draft version as a candidate release. */
+  async createCandidateRelease(
+    projectId: string,
+    data: ApiCandidateCreate
+  ): Promise<ApiManuscriptRelease> {
+    return api.post<ApiManuscriptRelease>(
+      `/projects/${projectId}/manuscript-releases`,
+      data
+    );
+  },
+
+  /** GOO-315: every manuscript release with derived status and checks. */
+  async listManuscriptReleases(
+    projectId: string
+  ): Promise<ApiManuscriptReleaseList> {
+    return api.get<ApiManuscriptReleaseList>(
+      `/projects/${projectId}/manuscript-releases`
+    );
+  },
+
+  /** GOO-315: promote one exact candidate (409 lists failing obligations). */
+  async promoteManuscriptRelease(
+    projectId: string,
+    releaseId: string,
+    data: ApiPromoteRequest
+  ): Promise<ApiManuscriptRelease> {
+    return api.post<ApiManuscriptRelease>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/promote`,
+      data
+    );
+  },
+
+  /** GOO-315: the stored package zip. */
+  async downloadManuscriptPackage(
+    projectId: string,
+    releaseId: string
+  ): Promise<void> {
+    await api.download(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/package`,
+      `manuscript-release-${releaseId}.zip`
+    );
+  },
+
+  /** GOO-315: recompute every package hash and the reference mapping. */
+  async verifyManuscriptRelease(
+    projectId: string,
+    releaseId: string
+  ): Promise<ApiReleaseVerification> {
+    return api.get<ApiReleaseVerification>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/verify`
     );
   },
 

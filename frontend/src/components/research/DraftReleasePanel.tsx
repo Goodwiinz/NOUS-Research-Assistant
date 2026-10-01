@@ -4,7 +4,7 @@
  * GOO-307 release status for one exact draft version: a badge, the stale
  * cause, and (for an adjudicator or supervisor) the blocker list and the
  * "Promote to verified" action. `is_current` and a passed review never mean
- * verified; only a promotion does.
+ * verified; only a promotion does. GOO-315's manuscript releases sit below.
  */
 
 import React from 'react';
@@ -14,6 +14,7 @@ import { ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { draftReleaseQueryKey, useDraftRelease } from '@/hooks/useDraftRelease';
 import { listProjectRoles } from '@/services/researchEngineService';
+import { ManuscriptReleaseSection } from './ManuscriptReleaseSection';
 import { projectService, type Draft } from '@/services/projectService';
 import { APIErrorClass } from '@/types/api';
 import type {
@@ -149,6 +150,11 @@ export const DraftReleasePanel: React.FC<DraftReleasePanelProps> = ({
           )}
         </div>
       )}
+      <ManuscriptReleaseSection
+        projectId={projectId}
+        draft={draft}
+        canPromote={canPromote}
+      />
     </div>
   );
 };
