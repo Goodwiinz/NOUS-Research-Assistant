@@ -1,7 +1,7 @@
 """Durable integration tool actions.
 
 Revision ID: it01_integration_actions
-Revises: b8d0f2a4c6e9
+Revises: d7f9b1c3e5a8
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,9 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "it01_integration_actions"
-down_revision = "b8d0f2a4c6e9"
+# #1780 and #1773/#1778 branched from b8d0f2a4c6e9 in parallel; this revision
+# now follows GOO-307's d7f9b1c3e5a8 so develop keeps a single head.
+down_revision = "d7f9b1c3e5a8"
 branch_labels = None
 depends_on = None
 _POSTGREST_ROLES = ("anon", "authenticated")

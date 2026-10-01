@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -213,3 +214,49 @@ def test_release_source_gate_skips_image_bumps_and_stale_runs(tmp_path: Path) ->
     assert proposal_status("ordinary-feature").returncode == 0
     git("checkout", "--detach", source_sha)
     assert not needed(source_sha), "A stale pipeline must not propose an old image"
+
+
+def test_release_protection_preflight_fails_closed() -> None:
+    validator = REPO_ROOT / "scripts/ci/check_release_protection.py"
+    passing = {
+        "requiresStatusChecks": True,
+        "requiresStrictStatusChecks": True,
+        "requiredStatusChecks": [
+            {"context": "Release Gate", "app": {"databaseId": 15368}}
+        ],
+    }
+    cases = [
+        (passing, 0),
+        (None, 1),
+        ({**passing, "requiresStatusChecks": False}, 1),
+        ({**passing, "requiresStrictStatusChecks": False}, 1),
+        ({**passing, "requiredStatusChecks": []}, 1),
+        (
+            {
+                **passing,
+                "requiredStatusChecks": [{"context": "Release Gate", "app": None}],
+            },
+            1,
+        ),
+    ]
+    for payload, expected in cases:
+        result = subprocess.run(
+            ["python3", str(validator)],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == expected, result.stderr
+    malformed = subprocess.run(
+        ["python3", str(validator)], input="not-json", text=True, capture_output=True
+    )
+    assert malformed.returncode == 1
+    release = _load_workflow(WORKFLOWS / "release-dev.yml")
+    for job in ["prepare", "promote"]:
+        step = _step_with_run(release, job, "check_release_protection.py")
+        assert "gh api graphql" in step["run"]
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert (
+        _step_with_run(release, "prepare", "check_release_protection.py")["if"]
+        == "steps.source.outputs.needed == 'true'"
+    )
