@@ -36,7 +36,7 @@ from src.tasks.processing_lifecycle import ProcessingStopped, require_active_ing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
 
-Change = Callable[[ProcessingJob, Document], None]
+Change = Callable[[Any, Any], None]
 
 
 def _dsn() -> str:
@@ -107,15 +107,15 @@ def _interfere(env: SimpleNamespace, change: Change) -> None:
         other.commit()
 
 
-def _cancel(job: ProcessingJob, doc: Document) -> None:
+def _cancel(job: Any, doc: Any) -> None:
     job.cancel_job()
 
 
-def _delete(job: ProcessingJob, doc: Document) -> None:
+def _delete(job: Any, doc: Any) -> None:
     doc.soft_delete()
 
 
-def _newer_retry(job: ProcessingJob, doc: Document) -> None:
+def _newer_retry(job: Any, doc: Any) -> None:
     job.celery_task_id = "newer-attempt"
 
 

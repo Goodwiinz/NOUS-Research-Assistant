@@ -6,7 +6,7 @@ proofs live in ``test_ingestion_stage_guard_postgres.py``.
 
 from __future__ import annotations
 
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 from uuid import UUID, uuid4
 
 import pytest
@@ -43,7 +43,7 @@ def db() -> Iterator[Session]:
         engine.dispose()
 
 
-def _seed(db: Session) -> tuple[UUID, ProcessingJob, Document]:
+def _seed(db: Session) -> tuple[UUID, Any, Any]:
     org_id, doc_id, job_id = uuid4(), uuid4(), uuid4()
     doc = Document(
         id=doc_id,
@@ -82,27 +82,27 @@ def test_live_attempt_passes_and_keeps_pending_stage_changes(db: Session) -> Non
     assert doc.content_text == "extracted"  # the refresh did not discard it
 
 
-def _cancel(job: ProcessingJob, doc: Document) -> None:
+def _cancel(job: Any, doc: Any) -> None:
     job.cancel_job()
 
 
-def _sweep(job: ProcessingJob, doc: Document) -> None:
+def _sweep(job: Any, doc: Any) -> None:
     job.fail_job("stuck")
 
 
-def _delete_job(job: ProcessingJob, doc: Document) -> None:
+def _delete_job(job: Any, doc: Any) -> None:
     job.soft_delete()
 
 
-def _delete_doc(job: ProcessingJob, doc: Document) -> None:
+def _delete_doc(job: Any, doc: Any) -> None:
     doc.soft_delete()
 
 
-def _supersede(job: ProcessingJob, doc: Document) -> None:
+def _supersede(job: Any, doc: Any) -> None:
     job.celery_task_id = "newer"
 
 
-def _foreign_org(job: ProcessingJob, doc: Document) -> None:
+def _foreign_org(job: Any, doc: Any) -> None:
     doc.organization_id = uuid4()
 
 
@@ -120,7 +120,7 @@ def _foreign_org(job: ProcessingJob, doc: Document) -> None:
 )
 def test_lost_attempt_is_stopped(
     db: Session,
-    change: Callable[[ProcessingJob, Document], None],
+    change: Callable[[Any, Any], None],
     reason: str,
     lock: bool,
 ) -> None:
