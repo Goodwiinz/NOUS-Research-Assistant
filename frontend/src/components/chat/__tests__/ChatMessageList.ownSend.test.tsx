@@ -5,7 +5,8 @@
  * the view back down; content they did not initiate must not.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, waitFor, within } from '@testing-library/react';
+import { fireEvent, waitFor, within } from '@testing-library/react';
+import { render } from '@/test/test-utils';
 import type { ReactElement } from 'react';
 
 import { ChatMessageList } from '../ChatMessageList';

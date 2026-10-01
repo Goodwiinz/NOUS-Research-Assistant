@@ -32,12 +32,18 @@ class ResearchAction(str, Enum):
     REVIEW = "review"
     ADJUDICATE = "adjudicate"
     SUPERVISE = "supervise"
+    # GOO-307: promote a draft version to verified.
+    RELEASE = "release"
 
 
-_DECISION_ROLE = {
-    ResearchAction.REVIEW: ResearchProjectRole.REVIEWER,
-    ResearchAction.ADJUDICATE: ResearchProjectRole.ADJUDICATOR,
-    ResearchAction.SUPERVISE: ResearchProjectRole.SUPERVISOR,
+# Any one of the roles suffices.
+_DECISION_ROLE: dict[ResearchAction, frozenset[ResearchProjectRole]] = {
+    ResearchAction.REVIEW: frozenset({ResearchProjectRole.REVIEWER}),
+    ResearchAction.ADJUDICATE: frozenset({ResearchProjectRole.ADJUDICATOR}),
+    ResearchAction.SUPERVISE: frozenset({ResearchProjectRole.SUPERVISOR}),
+    ResearchAction.RELEASE: frozenset(
+        {ResearchProjectRole.ADJUDICATOR, ResearchProjectRole.SUPERVISOR}
+    ),
 }
 _MUTATING_ACTIONS = set(_DECISION_ROLE) | {ResearchAction.EDIT, ResearchAction.MANAGE}
 
@@ -285,8 +291,9 @@ async def resolve_project(
     }:
         raise HTTPException(status_code=404, detail="Project not found")
     required = _DECISION_ROLE.get(action)
-    if required is not None and required not in roles:
-        raise HTTPException(status_code=403, detail=f"{required.value} role required")
+    if required is not None and required.isdisjoint(roles):
+        names = " or ".join(sorted(role.value for role in required))
+        raise HTTPException(status_code=403, detail=f"{names} role required")
 
     engine = cast(
         Optional[ResearchProject],

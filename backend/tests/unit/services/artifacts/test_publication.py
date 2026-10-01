@@ -10,8 +10,10 @@ import pytest
 from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.models.agent_run import AgentRun
 from src.models.artifact import (
     Artifact,
+    ArtifactLifecycleOutbox,
     ArtifactReference,
     ArtifactUpload,
     ArtifactVersion,
@@ -81,6 +83,8 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         ArtifactVersion,
         ArtifactUpload,
         ArtifactReference,
+        ArtifactLifecycleOutbox,
+        AgentRun,
     ]
     async with engine.begin() as conn:
         for model in tables:

@@ -208,8 +208,15 @@ def run_extraction_matrix(
     document_ids: List[str],
     columns: List[Dict[str, Any]],
     task_id: str,
+    form_version_id: Optional[str] = None,
+    initiated_by_user_id: Optional[str] = None,
+    source_hashes: Optional[Dict[str, str]] = None,
 ) -> None:
-    """Run matrix extraction in a durable Celery worker."""
+    """Run matrix extraction in a durable Celery worker.
+
+    GOO-304: the enqueuer pins the form version, source hashes and initiating
+    user; a task queued before that (no pins) fails without writing.
+    """
     from src.services.research.extraction_matrix_service import ExtractionMatrixService
 
     asyncio.run(
@@ -218,5 +225,10 @@ def run_extraction_matrix(
             document_ids=[UUID(document_id) for document_id in document_ids],
             columns=columns,
             task_id=task_id,
+            form_version_id=UUID(form_version_id) if form_version_id else None,
+            initiated_by_user_id=(
+                UUID(initiated_by_user_id) if initiated_by_user_id else None
+            ),
+            source_hashes=source_hashes,
         )
     )

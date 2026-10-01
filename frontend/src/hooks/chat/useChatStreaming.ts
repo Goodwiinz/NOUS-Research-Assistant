@@ -1,5 +1,6 @@
 'use client';
 
+import { useInvalidateThreadArtifacts } from '@/hooks/chat/useThreadArtifacts';
 import { extractConfirmationPreview } from '@nous/chat-runtime/message';
 
 import type {
@@ -737,6 +738,7 @@ export function useChatStreaming(
 
   const router = useRouter();
   const queryClient = useQueryClient();
+  const invalidateThreadArtifacts = useInvalidateThreadArtifacts();
 
   const finishAuthRecoveryAttempt = useCallback(
     (attempt: StreamAuthRecoveryAttempt | undefined): void => {
@@ -1231,6 +1233,10 @@ export function useChatStreaming(
                 streamingProgress: [...turnProgress],
               });
             },
+            onArtifactVersion: (ref) => {
+              if (currentThreadId)
+                void invalidateThreadArtifacts(currentThreadId, ref);
+            },
             onRunId: (runId) => {
               if (!currentThreadId || streamOwnerRef.current !== streamOwner) {
                 return;
@@ -1239,10 +1245,13 @@ export function useChatStreaming(
               useAgentActivityStore.getState().setRunId(currentThreadId, runId);
               const stopPending = isStoppedByUser();
               if (harnessConnection.executionProvider === 'codex') {
-                harnessConnection.receive({
-                  type: stopPending ? 'stopping' : 'accepted',
-                  runId,
-                }, currentThreadId);
+                harnessConnection.receive(
+                  {
+                    type: stopPending ? 'stopping' : 'accepted',
+                    runId,
+                  },
+                  currentThreadId
+                );
               }
               // Stop can race the accepted frame while the server is still
               // opening the response. Once the producer gives us its exact
@@ -1261,7 +1270,10 @@ export function useChatStreaming(
                 void harnessConnection
                   .loadApproval(requestId, currentThreadId)
                   .catch((error) => {
-                    console.error('[Chat] Could not load native request:', error);
+                    console.error(
+                      '[Chat] Could not load native request:',
+                      error
+                    );
                   });
               }
             },
@@ -1458,6 +1470,8 @@ export function useChatStreaming(
             },
             onDone: (payload) => {
               console.log('[Agent] Stream complete');
+              if (currentThreadId)
+                void invalidateThreadArtifacts(currentThreadId);
               finishAuthRecoveryAttempt(authRecoveryAttempt);
               if (payload) {
                 doneIds = payload;
@@ -1848,6 +1862,7 @@ export function useChatStreaming(
       requestDurableStop,
       harnessConnection,
       displayedMessages.length,
+      invalidateThreadArtifacts,
     ]
   );
 
@@ -2805,6 +2820,10 @@ export function useChatStreaming(
                   streamingProgress: [...confirmProgress],
                 });
               },
+              onArtifactVersion: (ref) => {
+                if (confirmationThreadId)
+                  void invalidateThreadArtifacts(confirmationThreadId, ref);
+              },
               onRunId: (runId) => {
                 if (
                   !confirmationThreadId ||
@@ -3017,6 +3036,8 @@ export function useChatStreaming(
               onDone: (payload) => {
                 finishAuthRecoveryAttempt(authRecoveryAttempt);
                 confirmDoneIds = payload ?? {};
+                if (confirmationThreadId)
+                  void invalidateThreadArtifacts(confirmationThreadId);
                 const reasoningSummary =
                   payload?.reasoning_summary ?? confirmReasoning;
                 if (confirmContent.trim() || reasoningSummary.trim()) {
@@ -3244,6 +3265,7 @@ export function useChatStreaming(
       maybeAutoFocusCreatedNote,
       setPendingConfirmation,
       requestDurableStop,
+      invalidateThreadArtifacts,
     ]
   );
 
