@@ -7296,6 +7296,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/review-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Versions
+         * @description The version chain with derived work status, stale counts and the
+         *     deltas a successor could accept.
+         */
+        get: operations["list_versions_api_v1_research_engine_projects__project_id__review_versions_get"];
+        put?: never;
+        /**
+         * Create Version
+         * @description Freeze the root (no parent) or a successor accepting one delta.
+         */
+        post: operations["create_version_api_v1_research_engine_projects__project_id__review_versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/review-versions/{version_id}/accounting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Accounting
+         * @description Both PRISMA bodies plus the update boxes.
+         */
+        get: operations["get_accounting_api_v1_research_engine_projects__project_id__review_versions__version_id__accounting_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/review-versions/{version_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Version
+         * @description Corpus, decisions with actors, work, accounting and release (read-only).
+         */
+        get: operations["export_version_api_v1_research_engine_projects__project_id__review_versions__version_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/review-versions/{version_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link Release
+         * @description Link a verified GOO-315 release superseding the parent's release.
+         */
+        post: operations["link_release_api_v1_research_engine_projects__project_id__review_versions__version_id__release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/review-versions/{version_id}/work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ensure Work
+         * @description Retry the targeted queues and assignments with the same keys.
+         */
+        post: operations["ensure_work_api_v1_research_engine_projects__project_id__review_versions__version_id__work_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/roles": {
         parameters: {
             query?: never;
@@ -19667,6 +19772,67 @@ export interface components {
          */
         ReviewDecision: "approve" | "decline";
         /**
+         * ReviewDecisionRef
+         * @description A decision carried by reference: attribution resolves via ``event_id``.
+         */
+        ReviewDecisionRef: {
+            /** Basis */
+            basis: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** Outcome */
+            outcome?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /**
+             * Resolution Id
+             * Format: uuid
+             */
+            resolution_id: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /**
+             * Uncertain
+             * @default false
+             */
+            uncertain: boolean;
+        };
+        /**
+         * ReviewDeltaOption
+         * @description A succeeded GOO-319 execution a successor of the tip may accept.
+         */
+        ReviewDeltaOption: {
+            /** Baseline Execution Id */
+            baseline_execution_id?: string | null;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Delta Hash */
+            delta_hash: string;
+            /**
+             * Execution Id
+             * Format: uuid
+             */
+            execution_id: string;
+            /**
+             * Schedule Id
+             * Format: uuid
+             */
+            schedule_id: string;
+            /** Scheduled Local */
+            scheduled_local: string;
+        };
+        /**
          * ReviewDescriptor
          * @description Content-free durable descriptor for the current review gate.
          */
@@ -19705,6 +19871,80 @@ export interface components {
          * @enum {string}
          */
         ReviewKind: "screening" | "extraction" | "final";
+        /** ReviewMissingHistory */
+        ReviewMissingHistory: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "decision_missing" | "attribution_missing";
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+        };
+        /** ReviewNeedsAttention */
+        ReviewNeedsAttention: {
+            /** Class */
+            class?: ("new" | "changed" | "corrected_retracted" | "unchanged" | "unknown") | null;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+        };
+        /** ReviewReleaseLinkCreate */
+        ReviewReleaseLinkCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+            /** Supersedes Release Id */
+            supersedes_release_id?: string | null;
+        };
+        /** ReviewReleaseLinkResponse */
+        ReviewReleaseLinkResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Linked By Id
+             * Format: uuid
+             */
+            linked_by_id: string;
+            /** Package Sha256 */
+            package_sha256: string;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+            /**
+             * Review Version Id
+             * Format: uuid
+             */
+            review_version_id: string;
+            /** Supersedes Release Id */
+            supersedes_release_id?: string | null;
+        };
         /**
          * ReviewValidationVocabulary
          * @description Bounded decision vocabulary used to render a pending gate.
@@ -19714,6 +19954,149 @@ export interface components {
             item_decisions?: string[];
             /** Reason Required For */
             reason_required_for?: string[];
+        };
+        /**
+         * ReviewVersionCreate
+         * @description A root version (no parent) or a successor accepting one GOO-319 delta
+         *     by ``(execution_id, delta_hash)``. ``carry_with_uncertainty`` names
+         *     ``unknown`` reports whose parent decision is carried with an explicit
+         *     flag (the rationale covers it).
+         */
+        ReviewVersionCreate: {
+            /** Carry With Uncertainty */
+            carry_with_uncertainty?: string[];
+            /** Delta Hash */
+            delta_hash?: string | null;
+            /** Execution Id */
+            execution_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Parent Review Version Id */
+            parent_review_version_id?: string | null;
+            /** Rationale */
+            rationale: string;
+            /** Reviewer User Ids */
+            reviewer_user_ids?: string[];
+        };
+        /**
+         * ReviewVersionExport
+         * @description The sealed ``nous.academic.review-version.v1`` attachment.
+         */
+        ReviewVersionExport: {
+            /** Body */
+            body: {
+                [key: string]: unknown;
+            };
+            /** Body Sha256 */
+            body_sha256: string;
+            /** Exported At */
+            exported_at: string;
+            /** Schema */
+            schema: string;
+        };
+        /** ReviewVersionListResponse */
+        ReviewVersionListResponse: {
+            /** Deltas */
+            deltas: components["schemas"]["ReviewDeltaOption"][];
+            /** Versions */
+            versions: components["schemas"]["ReviewVersionResponse"][];
+        };
+        /** ReviewVersionResponse */
+        ReviewVersionResponse: {
+            /** Accepted Execution Id */
+            accepted_execution_id?: string | null;
+            /** Carried */
+            carried: components["schemas"]["ReviewDecisionRef"][];
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Delta Hash */
+            delta_hash?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Tip */
+            is_tip: boolean;
+            /** Missing History */
+            missing_history: components["schemas"]["ReviewMissingHistory"][];
+            /** Needs Attention */
+            needs_attention: components["schemas"]["ReviewNeedsAttention"][];
+            /** Parent Review Version Id */
+            parent_review_version_id?: string | null;
+            /** Prisma Body Hash */
+            prisma_body_hash: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rationale */
+            rationale: string;
+            release?: components["schemas"]["ReviewReleaseLinkResponse"] | null;
+            /** Report Ids */
+            report_ids: string[];
+            /** Required Work */
+            required_work: {
+                [key: string]: string[];
+            };
+            /** Stale Counts */
+            stale_counts?: {
+                [key: string]: number;
+            };
+            /** Strategy Version */
+            strategy_version?: string | null;
+            /** Version Number */
+            version_number: number;
+            /** Work */
+            work: components["schemas"]["ReviewWorkStatus"][];
+        };
+        /**
+         * ReviewWorkStatus
+         * @description Derived on read: the targeted GOO-301/302 queue for one stage.
+         */
+        ReviewWorkStatus: {
+            /** Assigned Reviewer Ids */
+            assigned_reviewer_ids?: string[];
+            /** Queue Id */
+            queue_id?: string | null;
+            /** Required Report Ids */
+            required_report_ids: string[];
+            /**
+             * Resolved Count
+             * @default 0
+             */
+            resolved_count: number;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "none" | "queued" | "queue_missing" | "queue_mismatch" | "waiting_on_title_abstract";
+            /**
+             * Unresolved Count
+             * @default 0
+             */
+            unresolved_count: number;
         };
         /**
          * ReviewerCreate
@@ -22705,6 +23088,37 @@ export interface components {
         TriggerExtractionRequest: {
             /** Document Ids */
             document_ids: string[];
+        };
+        /**
+         * UpdateAccountingResponse
+         * @description PRISMA 2020 for updated reviews: both flows plus the update boxes.
+         *     ``boxes`` is None (and ``error`` set) while the version does not
+         *     reconcile, e.g. its new work is unresolved.
+         */
+        UpdateAccountingResponse: {
+            /** Boxes */
+            boxes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Error */
+            error?: string | null;
+            /** Flow */
+            flow: {
+                [key: string]: unknown;
+            };
+            /** Flow Matches Frozen Hash */
+            flow_matches_frozen_hash: boolean;
+            /** Parent Flow */
+            parent_flow?: {
+                [key: string]: unknown;
+            } | null;
+            /** Parent Review Version Id */
+            parent_review_version_id?: string | null;
+            /**
+             * Review Version Id
+             * Format: uuid
+             */
+            review_version_id: string;
         };
         /**
          * UpdateEntityRequest
@@ -36666,6 +37080,251 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_versions_api_v1_research_engine_projects__project_id__review_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_version_api_v1_research_engine_projects__project_id__review_versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Replayed version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionResponse"];
+                };
+            };
+            /** @description Unknown parent version or execution */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale tip, delta changed or out of order, unresolved parent work, or a root already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ineligible reviewer or invalid uncertainty carry */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_accounting_api_v1_research_engine_projects__project_id__review_versions__version_id__accounting_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateAccountingResponse"];
+                };
+            };
+            /** @description Update accounting does not reconcile */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_version_api_v1_research_engine_projects__project_id__review_versions__version_id__export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sealed nous.academic.review-version.v1 export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionExport"];
+                };
+            };
+            /** @description Unknown or foreign version */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_release_api_v1_research_engine_projects__project_id__review_versions__version_id__release_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewReleaseLinkCreate"];
+            };
+        };
+        responses: {
+            /** @description Replayed link */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewReleaseLinkResponse"];
+                };
+            };
+            /** @description Not verified, too old, or wrong superseded release */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ensure_work_api_v1_research_engine_projects__project_id__review_versions__version_id__work_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionResponse"];
                 };
             };
             /** @description Validation Error */
