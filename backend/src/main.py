@@ -91,6 +91,7 @@ from src.api.research_engine import (
     research_engine_journey_router,
     research_engine_projects_router,
     research_engine_protocols_router,
+    research_engine_reruns_router,
     research_engine_reviews_router,
     research_engine_runs_router,
     research_engine_screening_router,
@@ -706,6 +707,9 @@ app.include_router(
 app.include_router(
     research_engine_experiments_router, prefix="/api/v1"
 )  # Research Engine run manifests, artifacts and figures (GOO-312)
+app.include_router(
+    research_engine_reruns_router, prefix="/api/v1"
+)  # Research Engine fresh reruns from run manifests (GOO-313)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search

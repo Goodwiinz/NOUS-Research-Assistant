@@ -17441,6 +17441,402 @@
         "title": "ReportSuggestion",
         "type": "object"
       },
+      "RerunAttemptResponse": {
+        "description": "``queued``/``running``/``interrupted`` without ``finished_at`` are\nderived (no terminal row yet); every other status is a terminal row.\n``reproduction`` exists iff ``status == \"executed\"``.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "comparison": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RerunComparisonRow"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comparison"
+          },
+          "comparison_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comparison Hash"
+          },
+          "environment_validation": {
+            "additionalProperties": true,
+            "title": "Environment Validation",
+            "type": "object"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "input_validation": {
+            "additionalProperties": true,
+            "title": "Input Validation",
+            "type": "object"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/RerunOutputResponse"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "reproduction": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reproduced",
+                  "not_reproduced"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reproduction"
+          },
+          "sandbox_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sandbox Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "restoration_failed",
+              "environment_unavailable",
+              "execution_failed",
+              "cancelled",
+              "interrupted",
+              "executed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          }
+        },
+        "required": [
+          "attempt",
+          "status"
+        ],
+        "title": "RerunAttemptResponse",
+        "type": "object"
+      },
+      "RerunComparisonRow": {
+        "properties": {
+          "actual_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Sha256"
+          },
+          "equal": {
+            "title": "Equal",
+            "type": "boolean"
+          },
+          "expected_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Sha256"
+          },
+          "mode": {
+            "enum": [
+              "bytes",
+              "json_numeric"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "numeric": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Numeric"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "name",
+          "mode",
+          "equal"
+        ],
+        "title": "RerunComparisonRow",
+        "type": "object"
+      },
+      "RerunCreate": {
+        "additionalProperties": false,
+        "description": "``rule`` is a ``nous.rerun-rule/1`` naming every manifest output once;\nomitted, byte equality for every output. It is hashed before enqueue.",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "RerunCreate",
+        "type": "object"
+      },
+      "RerunEligibilityResponse": {
+        "properties": {
+          "default_rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Rule"
+          },
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "eligible",
+          "reasons"
+        ],
+        "title": "RerunEligibilityResponse",
+        "type": "object"
+      },
+      "RerunListResponse": {
+        "properties": {
+          "reruns": {
+            "items": {
+              "$ref": "#/components/schemas/RerunResponse"
+            },
+            "title": "Reruns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reruns"
+        ],
+        "title": "RerunListResponse",
+        "type": "object"
+      },
+      "RerunOutputResponse": {
+        "description": "A retained rerun output; its bytes stream through the output route.",
+        "properties": {
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sha256",
+          "byte_size"
+        ],
+        "title": "RerunOutputResponse",
+        "type": "object"
+      },
+      "RerunResponse": {
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/RerunAttemptResponse"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "manifest_hash": {
+            "title": "Manifest Hash",
+            "type": "string"
+          },
+          "manifest_id": {
+            "format": "uuid",
+            "title": "Manifest Id",
+            "type": "string"
+          },
+          "requested_by_id": {
+            "format": "uuid",
+            "title": "Requested By Id",
+            "type": "string"
+          },
+          "rule": {
+            "additionalProperties": true,
+            "title": "Rule",
+            "type": "object"
+          },
+          "rule_hash": {
+            "title": "Rule Hash",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "run_id",
+          "manifest_id",
+          "manifest_hash",
+          "rule",
+          "rule_hash",
+          "requested_by_id",
+          "created_at",
+          "attempts"
+        ],
+        "title": "RerunResponse",
+        "type": "object"
+      },
       "ResearchProjectRole": {
         "enum": [
           "reviewer",
@@ -48273,6 +48669,257 @@
         ]
       }
     },
+    "/api/v1/research-engine/reruns/{rerun_id}": {
+      "get": {
+        "operationId": "get_rerun_route_api_v1_research_engine_reruns__rerun_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rerun_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Rerun Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Rerun Route",
+        "tags": [
+          "research-engine-reruns"
+        ]
+      }
+    },
+    "/api/v1/research-engine/reruns/{rerun_id}/attempts/{attempt}/outputs/{name}": {
+      "get": {
+        "operationId": "download_rerun_output_route_api_v1_research_engine_reruns__rerun_id__attempts__attempt__outputs__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rerun_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Rerun Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attempt",
+            "required": true,
+            "schema": {
+              "title": "Attempt",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Rerun Output Route",
+        "tags": [
+          "research-engine-reruns"
+        ]
+      }
+    },
+    "/api/v1/research-engine/reruns/{rerun_id}/cancel": {
+      "post": {
+        "operationId": "cancel_rerun_route_api_v1_research_engine_reruns__rerun_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rerun_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Rerun Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Rerun Route",
+        "tags": [
+          "research-engine-reruns"
+        ]
+      }
+    },
+    "/api/v1/research-engine/reruns/{rerun_id}/comparison": {
+      "get": {
+        "operationId": "download_rerun_comparison_route_api_v1_research_engine_reruns__rerun_id__comparison_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rerun_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Rerun Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Rerun Comparison Route",
+        "tags": [
+          "research-engine-reruns"
+        ]
+      }
+    },
+    "/api/v1/research-engine/reruns/{rerun_id}/retry": {
+      "post": {
+        "description": "Any request body is ignored: attempt n+1 reuses the stored rule.",
+        "operationId": "retry_rerun_route_api_v1_research_engine_reruns__rerun_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rerun_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Rerun Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retry Rerun Route",
+        "tags": [
+          "research-engine-reruns"
+        ]
+      }
+    },
     "/api/v1/research-engine/runs/{run_id}": {
       "get": {
         "description": "Get run status.",
@@ -48617,6 +49264,161 @@
         "summary": "Pause Run",
         "tags": [
           "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/runs/{run_id}/rerun-eligibility": {
+      "get": {
+        "operationId": "rerun_eligibility_route_api_v1_research_engine_runs__run_id__rerun_eligibility_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerunEligibilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rerun Eligibility Route",
+        "tags": [
+          "research-engine-reruns"
+        ]
+      }
+    },
+    "/api/v1/research-engine/runs/{run_id}/reruns": {
+      "get": {
+        "operationId": "list_reruns_route_api_v1_research_engine_runs__run_id__reruns_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Reruns Route",
+        "tags": [
+          "research-engine-reruns"
+        ]
+      },
+      "post": {
+        "operationId": "admit_rerun_route_api_v1_research_engine_runs__run_id__reruns_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerunCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Not eligible; the body lists every reason"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admit Rerun Route",
+        "tags": [
+          "research-engine-reruns"
         ]
       }
     },

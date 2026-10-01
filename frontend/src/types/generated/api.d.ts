@@ -7182,6 +7182,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/reruns/{rerun_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Rerun Route */
+        get: operations["get_rerun_route_api_v1_research_engine_reruns__rerun_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/reruns/{rerun_id}/attempts/{attempt}/outputs/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Rerun Output Route */
+        get: operations["download_rerun_output_route_api_v1_research_engine_reruns__rerun_id__attempts__attempt__outputs__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/reruns/{rerun_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Rerun Route */
+        post: operations["cancel_rerun_route_api_v1_research_engine_reruns__rerun_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/reruns/{rerun_id}/comparison": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Rerun Comparison Route */
+        get: operations["download_rerun_comparison_route_api_v1_research_engine_reruns__rerun_id__comparison_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/reruns/{rerun_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Rerun Route
+         * @description Any request body is ignored: attempt n+1 reuses the stored rule.
+         */
+        post: operations["retry_rerun_route_api_v1_research_engine_reruns__rerun_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -7307,6 +7395,41 @@ export interface paths {
          * @description Pause a running run.
          */
         post: operations["pause_run_api_v1_research_engine_runs__run_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/runs/{run_id}/rerun-eligibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rerun Eligibility Route */
+        get: operations["rerun_eligibility_route_api_v1_research_engine_runs__run_id__rerun_eligibility_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/runs/{run_id}/reruns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reruns Route */
+        get: operations["list_reruns_route_api_v1_research_engine_runs__run_id__reruns_get"];
+        put?: never;
+        /** Admit Rerun Route */
+        post: operations["admit_rerun_route_api_v1_research_engine_runs__run_id__reruns_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17502,6 +17625,155 @@ export interface components {
              * Format: uuid
              */
             report_id: string;
+        };
+        /**
+         * RerunAttemptResponse
+         * @description ``queued``/``running``/``interrupted`` without ``finished_at`` are
+         *     derived (no terminal row yet); every other status is a terminal row.
+         *     ``reproduction`` exists iff ``status == "executed"``.
+         */
+        RerunAttemptResponse: {
+            /** Attempt */
+            attempt: number;
+            /** Comparison */
+            comparison?: components["schemas"]["RerunComparisonRow"][] | null;
+            /** Comparison Hash */
+            comparison_hash?: string | null;
+            /** Environment Validation */
+            environment_validation?: {
+                [key: string]: unknown;
+            };
+            /** Finished At */
+            finished_at?: string | null;
+            /** Input Validation */
+            input_validation?: {
+                [key: string]: unknown;
+            };
+            /** Lease Expires At */
+            lease_expires_at?: string | null;
+            /** Outputs */
+            outputs?: components["schemas"]["RerunOutputResponse"][];
+            /** Reasons */
+            reasons?: string[];
+            /** Reproduction */
+            reproduction?: ("reproduced" | "not_reproduced") | null;
+            /** Sandbox Id */
+            sandbox_id?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "restoration_failed" | "environment_unavailable" | "execution_failed" | "cancelled" | "interrupted" | "executed";
+            /** Template Id */
+            template_id?: string | null;
+        };
+        /** RerunComparisonRow */
+        RerunComparisonRow: {
+            /** Actual Sha256 */
+            actual_sha256?: string | null;
+            /** Equal */
+            equal: boolean;
+            /** Expected Sha256 */
+            expected_sha256?: string | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "bytes" | "json_numeric";
+            /** Name */
+            name: string;
+            /** Numeric */
+            numeric?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * RerunCreate
+         * @description ``rule`` is a ``nous.rerun-rule/1`` naming every manifest output once;
+         *     omitted, byte equality for every output. It is hashed before enqueue.
+         */
+        RerunCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Rule */
+            rule?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** RerunEligibilityResponse */
+        RerunEligibilityResponse: {
+            /** Default Rule */
+            default_rule?: {
+                [key: string]: unknown;
+            } | null;
+            /** Eligible */
+            eligible: boolean;
+            /** Reasons */
+            reasons: string[];
+        };
+        /** RerunListResponse */
+        RerunListResponse: {
+            /** Reruns */
+            reruns: components["schemas"]["RerunResponse"][];
+        };
+        /**
+         * RerunOutputResponse
+         * @description A retained rerun output; its bytes stream through the output route.
+         */
+        RerunOutputResponse: {
+            /** Byte Size */
+            byte_size: number;
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+        };
+        /** RerunResponse */
+        RerunResponse: {
+            /** Attempts */
+            attempts: components["schemas"]["RerunAttemptResponse"][];
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Manifest Hash */
+            manifest_hash: string;
+            /**
+             * Manifest Id
+             * Format: uuid
+             */
+            manifest_id: string;
+            /**
+             * Requested By Id
+             * Format: uuid
+             */
+            requested_by_id: string;
+            /** Rule */
+            rule: {
+                [key: string]: unknown;
+            };
+            /** Rule Hash */
+            rule_hash: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
         };
         /**
          * ResearchProjectRole
@@ -34112,6 +34384,163 @@ export interface operations {
             };
         };
     };
+    get_rerun_route_api_v1_research_engine_reruns__rerun_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rerun_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_rerun_output_route_api_v1_research_engine_reruns__rerun_id__attempts__attempt__outputs__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rerun_id: string;
+                attempt: number;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_rerun_route_api_v1_research_engine_reruns__rerun_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rerun_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_rerun_comparison_route_api_v1_research_engine_reruns__rerun_id__comparison_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rerun_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_rerun_route_api_v1_research_engine_reruns__rerun_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rerun_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_run_api_v1_research_engine_runs__run_id__get: {
         parameters: {
             query?: never;
@@ -34320,6 +34749,110 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RunResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rerun_eligibility_route_api_v1_research_engine_runs__run_id__rerun_eligibility_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerunEligibilityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_reruns_route_api_v1_research_engine_runs__run_id__reruns_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerunListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admit_rerun_route_api_v1_research_engine_runs__run_id__reruns_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RerunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerunResponse"];
+                };
+            };
+            /** @description Not eligible; the body lists every reason */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
