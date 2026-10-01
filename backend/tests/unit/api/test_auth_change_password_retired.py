@@ -44,30 +44,28 @@ def test_openapi_schema_has_no_change_password_path() -> None:
     assert "PasswordChange" not in app.openapi()["components"]["schemas"]
 
 
-def test_posting_to_change_password_returns_404() -> None:
+def test_posting_to_change_password_returns_404(test_app, test_auth_headers) -> None:
     """End-to-end proof: the path is unrouted, not merely unlisted."""
     from contextlib import asynccontextmanager
     from typing import Any, AsyncIterator
 
     from fastapi.testclient import TestClient
 
-    from src.main import app
-
     @asynccontextmanager
     async def _no_lifespan(_app: Any) -> AsyncIterator[None]:
         # pragma: no cover - trivial shim
         yield
 
-    original_lifespan = app.router.lifespan_context
-    app.router.lifespan_context = _no_lifespan
+    original_lifespan = test_app.router.lifespan_context
+    test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(app) as client:
+        with TestClient(test_app, headers=test_auth_headers) as client:
             response = client.post(
                 "/api/v1/auth/change-password",
                 json={"current_password": "a", "new_password": "b"},
             )
     finally:
-        app.router.lifespan_context = original_lifespan
+        test_app.router.lifespan_context = original_lifespan
 
     assert response.status_code == 404
 

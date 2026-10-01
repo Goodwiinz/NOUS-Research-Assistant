@@ -16,7 +16,13 @@ from src.models.evidence import StanceEnum
 from src.services.evidence.consensus_calculator import ConsensusCalculator
 
 KINDS = ("factual", "interpretation")
-LINK_KINDS = ("extraction", "source_span", "legacy_unanchored")
+LINK_KINDS = (
+    "extraction",
+    "source_span",
+    "legacy_unanchored",
+    "synthesis_result",
+    "figure",  # GOO-312
+)
 LINK_STATUSES = ("linked", "withdrawn")
 OBSERVED_STANCES = tuple(s.value for s in StanceEnum)
 STANCES = OBSERVED_STANCES + ("unresolved",)
@@ -24,6 +30,8 @@ STANCES = OBSERVED_STANCES + ("unresolved",)
 UNCITED_STANCES = frozenset({"unresolved", "not_addressed"})
 TEXT_MISMATCH = "Text does not match the draft passage"
 _SPAN = ("start_char", "end_char", "quote")
+_SYNTHESIS = "synthesis_result_id"
+_FIGURE = "figure_id"
 _calculator = ConsensusCalculator()
 
 
@@ -59,6 +67,8 @@ def check_link_shape(
     quote: str | None,
     status: str,
     supersedes_link_id: UUID | None,
+    synthesis_result_id: UUID | None = None,
+    figure_id: UUID | None = None,
 ) -> None:
     """Mirror of the ``research_claim_evidence_links`` CHECKs."""
     cols: dict[str, Any] = {
@@ -70,6 +80,8 @@ def check_link_shape(
         "start_char": start_char,
         "end_char": end_char,
         "quote": quote,
+        "synthesis_result_id": synthesis_result_id,
+        "figure_id": figure_id,
     }
     if status not in LINK_STATUSES:
         raise ValueError("Link status must be linked or withdrawn")
@@ -77,13 +89,29 @@ def check_link_shape(
         raise ValueError("A withdrawal must supersede a link")
     if kind == "extraction":
         required: tuple[str, ...] = ("accepted_value_id", "document_id", "source_hash")
-        forbidden: tuple[str, ...] = ("draft_citation_id", *_SPAN)
+        forbidden: tuple[str, ...] = (
+            "draft_citation_id",
+            *_SPAN,
+            _SYNTHESIS,
+            _FIGURE,
+        )
     elif kind == "source_span":
         required = ("document_id", "source_hash", "text_sha256", *_SPAN)
-        forbidden = ("accepted_value_id", "draft_citation_id")
+        forbidden = ("accepted_value_id", "draft_citation_id", _SYNTHESIS, _FIGURE)
     elif kind == "legacy_unanchored":
         required = ("draft_citation_id",)
-        forbidden = ("accepted_value_id", "source_hash", "text_sha256", *_SPAN)
+        forbidden = (
+            "accepted_value_id",
+            "source_hash",
+            "text_sha256",
+            *_SPAN,
+            _SYNTHESIS,
+            _FIGURE,
+        )
+    elif kind in ("synthesis_result", "figure"):
+        target = _SYNTHESIS if kind == "synthesis_result" else _FIGURE
+        required = (target,)
+        forbidden = tuple(name for name in cols if name != target)
     else:
         raise ValueError(f"Link kind must be one of {', '.join(LINK_KINDS)}")
     missing = [name for name in required if cols[name] is None]

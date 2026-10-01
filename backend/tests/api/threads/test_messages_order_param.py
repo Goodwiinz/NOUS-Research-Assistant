@@ -141,7 +141,9 @@ async def test_before_id_does_not_skip_equal_timestamp_rows(
     ]
 
 
-def test_route_accepts_order_query_param_and_forwards(test_app, monkeypatch):
+def test_route_accepts_order_query_param_and_forwards(
+    test_app, test_auth_headers, monkeypatch
+):
     """The route accepts ``?order=desc`` (no 422) and forwards it to the service."""
     received: dict = {}
 
@@ -174,7 +176,7 @@ def test_route_accepts_order_query_param_and_forwards(test_app, monkeypatch):
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app) as client:
+        with TestClient(test_app, headers=test_auth_headers) as client:
             tid = uuid4()
             resp = client.get(
                 f"/api/v2/threads/{tid}/messages",
@@ -189,7 +191,7 @@ def test_route_accepts_order_query_param_and_forwards(test_app, monkeypatch):
     assert received["order"] == "desc"
 
 
-def test_route_defaults_order_to_asc(test_app, monkeypatch):
+def test_route_defaults_order_to_asc(test_app, test_auth_headers, monkeypatch):
     """Omitting ``order`` forwards ``asc`` to the service (backward compatible)."""
     received: dict = {}
 
@@ -222,7 +224,7 @@ def test_route_defaults_order_to_asc(test_app, monkeypatch):
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app) as client:
+        with TestClient(test_app, headers=test_auth_headers) as client:
             tid = uuid4()
             resp = client.get(f"/api/v2/threads/{tid}/messages")
             assert resp.status_code == 200, resp.text
