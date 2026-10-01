@@ -1693,3 +1693,50 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider evals/academic-writing
 | Guard (line) | Mutation | Observed mutant failure |
 |---|---|---|
 | `model_only` rule in `_factual_code` (`release_rules.py:169`) | `return "model_only" if ...` replaced with `return None if ...` (a model stance counts as accepted) | `[dev-unsupported-number]` fails with `assert [] == [('model_only', ...)]`: the seeded unsupported number would promote. The other three conditions still block. |
+
+## GOO-308 plan-to-write journey, audit bundle and collector — 2026-09-30
+
+PostgreSQL proof: `backend/tests/integration/test_audit_bundle_postgres.py`.
+It ran against local PostgreSQL 14 on GOO-301's `screening_factory` schema,
+whose chain still ends at `d7f9b1c3e5a8` (connection URL from the environment;
+value omitted).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy.
+
+`filecmp` against the copy and `git diff --quiet` on the mutated file both
+succeeded for every mutant, on committed files. Every suite passed again
+afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/journey.py`
+  `8cf5f6c09a49d77250ec1a1b0d62f5ff47edee106bb0b4c7a03a0acba75d0f8f`
+- `backend/src/services/research_engine/corpus_export.py`
+  `740d1c3a8a9e4e3e5c2434c86d40b9d6c9e951403bd90e9a73b191ccaf84ce84`
+- `backend/src/services/research_engine/audit_bundle.py`
+  `a0317391e22f3acb591639423da3a7c78798c84932cc26ca51425f4bc67586f4`
+- `frontend/src/components/research/DraftClaimsPanel.tsx`
+  `660467d0842e1e24090f07bfce1cb774e2060bcacce4c97db312cfd97efbc5d9`
+- `evals/academic-journey-v1/collect.py`
+  `8e299f145056200e0283c9816625abf9c0d0a066041dbd1828c6d60565a390a3`
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_audit_bundle_postgres.py   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_audit_bundle.py -k tampered   # from backend/
+pnpm --dir frontend exec vitest run src/components/research/__tests__/DraftClaimsPanel.test.tsx -t "code points"
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider evals/academic-journey-v1/tests -k <tampered|refuses>
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` in `begin_read_snapshot` (`journey.py:215`) | replaced with `pass` | The PG proof fails at step 2, earlier than the plan predicted (step 7): `RuntimeError: load PRISMA inputs outside a writing transaction`. Without the caller's snapshot, GOO-299's `replay_decisions` (called by the corpus part) takes a `FOR SHARE` row lock. That lock assigns a transaction id, so `load_inputs` refuses to open its own snapshot, and no bundle is produced at all. |
+| Resolutions-only Select count (`journey.py:345`) | `resolved_reports` counts `screening_observations` for the live queues instead of resolution tips | Step 8's blind-review assertion fails: R's journey JSON differs after R2's unrevealed submission on a report R has not screened. |
+| GOO-300's restricted `raw` strip, reached through the bundle (`corpus_export.py:485`) | `"raw": record.raw if allowed else None` replaced with `"raw": record.raw` | Step 4 fails with `AssertionError: corpus.json`: `RESTRICTED-7f3a` appears in `corpus.json`. |
+| `SHA256SUMS` comparison in `verify_bundle` (`audit_bundle.py:410`) | `return {}` inserted before the loop | `test_verify_bundle_rejects_tampered_member` fails: `DID NOT RAISE BundleError`. |
+| UTF-16 to code-point conversion (`DraftClaimsPanel.tsx:202`) | `start_char: codePoints(content, start)` replaced with `start_char: start` | `selection offsets are code points` fails: the posted `start_char` is 9, where 8 was expected (the leading "📊" is two UTF-16 units). |
+| Collector `SHA256SUMS` recomputation (`collect.py:89`) | the comparison replaced with `if False:` | `test_tampered_bundle_member_rejected` fails because the message changes to `bundle member claims.json does not match the manifest`. The tampered bundle is still refused, by the manifest's own `sha256` check and then by the body hash. The plan predicted acceptance, but these are defence in depth, and the test pins the `SHA256SUMS` check specifically. |
+| Collector refusal on missing evidence (`collect.py:409`) | the `is_file()` check replaced with `if False:` | Both `test_refuses_trial_without_bundle_or_trace` cases fail. The missing bundle surfaces as an unhandled `FileNotFoundError`. The missing trace is refused later, with a different message (`cannot read retained artifact`). No report is written in either case, but the declared refusal no longer names the missing evidence. |

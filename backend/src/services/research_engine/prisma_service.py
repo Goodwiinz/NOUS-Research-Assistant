@@ -52,6 +52,9 @@ async def _begin_snapshot(db: AsyncSession) -> None:
     if db.get_bind().dialect.name != "postgresql":
         return  # ponytail: SQLite unit tests share one connection, no torn reads
     if db.in_transaction():
+        level = (await db.execute(text("SHOW transaction_isolation"))).scalar_one()
+        if level == "repeatable read":
+            return  # the caller's snapshot (GOO-308 journey and audit bundle)
         wrote = (
             await db.execute(text("SELECT txid_current_if_assigned()"))
         ).scalar_one_or_none()

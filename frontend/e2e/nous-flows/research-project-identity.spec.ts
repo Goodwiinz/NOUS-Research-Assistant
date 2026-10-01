@@ -138,6 +138,21 @@ async function installMockedApi(
           settings: {},
         },
       });
+    } else if (path === `/research-engine/projects/${COLLECTION_ID}/journey`) {
+      // GOO-308: the rail reads one canonical-id journey.
+      await route.fulfill({
+        json: {
+          stages: ['plan', 'discover', 'select', 'extract', 'write'].map(
+            (key) => ({
+              key,
+              status: 'not_started',
+              facts: {},
+              blockers: [],
+            })
+          ),
+          current: 'plan',
+        },
+      });
     } else if (path === `/research-engine/projects/${COLLECTION_ID}`) {
       await route.fulfill({
         json: {
@@ -362,6 +377,19 @@ async function installMockedApi(
       await route.fulfill({ json: [] });
     } else if (path.includes('/extraction-matrices')) {
       await route.fulfill({ json: { matrices: [], total: 0 } });
+    } else if (path === `/research-engine/runs/${RUN_ID}/steps`) {
+      await route.fulfill({ json: [] });
+    } else if (path === '/research-engine/capabilities') {
+      await route.fulfill({ json: [] });
+    } else if (path.startsWith(`/research-engine/projects/${COLLECTION_ID}/`)) {
+      // GOO-299..303 project lists (reports, imports, queues, full text,
+      // conflicts) are arrays; the envelope below crashed their panels.
+      // Non-list reads (PRISMA, coverage) answer 404: their cards show it.
+      if (request.method() === 'GET' && !path.endsWith('/prisma')) {
+        await route.fulfill({ json: [] });
+      } else {
+        await route.fulfill({ status: 404, json: { detail: 'Not found' } });
+      }
     } else {
       await route.fulfill({ json: { items: [], total: 0 } });
     }
@@ -399,6 +427,12 @@ test('one canonical card retains collection identity across research surfaces', 
     page.getByRole('textbox', { name: 'Blueprint name' })
   ).toHaveValue('Seeded evidence workflow');
   await expect(page.getByText('Approved version 1')).toBeVisible();
+  const rail = page.getByRole('list', { name: 'Research journey' });
+  await expect(rail.getByRole('listitem')).toHaveCount(5);
+  await expect(rail.getByText('Not started')).toHaveCount(5);
+  expect(seenProjectScopedPaths).toContain(
+    `/research-engine/projects/${COLLECTION_ID}/journey`
+  );
   await page.getByRole('button', { name: /Start run/i }).click();
   await expect.poll(api.getRunRequest).toEqual({
     protocol_version_id: PROTOCOL_VERSION_ID,
