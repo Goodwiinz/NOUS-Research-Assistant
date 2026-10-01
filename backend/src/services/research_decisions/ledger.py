@@ -5,7 +5,8 @@ Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
 ``research_evidence``, ``research_synthesis``, ``research_experiment``,
 ``research_reproduction``, ``research_peer_review``, ``research_manuscript``,
-``research_statements``, ``research_deposit``, ``research_search_update``)
+``research_statements``, ``research_deposit``, ``research_search_update``,
+``research_review_update``)
 registers its subject type, payload vocabulary, value validation and replay
 transition rules in ``_FAMILIES``.
 
@@ -735,6 +736,32 @@ _SEARCH_UPDATE_CLASSES = frozenset(
 )
 _STRATEGY_VERSION_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SCHEDULED_LOCAL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
+# GOO-320: superseding review versions, one stream per Collection. A
+# supervisor freezes each version (rationale required) and links each to one
+# GOO-315 release that supersedes the parent version's release.
+_REVIEW_UPDATE_AGGREGATE = "research_review_update"
+_REVIEW_UPDATE_SUBJECT = "review_version"
+_REVIEW_UPDATE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("review_update.versioned", 1): frozenset(
+        {
+            "collection_id",
+            "review_version_id",
+            "parent_review_version_id",
+            "version_number",
+            "accepted_execution_id",
+            "delta_hash",
+            "protocol_version_id",
+            "carried_count",
+            "required_work_counts",
+            "needs_attention_count",
+            "content_hash",
+        }
+    ),
+    ("review_update.release_linked", 1): frozenset(
+        {"collection_id", "review_version_id", "release_id", "supersedes_release_id"}
+    ),
+}
+_REVIEW_STAGES = frozenset({"title_abstract", "full_text"})
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
     "extraction.accepted",
     "claim.assessed",
@@ -743,6 +770,7 @@ _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
     "evidence.certainty_assessed",
     "deposit.approved",
     "deposit.revoked",
+    "review_update.versioned",
 }
 
 
@@ -3315,6 +3343,105 @@ def _validate_search_update_transitions(
         last_executed[schedule] = str(payload["execution_id"])
 
 
+def _validate_review_update_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if (
+        _validated_payload_uuid(payload["review_version_id"], "review_version_id")
+        != subject_id
+    ):
+        raise DecisionValidationError("review event subject is not its version")
+    if event_type == "review_update.release_linked":
+        _validated_payload_uuid(payload["release_id"], "release_id")
+        _validated_optional_uuid(
+            payload["supersedes_release_id"], "supersedes_release_id"
+        )
+        return
+    parent = _validated_optional_uuid(
+        payload["parent_review_version_id"], "parent_review_version_id"
+    )
+    execution = _validated_optional_uuid(
+        payload["accepted_execution_id"], "accepted_execution_id"
+    )
+    if payload["delta_hash"] is not None:
+        _validated_sha256(payload["delta_hash"], "delta_hash")
+    number = payload["version_number"]
+    if not _is_int(number) or number < 1:
+        raise DecisionValidationError("version_number must be a positive integer")
+    if not (
+        (parent is None)
+        == (execution is None)
+        == (payload["delta_hash"] is None)
+        == (number == 1)
+    ):
+        raise DecisionValidationError("only the root version has no parent or delta")
+    _validated_payload_uuid(payload["protocol_version_id"], "protocol_version_id")
+    _validated_sha256(payload["content_hash"], "content_hash")
+    for field in ("carried_count", "needs_attention_count"):
+        if not _is_int(payload[field]) or payload[field] < 0:
+            raise DecisionValidationError(f"{field} must be a non-negative integer")
+    counts = payload["required_work_counts"]
+    if (
+        not isinstance(counts, dict)
+        or set(counts) != _REVIEW_STAGES
+        or not all(_is_int(v) and v >= 0 for v in counts.values())
+    ):
+        raise DecisionValidationError("required_work_counts must give every stage")
+
+
+def _validate_review_update_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Versions form one linear chain with contiguous numbers, each accepted
+    execution appears once, and a release link names a recorded version and
+    supersedes exactly the release linked to that version's parent."""
+    tip: tuple[str, int] | None = None
+    parents: dict[str, str | None] = {}
+    executions: set[str] = set()
+    linked: dict[str, str] = {}
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.actor_role != "supervisor":
+            raise DecisionReplayError("review versions are a supervisor's")
+        version = str(payload["review_version_id"])
+        if event.event_type == "review_update.versioned":
+            parent = payload["parent_review_version_id"]
+            parent = None if parent is None else str(parent)
+            expected = (None, 1) if tip is None else (tip[0], tip[1] + 1)
+            if version in parents or (parent, payload["version_number"]) != expected:
+                raise DecisionReplayError("review version does not extend the tip")
+            execution = payload["accepted_execution_id"]
+            if execution is not None:
+                if str(execution) in executions:
+                    raise DecisionReplayError("delta already accepted by a version")
+                executions.add(str(execution))
+            parents[version] = parent
+            tip = (version, int(payload["version_number"]))
+            continue
+        if version not in parents:
+            raise DecisionReplayError("release link names no recorded version")
+        if version in linked:
+            raise DecisionReplayError("review version already has a release")
+        superseded = payload["supersedes_release_id"]
+        parent = parents[version]
+        expected_release = None if parent is None else linked.get(parent)
+        if (None if superseded is None else str(superseded)) != expected_release:
+            raise DecisionReplayError(
+                "release link does not supersede the parent's release"
+            )
+        linked[version] = str(payload["release_id"])
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -3460,6 +3587,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_SEARCH_UPDATE_PAYLOAD_KEYS,
         validate_payload=_validate_search_update_payload,
         validate_transitions=_validate_search_update_transitions,
+        requires_subject_version=False,
+    ),
+    _REVIEW_UPDATE_AGGREGATE: _Family(
+        subject_type=_REVIEW_UPDATE_SUBJECT,
+        payload_keys=_REVIEW_UPDATE_PAYLOAD_KEYS,
+        validate_payload=_validate_review_update_payload,
+        validate_transitions=_validate_review_update_transitions,
         requires_subject_version=False,
     ),
 }
