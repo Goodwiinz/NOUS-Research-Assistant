@@ -3,9 +3,9 @@
 Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
-``research_evidence``, ``research_synthesis``) registers its subject type,
-payload vocabulary, value validation and replay transition rules in
-``_FAMILIES``.
+``research_evidence``, ``research_synthesis``, ``research_experiment``)
+registers its subject type, payload vocabulary, value validation and replay
+transition rules in ``_FAMILIES``.
 
 Idempotency is scoped to one aggregate stream. Protocol approval derives one
 stable subkey per emitted event (for example ``<request>:superseded`` and
@@ -317,6 +317,10 @@ _CLAIMS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
 _CLAIMS_PAYLOAD_KEYS[("claim.linked", 2)] = _CLAIMS_PAYLOAD_KEYS[
     ("claim.linked", 1)
 ] | {"synthesis_result_id"}
+# GOO-312: v3 adds the ``figure`` link target; v1 and v2 keep replaying.
+_CLAIMS_PAYLOAD_KEYS[("claim.linked", 3)] = _CLAIMS_PAYLOAD_KEYS[
+    ("claim.linked", 2)
+] | {"figure_id"}
 # GOO-307: verified draft releases, one stream per Collection so promotion
 # and cross-draft invalidation share one total order. A promotion's subject is
 # its release; a staling's subject is the Collection.
@@ -329,6 +333,7 @@ _RELEASE_CAUSE_FAMILIES = frozenset(
         "research_claims",
         "research_release",
         "research_synthesis",  # GOO-311: a successor synthesis result
+        "research_experiment",  # GOO-312: a successor figure
     }
 )
 _RELEASE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
@@ -455,6 +460,36 @@ _SYNTHESIS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
             "result_hash",
             "included_units",
             "excluded",
+        }
+    ),
+}
+# GOO-312: run manifests and figure records, one stream per Collection. The
+# subject of each event is the manifest or figure row it inserted.
+_EXPERIMENT_AGGREGATE = "research_experiment"
+_EXPERIMENT_SUBJECT = "experiment"
+_EXPERIMENT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("run.manifest_recorded", 1): frozenset(
+        {
+            "collection_id",
+            "run_id",
+            "manifest_id",
+            "manifest_hash",
+            "completeness",
+            "missing",
+            "status",
+            "output_artifact_ids",
+        }
+    ),
+    ("figure.registered", 1): frozenset(
+        {
+            "collection_id",
+            "figure_id",
+            "figure_key",
+            "kind",
+            "output_artifact_id",
+            "run_id",
+            "manifest_id",
+            "supersedes_figure_id",
         }
     ),
 }
@@ -1079,6 +1114,9 @@ def _validate_claims_payload(
                 supersedes_link_id=supersedes,
                 synthesis_result_id=_validated_optional_uuid(
                     payload.get("synthesis_result_id"), "synthesis_result_id"
+                ),
+                figure_id=_validated_optional_uuid(
+                    payload.get("figure_id"), "figure_id"
                 ),
             )
         except ValueError as error:
@@ -2065,7 +2103,7 @@ def _validate_claims_transitions(
             row = live(link)
             if (
                 row is None
-                or row["kind"] in ("legacy_unanchored", "synthesis_result")
+                or row["kind"] in ("legacy_unanchored", "synthesis_result", "figure")
                 or version_claim[link_version[link]] != claim
             ):
                 raise DecisionReplayError("stance observation needs a live link")
@@ -2317,6 +2355,98 @@ def _validate_synthesis_transitions(
         tips[key] = (result, str(payload["input_hash"]))
 
 
+def _validate_experiment_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    _validated_payload_uuid(payload["run_id"], "run_id")
+    manifest = _validated_payload_uuid(payload["manifest_id"], "manifest_id")
+    if event_type == "run.manifest_recorded":
+        if manifest != subject_id:
+            raise DecisionValidationError("manifest event subject is not its manifest")
+        _validated_sha256(payload["manifest_hash"], "manifest_hash")
+        if payload["completeness"] not in ("complete", "incomplete"):
+            raise DecisionValidationError("manifest completeness is invalid")
+        missing = payload["missing"]
+        if not isinstance(missing, list) or not all(
+            isinstance(m, str) and m for m in missing
+        ):
+            raise DecisionValidationError("manifest missing must list paths")
+        if (payload["completeness"] == "complete") != (not missing):
+            raise DecisionValidationError("manifest completeness disagrees")
+        if not isinstance(payload["status"], str) or not payload["status"]:
+            raise DecisionValidationError("manifest status is invalid")
+        ids = _validated_uuid_list(
+            payload["output_artifact_ids"], "output_artifact_ids"
+        )
+        if len(set(ids)) != len(ids):
+            raise DecisionValidationError("output_artifact_ids must be unique")
+        return
+    figure = _validated_payload_uuid(payload["figure_id"], "figure_id")
+    if figure != subject_id:
+        raise DecisionValidationError("figure event subject is not its figure")
+    if figure == _validated_optional_uuid(
+        payload["supersedes_figure_id"], "supersedes_figure_id"
+    ):
+        raise DecisionValidationError("figure cannot supersede itself")
+    key = payload["figure_key"]
+    if not isinstance(key, str) or not key or len(key) > 64:
+        raise DecisionValidationError("figure_key is invalid")
+    if payload["kind"] not in ("figure", "table"):
+        raise DecisionValidationError("figure kind is invalid")
+    _validated_payload_uuid(payload["output_artifact_id"], "output_artifact_id")
+
+
+def _validate_experiment_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """The machine records at most one manifest per run; an editor registers
+    a figure on an output of a manifest recorded earlier in the stream, and
+    each figure_key has one chain whose successors name its tip."""
+    manifests: dict[str, tuple[str, set[str]]] = {}  # manifest -> (run, outputs)
+    runs: set[str] = set()
+    tips: dict[str, str] = {}  # figure_key -> tip figure id
+    figures: set[str] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        run, manifest = str(payload["run_id"]), str(payload["manifest_id"])
+        if event.event_type == "run.manifest_recorded":
+            if event.actor_role != "machine":
+                raise DecisionReplayError("run manifest requires the machine")
+            if run in runs or manifest in manifests:
+                raise DecisionReplayError("run already has a manifest")
+            runs.add(run)
+            manifests[manifest] = (
+                run,
+                {str(v) for v in payload["output_artifact_ids"]},
+            )
+            continue
+        if event.actor_role != "editor":
+            raise DecisionReplayError("figure registration requires an editor")
+        recorded = manifests.get(manifest)
+        if recorded is None or recorded[0] != run:
+            raise DecisionReplayError("figure names no prior manifest")
+        if str(payload["output_artifact_id"]) not in recorded[1]:
+            raise DecisionReplayError("figure output is not in its manifest")
+        key = str(payload["figure_key"])
+        if payload["supersedes_figure_id"] != tips.get(key):
+            raise DecisionReplayError("figure supersedes a non-tip")
+        figure = str(payload["figure_id"])
+        if figure in figures:
+            raise DecisionReplayError("figure id reused")
+        figures.add(figure)
+        tips[key] = figure
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -2413,6 +2543,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_SYNTHESIS_PAYLOAD_KEYS,
         validate_payload=_validate_synthesis_payload,
         validate_transitions=_validate_synthesis_transitions,
+        requires_subject_version=False,
+    ),
+    _EXPERIMENT_AGGREGATE: _Family(
+        subject_type=_EXPERIMENT_SUBJECT,
+        payload_keys=_EXPERIMENT_PAYLOAD_KEYS,
+        validate_payload=_validate_experiment_payload,
+        validate_transitions=_validate_experiment_transitions,
         requires_subject_version=False,
     ),
 }

@@ -14,6 +14,7 @@ from src.services.research_decisions.ledger import (
     _validate_claims_transitions,
     _validate_event,
     _validate_evidence_transitions,
+    _validate_experiment_transitions,
     _validate_extraction_transitions,
     _validate_identity_transitions,
     _validate_release_transitions,
@@ -2638,3 +2639,176 @@ def test_release_staled_accepts_synthesis_cause() -> None:
     payload["cause"] = {**payload["cause"], "family": "research_nonsense"}
     with pytest.raises(DecisionValidationError, match="cause"):
         r.validate("release.staled", payload, r.collection_id)
+
+
+# --- GOO-312: research_experiment and claim.linked v3 -------------------------
+
+
+class _Experiment:
+    """Hand-built events for one Collection's research_experiment stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+
+    def manifest(
+        self, run: UUID, manifest: UUID, outputs: list[UUID]
+    ) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "run_id": str(run),
+            "manifest_id": str(manifest),
+            "manifest_hash": "a" * 64,
+            "completeness": "complete",
+            "missing": [],
+            "status": "completed",
+            "output_artifact_ids": [str(o) for o in outputs],
+        }
+
+    def figure(
+        self,
+        figure: UUID,
+        run: UUID,
+        manifest: UUID,
+        output: UUID,
+        supersedes: UUID | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "figure_id": str(figure),
+            "figure_key": "fig-1",
+            "kind": "figure",
+            "output_artifact_id": str(output),
+            "run_id": str(run),
+            "manifest_id": str(manifest),
+            "supersedes_figure_id": None if supersedes is None else str(supersedes),
+        }
+
+    def validate(self, event_type: str, payload: dict[str, Any]) -> None:
+        subject = payload["manifest_id" if "missing" in payload else "figure_id"]
+        _validate_event(
+            aggregate_type="research_experiment",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="experiment",
+            subject_id=UUID(subject),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="d" * 64,
+        )
+
+    def replay(self, *events: tuple[str, str, dict[str, Any]]) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_experiment_transitions(stored, self.collection_id)
+
+
+def test_experiment_payloads_validate() -> None:
+    e = _Experiment()
+    run, manifest, output = uuid4(), uuid4(), uuid4()
+    recorded = e.manifest(run, manifest, [output])
+    e.validate("run.manifest_recorded", recorded)
+    e.validate("figure.registered", e.figure(uuid4(), run, manifest, output))
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        e.validate("run.manifest_recorded", {**recorded, "storage_key": "k"})
+    with pytest.raises(DecisionValidationError, match="disagrees"):
+        e.validate("run.manifest_recorded", {**recorded, "missing": ["seed"]})
+    with pytest.raises(DecisionValidationError, match="kind"):
+        e.validate(
+            "figure.registered",
+            {**e.figure(uuid4(), run, manifest, output), "kind": "chart"},
+        )
+
+
+def test_experiment_replay_rejects_second_manifest_for_run() -> None:
+    e = _Experiment()
+    run = uuid4()
+    first = ("run.manifest_recorded", "machine", e.manifest(run, uuid4(), []))
+    e.replay(first)
+    with pytest.raises(DecisionReplayError, match="already has a manifest"):
+        e.replay(
+            first, ("run.manifest_recorded", "machine", e.manifest(run, uuid4(), []))
+        )
+    with pytest.raises(DecisionReplayError, match="machine"):
+        e.replay(("run.manifest_recorded", "editor", e.manifest(run, uuid4(), [])))
+
+
+def test_figure_replay_requires_prior_manifest() -> None:
+    e = _Experiment()
+    run, manifest, output, fig = uuid4(), uuid4(), uuid4(), uuid4()
+    recorded = ("run.manifest_recorded", "machine", e.manifest(run, manifest, [output]))
+    registered = (
+        "figure.registered",
+        "editor",
+        e.figure(fig, run, manifest, output),
+    )
+    successor = e.figure(uuid4(), run, manifest, output, supersedes=fig)
+    e.replay(recorded, registered, ("figure.registered", "editor", successor))
+    with pytest.raises(DecisionReplayError, match="no prior manifest"):
+        e.replay(registered, recorded)
+    with pytest.raises(DecisionReplayError, match="not in its manifest"):
+        e.replay(
+            recorded,
+            ("figure.registered", "editor", e.figure(fig, run, manifest, uuid4())),
+        )
+    with pytest.raises(DecisionReplayError, match="non-tip"):
+        e.replay(
+            recorded,
+            registered,
+            ("figure.registered", "editor", e.figure(uuid4(), run, manifest, output)),
+        )
+    with pytest.raises(DecisionReplayError, match="editor"):
+        e.replay(recorded, ("figure.registered", "machine", registered[2]))
+
+
+def test_claim_linked_v3_requires_figure_id_for_figure_kind() -> None:
+    c = _Claims()
+    version, link = uuid4(), uuid4()
+
+    def validate_v3(payload: dict[str, Any]) -> None:
+        _validate_event(
+            aggregate_type="research_claims",
+            aggregate_id=c.collection_id,
+            event_type="claim.linked",
+            event_schema_version=3,
+            subject_type="research_claim",
+            subject_id=c.claim,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+        )
+
+    figure = {
+        **c.linked(version, link, "legacy_unanchored"),
+        "draft_citation_id": None,
+        "document_id": None,
+        "kind": "figure",
+        "synthesis_result_id": None,
+        "figure_id": str(uuid4()),
+    }
+    validate_v3(figure)
+    validate_v3(
+        {**c.linked(version, link), "synthesis_result_id": None, "figure_id": None}
+    )
+    with pytest.raises(DecisionValidationError, match="claim link"):
+        validate_v3({**figure, "figure_id": None})
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        validate_v3({**c.linked(version, link), "synthesis_result_id": None})
+    # A figure link is live for assessment but carries no model stance.
+    versioned = ("claim.versioned", "editor", c.versioned(version))
+    c.replay(
+        versioned,
+        ("claim.linked", "editor", figure),
+        ("claim.assessed", "adjudicator", c.assessed(version, uuid4(), [link])),
+    )
+    with pytest.raises(DecisionReplayError, match="live link"):
+        c.replay(
+            versioned,
+            ("claim.linked", "editor", figure),
+            ("claim.observed", "machine", c.observed(link, uuid4())),
+        )

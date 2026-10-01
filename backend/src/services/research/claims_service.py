@@ -96,6 +96,7 @@ SPAN_MISMATCH = "Span does not match the source"
 CITATION_OTHER_DRAFT = "Citation belongs to another draft version"
 LEGACY_UNASSESSABLE = "Legacy links cannot be assessed"
 SYNTHESIS_NO_STANCE = "Synthesis links carry no model stance"
+FIGURE_NO_STANCE = "Figure links carry no model stance"
 NO_STANCE = (
     "No stance classification for this claim and source revision; "
     "run the evidence meter"
@@ -106,6 +107,7 @@ _REQUEST_FIELDS = {
     "source_span": ("document_id", "start_char", "end_char", "quote"),
     "legacy_unanchored": ("draft_citation_id",),
     "synthesis_result": ("synthesis_result_id",),
+    "figure": ("figure_id",),
 }
 _TARGET_FIELDS = (
     "accepted_value_id",
@@ -115,6 +117,7 @@ _TARGET_FIELDS = (
     "quote",
     "draft_citation_id",
     "synthesis_result_id",
+    "figure_id",
 )
 # The meter's classifier fingerprint (``api/evidence/router._classifier_version``).
 _classifier = StanceClassifier()
@@ -668,6 +671,17 @@ async def _synthesis_target(
     return {"synthesis_result_id": row.id}
 
 
+async def _figure_target(
+    db: AsyncSession, context: ProjectContext, figure_id: UUID
+) -> dict[str, Any]:
+    """GOO-312: only an unsuperseded, non-stale figure of this Collection."""
+    # Local import: experiment_service reaches this module through the graph.
+    from src.services.research_engine import experiment_service
+
+    row = await experiment_service.current_figure(db, _cid(context), figure_id)
+    return {"figure_id": row.id}
+
+
 async def link(
     db: AsyncSession,
     context: ProjectContext,
@@ -714,6 +728,9 @@ async def link(
     elif kind == "synthesis_result":
         assert data.synthesis_result_id is not None
         target = await _synthesis_target(db, context, data.synthesis_result_id)
+    elif kind == "figure":
+        assert data.figure_id is not None
+        target = await _figure_target(db, context, data.figure_id)
     else:
         assert data.draft_citation_id is not None
         target = await _legacy_target(db, version, data.draft_citation_id)
@@ -763,10 +780,11 @@ async def link(
             "end_char": row.end_char,
             "quote_sha256": anchors.text_sha256(columns["quote"]),
             "synthesis_result_id": _str(row.synthesis_result_id),
+            "figure_id": _str(row.figure_id),
         },
         key=key,
         fingerprint=fingerprint,
-        schema_version=2,  # GOO-311: v2 carries synthesis_result_id
+        schema_version=3,  # GOO-312: v3 adds figure_id to v2's synthesis_result_id
     )
     if data.supersedes_link_id is not None:  # re-pointed or withdrawn
         await _invalidate(
@@ -810,6 +828,8 @@ async def _live_link(
         raise HTTPException(status_code=409, detail=LEGACY_UNASSESSABLE)
     if row.kind == "synthesis_result":
         raise HTTPException(status_code=422, detail=SYNTHESIS_NO_STANCE)
+    if row.kind == "figure":
+        raise HTTPException(status_code=422, detail=FIGURE_NO_STANCE)
     superseded = (
         await db.execute(
             select(ResearchClaimEvidenceLink.id).where(
@@ -1041,7 +1061,8 @@ async def _source_changed(db: AsyncSession, row: Any) -> bool:
     """GOO-305's derive-on-read rule for one link."""
     # ponytail: a synthesis link has no source of its own; a changed input
     # shows as the result's ``stale`` flag and stales the release (GOO-311).
-    if row.kind in ("legacy_unanchored", "synthesis_result"):
+    # A figure link likewise stales through its run's inputs (GOO-312).
+    if row.kind in ("legacy_unanchored", "synthesis_result", "figure"):
         return False
     document: Any = await db.get(Document, row.document_id)
     current = anchors.text_sha256(None if document is None else document.content_text)

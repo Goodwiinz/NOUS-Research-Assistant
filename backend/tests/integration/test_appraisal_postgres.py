@@ -386,6 +386,8 @@ _APPRAISAL_MIGRATION = "e2a4c6b8d0f1_create_appraisal_assessments.py"
 _EVIDENCE_MIGRATION = "f4b6d8a0c2e3_create_evidence_certainty.py"
 # GOO-311's synthesis results reference GOO-310's tables and use the function.
 _SYNTHESIS_MIGRATION = "a6c8e0b2d4f5_create_synthesis_results.py"
+# GOO-312's manifest, artifact and figure triggers use the function too.
+_MANIFEST_MIGRATION = "b8e0c2d4f6a7_create_run_manifests.py"
 
 
 def _migration(connection: Connection, direction: str, filename: str) -> None:
@@ -398,15 +400,18 @@ def _migration(connection: Connection, direction: str, filename: str) -> None:
 
 
 async def _run_migration(factory: Factory, direction: str) -> None:
-    order = [_SYNTHESIS_MIGRATION, _EVIDENCE_MIGRATION, _APPRAISAL_MIGRATION]
+    order = [
+        _MANIFEST_MIGRATION,
+        _SYNTHESIS_MIGRATION,
+        _EVIDENCE_MIGRATION,
+        _APPRAISAL_MIGRATION,
+    ]
     if direction == "upgrade":
         order.reverse()
     async with factory() as db:
         connection = await db.connection()
         for filename in order:
-            await connection.run_sync(
-                lambda sync, name=filename: _migration(sync, direction, name)
-            )
+            await connection.run_sync(_migration, direction, filename)
         await db.commit()
 
 

@@ -60,6 +60,13 @@ import type {
   ApiSynthesisResult,
   ApiSynthesisRoles,
 } from '@/types/api/research-synthesis-contract';
+import type {
+  ApiFigure,
+  ApiFigureCreate,
+  ApiFigureLineage,
+  ApiFigureList,
+  ApiRunManifestV2,
+} from '@/types/api/research-experiment-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -639,3 +646,46 @@ export const executeSynthesis = (
 /** Every result with its inputs; the numbers recompute offline. */
 export const exportSynthesis = (projectId: string): Promise<void> =>
   api.download(`/research-engine/projects/${projectId}/synthesis/export`);
+
+// --- Run manifests and figures (GOO-312) -------------------------------------
+
+export type {
+  ApiFigure as Figure,
+  ApiFigureCreate as FigureCreate,
+  ApiFigureLineage as FigureLineage,
+  ApiFigureList as FigureList,
+  ApiRunArtifact as RunArtifact,
+  ApiRunManifestV2 as RunManifestV2,
+} from '@/types/api/research-experiment-contract';
+
+/** The v2 manifest, or the legacy view (``schema`` names which). */
+export const getManifestV2 = (runId: string): Promise<ApiRunManifestV2> =>
+  api.get<ApiRunManifestV2>(`${BASE}/runs/${runId}/manifest/v2`);
+
+/** Exactly the hashed manifest bytes; the server names the file. */
+export const downloadManifestV2 = (runId: string): Promise<void> =>
+  api.download(`/research-engine/runs/${runId}/manifest/v2/download`);
+
+/** One retained run file, streamed with its sha256. */
+export const downloadRunArtifact = (
+  runId: string,
+  artifactId: string
+): Promise<void> =>
+  api.download(`/research-engine/runs/${runId}/artifacts/${artifactId}`);
+
+const figures = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/figures`;
+
+export const listFigures = (projectId: string): Promise<ApiFigureList> =>
+  api.get<ApiFigureList>(figures(projectId));
+
+export const registerFigure = (
+  projectId: string,
+  data: ApiFigureCreate
+): Promise<ApiFigure> => api.post<ApiFigure>(figures(projectId), data);
+
+export const getFigureLineage = (
+  projectId: string,
+  figureId: string
+): Promise<ApiFigureLineage> =>
+  api.get<ApiFigureLineage>(`${figures(projectId)}/${figureId}/lineage`);

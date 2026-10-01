@@ -73,6 +73,7 @@ ANCHORS_MIGRATION = MIGRATION.with_name("b8d0f2a4c6e9_add_extraction_source_anch
 CLAIMS_MIGRATION = MIGRATION.with_name("c4e6a8b0d2f5_create_research_claims.py")
 EVIDENCE_MIGRATION = MIGRATION.with_name("f4b6d8a0c2e3_create_evidence_certainty.py")
 SYNTHESIS_MIGRATION = MIGRATION.with_name("a6c8e0b2d4f5_create_synthesis_results.py")
+MANIFEST_MIGRATION = MIGRATION.with_name("b8e0c2d4f6a7_create_run_manifests.py")
 
 
 class _LLM:
@@ -100,22 +101,24 @@ async def _migration(factory: Factory, *steps: str) -> None:
     """Run a3c5e7f9b1d4's steps. Its upgrade also re-applies the GOO-305
     anchor columns (b8d0f2a4c6e9), which the ORM models now carry; the GOO-306
     claim tables (c4e6a8b0d2f5), GOO-310's evidence tables (f4b6d8a0c2e3) and
-    GOO-311's synthesis results (a6c8e0b2d4f5) reference it, so they come off
-    first and go back on last."""
+    GOO-311's synthesis results (a6c8e0b2d4f5) reference it, and GOO-312's
+    figure link (b8e0c2d4f6a7) widens the claim links, so they come off first
+    and go back on last."""
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
 
     module, anchors = _module(MIGRATION), _module(ANCHORS_MIGRATION)
     claims, evidence = _module(CLAIMS_MIGRATION), _module(EVIDENCE_MIGRATION)
-    synthesis = _module(SYNTHESIS_MIGRATION)
+    synthesis, manifests = _module(SYNTHESIS_MIGRATION), _module(MANIFEST_MIGRATION)
     async with factory() as db:
 
         def run(sync_connection: Any) -> None:
-            module.op = anchors.op = claims.op = evidence.op = synthesis.op = (
-                Operations(MigrationContext.configure(sync_connection))
-            )
+            operations = Operations(MigrationContext.configure(sync_connection))
+            for migration in (module, anchors, claims, evidence, synthesis, manifests):
+                migration.op = operations
             for step in steps:
                 if step == "downgrade":
+                    manifests.downgrade()
                     synthesis.downgrade()
                     evidence.downgrade()
                     claims.downgrade()
@@ -125,6 +128,7 @@ async def _migration(factory: Factory, *steps: str) -> None:
                     claims.upgrade()
                     evidence.upgrade()
                     synthesis.upgrade()
+                    manifests.upgrade()
 
         await (await db.connection()).run_sync(run)
         await db.commit()

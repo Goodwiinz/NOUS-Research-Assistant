@@ -161,6 +161,35 @@ def test_synthesis_link_shape() -> None:
             rules.check_link_shape(kind, **cols)
 
 
+def test_figure_link_shape() -> None:
+    """GOO-312: a ``figure`` link cites only the figure."""
+    rules.check_link_shape("figure", **_cols(figure_id=uuid4()))
+    doc = uuid4()
+    rejected = [
+        ("figure", _cols()),
+        ("figure", _cols(figure_id=uuid4(), document_id=doc)),
+        ("figure", _cols(figure_id=uuid4(), synthesis_result_id=uuid4())),
+        ("figure", _cols(figure_id=uuid4(), quote="q")),
+        ("synthesis_result", _cols(synthesis_result_id=uuid4(), figure_id=uuid4())),
+        (
+            "source_span",
+            _cols(
+                document_id=doc,
+                source_hash=H1,
+                text_sha256=H2,
+                start_char=0,
+                end_char=4,
+                quote="x",
+                figure_id=uuid4(),
+            ),
+        ),
+        ("legacy_unanchored", _cols(draft_citation_id=uuid4(), figure_id=uuid4())),
+    ]
+    for kind, cols in rejected:
+        with pytest.raises(ValueError):
+            rules.check_link_shape(kind, **cols)
+
+
 def test_assessment_requires_live_links_unless_unresolved() -> None:
     live = [uuid4(), uuid4()]
     rules.check_assessment("supporting", [live[0]], [], live)

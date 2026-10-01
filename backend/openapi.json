@@ -4816,7 +4816,7 @@
         "type": "object"
       },
       "ClaimLinkCreate": {
-        "description": "Link the claim's tip version to evidence, or withdraw/re-point a link.\n\n``extraction`` takes ``accepted_value_id``; ``source_span`` takes\n``document_id``, ``start_char``, ``end_char`` and ``quote``;\n``legacy_unanchored`` takes ``draft_citation_id``; ``synthesis_result``\n(GOO-311) takes ``synthesis_result_id``. The server copies the source\nhashes. A ``withdrawn`` row supersedes a link and copies its target.",
+        "description": "Link the claim's tip version to evidence, or withdraw/re-point a link.\n\n``extraction`` takes ``accepted_value_id``; ``source_span`` takes\n``document_id``, ``start_char``, ``end_char`` and ``quote``;\n``legacy_unanchored`` takes ``draft_citation_id``; ``synthesis_result``\n(GOO-311) takes ``synthesis_result_id``; ``figure`` (GOO-312) takes\n``figure_id``. The server copies the source\nhashes. A ``withdrawn`` row supersedes a link and copies its target.",
         "properties": {
           "accepted_value_id": {
             "anyOf": [
@@ -4871,6 +4871,18 @@
             ],
             "title": "End Char"
           },
+          "figure_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Figure Id"
+          },
           "idempotency_key": {
             "maxLength": 255,
             "minLength": 1,
@@ -4882,7 +4894,8 @@
               "extraction",
               "source_span",
               "legacy_unanchored",
-              "synthesis_result"
+              "synthesis_result",
+              "figure"
             ],
             "title": "Kind",
             "type": "string"
@@ -5018,6 +5031,18 @@
             ],
             "title": "End Char"
           },
+          "figure_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Figure Id"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -5028,7 +5053,8 @@
               "extraction",
               "source_span",
               "legacy_unanchored",
-              "synthesis_result"
+              "synthesis_result",
+              "figure"
             ],
             "title": "Kind",
             "type": "string"
@@ -10628,6 +10654,326 @@
           "items"
         ],
         "title": "ExtractionReviewDecisionPayload",
+        "type": "object"
+      },
+      "FigureCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "caption": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Caption",
+            "type": "string"
+          },
+          "figure_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Figure Key",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "figure",
+              "table"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "output_artifact_id": {
+            "format": "uuid",
+            "title": "Output Artifact Id",
+            "type": "string"
+          },
+          "supersedes_figure_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Figure Id"
+          }
+        },
+        "required": [
+          "figure_key",
+          "kind",
+          "caption",
+          "output_artifact_id",
+          "idempotency_key"
+        ],
+        "title": "FigureCreate",
+        "type": "object"
+      },
+      "FigureLineageResponse": {
+        "description": "output -> run -> code/environment/data -> hypothesis/protocol.",
+        "properties": {
+          "code": {
+            "additionalProperties": true,
+            "title": "Code",
+            "type": "object"
+          },
+          "completeness": {
+            "enum": [
+              "complete",
+              "incomplete"
+            ],
+            "title": "Completeness",
+            "type": "string"
+          },
+          "effective_plan_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Plan Hash"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          },
+          "figure": {
+            "$ref": "#/components/schemas/FigureResponse"
+          },
+          "hypothesis_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hypothesis Sha256"
+          },
+          "inputs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "manifest_hash": {
+            "title": "Manifest Hash",
+            "type": "string"
+          },
+          "manifest_id": {
+            "format": "uuid",
+            "title": "Manifest Id",
+            "type": "string"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "output": {
+            "$ref": "#/components/schemas/RunArtifactResponse"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "protocol_content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Content Hash"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "question_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Version Id"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_status": {
+            "title": "Run Status",
+            "type": "string"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          }
+        },
+        "required": [
+          "figure",
+          "output",
+          "run_id",
+          "run_status",
+          "manifest_id",
+          "manifest_hash",
+          "completeness",
+          "missing",
+          "code",
+          "inputs",
+          "parameters"
+        ],
+        "title": "FigureLineageResponse",
+        "type": "object"
+      },
+      "FigureListResponse": {
+        "properties": {
+          "figures": {
+            "items": {
+              "$ref": "#/components/schemas/FigureResponse"
+            },
+            "title": "Figures",
+            "type": "array"
+          }
+        },
+        "required": [
+          "figures"
+        ],
+        "title": "FigureListResponse",
+        "type": "object"
+      },
+      "FigureResponse": {
+        "properties": {
+          "caption": {
+            "title": "Caption",
+            "type": "string"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "figure_key": {
+            "title": "Figure Key",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "figure",
+              "table"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "manifest_id": {
+            "format": "uuid",
+            "title": "Manifest Id",
+            "type": "string"
+          },
+          "output_artifact_id": {
+            "format": "uuid",
+            "title": "Output Artifact Id",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "superseded": {
+            "default": false,
+            "title": "Superseded",
+            "type": "boolean"
+          },
+          "supersedes_figure_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Figure Id"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "figure_key",
+          "kind",
+          "caption",
+          "output_artifact_id",
+          "run_id",
+          "manifest_id",
+          "created_by_id",
+          "created_at"
+        ],
+        "title": "FigureResponse",
         "type": "object"
       },
       "FileListResponse": {
@@ -18262,6 +18608,52 @@
         "title": "RollbackRequest",
         "type": "object"
       },
+      "RunArtifactResponse": {
+        "description": "A retained run file; its bytes stream through the artifact route.",
+        "properties": {
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "role",
+          "name",
+          "media_type",
+          "sha256",
+          "byte_size"
+        ],
+        "title": "RunArtifactResponse",
+        "type": "object"
+      },
       "RunCreate": {
         "description": "Schema for creating a research run.",
         "properties": {
@@ -18294,6 +18686,72 @@
           }
         },
         "title": "RunCreate",
+        "type": "object"
+      },
+      "RunManifestV2Response": {
+        "description": "A run's ``nous.run-manifest/2`` (or the legacy view when absent).\n``completeness`` is derived from ``missing``; it is never asserted.",
+        "properties": {
+          "completeness": {
+            "enum": [
+              "complete",
+              "incomplete"
+            ],
+            "title": "Completeness",
+            "type": "string"
+          },
+          "legacy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legacy"
+          },
+          "manifest": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest"
+          },
+          "manifest_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Hash"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "schema": {
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "completeness",
+          "missing"
+        ],
+        "title": "RunManifestV2Response",
         "type": "object"
       },
       "RunResponse": {
@@ -21538,7 +21996,8 @@
           "extract",
           "synthesize",
           "verify",
-          "export"
+          "export",
+          "analyze"
         ],
         "title": "StepType",
         "type": "string"
@@ -45027,6 +45486,168 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{project_id}/figures": {
+      "get": {
+        "operationId": "list_figures_route_api_v1_research_engine_projects__project_id__figures_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FigureListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Figures Route",
+        "tags": [
+          "research-engine-experiments"
+        ]
+      },
+      "post": {
+        "operationId": "register_figure_route_api_v1_research_engine_projects__project_id__figures_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FigureCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FigureResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register Figure Route",
+        "tags": [
+          "research-engine-experiments"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/figures/{figure_id}/lineage": {
+      "get": {
+        "operationId": "figure_lineage_route_api_v1_research_engine_projects__project_id__figures__figure_id__lineage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "figure_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Figure Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FigureLineageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Figure Lineage Route",
+        "tags": [
+          "research-engine-experiments"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}/fulltext": {
       "get": {
         "operationId": "list_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_get",
@@ -47701,6 +48322,60 @@
         ]
       }
     },
+    "/api/v1/research-engine/runs/{run_id}/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "download_artifact_route_api_v1_research_engine_runs__run_id__artifacts__artifact_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Artifact Route",
+        "tags": [
+          "research-engine-experiments"
+        ]
+      }
+    },
     "/api/v1/research-engine/runs/{run_id}/export": {
       "get": {
         "description": "Download an owner-scoped artifact for a completed research run.",
@@ -47801,6 +48476,98 @@
         "summary": "Get Manifest",
         "tags": [
           "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/runs/{run_id}/manifest/v2": {
+      "get": {
+        "operationId": "get_manifest_v2_route_api_v1_research_engine_runs__run_id__manifest_v2_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunManifestV2Response"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Manifest V2 Route",
+        "tags": [
+          "research-engine-experiments"
+        ]
+      }
+    },
+    "/api/v1/research-engine/runs/{run_id}/manifest/v2/download": {
+      "get": {
+        "operationId": "download_manifest_v2_route_api_v1_research_engine_runs__run_id__manifest_v2_download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Manifest V2 Route",
+        "tags": [
+          "research-engine-experiments"
         ]
       }
     },

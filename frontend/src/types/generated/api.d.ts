@@ -6521,6 +6521,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/figures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Figures Route */
+        get: operations["list_figures_route_api_v1_research_engine_projects__project_id__figures_get"];
+        put?: never;
+        /** Register Figure Route */
+        post: operations["register_figure_route_api_v1_research_engine_projects__project_id__figures_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/figures/{figure_id}/lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Figure Lineage Route */
+        get: operations["figure_lineage_route_api_v1_research_engine_projects__project_id__figures__figure_id__lineage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/fulltext": {
         parameters: {
             query?: never;
@@ -7167,6 +7202,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/runs/{run_id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Artifact Route */
+        get: operations["download_artifact_route_api_v1_research_engine_runs__run_id__artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/runs/{run_id}/export": {
         parameters: {
             query?: never;
@@ -7199,6 +7251,40 @@ export interface paths {
          * @description Get the current manifest, including durable in-flight search receipts.
          */
         get: operations["get_manifest_api_v1_research_engine_runs__run_id__manifest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/runs/{run_id}/manifest/v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Manifest V2 Route */
+        get: operations["get_manifest_v2_route_api_v1_research_engine_runs__run_id__manifest_v2_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/runs/{run_id}/manifest/v2/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Manifest V2 Route */
+        get: operations["download_manifest_v2_route_api_v1_research_engine_runs__run_id__manifest_v2_download_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11969,7 +12055,8 @@ export interface components {
          *     ``extraction`` takes ``accepted_value_id``; ``source_span`` takes
          *     ``document_id``, ``start_char``, ``end_char`` and ``quote``;
          *     ``legacy_unanchored`` takes ``draft_citation_id``; ``synthesis_result``
-         *     (GOO-311) takes ``synthesis_result_id``. The server copies the source
+         *     (GOO-311) takes ``synthesis_result_id``; ``figure`` (GOO-312) takes
+         *     ``figure_id``. The server copies the source
          *     hashes. A ``withdrawn`` row supersedes a link and copies its target.
          */
         ClaimLinkCreate: {
@@ -11986,13 +12073,15 @@ export interface components {
             draft_citation_id?: string | null;
             /** End Char */
             end_char?: number | null;
+            /** Figure Id */
+            figure_id?: string | null;
             /** Idempotency Key */
             idempotency_key: string;
             /**
              * Kind
              * @enum {string}
              */
-            kind: "extraction" | "source_span" | "legacy_unanchored" | "synthesis_result";
+            kind: "extraction" | "source_span" | "legacy_unanchored" | "synthesis_result" | "figure";
             /** Quote */
             quote?: string | null;
             /** Start Char */
@@ -12033,6 +12122,8 @@ export interface components {
             draft_citation_id?: string | null;
             /** End Char */
             end_char?: number | null;
+            /** Figure Id */
+            figure_id?: string | null;
             /**
              * Id
              * Format: uuid
@@ -12042,7 +12133,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "extraction" | "source_span" | "legacy_unanchored" | "synthesis_result";
+            kind: "extraction" | "source_span" | "legacy_unanchored" | "synthesis_result" | "figure";
             latest_observation?: components["schemas"]["StanceObservationResponse"] | null;
             /** Quote */
             quote?: string | null;
@@ -14451,6 +14542,148 @@ export interface components {
         ExtractionReviewDecisionPayload: {
             /** Items */
             items: components["schemas"]["ExtractionItemDecision"][];
+        };
+        /** FigureCreate */
+        FigureCreate: {
+            /** Caption */
+            caption: string;
+            /** Figure Key */
+            figure_key: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "figure" | "table";
+            /**
+             * Output Artifact Id
+             * Format: uuid
+             */
+            output_artifact_id: string;
+            /** Supersedes Figure Id */
+            supersedes_figure_id?: string | null;
+        };
+        /**
+         * FigureLineageResponse
+         * @description output -> run -> code/environment/data -> hypothesis/protocol.
+         */
+        FigureLineageResponse: {
+            /** Code */
+            code: {
+                [key: string]: unknown;
+            };
+            /**
+             * Completeness
+             * @enum {string}
+             */
+            completeness: "complete" | "incomplete";
+            /** Effective Plan Hash */
+            effective_plan_hash?: string | null;
+            /** Environment */
+            environment?: {
+                [key: string]: unknown;
+            } | null;
+            figure: components["schemas"]["FigureResponse"];
+            /** Hypothesis Sha256 */
+            hypothesis_sha256?: string | null;
+            /** Inputs */
+            inputs: {
+                [key: string]: unknown;
+            }[];
+            /** Manifest Hash */
+            manifest_hash: string;
+            /**
+             * Manifest Id
+             * Format: uuid
+             */
+            manifest_id: string;
+            /** Missing */
+            missing: string[];
+            output: components["schemas"]["RunArtifactResponse"];
+            /** Parameters */
+            parameters: {
+                [key: string]: unknown;
+            };
+            /** Protocol Content Hash */
+            protocol_content_hash?: string | null;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /** Question Version Id */
+            question_version_id?: string | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Run Status */
+            run_status: string;
+            /** Seed */
+            seed?: number | null;
+        };
+        /** FigureListResponse */
+        FigureListResponse: {
+            /** Figures */
+            figures: components["schemas"]["FigureResponse"][];
+        };
+        /** FigureResponse */
+        FigureResponse: {
+            /** Caption */
+            caption: string;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Figure Key */
+            figure_key: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "figure" | "table";
+            /**
+             * Manifest Id
+             * Format: uuid
+             */
+            manifest_id: string;
+            /**
+             * Output Artifact Id
+             * Format: uuid
+             */
+            output_artifact_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /**
+             * Superseded
+             * @default false
+             */
+            superseded: boolean;
+            /** Supersedes Figure Id */
+            supersedes_figure_id?: string | null;
         };
         /** FileListResponse */
         FileListResponse: {
@@ -17805,6 +18038,32 @@ export interface components {
             version_id: string;
         };
         /**
+         * RunArtifactResponse
+         * @description A retained run file; its bytes stream through the artifact route.
+         */
+        RunArtifactResponse: {
+            /** Byte Size */
+            byte_size: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Media Type */
+            media_type: string;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Sha256 */
+            sha256: string;
+        };
+        /**
          * RunCreate
          * @description Schema for creating a research run.
          */
@@ -17816,6 +18075,32 @@ export interface components {
             /** Protocol Version Id */
             protocol_version_id?: string | null;
             scope_confirmation?: components["schemas"]["DailyBriefScopeConfirmation"] | null;
+        };
+        /**
+         * RunManifestV2Response
+         * @description A run's ``nous.run-manifest/2`` (or the legacy view when absent).
+         *     ``completeness`` is derived from ``missing``; it is never asserted.
+         */
+        RunManifestV2Response: {
+            /**
+             * Completeness
+             * @enum {string}
+             */
+            completeness: "complete" | "incomplete";
+            /** Legacy */
+            legacy?: {
+                [key: string]: unknown;
+            } | null;
+            /** Manifest */
+            manifest?: {
+                [key: string]: unknown;
+            } | null;
+            /** Manifest Hash */
+            manifest_hash?: string | null;
+            /** Missing */
+            missing: string[];
+            /** Schema */
+            schema: string;
         };
         /**
          * RunResponse
@@ -19315,7 +19600,7 @@ export interface components {
          * @description Types of steps in a research blueprint.
          * @enum {string}
          */
-        StepType: "search" | "screen" | "extract" | "synthesize" | "verify" | "export";
+        StepType: "search" | "screen" | "extract" | "synthesize" | "verify" | "export" | "analyze";
         /** StreamCancelRequest */
         StreamCancelRequest: {
             /**
@@ -32245,6 +32530,104 @@ export interface operations {
             };
         };
     };
+    list_figures_route_api_v1_research_engine_projects__project_id__figures_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FigureListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_figure_route_api_v1_research_engine_projects__project_id__figures_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FigureCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FigureResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    figure_lineage_route_api_v1_research_engine_projects__project_id__figures__figure_id__lineage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                figure_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FigureLineageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_get: {
         parameters: {
             query?: never;
@@ -33760,6 +34143,38 @@ export interface operations {
             };
         };
     };
+    download_artifact_route_api_v1_research_engine_runs__run_id__artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     export_run_api_v1_research_engine_runs__run_id__export_get: {
         parameters: {
             query?: {
@@ -33794,6 +34209,68 @@ export interface operations {
         };
     };
     get_manifest_api_v1_research_engine_runs__run_id__manifest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_manifest_v2_route_api_v1_research_engine_runs__run_id__manifest_v2_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunManifestV2Response"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_manifest_v2_route_api_v1_research_engine_runs__run_id__manifest_v2_download_get: {
         parameters: {
             query?: never;
             header?: never;

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 ClaimKind = Literal["factual", "interpretation"]
 ClaimLinkKind = Literal[
-    "extraction", "source_span", "legacy_unanchored", "synthesis_result"
+    "extraction", "source_span", "legacy_unanchored", "synthesis_result", "figure"
 ]
 ClaimLinkStatus = Literal["linked", "withdrawn"]
 ClaimStance = Literal["supporting", "opposing", "neutral", "not_addressed"]
@@ -42,7 +42,8 @@ class ClaimLinkCreate(BaseModel):
     ``extraction`` takes ``accepted_value_id``; ``source_span`` takes
     ``document_id``, ``start_char``, ``end_char`` and ``quote``;
     ``legacy_unanchored`` takes ``draft_citation_id``; ``synthesis_result``
-    (GOO-311) takes ``synthesis_result_id``. The server copies the source
+    (GOO-311) takes ``synthesis_result_id``; ``figure`` (GOO-312) takes
+    ``figure_id``. The server copies the source
     hashes. A ``withdrawn`` row supersedes a link and copies its target.
     """
 
@@ -55,6 +56,7 @@ class ClaimLinkCreate(BaseModel):
     quote: Optional[str] = Field(default=None, min_length=1, max_length=2000)
     draft_citation_id: Optional[UUID] = Field(default=None)
     synthesis_result_id: Optional[UUID] = Field(default=None)
+    figure_id: Optional[UUID] = Field(default=None)
     status: ClaimLinkStatus = Field(default="linked")
     supersedes_link_id: Optional[UUID] = Field(default=None)
     idempotency_key: str = Field(..., min_length=1, max_length=255)
@@ -132,6 +134,7 @@ class ClaimLinkResponse(BaseModel):
     end_char: Optional[int] = Field(default=None)
     quote: Optional[str] = Field(default=None)
     synthesis_result_id: Optional[UUID] = Field(default=None)
+    figure_id: Optional[UUID] = Field(default=None)
     status: ClaimLinkStatus
     supersedes_link_id: Optional[UUID] = Field(default=None)
     created_by_id: UUID

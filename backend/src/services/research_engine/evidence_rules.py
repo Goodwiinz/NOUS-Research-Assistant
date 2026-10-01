@@ -149,6 +149,28 @@ def table_hash(
     rows: Sequence[Mapping[str, Any]],
     excluded: Sequence[Mapping[str, Any]],
 ) -> str:
+    return hashlib.sha256(
+        table_bytes(
+            protocol_version_id,
+            form_version_id,
+            outcome_key,
+            timepoint,
+            field_ids,
+            rows,
+            excluded,
+        )
+    ).hexdigest()
+
+
+def table_bytes(
+    protocol_version_id: Any,
+    form_version_id: Any,
+    outcome_key: str,
+    timepoint: str,
+    field_ids: Sequence[Any],
+    rows: Sequence[Mapping[str, Any]],
+    excluded: Sequence[Mapping[str, Any]],
+) -> bytes:
     body = {
         "protocol_version_id": str(protocol_version_id),
         "form_version_id": str(form_version_id),
@@ -158,7 +180,8 @@ def table_hash(
         "rows": list(rows),
         "excluded": list(excluded),
     }
-    return hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+    # GOO-312: these exact bytes are an ``analyze`` step's table input.
+    return _canonical(body).encode("utf-8")
 
 
 def cell_members(rows: Sequence[Mapping[str, Any]], field_id: Any) -> set[str]:

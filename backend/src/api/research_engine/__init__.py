@@ -6,6 +6,7 @@ from .blueprints import router as research_engine_blueprints_router
 from .capabilities import router as research_engine_capabilities_router
 from .corpus import router as research_engine_corpus_router
 from .evidence import router as research_engine_evidence_router
+from .experiments import router as research_engine_experiments_router
 from .identities import router as research_engine_identities_router
 from .journey import router as research_engine_journey_router
 from .projects import router as research_engine_projects_router
@@ -31,5 +32,6 @@ __all__ = [
     "research_engine_appraisals_router",
     "research_engine_evidence_router",
     "research_engine_synthesis_router",
+    "research_engine_experiments_router",
     "research_engine_steps_router",
 ]
