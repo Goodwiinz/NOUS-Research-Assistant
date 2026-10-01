@@ -38,6 +38,7 @@ from src.services.research_engine import (
     appraisal_service,
     corpus_export,
     evidence_service,
+    experiment_service,
     identity_service,
     prisma,
     synthesis_service,
@@ -327,6 +328,15 @@ async def _synthesis(db: AsyncSession, context: ProjectContext) -> list[Part]:
     ]
 
 
+async def _experiments(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-312: every run manifest and figure version (no storage keys)."""
+    body = await experiment_service.export_body(db, context)
+    empty = not body["manifests"] and not body["figures"]
+    return [
+        _sealed_part("experiments.json", experiment_service.EXPORT_SCHEMA, body, empty)
+    ]
+
+
 async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
     """The builders, in a fixed order (looked up at call time). PRISMA reads
     last: without the caller's snapshot, ``load_inputs`` would open its own
@@ -341,6 +351,7 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _appraisal,
         _evidence,
         _synthesis,
+        _experiments,
         _prisma,
     ):
         parts.extend(await build(db, context))

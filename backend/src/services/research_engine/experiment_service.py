@@ -68,10 +68,12 @@ from src.services.research_engine.project_access import (
     ProjectContext,
     project_documents_query,
 )
+from src.services.research_engine.run_lifecycle import _PAUSE_REQUESTED_KEY
 from src.services.research_engine.screening_service import _is_unique_violation
 
 AGGREGATE_TYPE = "research_experiment"
 SUBJECT_TYPE = "experiment"
+EXPORT_SCHEMA = "nous.academic.experiments.v1"
 
 MANIFEST_NOT_FOUND = "Run manifest not found"
 ARTIFACT_NOT_FOUND = "Run artifact not found"
@@ -445,14 +447,20 @@ async def _manifest_row(db: AsyncSession, run_id: Any) -> Any:
     ).scalar_one_or_none()
 
 
-async def manifest_v2(
-    db: AsyncSession, run: Any, legacy: Mapping[str, Any]
-) -> RunManifestV2Response:
-    """VIEW: the stored manifest, or the legacy view (``legacy`` is the
-    unchanged ``GET /runs/{id}/manifest`` body) with nothing synthesized."""
+def legacy_manifest_body(run: Any) -> dict[str, Any]:
+    """Byte-for-byte the ``GET /runs/{id}/manifest`` body."""
+    manifest = dict(run.reproducibility_manifest or {})
+    manifest.pop(_PAUSE_REQUESTED_KEY, None)
+    return {**manifest, "run_status": run.status}
+
+
+async def manifest_v2(db: AsyncSession, run: Any) -> RunManifestV2Response:
+    """VIEW: the stored manifest, or the legacy view (the unchanged
+    ``GET /runs/{id}/manifest`` body) with nothing synthesized."""
     row = await _manifest_row(db, run.id)
     if row is None:
-        return RunManifestV2Response.model_validate(rules.legacy_view(legacy))
+        legacy = rules.legacy_view(legacy_manifest_body(run))
+        return RunManifestV2Response.model_validate(legacy)
     return RunManifestV2Response(
         schema=rules.SCHEMA,
         manifest=row.manifest,
@@ -629,6 +637,34 @@ async def lineage(
         protocol_content_hash=manifest.get("protocol_content_hash"),
         effective_plan_hash=manifest.get("effective_plan_hash"),
     )
+
+
+async def export_body(db: AsyncSession, context: ProjectContext) -> dict[str, Any]:
+    """The audit bundle's ``experiments.json`` body: every manifest (with its
+    hash, completeness and missing list) and every figure version."""
+    collection_id = _cid(context)
+    manifests = await _all(
+        db,
+        select(ResearchRunManifest)
+        .where(ResearchRunManifest.collection_id == collection_id)
+        .order_by(ResearchRunManifest.created_at, ResearchRunManifest.id),
+    )
+    listing = await list_figures(db, context)
+    return {
+        "project_id": str(collection_id),
+        "manifests": [
+            {
+                "manifest_id": str(row.id),
+                "run_id": str(row.run_id),
+                "manifest_hash": row.manifest_hash,
+                "completeness": row.completeness,
+                "missing": list(row.missing),
+                "manifest": row.manifest,
+            }
+            for row in manifests
+        ],
+        "figures": [f.model_dump(mode="json") for f in listing.figures],
+    }
 
 
 # --- Writes ----------------------------------------------------------------------

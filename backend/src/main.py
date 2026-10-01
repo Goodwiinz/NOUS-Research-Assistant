@@ -86,6 +86,7 @@ from src.api.research_engine import (
     research_engine_capabilities_router,
     research_engine_corpus_router,
     research_engine_evidence_router,
+    research_engine_experiments_router,
     research_engine_identities_router,
     research_engine_journey_router,
     research_engine_projects_router,
@@ -702,6 +703,9 @@ app.include_router(
 app.include_router(
     research_engine_synthesis_router, prefix="/api/v1"
 )  # Research Engine quantitative synthesis (GOO-311)
+app.include_router(
+    research_engine_experiments_router, prefix="/api/v1"
+)  # Research Engine run manifests, artifacts and figures (GOO-312)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search
