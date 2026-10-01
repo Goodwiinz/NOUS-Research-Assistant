@@ -1,8 +1,15 @@
-"""GOO-316 statements service units: the ORCID receipt keeps no token, and
-the OAuth state is signed, expiring and bound to the session user."""
+"""GOO-316 statements service units: the ORCID receipt keeps no token, the
+OAuth state is signed, expiring and bound to the session user, and the
+anonymized build's byte scan refuses a leak redaction cannot reach.
+
+Mutation verification (docs/engineering/testing.md), GOO-316 section of
+``docs/testing/agent-orchestration-mutation-checks.md``: skipping
+``scan_leaks`` in ``_anonymized`` fails ``-k leak``."""
 
 import logging
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -85,3 +92,49 @@ def test_oauth_state_is_signed_expiring_and_user_bound() -> None:
     forged = f"{payload}.{'0' * len(signature)}"
     assert not service.verify_state(forged, user, now=1001.0)
     assert not service.verify_state("garbage", user)
+
+
+async def test_anonymized_build_fails_on_a_leak_redaction_cannot_reach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A binary member is copied, never redacted: the post-condition byte
+    scan is what refuses it (``anonymization_leak:<member>``)."""
+    from fastapi import HTTPException
+
+    from src.services.research import manuscript_release_service as mr
+    from src.services.research_engine.audit_bundle import Part
+
+    monkeypatch.setattr(
+        mr.statements_service,
+        "identities",
+        AsyncMock(return_value=["Rosalind Featherstonehaugh"]),
+    )
+    text = b"## Methods\nThanks to Rosalind Featherstonehaugh.\n"
+    binary = b"\xff\xfe\x00Rosalind Featherstonehaugh\x00\xff"
+    meta: dict[str, Any] = {
+        "project_id": str(uuid4()),
+        "generated_at": "2026-10-01T00:00:00+00:00",
+        "deployment_sha": None,
+        "protocol_version_id": None,
+        "stream_heads": {},
+        "schema": "nous.manuscript-release.v1",
+    }
+    context: Any = SimpleNamespace()
+    clean = await mr._anonymized(
+        None,  # type: ignore[arg-type]
+        context,
+        [Part("manuscript.md", None, text, mr._sha(text))],
+        {},
+        meta,
+    )
+    assert b"Featherstonehaugh" not in b"".join(mr._members(clean).values())
+    with pytest.raises(HTTPException) as refused:
+        await mr._anonymized(
+            None,  # type: ignore[arg-type]
+            context,
+            [Part("figures/fig-1.png", None, binary, mr._sha(binary))],
+            {},
+            meta,
+        )
+    assert refused.value.status_code == 422
+    assert refused.value.detail == "anonymization_leak:figures/fig-1.png"

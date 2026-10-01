@@ -2092,3 +2092,68 @@ available), a GOO-311 synthesis link in the proof (the synthesis seed needs a
 full evidence-table chain; the synthesis snapshot and package paths are
 covered only by review), and the live journey (needs a deployed stack at
 `e4c6a8b0d2f3`).
+
+## GOO-316 statements, ORCID identity states, venue profile and anonymization — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_statements_venue_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `f6a8c0d2e4b5`
+(connection URL from the environment; value omitted). The four tables, the
+approval's composite `(statement_set_id, set_hash)` FK and the insert-only
+triggers come from the migration. Every write goes through the real
+`resolve_project` and the real services; package bytes go to a temporary
+`LocalArtifactStorage`. Step 8 (legacy, no statement set) runs first,
+because any later statement set changes the rebuilt snapshot by design.
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty (and the SHA-256 below matches).
+
+The proof (1), venue rules (9), statements service (3), manuscript rules,
+route and boundary tests passed again after every restore. No mutant was
+committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/venue_rules.py`
+  `62600064d86290b33f419695925ecfab3d86a03c4a283546f91d77c11dcb9351`
+- `backend/src/services/research/statements_service.py`
+  `8191cbe62fb51223c333d6f831f4eeb357131daa56ec75659595adb6f1358011`
+- `backend/src/services/research/manuscript_release_service.py`
+  `8c032e3ce77b356e10007527a6e4ce7f4219b4f7375502961d85acd1cdfc12fc`
+- `backend/src/services/research/manuscript_rules.py`
+  `875a73873ddfc93e8798e9a90d1f5d9bfd479694011a73dc4a4826e8ec25a38d`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_venue_rules.py -k orcid   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_statements_service.py -k leak   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_statements_venue_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| ORCID status needs a receipt (`venue_rules.py:322`) | `return "authenticated", None` when no receipt matches (any iD authenticates) | `-k orcid`: 2 failed; `test_orcid_name_match_is_not_authenticated` and `:132` `'authenticated' == 'unauthenticated'` (B, typed iD, shows authenticated). |
+| Token stripping in `record_orcid` (`statements_service.py:803`) | `name_claim=str(dict(token_response))[:255]` (store the whole response) | Proof step 2 (`:591`): `assert 1 == 0`; the access token is found in `orcid_authentications`. |
+| Leak scan post-condition (`manuscript_release_service.py:946`) plus reviewer identities (`statements_service.py:266`) | `leaks: list[str] = []` and the reviewer display names dropped from `identities` | Proof step 5 (`:665`): `('manuscript.md', 'Rosalind Featherstonehaugh')` is in the anonymized bytes. |
+| Leak scan alone (`manuscript_release_service.py:946`) | `leaks: list[str] = []` | `-k leak` (`test_statements_service.py:131`): `DID NOT RAISE HTTPException`; a binary member carrying a reviewer name is packaged. |
+| Venue check bound to the package hash (`manuscript_rules.py:277`) | the `package_sha256` comparison removed (any check of the release/project counts) | Proof step 7 (`:715`): `DID NOT RAISE ObligationsNotMet`; candidate 3 promotes on candidate 2's replayed passing check. |
+| Approval `set_hash` binding (`statements_service.py:193`) | `if True` (approvals of any set count) | Proof step 6 (`:677`): `'pass' == 'fail'`; v1's approvals carry over to the v2-bound candidate. |
+
+Backstop and masking checks (not failing mutants, by design):
+
+- With only the scan skipped, the PostgreSQL proof passes: redaction removes
+  every identity it knows about from text members, so the scan is a
+  post-condition backstop. The focused unit test isolates it with a binary
+  member that redaction cannot reach.
+- With only the reviewer display names dropped from `identities`, the proof
+  fails at step 5 as above: the scan uses the same identity list, so it
+  never compensates for a missing identity source (the proof's own
+  independent string list does).
+
+Not performed: live ORCID OAuth (sandbox or production; needs a registered
+ORCID app and a sandbox account), the venue-profile expert review of the
+ICMJE/CRediT mapping (none is available), and the live journey (needs a
+deployed stack at `f6a8c0d2e4b5`).
