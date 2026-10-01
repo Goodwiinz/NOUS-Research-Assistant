@@ -3898,6 +3898,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/actions/{invocation_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review Action */
+        get: operations["review_action_api_v1_integrations_actions__invocation_id__review_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices": {
         parameters: {
             query?: never;
@@ -10043,8 +10060,53 @@ export interface components {
             /** Approved */
             approved: boolean;
         };
+        /**
+         * ActionReview
+         * @description What the interactive owner sees before deciding: the exact stored target.
+         */
+        ActionReview: {
+            /** Content */
+            content: string;
+            /** Decided At */
+            decided_at?: string | null;
+            /**
+             * Invocation Id
+             * Format: uuid
+             */
+            invocation_id: string;
+            /** Last Error */
+            last_error?: string | null;
+            /** Project Available */
+            project_available: boolean;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Label */
+            project_label: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            result?: components["schemas"]["ToolResult"] | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "awaiting_approval" | "approved" | "executing" | "succeeded" | "failed" | "outcome_unknown";
+            /** Tags */
+            tags: string[];
+            /** Title */
+            title: string;
+            /** Tool Name */
+            tool_name: string;
+        };
         /** ActionStatus */
         ActionStatus: {
+            /** Approval Url */
+            approval_url?: string | null;
             /**
              * Invocation Id
              * Format: uuid
@@ -27426,6 +27488,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_action_api_v1_integrations_actions__invocation_id__review_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invocation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionReview"];
                 };
             };
             /** @description Validation Error */
