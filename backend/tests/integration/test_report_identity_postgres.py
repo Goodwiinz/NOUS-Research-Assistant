@@ -64,6 +64,8 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _IDENTITY_TABLES = (
+    # GOO-309 appraisals reference reports and studies; not rebuilt here.
+    "appraisal_assessments",
     # GOO-303 acquisition, then GOO-301/302 screening tables reference
     # research_reports: drop them first, each before the tables it references.
     "research_fulltext_attempts",

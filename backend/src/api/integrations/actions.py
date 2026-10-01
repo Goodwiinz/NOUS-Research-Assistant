@@ -19,12 +19,18 @@ from src.core.database import get_db
 from src.models.user import User
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolInvocation
-from src.schemas.tool_actions import ActionActor, ActionDecision, ActionStatus
+from src.schemas.tool_actions import (
+    ActionActor,
+    ActionDecision,
+    ActionReview,
+    ActionStatus,
+)
 from src.services.agent.tool_actions import (
     ActionConflict,
     ActionNotFound,
     ToolActionArgumentError,
     decide_action,
+    get_action_for_review,
     get_action_status,
     request_action,
 )
@@ -72,6 +78,18 @@ async def read_action(
 ) -> ActionStatus:
     try:
         return await get_action_status(db, _actor(context), invocation_id)
+    except ActionNotFound as error:
+        raise HTTPException(404, "Action not found") from error
+
+
+@router.get("/{invocation_id}/review", response_model=ActionReview)
+async def review_action(
+    invocation_id: UUID,
+    user: User = Depends(require_interactive_user),
+    db: AsyncSession = Depends(get_db),
+) -> ActionReview:
+    try:
+        return await get_action_for_review(db, user, invocation_id)
     except ActionNotFound as error:
         raise HTTPException(404, "Action not found") from error
 

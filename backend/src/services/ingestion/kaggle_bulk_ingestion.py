@@ -8,12 +8,13 @@ Uses streaming to handle large datasets efficiently.
 import asyncio
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
+
+from src.core.neo4j_auth import get_neo4j_auth
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +101,15 @@ class KaggleBulkIngestionService:
         batch_size: int = 1000,
         max_papers: int = 500000,
     ):
-        self.neo4j_uri = neo4j_uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.neo4j_user = neo4j_user or os.getenv("NEO4J_USER", "neo4j")
-        self.neo4j_password = neo4j_password or os.getenv("NEO4J_PASSWORD", "password")
+        if neo4j_uri and neo4j_user and neo4j_password:
+            self.neo4j_uri = neo4j_uri
+            self.neo4j_user = neo4j_user
+            self.neo4j_password = neo4j_password
+        else:
+            auth = get_neo4j_auth()
+            self.neo4j_uri = neo4j_uri or auth.uri
+            self.neo4j_user = neo4j_user or auth.user
+            self.neo4j_password = neo4j_password or auth.password
         self.batch_size = batch_size
         self.max_papers = max_papers
         self.progress = IngestionProgress()

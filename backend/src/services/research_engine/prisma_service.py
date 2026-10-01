@@ -52,6 +52,9 @@ async def _begin_snapshot(db: AsyncSession) -> None:
     if db.get_bind().dialect.name != "postgresql":
         return  # ponytail: SQLite unit tests share one connection, no torn reads
     if db.in_transaction():
+        level = (await db.execute(text("SHOW transaction_isolation"))).scalar_one()
+        if level == "repeatable read":
+            return  # the caller's snapshot (GOO-308 journey and audit bundle)
         wrote = (
             await db.execute(text("SELECT txid_current_if_assigned()"))
         ).scalar_one_or_none()
@@ -91,7 +94,12 @@ async def load_inputs(db: AsyncSession, context: ProjectContext) -> PrismaInputs
     """Read every PRISMA input for the Collection (VIEW; takes no locks)."""
     cid = cast(UUID, context.collection.id)  # before the snapshot expires it
     await _begin_snapshot(db)
+    return await read_inputs(db, cid)
 
+
+async def read_inputs(db: AsyncSession, cid: UUID) -> PrismaInputs:
+    """``load_inputs`` without opening a snapshot: for a writer that already
+    holds the Collection lock (GOO-315's manuscript release)."""
     records: list[Record] = []
     for source_id, report_id, connector, metadata in (
         await db.execute(

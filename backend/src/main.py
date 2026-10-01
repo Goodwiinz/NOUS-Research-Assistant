@@ -39,6 +39,7 @@ from src.api.arxiv import (
 )
 from src.api.auth import auth_router, cli_auth_router
 from src.api.auth.api_keys import router as api_keys_router
+from src.api.auth_orcid import router as orcid_router
 from src.api.connectors import connectors_router
 from src.api.diagnostics import diagnostics_router
 from src.api.documents import (
@@ -68,29 +69,39 @@ from src.api.research import (
     chat_router,
     citations_router,
     claims_router,
+    deposits_router,
     drafts_router,
     export_router,
     extraction_matrix_router,
+    manuscript_releases_router,
+    peer_review_router,
     pipeline_router,
     project_chat_router,
     project_report_router,
     project_skills_router,
     projects_router,
+    statements_router,
     tone_engine_router,
     writer_router,
 )
 from src.api.research_engine import (
     research_engine_acquisition_router,
+    research_engine_appraisals_router,
     research_engine_blueprints_router,
     research_engine_capabilities_router,
     research_engine_corpus_router,
+    research_engine_evidence_router,
+    research_engine_experiments_router,
     research_engine_identities_router,
+    research_engine_journey_router,
     research_engine_projects_router,
     research_engine_protocols_router,
+    research_engine_reruns_router,
     research_engine_reviews_router,
     research_engine_runs_router,
     research_engine_screening_router,
     research_engine_steps_router,
+    research_engine_synthesis_router,
 )
 from src.api.search import knowledge_graph_router, search_quality_router, search_router
 from src.api.security import compliance_router, encryption_router, rbac_router
@@ -650,6 +661,11 @@ app.include_router(project_skills_router)  # Project skill catalog and staged ap
 app.include_router(project_chat_router)  # Project-Chat integration endpoints
 app.include_router(drafts_router)  # Research Assistant drafts endpoints
 app.include_router(claims_router)  # GOO-306 versioned claims and evidence links
+app.include_router(peer_review_router)  # GOO-314 external peer-review responses
+app.include_router(manuscript_releases_router)  # GOO-315 manuscript releases
+app.include_router(statements_router)  # GOO-316 statement sets and approvals
+app.include_router(deposits_router)  # GOO-318 archive deposits
+app.include_router(orcid_router)  # GOO-316 ORCID /authenticate receipts
 app.include_router(tone_engine_router)  # Scholarly Tone Engine endpoints
 app.include_router(extraction_matrix_router)  # Extraction Matrix endpoints
 app.include_router(writer_router)  # AI Writer endpoints
@@ -690,6 +706,24 @@ app.include_router(
 app.include_router(
     research_engine_acquisition_router, prefix="/api/v1"
 )  # Research Engine full-text acquisition + PRISMA flow (GOO-303)
+app.include_router(
+    research_engine_journey_router, prefix="/api/v1"
+)  # Research Engine plan-to-write journey + audit bundle (GOO-308)
+app.include_router(
+    research_engine_appraisals_router, prefix="/api/v1"
+)  # Research Engine study-design appraisal (GOO-309)
+app.include_router(
+    research_engine_evidence_router, prefix="/api/v1"
+)  # Research Engine evidence tables, contradictions and certainty (GOO-310)
+app.include_router(
+    research_engine_synthesis_router, prefix="/api/v1"
+)  # Research Engine quantitative synthesis (GOO-311)
+app.include_router(
+    research_engine_experiments_router, prefix="/api/v1"
+)  # Research Engine run manifests, artifacts and figures (GOO-312)
+app.include_router(
+    research_engine_reruns_router, prefix="/api/v1"
+)  # Research Engine fresh reruns from run manifests (GOO-313)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search
