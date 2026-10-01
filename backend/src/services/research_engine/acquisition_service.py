@@ -400,7 +400,13 @@ async def retrieved_report_ids(
     )
     if not retrieved:
         return set()
-    merged = dict(
+    merged = await _merged(db, collection_id)
+    finals = {_final_report(merged, report_id) for report_id in retrieved}
+    return finals & set(report_ids)
+
+
+async def _merged(db: AsyncSession, collection_id: UUID) -> dict[UUID, UUID]:
+    return dict(
         (
             await db.execute(
                 select(ResearchReport.id, ResearchReport.merged_into_report_id).where(
@@ -412,11 +418,43 @@ async def retrieved_report_ids(
         .tuples()
         .all()
     )
-    finals = set()
-    for report_id in retrieved:
-        seen = set()
-        while report_id in merged and report_id not in seen:
-            seen.add(report_id)
-            report_id = merged[report_id]
-        finals.add(report_id)
-    return finals & set(report_ids)
+
+
+def _final_report(merged: dict[UUID, UUID], report_id: UUID) -> UUID:
+    """Follow the merge chain to the surviving report (cycle-safe)."""
+    seen = set()
+    while report_id in merged and report_id not in seen:
+        seen.add(report_id)
+        report_id = merged[report_id]
+    return report_id
+
+
+async def document_reports(db: AsyncSession, collection_id: UUID) -> dict[UUID, UUID]:
+    """document_id -> surviving report, for every ``retrieved`` head attempt
+    (GOO-309): only GOO-303's attempt records a document as a report's full
+    text, so any other document has no report and no study."""
+    rows = (
+        (
+            await db.execute(
+                select(
+                    ResearchFulltextAttempt.document_id,
+                    ResearchFulltextRequest.report_id,
+                )
+                .join(
+                    ResearchFulltextRequest,
+                    ResearchFulltextAttempt.request_id == ResearchFulltextRequest.id,
+                )
+                .where(
+                    ResearchFulltextRequest.collection_id == collection_id,
+                    ResearchFulltextAttempt.outcome == "retrieved",
+                    _is_head(),
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    if not rows:
+        return {}
+    merged = await _merged(db, collection_id)
+    return {document: _final_report(merged, report) for document, report in rows}

@@ -118,6 +118,17 @@ async def current_protocol_version_id(
     return str(version_id) if version_id is not None else None
 
 
+def analysis_unit(report: Any) -> str | None:
+    """The unit a result belongs to (GOO-309): ``study:<id>`` for a confirmed
+    study link, ``report:<id>`` for no link, ``None`` while a link is proposed
+    or disputed. Merged reports never reach here (``live_reports`` refuses)."""
+    if report.study_id is None:
+        return f"report:{report.id}"
+    if report.study_link_status == "confirmed":
+        return f"study:{report.study_id}"
+    return None
+
+
 def _require_role(context: ProjectContext, role: ResearchProjectRole) -> None:
     if role not in context.effective_roles:
         raise HTTPException(status_code=403, detail=f"{role.value} role required")
