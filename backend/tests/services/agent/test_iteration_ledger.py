@@ -254,3 +254,58 @@ def test_config_initial_query_is_redacted(ledger_dir: Path):
 
     config = json.loads((ledger_dir / "thread-cfg" / "config.json").read_text())
     assert "bob@example.com" not in config["initial_query"]
+
+
+@pytest.mark.unit
+def test_ledger_redacts_plan_page_context_and_errors(ledger_dir: Path):
+    """R8-C7: the R7-L4 redaction covered messages and tool executions only.
+
+    ``plan``, ``page_context``, ``last_error``/``last_error_info`` and the
+    reflection issues were written raw to iterations/, config.json and
+    final.json. The project id stays raw: ``project_report.py`` filters
+    final.json on it, and redact_pii would rewrite it to ``<uuid>``.
+    """
+    from src.services.agent.iteration_ledger import write_iteration
+
+    project_id = "6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab"
+    state = _state_with_one_turn()
+    state["current_project_id"] = project_id
+    state["plan"] = [
+        {"step": 1, "tool": "send_mail", "args_hint": "mail carol@example.com"}
+    ]
+    state["page_context"] = {
+        "type": "project",
+        "project_id": project_id,
+        "metadata": {"selection": "ping dave@example.com"},
+    }
+    state["last_error"] = "SMTP rejected erin@example.com"
+    state["last_error_info"] = {
+        "category": "tool_error",
+        "message": "bounce for erin@example.com",
+    }
+    state["_reflection_result"] = {
+        "passed": False,
+        "issues": ["cites frank@example.com"],
+        "severity": "low",
+    }
+    doc_id = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+    state["retrieved_contexts"] = [
+        {"document_id": doc_id, "title": "CV of gina@example.com", "score": 0.9}
+    ]
+
+    path = write_iteration("thread-c7", state)
+    assert path is not None
+    thread_dir = ledger_dir / "thread-c7"
+    for written in (path, thread_dir / "config.json", thread_dir / "final.json"):
+        assert "@" not in written.read_text(), written.name
+
+    record = json.loads(path.read_text())
+    snapshot = record["state_snapshot"]
+    assert snapshot["plan"][0]["args_hint"] == "mail <email>"
+    assert snapshot["page_context"]["type"] == "project"
+    assert snapshot["current_project_id"] == project_id
+    assert snapshot["retrieved_contexts"][0]["document_id"] == doc_id
+    final = json.loads((thread_dir / "final.json").read_text())
+    assert final["current_project_id"] == project_id
+    config = json.loads((thread_dir / "config.json").read_text())
+    assert config["current_project_id"] == project_id
