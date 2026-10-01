@@ -33,9 +33,14 @@ def _has_current_user_dependency(fn: Callable[..., Any]) -> bool:
 
 
 def test_websocket_v2_status_requires_auth() -> None:
+    """I6 tightened /status to platform operators; that gate itself depends
+    on ``get_current_user``, so authentication is still enforced."""
     from src.api.realtime.websocket_v2 import get_websocket_status
+    from src.core.dependencies import require_platform_operator
 
-    assert _has_current_user_dependency(get_websocket_status)
+    param = inspect.signature(get_websocket_status).parameters["current_user"]
+    assert param.default.dependency is require_platform_operator
+    assert _has_current_user_dependency(require_platform_operator)
 
 
 def test_websocket_v2_channels_requires_auth() -> None:
