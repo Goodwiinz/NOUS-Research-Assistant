@@ -582,7 +582,9 @@ async def export_draft(
                 content = file_data.get("content", "")
                 if not name:
                     continue
-                zip_file.writestr(name, content)
+                # Fixed timestamp: same draft -> byte-identical ZIP (GOO-394/396).
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                zip_file.writestr(info, content, compress_type=zipfile.ZIP_DEFLATED)
 
         zip_buffer.seek(0)
         filename = (result.get("files", [{}])[0].get("filename", "draft.tex")).replace(

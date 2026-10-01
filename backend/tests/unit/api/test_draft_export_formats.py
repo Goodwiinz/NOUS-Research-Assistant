@@ -125,6 +125,10 @@ def test_markdown_and_latex_bytes_unchanged(client: TestClient) -> None:
         assert archive.namelist() == ["Draft_1.tex", "references.bib"]
         assert _sha(archive.read("Draft_1.tex")) == GOLDEN["latex.tex"]
         assert _sha(archive.read("references.bib")) == GOLDEN["latex.bib"]
+        # Byte-stable ZIP (GOO-394): fixed member timestamps, still deflated.
+        for info in archive.infolist():
+            assert info.date_time == (1980, 1, 1, 0, 0, 0)
+            assert info.compress_type == zipfile.ZIP_DEFLATED
 
 
 def test_unknown_format_still_400(client: TestClient) -> None:
