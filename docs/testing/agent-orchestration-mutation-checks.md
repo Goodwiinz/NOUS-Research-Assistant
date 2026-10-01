@@ -2236,11 +2236,11 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
 
 | Guard (line) | Mutation | Observed mutant failure |
 |---|---|---|
-| Lookup before the only remote create (`deposit_service.py:951`) | `found = None` (skip `find_by_operation`) | Proof step 4 (`test_archive_deposit_postgres.py:583`): `AssertionError: a retry created a second deposition`. |
-| Timeout is `unknown` (`deposit_service.py:818`) | `outcome = "failed"` (retryable kept) | Step 4 (`:579`): `assert ('prepared' == 'ambiguous' ...)`; the timed-out create never reads ambiguous. |
+| Lookup before the only remote create (`deposit_service.py:958`) | `found = None` (skip `find_by_operation`) | Proof step 4 (`test_archive_deposit_postgres.py:583`): `AssertionError: a retry created a second deposition`. |
+| Timeout is `unknown` (`deposit_service.py:825`) | `outcome = "failed"` (retryable kept) | Step 4 (`:579`): `assert ('prepared' == 'ambiguous' ...)`; the timed-out create never reads ambiguous. |
 | Published needs remote `submitted` + record id (`deposit_rules.py:50`) | `if False and attempt.phase == "published" ...` (trust our own publish call) | `-k unpublished` (`test_deposit_rules.py:33`): `assert 'published' == 'files_uploaded'`. |
-| Worker approval recheck before every remote call (`deposit_service.py:729`) | `if False and (approval is None ...)` | Step 6 (`:620`): `assert (None == 'approval_invalid')`; the worker went on to publish after the revocation. |
-| Requester is never the approver (`deposit_service.py:595`) | `if False:` | Step 2 (`:538`): `Failed: DID NOT RAISE HTTPException`; S's request on S's own approval was accepted. |
+| Worker approval recheck before every remote call (`deposit_service.py:736`) | `if False and (approval is None ...)` | Step 6 (`:620`): `assert (None == 'approval_invalid')`; the worker went on to publish after the revocation. |
+| Requester is never the approver (`deposit_service.py:602`) | `if False:` | Step 2 (`:538`): `Failed: DID NOT RAISE HTTPException`; S's request on S's own approval was accepted. |
 | Read-back compare (`deposit_rules.py:143`) | `return []` before any comparison | Step 8 (`:671`): `assert ('verified' == 'failed' ...)`; the corrupted md5 verified. |
 | `redact` (`deposit_rules.py:170`) | `return obj` | `-k redact` (`test_deposit_rules.py:150`): token found in the redacted value; step 10 (`:689`): the echoed token found in `archive_deposit_attempts`. |
 | `uq_deposit_live` (`b0e2a4c6d8f9_create_archive_deposits.py:162`) | the `op.create_index("uq_deposit_live", ...)` call replaced by a no-op | Step 3 (`:549`): `assert UUID(...) == UUID(...)`; two concurrent requests created two operations. |
@@ -2252,7 +2252,7 @@ All selectors passed again after each restore. No mutant was committed.
 Pre-mutation SHA-256 of each mutated file:
 
 - `backend/src/services/research/deposit_service.py`
-  `dc8dd0eebab349103b3119477a4018eb6a1171cf2ba98ba84494330abdab2730`
+  `8ac2663c6ef7bc311c3b2e347024288b2cc110f498ad87f7a2d7f248c8582da0`
 - `backend/src/services/research/deposit_rules.py`
   `67cfb1c39f4e82dfa0e3fd3d24e23d590fc07ebd45a4bbf7bf7d944466f91bbb`
 - `backend/alembic/versions/b0e2a4c6d8f9_create_archive_deposits.py`
