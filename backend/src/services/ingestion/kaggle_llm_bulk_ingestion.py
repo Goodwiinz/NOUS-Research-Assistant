@@ -108,8 +108,6 @@ class KaggleLLMBulkIngestionService:
         if self._neo4j_driver is None:
             from neo4j import AsyncGraphDatabase
 
-            from src.core.neo4j_auth import get_neo4j_auth
-
             auth = get_neo4j_auth()
 
             self._neo4j_driver = AsyncGraphDatabase.driver(

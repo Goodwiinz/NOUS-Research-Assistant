@@ -15,6 +15,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.core.dependencies import require_platform_operator
+from src.core.neo4j_auth import get_neo4j_auth
 from src.services.ingestion.kaggle_llm_bulk_ingestion import (
     KaggleLLMBulkIngestionService,
     LLMIngestionProgress,
@@ -34,6 +35,9 @@ router = APIRouter(
 # Global progress tracker
 _current_ingestion: Optional[LLMIngestionProgress] = None
 _ingestion_task: Optional[asyncio.Task] = None
+
+# Stable public detail for a /start request made without Neo4j credentials.
+NEO4J_UNCONFIGURED_DETAIL = "Neo4j credentials are not configured"
 
 
 class LLMBulkIngestionRequest(BaseModel):
@@ -168,6 +172,13 @@ async def start_llm_bulk_ingestion(
             message="LLM ingestion already in progress",
             estimated_cost_usd=estimated_cost,
         )
+
+    # Resolve credentials before scheduling: a detached task would otherwise
+    # report "Started" and then die on the missing password unobserved.
+    try:
+        get_neo4j_auth()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail=NEO4J_UNCONFIGURED_DETAIL)
 
     # Reset progress
     _current_ingestion = None
@@ -324,15 +335,14 @@ async def test_llm_small_batch():
 
     Estimated cost: ~$2-4
     """
-    service = KaggleLLMBulkIngestionService(
-        batch_size=25,
-        max_papers=50,
-        enable_embeddings=True,
-        enable_entity_extraction=True,
-        enable_relationship_extraction=True,
-    )
-
     try:
+        service = KaggleLLMBulkIngestionService(
+            batch_size=25,
+            max_papers=50,
+            enable_embeddings=True,
+            enable_entity_extraction=True,
+            enable_relationship_extraction=True,
+        )
         result = await service.run_ingestion(
             categories=["cs.AI", "cs.LG"], resume=False  # Focus on AI/ML papers
         )
@@ -359,11 +369,8 @@ async def get_llm_ingestion_stats():
     """
     from neo4j import AsyncGraphDatabase
 
-    from src.core.neo4j_auth import get_neo4j_auth
-
-    auth = get_neo4j_auth()
-
     try:
+        auth = get_neo4j_auth()
         driver = AsyncGraphDatabase.driver(auth.uri, auth=(auth.user, auth.password))
 
         async with driver.session() as session:
