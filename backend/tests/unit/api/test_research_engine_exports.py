@@ -27,7 +27,9 @@ def _runs_module() -> Any:
 
 
 @pytest.fixture
-def export_client(test_app: FastAPI) -> Iterator[tuple[TestClient, Any, AsyncMock]]:
+def export_client(
+    test_app: FastAPI, test_auth_headers: dict[str, str]
+) -> Iterator[tuple[TestClient, Any, AsyncMock]]:
     user = SimpleNamespace(
         id=uuid4(), organization_id=uuid4(), email="owner@example.test"
     )
@@ -42,7 +44,9 @@ def export_client(test_app: FastAPI) -> Iterator[tuple[TestClient, Any, AsyncMoc
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app, raise_server_exceptions=False) as client:
+        with TestClient(
+            test_app, headers=test_auth_headers, raise_server_exceptions=False
+        ) as client:
             yield client, user, db
     finally:
         test_app.router.lifespan_context = original_lifespan

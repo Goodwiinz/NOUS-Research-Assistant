@@ -557,18 +557,101 @@ def configure_test_logging():
 # FastAPI Test Client Fixtures
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# TEST-ONLY multi-tenancy middleware seam (audit I7 fail-closed gate).
+#
+# The real MultiTenancyMiddleware now 401s any request without a verifiable
+# Bearer token. App-level tests (tests/api, tests/unit/api) exercise endpoint
+# logic with dependency_overrides, not real JWTs — without this seam every
+# such request would die at the middleware with 401 before reaching the route.
+#
+# The seam lives ONLY here:
+#   * ``test_app`` patches the middleware's verification/DB seams so the fixed
+#     test token resolves to the same fake tenant (``test-org-id`` /
+#     ``test-user-id-12345``) the existing ``mock_user`` fixtures assume. Any
+#     other token falls through to the real verifier, so tokens minted by
+#     ``create_access_token`` keep behaving honestly.
+#   * ``test_client`` / ``async_test_client`` inject the fixed token as a
+#     default Authorization header; per-request headers override it.
+#
+# The middleware unit tests (tests/unit/middleware/test_multi_tenancy.py) do
+# NOT use this fixture — they build their own apps and exercise the real gate.
+# ----------------------------------------------------------------------------
+_TEST_BEARER_TOKEN = "test-token-multi-tenancy-seam"
+_TEST_TENANT_ORG_ID = "test-org-id"
+_TEST_TENANT_USER_ID = "test-user-id-12345"
+
+
+def _patch_multi_tenancy_middleware(monkeypatch):
+    """Point the middleware's verify/resolve seams at a fixed fake tenant."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.core.security import verify_token as _real_verify_token
+    from src.middleware import multi_tenancy as _mt
+
+    def _fake_verify_token(token):
+        if token == _TEST_BEARER_TOKEN:
+            return SimpleNamespace(
+                user_id=_TEST_TENANT_USER_ID,
+                organization_id=None,  # force the DB-resolution path
+                role="user",
+            )
+        return _real_verify_token(token)
+
+    monkeypatch.setattr(_mt, "verify_token", _fake_verify_token)
+
+    fake_user = SimpleNamespace(
+        id=_TEST_TENANT_USER_ID,
+        organization_id=_TEST_TENANT_ORG_ID,
+        role="user",
+    )
+
+    class _FakeResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return fake_user
+
+    fake_db = AsyncMock()
+    fake_db.execute = AsyncMock(return_value=_FakeResult())
+    fake_db.is_active = True
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=fake_db)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(_mt, "AsyncSessionLocal", MagicMock(return_value=session_cm))
+
+
+def _test_auth_headers() -> dict:
+    """Default Authorization header carrying the fixed test token."""
+    return {"Authorization": f"Bearer {_TEST_BEARER_TOKEN}"}
+
 
 @pytest.fixture
-def test_app():
-    """Create FastAPI test application."""
+def test_auth_headers() -> dict:
+    """Authorization headers for clients built outside ``test_client``.
+
+    Same fixed test token the ``test_app`` middleware seam accepts. Tests that
+    construct their own ``TestClient`` (instead of using the ``test_client``
+    fixture) pass this as ``TestClient(..., headers=test_auth_headers)`` so
+    the fail-closed tenant gate resolves the fake tenant.
+    """
+    return _test_auth_headers()
+
+
+@pytest.fixture
+def test_app(monkeypatch):
+    """Create FastAPI test application with the tenancy middleware test seam."""
     try:
         from src.main import app
 
         # Clear any existing dependency overrides
         app.dependency_overrides = {}
-        return app
     except ImportError:
         pytest.skip("FastAPI app not available")
+    _patch_multi_tenancy_middleware(monkeypatch)
+    return app
 
 
 @pytest.fixture
@@ -585,7 +668,7 @@ def test_client(test_app):
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app) as client:
+        with TestClient(test_app, headers=_test_auth_headers()) as client:
             yield client
     finally:
         test_app.router.lifespan_context = original_lifespan
@@ -596,7 +679,9 @@ async def async_test_client(test_app) -> AsyncGenerator:
     """Create async test client for FastAPI application."""
     from httpx import AsyncClient
 
-    async with AsyncClient(app=test_app, base_url="http://test") as client:
+    async with AsyncClient(
+        app=test_app, base_url="http://test", headers=_test_auth_headers()
+    ) as client:
         yield client
 
 
