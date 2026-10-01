@@ -175,6 +175,62 @@
         "title": "APIKeyResponse",
         "type": "object"
       },
+      "ActionDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "approved"
+        ],
+        "title": "ActionDecision",
+        "type": "object"
+      },
+      "ActionStatus": {
+        "properties": {
+          "invocation_id": {
+            "format": "uuid",
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "awaiting_approval",
+              "approved",
+              "executing",
+              "succeeded",
+              "failed",
+              "outcome_unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invocation_id",
+          "state",
+          "tool_name"
+        ],
+        "title": "ActionStatus",
+        "type": "object"
+      },
       "AgentExecuteRequest": {
         "properties": {
           "attachment_ids": {
@@ -3091,6 +3147,895 @@
         "title": "CitationLookupRequest",
         "type": "object"
       },
+      "ClaimAssessmentCreate": {
+        "description": "An adjudicator's judgement of the claim's tip version.",
+        "properties": {
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "link_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Link Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "stance": {
+            "enum": [
+              "supporting",
+              "opposing",
+              "neutral",
+              "not_addressed",
+              "unresolved"
+            ],
+            "title": "Stance",
+            "type": "string"
+          },
+          "stance_observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Stance Observation Ids",
+            "type": "array"
+          },
+          "supersedes_assessment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Assessment Id"
+          }
+        },
+        "required": [
+          "claim_version_id",
+          "stance",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ClaimAssessmentCreate",
+        "type": "object"
+      },
+      "ClaimAssessmentResponse": {
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "assessed_by_id": {
+            "format": "uuid",
+            "title": "Assessed By Id",
+            "type": "string"
+          },
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "link_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Link Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "stance": {
+            "enum": [
+              "supporting",
+              "opposing",
+              "neutral",
+              "not_addressed",
+              "unresolved"
+            ],
+            "title": "Stance",
+            "type": "string"
+          },
+          "stance_observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Stance Observation Ids",
+            "type": "array"
+          },
+          "supersedes_assessment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Assessment Id"
+          }
+        },
+        "required": [
+          "id",
+          "claim_version_id",
+          "stance",
+          "link_ids",
+          "stance_observation_ids",
+          "rationale",
+          "assessed_by_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "ClaimAssessmentResponse",
+        "type": "object"
+      },
+      "ClaimCounts": {
+        "properties": {
+          "assessed": {
+            "title": "Assessed",
+            "type": "integer"
+          },
+          "claims": {
+            "title": "Claims",
+            "type": "integer"
+          },
+          "legacy_unanchored": {
+            "title": "Legacy Unanchored",
+            "type": "integer"
+          },
+          "links_by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Links By Kind",
+            "type": "object"
+          },
+          "unassessed": {
+            "title": "Unassessed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "claims",
+          "links_by_kind",
+          "legacy_unanchored",
+          "assessed",
+          "unassessed"
+        ],
+        "title": "ClaimCounts",
+        "type": "object"
+      },
+      "ClaimCreate": {
+        "description": "A new claim over ``draft.content[start_char:end_char]`` (exactly).",
+        "properties": {
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "end_char": {
+            "minimum": 1.0,
+            "title": "End Char",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "default": "factual",
+            "enum": [
+              "factual",
+              "interpretation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "start_char": {
+            "minimum": 0.0,
+            "title": "Start Char",
+            "type": "integer"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "start_char",
+          "end_char",
+          "text",
+          "idempotency_key"
+        ],
+        "title": "ClaimCreate",
+        "type": "object"
+      },
+      "ClaimDetailResponse": {
+        "description": "The full history, each list in ``created_at, id`` order.",
+        "properties": {
+          "assessments": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimAssessmentResponse"
+            },
+            "title": "Assessments",
+            "type": "array"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimLinkResponse"
+            },
+            "title": "Links",
+            "type": "array"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/StanceObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimVersionResponse"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "created_by_id",
+          "created_at",
+          "versions",
+          "links",
+          "observations",
+          "assessments"
+        ],
+        "title": "ClaimDetailResponse",
+        "type": "object"
+      },
+      "ClaimLinkCreate": {
+        "description": "Link the claim's tip version to evidence, or withdraw/re-point a link.\n\n``extraction`` takes ``accepted_value_id``; ``source_span`` takes\n``document_id``, ``start_char``, ``end_char`` and ``quote``;\n``legacy_unanchored`` takes ``draft_citation_id``. The server copies the\nsource hashes. A ``withdrawn`` row supersedes a link and copies its target.",
+        "properties": {
+          "accepted_value_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Value Id"
+          },
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "draft_citation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Citation Id"
+          },
+          "end_char": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Char"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "extraction",
+              "source_span",
+              "legacy_unanchored"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "start_char": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Char"
+          },
+          "status": {
+            "default": "linked",
+            "enum": [
+              "linked",
+              "withdrawn"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "supersedes_link_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Link Id"
+          }
+        },
+        "required": [
+          "claim_version_id",
+          "kind",
+          "idempotency_key"
+        ],
+        "title": "ClaimLinkCreate",
+        "type": "object"
+      },
+      "ClaimLinkResponse": {
+        "properties": {
+          "accepted_value_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Value Id"
+          },
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "draft_citation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Citation Id"
+          },
+          "end_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Char"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "extraction",
+              "source_span",
+              "legacy_unanchored"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "latest_observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StanceObservationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "source_changed": {
+            "default": false,
+            "title": "Source Changed",
+            "type": "boolean"
+          },
+          "source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Hash"
+          },
+          "start_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Char"
+          },
+          "status": {
+            "enum": [
+              "linked",
+              "withdrawn"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "supersedes_link_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Link Id"
+          },
+          "text_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Sha256"
+          }
+        },
+        "required": [
+          "id",
+          "claim_version_id",
+          "kind",
+          "status",
+          "created_by_id",
+          "created_at"
+        ],
+        "title": "ClaimLinkResponse",
+        "type": "object"
+      },
+      "ClaimListResponse": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/ClaimCounts"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "counts"
+        ],
+        "title": "ClaimListResponse",
+        "type": "object"
+      },
+      "ClaimResponse": {
+        "properties": {
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ClaimVersionResponse"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "created_by_id",
+          "created_at",
+          "version"
+        ],
+        "title": "ClaimResponse",
+        "type": "object"
+      },
+      "ClaimSummary": {
+        "description": "One claim: its tip version, or the version pinned to the filtered draft.",
+        "properties": {
+          "assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClaimAssessmentResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "citation_review_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation Review Status"
+          },
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "is_tip": {
+            "title": "Is Tip",
+            "type": "boolean"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimLinkResponse"
+            },
+            "title": "Links",
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ClaimVersionResponse"
+          }
+        },
+        "required": [
+          "claim_id",
+          "version",
+          "is_tip",
+          "links"
+        ],
+        "title": "ClaimSummary",
+        "type": "object"
+      },
+      "ClaimVersionCreate": {
+        "description": "A reworded passage; it must supersede the claim's current version.",
+        "properties": {
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "end_char": {
+            "minimum": 1.0,
+            "title": "End Char",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "default": "factual",
+            "enum": [
+              "factual",
+              "interpretation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "start_char": {
+            "minimum": 0.0,
+            "title": "Start Char",
+            "type": "integer"
+          },
+          "supersedes_claim_version_id": {
+            "format": "uuid",
+            "title": "Supersedes Claim Version Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "start_char",
+          "end_char",
+          "text",
+          "idempotency_key",
+          "supersedes_claim_version_id"
+        ],
+        "title": "ClaimVersionCreate",
+        "type": "object"
+      },
+      "ClaimVersionResponse": {
+        "properties": {
+          "attributed_to_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributed To User Id"
+          },
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "draft_content_hash": {
+            "title": "Draft Content Hash",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_review_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Review Id"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "end_char": {
+            "title": "End Char",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "factual",
+              "interpretation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "normalized_hash": {
+            "title": "Normalized Hash",
+            "type": "string"
+          },
+          "start_char": {
+            "title": "Start Char",
+            "type": "integer"
+          },
+          "supersedes_claim_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Claim Version Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "text_sha256": {
+            "title": "Text Sha256",
+            "type": "string"
+          },
+          "version_no": {
+            "title": "Version No",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "claim_id",
+          "version_no",
+          "kind",
+          "text",
+          "text_sha256",
+          "normalized_hash",
+          "draft_id",
+          "draft_version",
+          "draft_content_hash",
+          "start_char",
+          "end_char",
+          "created_by_id",
+          "created_at"
+        ],
+        "title": "ClaimVersionResponse",
+        "type": "object"
+      },
       "CollectionCreate": {
         "description": "Create collection request",
         "properties": {
@@ -5319,6 +6264,173 @@
         ],
         "title": "DocumentType",
         "type": "string"
+      },
+      "DraftPromoteRequest": {
+        "description": "Promote the exact version whose content hashes to ``content_hash``.",
+        "properties": {
+          "content_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          }
+        },
+        "required": [
+          "content_hash",
+          "idempotency_key"
+        ],
+        "title": "DraftPromoteRequest",
+        "type": "object"
+      },
+      "DraftReleaseResponse": {
+        "description": "A promotion of one exact draft version; stale rows are kept.",
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Assessment Ids",
+            "type": "array"
+          },
+          "claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Claim Version Ids",
+            "type": "array"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "interpretation_claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Interpretation Claim Version Ids",
+            "type": "array"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "integer"
+          },
+          "promoted_by_id": {
+            "format": "uuid",
+            "title": "Promoted By Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "stale_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale At"
+          },
+          "stale_event_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Event Id"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "draft_id",
+          "draft_version",
+          "content_hash",
+          "claim_version_ids",
+          "assessment_ids",
+          "interpretation_claim_version_ids",
+          "policy_version",
+          "promoted_by_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "DraftReleaseResponse",
+        "type": "object"
       },
       "DraftReviewListResponse": {
         "properties": {
@@ -13223,6 +14335,165 @@
         "title": "RelationshipType",
         "type": "string"
       },
+      "ReleaseBlocker": {
+        "description": "One reason a draft version cannot be promoted (GOO-307).",
+        "properties": {
+          "claim_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Version Id"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "end": {
+            "title": "End",
+            "type": "integer"
+          },
+          "start": {
+            "title": "Start",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "start",
+          "end",
+          "text",
+          "detail"
+        ],
+        "title": "ReleaseBlocker",
+        "type": "object"
+      },
+      "ReleaseCheckResponse": {
+        "description": "A draft version's release status, blockers and invalidation report.",
+        "properties": {
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "invalidation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseInvalidation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DraftReleaseResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release_status": {
+            "enum": [
+              "candidate",
+              "verified",
+              "stale"
+            ],
+            "title": "Release Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "draft_version",
+          "release_status",
+          "content_hash",
+          "blockers",
+          "dimensions"
+        ],
+        "title": "ReleaseCheckResponse",
+        "type": "object"
+      },
+      "ReleaseInvalidation": {
+        "description": "Why the latest release is stale: persisted, or derived on read.",
+        "properties": {
+          "assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Assessment Ids",
+            "type": "array"
+          },
+          "cause": {
+            "additionalProperties": true,
+            "title": "Cause",
+            "type": "object"
+          },
+          "changed_nodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Nodes",
+            "type": "array"
+          },
+          "stale_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale At"
+          }
+        },
+        "required": [
+          "cause",
+          "changed_nodes",
+          "assessment_ids"
+        ],
+        "title": "ReleaseInvalidation",
+        "type": "object"
+      },
       "ReportCandidatesResponse": {
         "description": "Read-only suggestions; titles and years never equate reports.",
         "properties": {
@@ -17416,6 +18687,126 @@
           "confidence"
         ],
         "title": "StanceBreakdownItem",
+        "type": "object"
+      },
+      "StanceObservationCreate": {
+        "description": "Snapshot the evidence meter's current stance for this link's source.",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "StanceObservationCreate",
+        "type": "object"
+      },
+      "StanceObservationResponse": {
+        "properties": {
+          "classified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classified At"
+          },
+          "classifier_confidence": {
+            "title": "Classifier Confidence",
+            "type": "number"
+          },
+          "classifier_version": {
+            "title": "Classifier Version",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inference_model_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inference Model Version"
+          },
+          "justification_excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Justification Excerpt"
+          },
+          "link_id": {
+            "format": "uuid",
+            "title": "Link Id",
+            "type": "string"
+          },
+          "observed_by_id": {
+            "format": "uuid",
+            "title": "Observed By Id",
+            "type": "string"
+          },
+          "source_content_hash": {
+            "title": "Source Content Hash",
+            "type": "string"
+          },
+          "stance": {
+            "enum": [
+              "supporting",
+              "opposing",
+              "neutral",
+              "not_addressed"
+            ],
+            "title": "Stance",
+            "type": "string"
+          },
+          "stance_classification_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stance Classification Id"
+          }
+        },
+        "required": [
+          "id",
+          "link_id",
+          "stance",
+          "classifier_confidence",
+          "classifier_version",
+          "source_content_hash",
+          "observed_by_id",
+          "created_at"
+        ],
+        "title": "StanceObservationResponse",
         "type": "object"
       },
       "StartChatFromProjectRequest": {
@@ -32116,6 +33507,161 @@
         ]
       }
     },
+    "/api/v1/integrations/actions": {
+      "post": {
+        "operationId": "create_action_api_v1_integrations_actions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Action",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/actions/{invocation_id}": {
+      "get": {
+        "operationId": "read_action_api_v1_integrations_actions__invocation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Action",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/actions/{invocation_id}/decision": {
+      "post": {
+        "operationId": "decide_api_v1_integrations_actions__invocation_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/context": {
       "get": {
         "operationId": "get_selected_context_api_v1_integrations_context_get",
@@ -35514,6 +37060,536 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/claims": {
+      "get": {
+        "description": "Each claim's tip version, or its version pinned to ``draft_id``.",
+        "operationId": "list_claims_api_v1_projects__project_id__claims_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "draft_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Claims",
+        "tags": [
+          "claims"
+        ]
+      },
+      "post": {
+        "description": "Create a claim over an exact draft passage (EDIT).",
+        "operationId": "create_claim_api_v1_projects__project_id__claims_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Claim",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/export": {
+      "get": {
+        "description": "Download the reconstructable claims evidence package (VIEW).",
+        "operationId": "export_claims_api_v1_projects__project_id__claims_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "draft_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Claims",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}": {
+      "get": {
+        "description": "The claim's full version, link, observation and assessment history.",
+        "operationId": "get_claim_api_v1_projects__project_id__claims__claim_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Claim",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}/assessments": {
+      "post": {
+        "description": "Assess the claim's tip version (ADJUDICATOR role only).",
+        "operationId": "create_claim_assessment_api_v1_projects__project_id__claims__claim_id__assessments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimAssessmentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimAssessmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Claim Assessment",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}/links": {
+      "post": {
+        "description": "Link, re-point or withdraw evidence on the claim's tip version (EDIT).",
+        "operationId": "create_claim_link_api_v1_projects__project_id__claims__claim_id__links_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimLinkCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Claim Link",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}/links/{link_id}/observations": {
+      "post": {
+        "description": "Snapshot the evidence meter's stance for this link's source (EDIT).",
+        "operationId": "create_stance_observation_api_v1_projects__project_id__claims__claim_id__links__link_id__observations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "link_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Link Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StanceObservationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StanceObservationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Stance Observation",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}/versions": {
+      "post": {
+        "description": "Append a reworded version superseding the claim's tip (EDIT).",
+        "operationId": "create_claim_version_api_v1_projects__project_id__claims__claim_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimVersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Claim Version",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/documents": {
       "get": {
         "description": "List documents in a project.\n\nArgs:\n    project_id: Project ID\n    current_user: Authenticated user\n    db: Database session\n\nReturns:\n    List of documents",
@@ -36560,6 +38636,152 @@
           }
         ],
         "summary": "Export Draft",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/promote": {
+      "post": {
+        "description": "Promote this exact version to verified (adjudicator or supervisor).\n\n201 new, 200 replayed; 409 blocked (every blocker listed), content\nchanged or stale; 403 without the role.",
+        "operationId": "promote_draft_api_v1_projects__project_id__drafts__draft_id__versions__version__promote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftPromoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Promote Draft",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/release": {
+      "get": {
+        "description": "Release status, every blocker and the invalidation report (VIEW).",
+        "operationId": "get_draft_release_api_v1_projects__project_id__drafts__draft_id__versions__version__release_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Draft Release",
         "tags": [
           "drafts"
         ]

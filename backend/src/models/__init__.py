@@ -74,6 +74,7 @@ from .extraction_matrix import (
 )
 from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
+from .draft_release import DraftRelease
 from .draft_task_result import DraftTaskResult
 from .generated_draft import GeneratedDraft
 from .message_attachment import MessageAttachment
@@ -138,6 +139,13 @@ from .research_report import (
     ResearchReportIdentifier,
     ResearchReportObservation,
     ResearchStudy,
+)
+from .research_claim import (
+    ResearchClaim,
+    ResearchClaimAssessment,
+    ResearchClaimEvidenceLink,
+    ResearchClaimStanceObservation,
+    ResearchClaimVersion,
 )
 from .research_run import ResearchRun, RunStatus
 from .research_source import ResearchSource
@@ -231,6 +239,7 @@ __all__ = [
     "ProjectSkillChangeRequest",
     "ProjectSkillVersionScan",
     "GeneratedDraft",
+    "DraftRelease",
     "DraftTaskResult",
     "DraftCitation",
     "DraftReview",
@@ -287,6 +296,12 @@ __all__ = [
     "ExtractionFormVersion",
     "ExtractionObservation",
     "ExtractionAcceptedValue",
+    # Versioned claims (GOO-306)
+    "ResearchClaim",
+    "ResearchClaimVersion",
+    "ResearchClaimEvidenceLink",
+    "ResearchClaimStanceObservation",
+    "ResearchClaimAssessment",
     # Integrity Score models
     "IntegrityScore",
     # Research Engine models
@@ -358,6 +373,7 @@ from .bridge_device import BridgeDevice, WorkspaceBinding
 from .harness_session import HarnessNativeRequest, HarnessSession
 from .integration_context_selection import IntegrationContextSelection
 from .integration_grant import IntegrationGrant, IntegrationGrantRequest
+from .tool_action import IntegrationToolAction
 
 __all__ += [
     "HarnessSession",
@@ -366,6 +382,7 @@ __all__ += [
     "IntegrationGrant",
     "IntegrationGrantRequest",
     "IntegrationContextSelection",
+    "IntegrationToolAction",
     "Artifact",
     "ArtifactVersion",
     "ArtifactUpload",

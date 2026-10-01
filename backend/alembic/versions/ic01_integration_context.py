@@ -1,7 +1,7 @@
 """Explicit integration context selections.
 
 Revision ID: ic01_integration_context
-Revises: b8d0f2a4c6e9
+Revises: it02_merge_integration_heads
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "ic01_integration_context"
-down_revision = "b8d0f2a4c6e9"
+down_revision = "it02_merge_integration_heads"
 branch_labels = None
 depends_on = None
 

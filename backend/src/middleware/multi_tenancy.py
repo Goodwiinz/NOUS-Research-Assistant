@@ -66,28 +66,21 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         if self._should_skip_tenant_validation(request):
             return await call_next(request)
 
+        # Resolve and validate the tenant in a session that is closed BEFORE the
+        # route runs. The route gets its own session from ``get_db``, whose
+        # lifetime FastAPI ties to the full response. Handing this session to
+        # the route (it used to be stashed on request state) let ``async with`` close it
+        # the moment ``call_next`` returned response headers, while a
+        # StreamingResponse body was still querying it: the close raised, the
+        # except below turned it into a 500, and a research run that the
+        # route had already claimed stayed RUNNING (dev D-01).
         try:
             async with AsyncSessionLocal() as db:
                 tenant_info = await self._extract_tenant_info(request, db)
-
-                if not tenant_info:
-                    return await call_next(request)
-                await self._validate_tenant_access(tenant_info["organization_id"], db)
-
-                request.state.db = db
-
-                with tenant_context_manager(
-                    organization_id=tenant_info["organization_id"],
-                    user_id=tenant_info["user_id"],
-                    user_role=tenant_info["role"],
-                ):
-                    request.state.tenant_id = tenant_info["organization_id"]
-                    request.state.user_id = tenant_info["user_id"]
-                    request.state.user_role = tenant_info["role"]
-                    sentry_sdk.set_user({"id": str(tenant_info["user_id"])})
-                    sentry_sdk.set_tag("tenant_id", str(tenant_info["organization_id"]))
-                    return await call_next(request)
-
+                if tenant_info:
+                    await self._validate_tenant_access(
+                        tenant_info["organization_id"], db
+                    )
         except PermissionDeniedException as e:
             return error_response(403, str(e))
         except Exception as e:
@@ -95,6 +88,23 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
             return error_response(
                 500, "Internal server error during tenant validation", "internal_error"
             )
+
+        if not tenant_info:
+            return await call_next(request)
+
+        # Route exceptions are outside the try above: they reach the app's
+        # exception handlers instead of being mislabelled as tenant failures.
+        with tenant_context_manager(
+            organization_id=tenant_info["organization_id"],
+            user_id=tenant_info["user_id"],
+            user_role=tenant_info["role"],
+        ):
+            request.state.tenant_id = tenant_info["organization_id"]
+            request.state.user_id = tenant_info["user_id"]
+            request.state.user_role = tenant_info["role"]
+            sentry_sdk.set_user({"id": str(tenant_info["user_id"])})
+            sentry_sdk.set_tag("tenant_id", str(tenant_info["organization_id"]))
+            return await call_next(request)
 
     def _should_skip_tenant_validation(self, request: Request) -> bool:
         """Check if tenant validation should be skipped for this endpoint.

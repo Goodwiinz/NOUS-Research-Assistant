@@ -10,9 +10,11 @@ from src.services.research_decisions.ledger import (
     DecisionReplayError,
     DecisionValidationError,
     _validate_acquisition_transitions,
+    _validate_claims_transitions,
     _validate_event,
     _validate_extraction_transitions,
     _validate_identity_transitions,
+    _validate_release_transitions,
     _validate_screening_transitions,
     decision_request_fingerprint,
     replay_screening_resolutions,
@@ -1593,3 +1595,434 @@ def test_source_stale_requires_hash_change() -> None:
     twice = ("extraction.staled", "machine", _staled_v2(ex, accepted))
     with pytest.raises(DecisionReplayError, match="current tip"):
         ex.replay(*base, twice, twice)
+
+
+class _Claims:
+    """Hand-built events for one Collection's research_claims stream."""
+
+    def __init__(self) -> None:
+        self.collection_id, self.claim = uuid4(), uuid4()
+        self.document = uuid4()
+
+    def _base(self, claim: UUID | None = None) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "claim_id": str(claim or self.claim),
+        }
+
+    def versioned(
+        self, version: UUID, number: int = 1, supersedes: UUID | None = None
+    ) -> dict[str, Any]:
+        return self._base() | {
+            "claim_version_id": str(version),
+            "version_no": number,
+            "supersedes_claim_version_id": str(supersedes) if supersedes else None,
+            "kind": "factual",
+            "attributed_to_user_id": None,
+            "text_sha256": "a" * 64,
+            "normalized_hash": "b" * 64,
+            "draft_id": str(uuid4()),
+            "draft_version": number,
+            "draft_content_hash": "c" * 64,
+            "start_char": 0,
+            "end_char": 10,
+            "draft_review_id": None,
+        }
+
+    def linked(
+        self,
+        version: UUID,
+        link: UUID,
+        kind: str = "source_span",
+        supersedes: UUID | None = None,
+        status: str = "linked",
+    ) -> dict[str, Any]:
+        span = kind == "source_span"
+        return self._base() | {
+            "claim_version_id": str(version),
+            "link_id": str(link),
+            "supersedes_link_id": str(supersedes) if supersedes else None,
+            "status": status,
+            "kind": kind,
+            "accepted_value_id": str(uuid4()) if kind == "extraction" else None,
+            "draft_citation_id": (
+                str(uuid4()) if kind == "legacy_unanchored" else None
+            ),
+            "document_id": str(self.document),
+            "source_hash": None if kind == "legacy_unanchored" else "d" * 64,
+            "text_sha256": None if kind == "legacy_unanchored" else "e" * 64,
+            "start_char": 3 if span else None,
+            "end_char": 9 if span else None,
+            "quote_sha256": "f" * 64 if span else None,
+        }
+
+    def observed(self, link: UUID, observation: UUID) -> dict[str, Any]:
+        return self._base() | {
+            "link_id": str(link),
+            "observation_id": str(observation),
+            "stance": "supporting",
+            "stance_classification_id": str(uuid4()),
+            "classifier_version": "stance-v1",
+            "inference_model_version": "gpt-4.1",
+            "source_content_hash": "e" * 64,
+            "classified_at": "2026-09-30T00:00:00+00:00",
+        }
+
+    def assessed(
+        self,
+        version: UUID,
+        assessment: UUID,
+        links: list[UUID],
+        observations: list[UUID] | None = None,
+        supersedes: UUID | None = None,
+        stance: str = "supporting",
+    ) -> dict[str, Any]:
+        return self._base() | {
+            "claim_version_id": str(version),
+            "assessment_id": str(assessment),
+            "supersedes_assessment_id": str(supersedes) if supersedes else None,
+            "stance": stance,
+            "link_ids": [str(link) for link in links],
+            "stance_observation_ids": [str(o) for o in observations or []],
+        }
+
+    def validate(
+        self, event_type: str, payload: dict[str, Any], reason: str | None = "why"
+    ) -> None:
+        _validate_event(
+            aggregate_type="research_claims",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="research_claim",
+            subject_id=self.claim,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+            reason=reason,
+        )
+
+    def replay(self, *events: tuple[str, str, dict[str, Any]]) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_claims_transitions(stored, self.collection_id)
+
+
+def _claim_history(c: _Claims) -> tuple[UUID, UUID, list[tuple[str, str, Any]]]:
+    """v1 with one span link observed once."""
+    version, link, observation = uuid4(), uuid4(), uuid4()
+    return (
+        version,
+        link,
+        [
+            ("claim.versioned", "editor", c.versioned(version)),
+            ("claim.linked", "editor", c.linked(version, link)),
+            ("claim.observed", "machine", c.observed(link, observation)),
+        ],
+    )
+
+
+def test_claims_replay_rejects_machine_assessment() -> None:
+    c = _Claims()
+    version, link, history = _claim_history(c)
+    assessed = c.assessed(version, uuid4(), [link])
+    c.replay(*history, ("claim.assessed", "adjudicator", assessed))
+    for role in ("machine", "editor", "reviewer"):
+        with pytest.raises(DecisionReplayError, match="adjudicator"):
+            c.replay(*history, ("claim.assessed", role, assessed))
+    with pytest.raises(DecisionReplayError, match="machine"):
+        c.replay(*history, ("claim.observed", "editor", c.observed(link, uuid4())))
+
+
+def test_claims_replay_rejects_forked_version_chain() -> None:
+    c = _Claims()
+    v1, v2 = uuid4(), uuid4()
+    first = ("claim.versioned", "editor", c.versioned(v1))
+    c.replay(first, ("claim.versioned", "editor", c.versioned(v2, 2, v1)))
+    for bad in (
+        c.versioned(v2),  # a second v1
+        c.versioned(v2, 3, v1),  # skips a number
+        c.versioned(v2, 2, uuid4()),  # supersedes a non-tip
+    ):
+        with pytest.raises(DecisionReplayError, match="forked"):
+            c.replay(first, ("claim.versioned", "editor", bad))
+    with pytest.raises(DecisionReplayError, match="forked"):
+        c.replay(
+            first,
+            ("claim.versioned", "editor", c.versioned(v2, 2, v1)),
+            ("claim.versioned", "editor", c.versioned(uuid4(), 2, v1)),
+        )
+    other_claim = {**c.versioned(v2), "claim_id": str(uuid4())}
+    with pytest.raises(DecisionReplayError, match="reused"):
+        c.replay(
+            first,
+            ("claim.versioned", "editor", {**other_claim, "claim_version_id": str(v1)}),
+        )
+
+
+def test_claims_replay_rejects_link_to_non_tip_version() -> None:
+    c = _Claims()
+    v1, v2, link = uuid4(), uuid4(), uuid4()
+    versions = (
+        ("claim.versioned", "editor", c.versioned(v1)),
+        ("claim.versioned", "editor", c.versioned(v2, 2, v1)),
+    )
+    c.replay(*versions, ("claim.linked", "editor", c.linked(v2, link)))
+    with pytest.raises(DecisionReplayError, match="non-tip"):
+        c.replay(*versions, ("claim.linked", "editor", c.linked(v1, link)))
+    with pytest.raises(DecisionReplayError, match="non-tip"):
+        c.replay(*versions, ("claim.linked", "editor", c.linked(uuid4(), link)))
+    # A link chain names its tip, on the same version.
+    first = ("claim.linked", "editor", c.linked(v2, link))
+    c.replay(
+        *versions,
+        first,
+        ("claim.linked", "editor", c.linked(v2, uuid4(), supersedes=link)),
+    )
+    with pytest.raises(DecisionReplayError, match="forked"):
+        c.replay(
+            *versions,
+            first,
+            ("claim.linked", "editor", c.linked(v2, uuid4(), supersedes=link)),
+            ("claim.linked", "editor", c.linked(v2, uuid4(), supersedes=link)),
+        )
+
+
+def test_claims_replay_rejects_assessment_citing_withdrawn_link() -> None:
+    c = _Claims()
+    version, link, history = _claim_history(c)
+    withdrawn = c.linked(version, uuid4(), supersedes=link, status="withdrawn")
+    with pytest.raises(DecisionReplayError, match="dead link"):
+        c.replay(
+            *history,
+            ("claim.linked", "editor", withdrawn),
+            ("claim.assessed", "adjudicator", c.assessed(version, uuid4(), [link])),
+        )
+    with pytest.raises(DecisionReplayError, match="foreign observation"):
+        c.replay(
+            *history,
+            (
+                "claim.assessed",
+                "adjudicator",
+                c.assessed(version, uuid4(), [link], [uuid4()]),
+            ),
+        )
+    first = uuid4()
+    base = (
+        *history,
+        ("claim.assessed", "adjudicator", c.assessed(version, first, [link])),
+    )
+    c.replay(
+        *base,
+        (
+            "claim.assessed",
+            "adjudicator",
+            c.assessed(version, uuid4(), [link], supersedes=first),
+        ),
+    )
+    with pytest.raises(DecisionReplayError, match="forked"):
+        c.replay(
+            *base,
+            ("claim.assessed", "adjudicator", c.assessed(version, uuid4(), [link])),
+        )
+
+
+def test_claims_replay_rejects_observation_on_legacy_link() -> None:
+    c = _Claims()
+    version, legacy = uuid4(), uuid4()
+    base = (
+        ("claim.versioned", "editor", c.versioned(version)),
+        ("claim.linked", "editor", c.linked(version, legacy, "legacy_unanchored")),
+    )
+    c.replay(*base)
+    with pytest.raises(DecisionReplayError, match="live link"):
+        c.replay(*base, ("claim.observed", "machine", c.observed(legacy, uuid4())))
+    span = uuid4()
+    other_revision = {**c.observed(span, uuid4()), "source_content_hash": "9" * 64}
+    with pytest.raises(DecisionReplayError, match="revision"):
+        c.replay(
+            *base,
+            ("claim.linked", "editor", c.linked(version, span)),
+            ("claim.observed", "machine", other_revision),
+        )
+
+
+def test_claims_payload_keys_exact() -> None:
+    c = _Claims()
+    version, link = uuid4(), uuid4()
+    samples = (
+        ("claim.versioned", c.versioned(version)),
+        ("claim.linked", c.linked(version, link)),
+        ("claim.linked", c.linked(version, link, "extraction")),
+        ("claim.linked", c.linked(version, link, "legacy_unanchored")),
+        ("claim.observed", c.observed(link, uuid4())),
+        ("claim.assessed", c.assessed(version, uuid4(), [link])),
+    )
+    for event_type, payload in samples:
+        c.validate(event_type, payload)
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            c.validate(event_type, {**payload, "extra": 1})
+        trimmed = dict(payload)
+        trimmed.pop("claim_id")
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            c.validate(event_type, trimmed)
+        with pytest.raises(DecisionValidationError, match="another collection"):
+            c.validate(event_type, {**payload, "collection_id": str(uuid4())})
+    with pytest.raises(DecisionValidationError, match="rationale"):
+        c.validate("claim.assessed", c.assessed(version, uuid4(), [link]), reason=None)
+    with pytest.raises(DecisionValidationError, match="must cite"):
+        c.validate("claim.assessed", c.assessed(version, uuid4(), []))
+    c.validate("claim.assessed", c.assessed(version, uuid4(), [], stance="unresolved"))
+    with pytest.raises(DecisionValidationError, match="claim link"):
+        c.validate(
+            "claim.linked",
+            {**c.linked(version, link, "legacy_unanchored"), "source_hash": "d" * 64},
+        )
+    with pytest.raises(DecisionValidationError, match="chain"):
+        c.validate("claim.versioned", {**c.versioned(version), "version_no": 2})
+    with pytest.raises(DecisionValidationError, match="attributed"):
+        c.validate(
+            "claim.versioned", {**c.versioned(version), "kind": "interpretation"}
+        )
+    with pytest.raises(DecisionValidationError, match="stance"):
+        c.validate(
+            "claim.observed", {**c.observed(link, uuid4()), "stance": "unresolved"}
+        )
+
+
+class _Release:
+    """Hand-built events for one Collection's research_release stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+
+    def promoted(self, release: UUID, draft: UUID) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "release_id": str(release),
+            "draft_id": str(draft),
+            "draft_version": 1,
+            "content_hash": "a" * 64,
+            "claim_version_ids": [str(uuid4())],
+            "assessment_ids": [str(uuid4())],
+            "interpretation_claim_version_ids": [],
+            "protocol_version_id": None,
+            "policy_version": 1,
+            "dimensions": {"support": {"status": "passed"}},
+        }
+
+    def staled(self, *releases: UUID) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "release_ids": [str(r) for r in releases],
+            "cause": {
+                "family": "research_claims",
+                "event_id": str(uuid4()),
+                "kind": "claim.assessed",
+            },
+            "changed_nodes": [f"assessment:{uuid4()}"],
+            "assessment_ids": [],
+        }
+
+    def validate(self, event_type: str, payload: dict[str, Any], subject: UUID) -> None:
+        _validate_event(
+            aggregate_type="research_release",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="draft_release",
+            subject_id=subject,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+        )
+
+    def replay(self, *events: tuple[str, str, dict[str, Any]]) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_release_transitions(stored, self.collection_id)
+
+
+def test_release_replay_rejects_reviewer_promotion() -> None:
+    r = _Release()
+    promoted = r.promoted(uuid4(), uuid4())
+    for role in ("adjudicator", "supervisor"):
+        r.replay(("release.promoted", role, promoted))
+    for role in ("reviewer", "editor", "machine"):
+        with pytest.raises(DecisionReplayError, match="adjudicator or supervisor"):
+            r.replay(("release.promoted", role, promoted))
+
+
+def test_release_replay_rejects_second_live_release() -> None:
+    r = _Release()
+    draft, first, second = uuid4(), uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="live release"):
+        r.replay(
+            ("release.promoted", "adjudicator", r.promoted(first, draft)),
+            ("release.promoted", "supervisor", r.promoted(second, draft)),
+        )
+    # Re-promotion after staling inserts a new live release.
+    r.replay(
+        ("release.promoted", "adjudicator", r.promoted(first, draft)),
+        ("release.staled", "adjudicator", r.staled(first)),
+        ("release.promoted", "supervisor", r.promoted(second, draft)),
+    )
+    r.replay(
+        ("release.promoted", "adjudicator", r.promoted(first, draft)),
+        ("release.promoted", "adjudicator", r.promoted(second, uuid4())),
+    )
+
+
+def test_release_replay_rejects_double_stale() -> None:
+    r = _Release()
+    release = uuid4()
+    promoted = ("release.promoted", "adjudicator", r.promoted(release, uuid4()))
+    r.replay(promoted, ("release.staled", "editor", r.staled(release)))
+    with pytest.raises(DecisionReplayError, match="non-live"):
+        r.replay(
+            promoted,
+            ("release.staled", "editor", r.staled(release)),
+            ("release.staled", "machine", r.staled(release)),
+        )
+    with pytest.raises(DecisionReplayError, match="non-live"):
+        r.replay(("release.staled", "editor", r.staled(uuid4())))
+
+
+def test_release_payload_keys_exact() -> None:
+    r = _Release()
+    release = uuid4()
+    samples = (
+        ("release.promoted", r.promoted(release, uuid4()), release),
+        ("release.staled", r.staled(release), r.collection_id),
+    )
+    for event_type, payload, subject in samples:
+        r.validate(event_type, payload, subject)
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            r.validate(event_type, {**payload, "extra": 1}, subject)
+        trimmed = dict(payload)
+        trimmed.pop("collection_id")
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            r.validate(event_type, trimmed, subject)
+        with pytest.raises(DecisionValidationError, match="another collection"):
+            r.validate(event_type, {**payload, "collection_id": str(uuid4())}, subject)
+    promoted, staled = samples[0][1], samples[1][1]
+    with pytest.raises(DecisionValidationError, match="subject"):
+        r.validate("release.promoted", promoted, uuid4())
+    with pytest.raises(DecisionValidationError, match="SHA-256"):
+        r.validate("release.promoted", {**promoted, "content_hash": "x"}, release)
+    with pytest.raises(DecisionValidationError, match="cause"):
+        r.validate(
+            "release.staled",
+            {**staled, "cause": {**staled["cause"], "family": "research_protocol"}},
+            r.collection_id,
+        )
+    with pytest.raises(DecisionValidationError, match="release_ids"):
+        r.validate("release.staled", {**staled, "release_ids": []}, r.collection_id)

@@ -26,9 +26,11 @@ from src.models.citation import Citation
 from src.models.collection import Collection
 from src.models.document import Document
 from src.models.draft_citation import DraftCitation
+from src.models.draft_release import DraftRelease
 from src.models.draft_review import DraftReview
 from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
+from src.models.research_claim import ResearchClaimVersion
 from src.services.agent.job_store import get_redis
 from src.services.research.bibliography_service import BibliographyService
 from src.services.research.evidence_selection import select_relevant_passages
@@ -119,6 +121,11 @@ def _ensure_draft_metrics() -> None:
 
 class DraftTaskNotRunning(RuntimeError):
     """The task's retained row is already terminal; its draft must not land."""
+
+
+class DraftRetainedError(RuntimeError):
+    """A claim version (GOO-306) or a release (GOO-307) pins this draft; it
+    is retained as evidence."""
 
 
 def _utcnow() -> datetime:
@@ -2200,6 +2207,22 @@ Key takeaways include the importance of continued investigation and the potentia
 
         if not draft:
             return False
+        # GOO-306: a pinned passage must stay resolvable; the RESTRICT FK on
+        # research_claim_versions.draft_id is the backstop.
+        # GOO-307: a verified (or once-verified) version is never deleted;
+        # the RESTRICT FK on draft_releases.draft_id is the backstop.
+        pinned = (
+            await self.db.execute(
+                select(ResearchClaimVersion.id)
+                .where(ResearchClaimVersion.draft_id == draft_id)
+                .union_all(
+                    select(DraftRelease.id).where(DraftRelease.draft_id == draft_id)
+                )
+                .limit(1)
+            )
+        ).first()
+        if pinned is not None:
+            raise DraftRetainedError(str(draft_id))
 
         was_current = draft.is_current
         await self.db.delete(draft)
@@ -2328,9 +2351,19 @@ Key takeaways include the importance of continued investigation and the potentia
         draft = await self.get_draft(project_id, draft_id)
         if not draft:
             return {"error": "Draft not found"}
+        if format not in ("markdown", "latex"):
+            return {"error": f"Unsupported format: {format}"}
+        # GOO-307: the stored content is wrapped, never altered: a status
+        # header plus the gate's unresolved and interpretation labels.
+        from src.services.research import draft_release_service, release_rules
+
+        gate, header = await draft_release_service.export_header(
+            self.db, project_id, draft
+        )
+        labelled = release_rules.label_export(draft.content, gate, format, header)
 
         if format == "markdown":
-            content = draft.content
+            content = labelled
             if include_bibliography:
                 citations = await self.get_draft_citations(project_id, draft_id)
                 if citations:
@@ -2351,7 +2384,7 @@ Key takeaways include the importance of continued investigation and the potentia
 
         elif format == "latex":
             # Convert to LaTeX
-            latex_content = self._convert_to_latex(draft.content)
+            latex_content = self._convert_to_latex(labelled)
             bib_content = ""
 
             if include_bibliography:

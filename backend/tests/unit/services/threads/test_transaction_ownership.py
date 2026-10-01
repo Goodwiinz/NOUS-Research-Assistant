@@ -40,10 +40,10 @@ Scope frozen here:
   (c) The route layer owns NO transaction boundary today (post-#1218):
       ``workspace_routes/*`` calls zero commit/rollback/flush/refresh — PR 3
       moves ownership *here*, so this must be the clean starting line.
-  (d) Session LIFECYCLE is owned by ``MultiTenancyMiddleware`` (creates the
-      ``AsyncSession``, assigns ``request.state.db``) and reused by
-      ``get_db`` — this is the seam PR 3's route-layer ``begin()`` plugs
-      into, so its shape is pinned for Task 3.2's design.
+  (d) Session LIFECYCLE is owned by ``get_db`` (one ``AsyncSession`` per
+      request, closed by FastAPI after the response body is sent). The
+      middleware no longer hands its tenant-lookup session to routes: that
+      session closed under still-streaming bodies (dev D-01).
 """
 
 from __future__ import annotations
@@ -522,32 +522,22 @@ class TestRouteLayerOwnsNoTransaction:
 
 
 class TestSessionLifecycleOwnership:
-    """(d) The middleware creates+owns the AsyncSession; ``get_db`` reuses it.
-    PR 3's route-layer ``begin()`` plugs into exactly this seam, so its shape
-    is frozen here as the design reference (not a behavior it may silently
-    change)."""
+    """(d) ``get_db`` creates+owns the request's AsyncSession; the middleware's
+    tenant-lookup session never reaches a route (dev D-01)."""
 
-    def test_middleware_creates_and_assigns_request_state_db(self) -> None:
+    def test_middleware_does_not_hand_its_session_to_routes(self) -> None:
         src = (BACKEND_DIR / "src" / "middleware" / "multi_tenancy.py").read_text(
             encoding="utf-8"
         )
-        assert "async with AsyncSessionLocal() as db:" in src, (
-            "MultiTenancyMiddleware no longer creates the request-scoped "
-            "AsyncSession via `async with AsyncSessionLocal() as db:` — the "
-            "session-lifecycle owner PR 3 depends on moved."
-        )
-        assert "request.state.db = db" in src, (
-            "MultiTenancyMiddleware no longer assigns `request.state.db` — the "
-            "route/service session seam moved."
+        assert "request.state.db" not in src, (
+            "MultiTenancyMiddleware must not expose its session on "
+            "request.state.db: it closes when call_next returns headers, "
+            "while a StreamingResponse body may still be using it."
         )
 
-    def test_get_db_reuses_the_middleware_session(self) -> None:
+    def test_get_db_owns_the_request_session(self) -> None:
         src = (BACKEND_DIR / "src" / "core" / "database.py").read_text(encoding="utf-8")
-        # get_db yields request.state.db when present, so route handlers and
-        # the services they call share the ONE middleware-owned transaction —
-        # the invariant that makes PR 3's single route-level begin() possible.
-        assert 'getattr(request.state, "db", None)' in src, (
-            "get_db no longer reuses the middleware's request.state.db session; "
-            "route handlers would get a second, independent transaction and "
-            "PR 3's single-transaction-per-request assumption would break."
+        assert "request.state" not in src, (
+            "get_db must open its own session (FastAPI closes it after the "
+            "response), not reuse a middleware-owned one."
         )

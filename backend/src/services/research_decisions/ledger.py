@@ -1,8 +1,8 @@
 """Caller-owned append and replay operations for research decisions.
 
 Each aggregate family (``research_protocol``, ``research_identity``,
-``research_screening``, ``research_acquisition``, ``research_extraction``)
-registers
+``research_screening``, ``research_acquisition``, ``research_extraction``,
+``research_claims``, ``research_release``) registers
 its subject type, payload vocabulary, value validation and replay transition
 rules in ``_FAMILIES``.
 
@@ -28,7 +28,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
-from src.services.research import extraction_rules
+from src.services.research import claim_rules, extraction_rules
 from src.services.research_engine import screening_rules
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -236,7 +236,110 @@ _EXTRACTION_PAYLOAD_KEYS |= {
     ("extraction.staled", 2): _EXTRACTION_PAYLOAD_KEYS[("extraction.staled", 1)]
     | {"reason", "document_id", "new_source_hash", "new_text_sha256"},
 }
-_RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {"extraction.accepted"}
+
+# GOO-306: versioned claims, one stream per Collection (so creation is
+# idempotent too); the subject is the claim. The rationale is the reason.
+_CLAIMS_AGGREGATE = "research_claims"
+_CLAIMS_SUBJECT = "research_claim"
+_CLAIMS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("claim.versioned", 1): frozenset(
+        {
+            "collection_id",
+            "claim_id",
+            "claim_version_id",
+            "version_no",
+            "supersedes_claim_version_id",
+            "kind",
+            "attributed_to_user_id",
+            "text_sha256",
+            "normalized_hash",
+            "draft_id",
+            "draft_version",
+            "draft_content_hash",
+            "start_char",
+            "end_char",
+            "draft_review_id",
+        }
+    ),
+    ("claim.linked", 1): frozenset(
+        {
+            "collection_id",
+            "claim_id",
+            "claim_version_id",
+            "link_id",
+            "supersedes_link_id",
+            "status",
+            "kind",
+            "accepted_value_id",
+            "draft_citation_id",
+            "document_id",
+            "source_hash",
+            "text_sha256",
+            "start_char",
+            "end_char",
+            "quote_sha256",
+        }
+    ),
+    ("claim.observed", 1): frozenset(
+        {
+            "collection_id",
+            "claim_id",
+            "link_id",
+            "observation_id",
+            "stance",
+            "stance_classification_id",
+            "classifier_version",
+            "inference_model_version",
+            "source_content_hash",
+            "classified_at",
+        }
+    ),
+    ("claim.assessed", 1): frozenset(
+        {
+            "collection_id",
+            "claim_id",
+            "claim_version_id",
+            "assessment_id",
+            "supersedes_assessment_id",
+            "stance",
+            "link_ids",
+            "stance_observation_ids",
+        }
+    ),
+}
+# GOO-307: verified draft releases, one stream per Collection so promotion
+# and cross-draft invalidation share one total order. A promotion's subject is
+# its release; a staling's subject is the Collection.
+_RELEASE_AGGREGATE = "research_release"
+_RELEASE_SUBJECT = "draft_release"
+_RELEASE_PROMOTERS = frozenset({"adjudicator", "supervisor"})
+_RELEASE_CAUSE_FAMILIES = frozenset(
+    {"research_extraction", "research_claims", "research_release"}
+)
+_RELEASE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("release.promoted", 1): frozenset(
+        {
+            "collection_id",
+            "release_id",
+            "draft_id",
+            "draft_version",
+            "content_hash",
+            "claim_version_ids",
+            "assessment_ids",
+            "interpretation_claim_version_ids",
+            "protocol_version_id",
+            "policy_version",
+            "dimensions",
+        }
+    ),
+    ("release.staled", 1): frozenset(
+        {"collection_id", "release_ids", "cause", "changed_nodes", "assessment_ids"}
+    ),
+}
+_RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
+    "extraction.accepted",
+    "claim.assessed",
+}
 
 
 class ResearchDecisionError(RuntimeError):
@@ -772,6 +875,175 @@ def _validate_extraction_payload(
         _validate_accepted_v2(payload)
 
 
+def _validated_optional_sha256(value: Any, field: str) -> None:
+    if value is not None:
+        _validated_sha256(value, field)
+
+
+def _validate_claims_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["claim_id"], "claim_id") != subject_id:
+        raise DecisionValidationError("claim event subject is not its claim")
+    if event_type == "claim.versioned":
+        version = _validated_payload_uuid(
+            payload["claim_version_id"], "claim_version_id"
+        )
+        supersedes = _validated_optional_uuid(
+            payload["supersedes_claim_version_id"], "supersedes_claim_version_id"
+        )
+        number = payload["version_no"]
+        if not _is_int(number) or number < 1:
+            raise DecisionValidationError("version_no must be a positive integer")
+        if version == supersedes or (supersedes is None) != (number == 1):
+            raise DecisionValidationError("claim version chain is invalid")
+        if payload["kind"] not in claim_rules.KINDS:
+            raise DecisionValidationError("claim kind is invalid")
+        attributed = _validated_optional_uuid(
+            payload["attributed_to_user_id"], "attributed_to_user_id"
+        )
+        if (payload["kind"] == "interpretation") != (attributed is not None):
+            raise DecisionValidationError("only an interpretation is attributed")
+        for key in ("text_sha256", "normalized_hash", "draft_content_hash"):
+            _validated_sha256(payload[key], key)
+        _validated_payload_uuid(payload["draft_id"], "draft_id")
+        if not _is_int(payload["draft_version"]) or payload["draft_version"] < 1:
+            raise DecisionValidationError("draft_version must be a positive integer")
+        if payload["start_char"] is None:
+            raise DecisionValidationError("claim passage needs offsets")
+        _validated_span(payload["start_char"], payload["end_char"], "passage")
+        _validated_optional_uuid(payload["draft_review_id"], "draft_review_id")
+        return
+    if event_type == "claim.linked":
+        _validated_payload_uuid(payload["claim_version_id"], "claim_version_id")
+        link = _validated_payload_uuid(payload["link_id"], "link_id")
+        supersedes = _validated_optional_uuid(
+            payload["supersedes_link_id"], "supersedes_link_id"
+        )
+        if link == supersedes:
+            raise DecisionValidationError("link cannot supersede itself")
+        _validated_span(payload["start_char"], payload["end_char"], "span")
+        for key in ("source_hash", "text_sha256", "quote_sha256"):
+            _validated_optional_sha256(payload[key], key)
+        try:
+            claim_rules.check_link_shape(
+                payload["kind"],
+                accepted_value_id=_validated_optional_uuid(
+                    payload["accepted_value_id"], "accepted_value_id"
+                ),
+                draft_citation_id=_validated_optional_uuid(
+                    payload["draft_citation_id"], "draft_citation_id"
+                ),
+                document_id=_validated_optional_uuid(
+                    payload["document_id"], "document_id"
+                ),
+                source_hash=payload["source_hash"],
+                text_sha256=payload["text_sha256"],
+                start_char=payload["start_char"],
+                end_char=payload["end_char"],
+                quote=payload["quote_sha256"],
+                status=payload["status"],
+                supersedes_link_id=supersedes,
+            )
+        except ValueError as error:
+            raise DecisionValidationError(f"claim link: {error}") from error
+        return
+    if event_type == "claim.observed":
+        _validated_payload_uuid(payload["link_id"], "link_id")
+        _validated_payload_uuid(payload["observation_id"], "observation_id")
+        if payload["stance"] not in claim_rules.OBSERVED_STANCES:
+            raise DecisionValidationError("observed stance is invalid")
+        _validated_optional_uuid(
+            payload["stance_classification_id"], "stance_classification_id"
+        )
+        if not isinstance(payload["classifier_version"], str):
+            raise DecisionValidationError("classifier_version must be a string")
+        model = payload["inference_model_version"]
+        if model is not None and not isinstance(model, str):
+            raise DecisionValidationError("inference_model_version must be a string")
+        _validated_sha256(payload["source_content_hash"], "source_content_hash")
+        classified = payload["classified_at"]
+        if classified is not None and not isinstance(classified, str):
+            raise DecisionValidationError("classified_at must be an ISO timestamp")
+        return
+    _validated_payload_uuid(payload["claim_version_id"], "claim_version_id")
+    assessment = _validated_payload_uuid(payload["assessment_id"], "assessment_id")
+    if assessment == _validated_optional_uuid(
+        payload["supersedes_assessment_id"], "supersedes_assessment_id"
+    ):
+        raise DecisionValidationError("assessment cannot supersede itself")
+    if payload["stance"] not in claim_rules.STANCES:
+        raise DecisionValidationError("assessed stance is invalid")
+    for key in ("link_ids", "stance_observation_ids"):
+        ids = _validated_uuid_list(payload[key], key)
+        if len(ids) > 20 or len(set(ids)) != len(ids):
+            raise DecisionValidationError(f"{key} must be 0-20 unique ids")
+    if not payload["link_ids"] and payload["stance"] not in claim_rules.UNCITED_STANCES:
+        raise DecisionValidationError("assessed stance must cite a link")
+
+
+def _validate_release_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if event_type == "release.promoted":
+        release = _validated_payload_uuid(payload["release_id"], "release_id")
+        if release != subject_id:
+            raise DecisionValidationError("release event subject is not its release")
+        _validated_payload_uuid(payload["draft_id"], "draft_id")
+        for key in ("draft_version", "policy_version"):
+            if not _is_int(payload[key]) or payload[key] < 1:
+                raise DecisionValidationError(f"{key} must be a positive integer")
+        _validated_sha256(payload["content_hash"], "content_hash")
+        for key in (
+            "claim_version_ids",
+            "assessment_ids",
+            "interpretation_claim_version_ids",
+        ):
+            ids = _validated_uuid_list(payload[key], key)
+            if len(set(ids)) != len(ids):
+                raise DecisionValidationError(f"{key} must be unique")
+        _validated_optional_uuid(payload["protocol_version_id"], "protocol_version_id")
+        if not isinstance(payload["dimensions"], dict):
+            raise DecisionValidationError("dimensions must be an object")
+        return
+    if subject_id != aggregate_id:
+        raise DecisionValidationError("release staling subject is its collection")
+    releases = _validated_uuid_list(payload["release_ids"], "release_ids")
+    if not releases or len(set(releases)) != len(releases):
+        raise DecisionValidationError("release_ids must be 1+ unique ids")
+    _validated_uuid_list(payload["assessment_ids"], "assessment_ids")
+    cause = payload["cause"]
+    if (
+        not isinstance(cause, dict)
+        or set(cause) != {"family", "event_id", "kind"}
+        or cause["family"] not in _RELEASE_CAUSE_FAMILIES
+        or not isinstance(cause["kind"], str)
+    ):
+        raise DecisionValidationError("release staling cause is invalid")
+    _validated_optional_uuid(cause["event_id"], "cause.event_id")
+    nodes = payload["changed_nodes"]
+    if not isinstance(nodes, list) or not nodes:
+        raise DecisionValidationError("changed_nodes must be a non-empty list")
+    if not all(isinstance(n, str) and ":" in n for n in nodes):
+        raise DecisionValidationError("changed_nodes must be kind:id strings")
+
+
 async def _locked_stream(
     db: AsyncSession,
     *,
@@ -835,8 +1107,12 @@ async def append_decision(
     payload: Mapping[str, Any],
     idempotency_key: str,
     request_fingerprint: str,
+    event_id: UUID | None = None,
 ) -> AppendDecisionResult:
-    """Append one event under a stream lock without ending the transaction."""
+    """Append one event under a stream lock without ending the transaction.
+
+    ``event_id`` lets a caller stamp rows with the event's id before the
+    append (GOO-307 ``release.staled``); by default a new id is drawn."""
     _validate_event(
         aggregate_type=aggregate_type,
         aggregate_id=aggregate_id,
@@ -889,7 +1165,7 @@ async def append_decision(
 
     seq = cast(int, stream.next_seq)
     event = ResearchDecisionEvent(
-        id=uuid4(),
+        id=event_id or uuid4(),
         stream_id=stream.id,
         collection_id=collection_id,
         seq=seq,
@@ -1451,6 +1727,144 @@ def _validate_extraction_transitions(
             staled.add(accepted)
 
 
+def _validate_claims_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Each claim's versions form one chain; links attach only to the claim's
+    tip and each link chain names its tip; machine snapshots observe live,
+    anchored links of their revision; only an adjudicator assesses a tip
+    version, citing its live links and their observations."""
+    version_tip: dict[UUID, UUID] = {}  # claim -> tip version
+    version_no: dict[UUID, int] = {}  # claim -> tip version_no
+    version_claim: dict[UUID, UUID] = {}  # version -> claim
+    link_version: dict[UUID, UUID] = {}  # link (any) -> version
+    link_row: dict[UUID, Mapping[str, Any]] = {}  # link -> payload
+    superseded_links: set[UUID] = set()
+    observation_link: dict[UUID, UUID] = {}
+    assessment_tip: dict[UUID, UUID] = {}  # version -> tip assessment
+    assessments: set[UUID] = set()
+
+    def live(link: UUID) -> Mapping[str, Any] | None:
+        row = link_row.get(link)
+        if row is None or link in superseded_links or row["status"] != "linked":
+            return None
+        return row
+
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        claim = _payload_uuid(payload["claim_id"], "claim_id")
+        if event.event_type == "claim.versioned":
+            version = _payload_uuid(payload["claim_version_id"], "claim_version_id")
+            prior = payload["supersedes_claim_version_id"]
+            expected = (
+                (None, 1)
+                if claim not in version_tip
+                else (str(version_tip[claim]), version_no[claim] + 1)
+            )
+            if (prior, payload["version_no"]) != expected:
+                raise DecisionReplayError("forked claim version chain")
+            if version in version_claim:
+                raise DecisionReplayError("claim version id reused")
+            version_tip[claim], version_no[claim] = version, payload["version_no"]
+            version_claim[version] = claim
+            continue
+        if event.event_type == "claim.linked":
+            version = _payload_uuid(payload["claim_version_id"], "claim_version_id")
+            if version_claim.get(version) != claim or version_tip[claim] != version:
+                raise DecisionReplayError("claim link targets a non-tip version")
+            link = _payload_uuid(payload["link_id"], "link_id")
+            if link in link_row:
+                raise DecisionReplayError("claim link id reused")
+            supersedes = payload["supersedes_link_id"]
+            if supersedes is not None:
+                prior_link = _payload_uuid(supersedes, "supersedes_link_id")
+                if (
+                    prior_link not in link_row
+                    or prior_link in superseded_links
+                    or link_version[prior_link] != version
+                ):
+                    raise DecisionReplayError("forked claim link chain")
+                superseded_links.add(prior_link)
+            link_row[link], link_version[link] = payload, version
+            continue
+        if event.event_type == "claim.observed":
+            if event.actor_role != "machine":
+                raise DecisionReplayError("stance observation requires the machine")
+            link = _payload_uuid(payload["link_id"], "link_id")
+            row = live(link)
+            if (
+                row is None
+                or row["kind"] == "legacy_unanchored"
+                or version_claim[link_version[link]] != claim
+            ):
+                raise DecisionReplayError("stance observation needs a live link")
+            if payload["source_content_hash"] != row["text_sha256"]:
+                raise DecisionReplayError("stance observation of another revision")
+            observation = _payload_uuid(payload["observation_id"], "observation_id")
+            if observation in observation_link:
+                raise DecisionReplayError("stance observation id reused")
+            observation_link[observation] = link
+            continue
+        if event.actor_role != "adjudicator":
+            raise DecisionReplayError("claim assessment requires an adjudicator")
+        version = _payload_uuid(payload["claim_version_id"], "claim_version_id")
+        if version_claim.get(version) != claim or version_tip[claim] != version:
+            raise DecisionReplayError("claim assessment of a non-tip version")
+        cited = {_payload_uuid(v, "link_ids") for v in payload["link_ids"]}
+        for link in cited:
+            row = live(link)
+            if (
+                row is None
+                or row["kind"] == "legacy_unanchored"
+                or link_version[link] != version
+            ):
+                raise DecisionReplayError("claim assessment cites a dead link")
+        for value in payload["stance_observation_ids"]:
+            observed = _payload_uuid(value, "stance_observation_ids")
+            if observation_link.get(observed) not in cited:
+                raise DecisionReplayError(
+                    "claim assessment cites a foreign observation"
+                )
+        supersedes = payload["supersedes_assessment_id"]
+        tip = assessment_tip.get(version)
+        if supersedes != (None if tip is None else str(tip)):
+            raise DecisionReplayError("forked claim assessment chain")
+        assessment = _payload_uuid(payload["assessment_id"], "assessment_id")
+        if assessment in assessments:
+            raise DecisionReplayError("claim assessment id reused")
+        assessments.add(assessment)
+        assessment_tip[version] = assessment
+
+
+def _validate_release_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Only an adjudicator or supervisor promotes; one live release per
+    draft; a staling names only live releases promoted earlier."""
+    live_draft: dict[UUID, UUID] = {}  # live release -> its draft
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.event_type == "release.promoted":
+            if event.actor_role not in _RELEASE_PROMOTERS:
+                raise DecisionReplayError(
+                    "release promotion requires an adjudicator or supervisor"
+                )
+            draft = _payload_uuid(payload["draft_id"], "draft_id")
+            if draft in live_draft.values():
+                raise DecisionReplayError("draft already has a live release")
+            live_draft[_payload_uuid(payload["release_id"], "release_id")] = draft
+            continue
+        for value in payload["release_ids"]:
+            release = _payload_uuid(value, "release_ids")
+            if release not in live_draft:
+                raise DecisionReplayError("release staling names a non-live release")
+            del live_draft[release]
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -1512,6 +1926,20 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_EXTRACTION_PAYLOAD_KEYS,
         validate_payload=_validate_extraction_payload,
         validate_transitions=_validate_extraction_transitions,
+        requires_subject_version=False,
+    ),
+    _CLAIMS_AGGREGATE: _Family(
+        subject_type=_CLAIMS_SUBJECT,
+        payload_keys=_CLAIMS_PAYLOAD_KEYS,
+        validate_payload=_validate_claims_payload,
+        validate_transitions=_validate_claims_transitions,
+        requires_subject_version=False,
+    ),
+    _RELEASE_AGGREGATE: _Family(
+        subject_type=_RELEASE_SUBJECT,
+        payload_keys=_RELEASE_PAYLOAD_KEYS,
+        validate_payload=_validate_release_payload,
+        validate_transitions=_validate_release_transitions,
         requires_subject_version=False,
     ),
 }

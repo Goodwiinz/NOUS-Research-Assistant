@@ -43,6 +43,7 @@ def cell(harness: _Harness, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(svc, "_document", AsyncMock(return_value=document))
     monkeypatch.setattr(svc, "_current_field", AsyncMock(return_value=(version, FIELD)))
     monkeypatch.setattr(svc, "_append", AsyncMock())
+    monkeypatch.setattr(svc, "_invalidate_releases", AsyncMock())  # GOO-307
     monkeypatch.setattr(svc, "_versions", AsyncMock(return_value=[version]))
     monkeypatch.setattr(svc, "_staled_ids", AsyncMock(return_value=set()))
     monkeypatch.setattr(svc, "_tips", AsyncMock(return_value=[]))

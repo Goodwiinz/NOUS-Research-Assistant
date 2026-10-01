@@ -22,13 +22,20 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models import Collection, DraftReview, Workspace
 from src.models.user import User
+from src.services.research import claim_rules, draft_release_service
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
     DraftGenerationStatus,
+    DraftRetainedError,
     get_task_result,
     reconcile_task,
 )
 from src.services.research_engine.project_access import ResearchAction, resolve_project
+from src.shared.research_schemas import (
+    DraftPromoteRequest,
+    DraftReleaseResponse,
+    ReleaseCheckResponse,
+)
 
 logger = get_logger()
 router = APIRouter(prefix="/api/v1/projects/{project_id}/drafts", tags=["drafts"])
@@ -95,6 +102,16 @@ async def _validate_project_ownership(
 ) -> Collection:
     """Apply the canonical project authorization and lifecycle boundary."""
     return (await resolve_project(db, project_id, current_user.id, action)).collection
+
+
+async def _release_fields(
+    db: AsyncSession, project_id: UUID, draft: Any
+) -> Dict[str, Any]:
+    status_by_id = await draft_release_service.statuses(db, project_id, [draft.id])
+    return {
+        "release_status": status_by_id[draft.id],
+        "content_hash": claim_rules.content_hash(draft.content),
+    }
 
 
 # ============================================================================
@@ -226,6 +243,9 @@ async def list_drafts(
         limit=limit,
     )
 
+    release = await draft_release_service.statuses(
+        db, project_id, [draft.id for draft in result["drafts"]]
+    )
     drafts = []
     for draft in result["drafts"]:
         draft_data = {
@@ -238,6 +258,9 @@ async def list_drafts(
             "citation_count": draft.citation_count,
             "is_current": draft.is_current,
             "created_at": draft.created_at.isoformat() if draft.created_at else None,
+            # GOO-307: candidate until promoted; is_current never verifies.
+            "release_status": release[draft.id],
+            "content_hash": claim_rules.content_hash(draft.content),
         }
         if include_content:
             draft_data["content"] = draft.content
@@ -284,6 +307,7 @@ async def get_current_draft(
         "generation_params": draft.generation_params,
         "is_current": draft.is_current,
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        **(await _release_fields(db, project_id, draft)),
     }
 
 
@@ -316,6 +340,7 @@ async def get_draft(
         "generation_params": draft.generation_params,
         "is_current": draft.is_current,
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        **(await _release_fields(db, project_id, draft)),
     }
 
 
@@ -332,11 +357,78 @@ async def delete_draft(
 
     service = DraftGenerationService(db)
 
-    success = await service.delete_draft(project_id, draft_id)
+    try:
+        success = await service.delete_draft(project_id, draft_id)
+    except DraftRetainedError:
+        raise HTTPException(
+            status_code=409, detail="Draft has claims; it is retained as evidence"
+        ) from None
     if not success:
         raise HTTPException(status_code=404, detail="Draft not found")
 
     return {"message": "Draft deleted", "draft_id": str(draft_id)}
+
+
+# ============================================================================
+# Verified release (GOO-307)
+# ============================================================================
+
+
+@router.get(
+    "/{draft_id:uuid}/versions/{version}/release",
+    response_model=ReleaseCheckResponse,
+)
+async def get_draft_release(
+    project_id: UUID,
+    draft_id: UUID,
+    version: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ReleaseCheckResponse:
+    """Release status, every blocker and the invalidation report (VIEW)."""
+    context = await resolve_project(db, project_id, current_user.id)
+    return await draft_release_service.check(db, context, draft_id, version)
+
+
+@router.post(
+    "/{draft_id:uuid}/versions/{version}/promote",
+    status_code=201,
+    response_model=DraftReleaseResponse,
+)
+async def promote_draft(
+    project_id: UUID,
+    draft_id: UUID,
+    version: int,
+    body: DraftPromoteRequest,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DraftReleaseResponse:
+    """Promote this exact version to verified (adjudicator or supervisor).
+
+    201 new, 200 replayed; 409 blocked (every blocker listed), content
+    changed or stale; 403 without the role."""
+    context = await resolve_project(
+        db, project_id, current_user.id, ResearchAction.RELEASE
+    )
+    try:
+        release, replayed = await draft_release_service.promote(
+            db, context, current_user.id, draft_id, version, body
+        )
+    except draft_release_service.ReleaseBlocked as blocked:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "release_blocked",
+                "blockers": [
+                    b.model_dump(mode="json")
+                    for b in draft_release_service.blocker_models(blocked.blockers)
+                ],
+            },
+        ) from None
+    if replayed:
+        response.status_code = 200
+    return release
 
 
 # ============================================================================
