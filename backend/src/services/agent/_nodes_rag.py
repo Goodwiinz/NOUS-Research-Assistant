@@ -37,6 +37,7 @@ from langchain_core.runnables import RunnableConfig
 
 from src.services.agent.observability import track_node_execution
 from src.services.agent.state import AgentState
+from src.services.agent.tool_registry import _BARE_GREETINGS, is_bare_greeting_text
 from src.services.do_kb.postprocess import drop_low_relevance_chunks
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,7 @@ _CONVERSATIONAL_PATTERNS: frozenset[str] = frozenset(
         "how are you",
         "thank",
         "thanks",
+        "thank you",
         "ok",
         "okay",
         "yes",
@@ -123,6 +125,21 @@ _CONVERSATIONAL_PATTERNS: frozenset[str] = frozenset(
         "hey",
         "hi",
     }
+)
+
+# R8-A1: the WHOLE message must be small talk — one or more conversational
+# phrases (plus the bare greetings) separated only by punctuation/whitespace,
+# e.g. "ok cool", "thanks!", "hi there". A per-word search let "no", "good" or
+# "what model" inside a real question skip retrieval AND memory recall.
+_CONVERSATIONAL_RE = re.compile(
+    r"\W*(?:(?:"
+    + "|".join(
+        re.escape(pattern)
+        for pattern in sorted(
+            _CONVERSATIONAL_PATTERNS | _BARE_GREETINGS, key=len, reverse=True
+        )
+    )
+    + r")\b\W*)+"
 )
 
 # Length threshold (in whitespace-delimited tokens) below which a query is
@@ -337,14 +354,11 @@ def is_conversational(content: str) -> bool:
     (``memory_retrieval_node``). Both hot-path nodes share this predicate so
     they agree on what counts as conversational. Empty / whitespace-only
     input counts as conversational — there is nothing to retrieve or recall.
+    The whole message must match (R8-A1): "no thanks" is small talk, "find
+    papers with no replication" is not.
     """
-    if not content or not content.strip():
-        return True
-    lowered = content.lower().strip()
-    return any(
-        re.search(r"\b" + re.escape(pattern) + r"\b", lowered)
-        for pattern in _CONVERSATIONAL_PATTERNS
-    )
+    normalized = " ".join((content or "").lower().split())
+    return not normalized or _CONVERSATIONAL_RE.fullmatch(normalized) is not None
 
 
 def _is_retrieval_query(content: str) -> bool:
@@ -357,7 +371,7 @@ def _is_retrieval_query(content: str) -> bool:
     prefix is treated as retrieval to avoid degrading recall.
 
     Rules (a query is treated as NON-retrieval when ANY of these hold):
-      0. lowercased content matches a ``_CONVERSATIONAL_PATTERNS`` entry
+      0. the whole message is small talk (:func:`is_conversational`)
 
     Otherwise treated as retrieval when ANY of these hold:
       1. token count >= ``_SHORT_QUERY_TOKEN_LIMIT`` (8)
@@ -1145,6 +1159,9 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
         and state.get("thread_persistence") == "durable"
         and bool(configurable.get("thread_id"))
         and not configurable.get("search_fn")
+        # R8-A10: a greeting needs no file text, and loading it would also
+        # block llm_node's zero-LLM greeting reply (requires no retrieval).
+        and not is_bare_greeting_text(last_user_msg or "")
     )
     if should_load_attachment_scope:
         attachment_contexts, attachment_status = await _load_attachment_contexts(
