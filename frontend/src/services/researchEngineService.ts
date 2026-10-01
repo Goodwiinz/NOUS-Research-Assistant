@@ -37,6 +37,12 @@ import type {
   ApiImportReceiptDetail,
 } from '@/types/api/research-corpus-contract';
 import type { ApiJourneyResponse } from '@/types/api/research-journey-contract';
+import type {
+  ApiAppraisal,
+  ApiAppraisalAdjudicate,
+  ApiAppraisalList,
+  ApiAppraisalSubmit,
+} from '@/types/api/research-appraisal-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -462,3 +468,39 @@ export const getJourney = (projectId: string): Promise<ApiJourneyResponse> =>
 /** One zip: every export, a manifest and SHA256SUMS (the server names it). */
 export const downloadAuditBundle = (projectId: string): Promise<void> =>
   api.download(`/research-engine/projects/${projectId}/audit-bundle`);
+
+// --- Study-design appraisal (GOO-309) ----------------------------------------
+
+export type {
+  ApiAppraisal as Appraisal,
+  ApiAppraisalAdjudicate as AppraisalAdjudicate,
+  ApiAppraisalDesign as AppraisalDesign,
+  ApiAppraisalDomain as AppraisalDomain,
+  ApiAppraisalEvidenceOption as AppraisalEvidenceOption,
+  ApiAppraisalInstrument as AppraisalInstrument,
+  ApiAppraisalList as AppraisalList,
+  ApiAppraisalResult as AppraisalResult,
+  ApiAppraisalStatus as AppraisalStatus,
+  ApiAppraisalSubmit as AppraisalSubmit,
+} from '@/types/api/research-appraisal-contract';
+
+const appraisals = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/appraisals`;
+
+export const listAppraisals = (projectId: string): Promise<ApiAppraisalList> =>
+  api.get<ApiAppraisalList>(appraisals(projectId));
+
+export const submitAppraisal = (
+  projectId: string,
+  data: ApiAppraisalSubmit
+): Promise<ApiAppraisal> => api.post<ApiAppraisal>(appraisals(projectId), data);
+
+export const adjudicateAppraisal = (
+  projectId: string,
+  data: ApiAppraisalAdjudicate
+): Promise<ApiAppraisal> =>
+  api.post<ApiAppraisal>(`${appraisals(projectId)}/adjudications`, data);
+
+/** The visible rows only; the server names the file. */
+export const exportAppraisals = (projectId: string): Promise<void> =>
+  api.download(`/research-engine/projects/${projectId}/appraisals/export`);

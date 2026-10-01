@@ -781,6 +781,156 @@ class JourneyResponse(BaseModel):
     current: Optional[JourneyStageKey] = None
 
 
+# --- Study-design appraisal (GOO-309) ------------------------------------------
+
+AppraisalResponseCode = Literal["Y", "PY", "PN", "N", "NI", "NA"]
+AppraisalJudgment = Literal["low", "some_concerns", "high"]
+AppraisalDesign = Literal[
+    "randomized_parallel_group",
+    "randomized_cluster",
+    "randomized_crossover",
+    "non_randomized_intervention",
+    "cohort",
+    "case_control",
+    "cross_sectional",
+    "other",
+]
+AppraisalStatus = Literal["awaiting_independent", "agreed", "conflict", "adjudicated"]
+
+
+class AppraisalEvidenceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["accepted_value", "observation"]
+    id: UUID
+
+
+class AppraisalDomain(BaseModel):
+    """One RoB 2 domain; ``None`` means unknown and is never derived."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    judgment: Optional[AppraisalJudgment] = None
+    signals: Dict[str, Optional[AppraisalResponseCode]] = Field(default_factory=dict)
+    rationale: Optional[str] = Field(None, min_length=1, max_length=4000)
+    evidence: List[AppraisalEvidenceRef] = Field(default_factory=list, max_length=20)
+
+
+class AppraisalSubmit(BaseModel):
+    protocol_version_id: UUID
+    instrument_key: str = Field(..., min_length=1, max_length=32)
+    instrument_version: str = Field(..., min_length=1, max_length=32)
+    study_id: Optional[UUID] = None
+    report_id: Optional[UUID] = None
+    outcome_key: str = Field(..., min_length=1, max_length=100)
+    timepoint: str = Field(..., min_length=1, max_length=100)
+    study_design: AppraisalDesign
+    applicability: Literal["applicable", "not_applicable"]
+    domains: Dict[str, AppraisalDomain] = Field(default_factory=dict, max_length=5)
+    overall: Optional[AppraisalJudgment] = None
+    supersedes_assessment_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def one_target(self) -> "AppraisalSubmit":
+        if (self.study_id is None) == (self.report_id is None):
+            raise ValueError("Name exactly one of study_id or report_id")
+        return self
+
+
+class AppraisalAdjudicate(AppraisalSubmit):
+    resolves_assessment_ids: List[UUID] = Field(..., min_length=1, max_length=10)
+    rationale: str = Field(..., min_length=1, max_length=4000)
+
+
+class AppraisalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    protocol_version_id: UUID
+    instrument_key: str
+    instrument_version: str
+    instrument_spec_hash: str
+    study_id: Optional[UUID] = None
+    report_id: Optional[UUID] = None
+    target_key: str
+    outcome_key: str
+    timepoint: str
+    study_design: str
+    applicability: str
+    domains: Dict[str, AppraisalDomain]
+    overall: Optional[str] = None
+    kind: Literal["independent", "adjudicated"]
+    actor_role: str
+    assessor_id: UUID
+    assessor_name: Optional[str] = None
+    resolves_assessment_ids: Optional[List[UUID]] = None
+    rationale: Optional[str] = None
+    input_hash: str
+    supersedes_assessment_id: Optional[UUID] = None
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class AppraisalEvidenceOption(BaseModel):
+    """An accepted-value tip of this unit's documents that a domain may cite."""
+
+    kind: Literal["accepted_value"] = "accepted_value"
+    id: UUID
+    document_id: UUID
+    field_id: UUID
+    value: Any = None
+    missingness: Optional[str] = None
+    quote: Optional[str] = None
+
+
+class AppraisalResult(BaseModel):
+    target_key: str
+    study_id: Optional[UUID] = None
+    report_id: Optional[UUID] = None
+    outcome_key: str
+    timepoint: str
+    status: AppraisalStatus
+    unresolved_domains: List[str]
+    stale: bool
+    mine: bool
+    rows: List[AppraisalResponse]
+    evidence_options: List[AppraisalEvidenceOption] = Field(default_factory=list)
+
+
+class AppraisalInstrumentDomain(BaseModel):
+    id: str
+    name: str
+    signals: List[str]
+
+
+class AppraisalInstrument(BaseModel):
+    key: str
+    version: str
+    spec_hash: str
+    mode: str
+    variant: str
+    domains: List[AppraisalInstrumentDomain]
+    responses: List[str]
+    judgments: List[str]
+    designs: List[str]
+    applies_to: List[str]
+    licence: str
+    encoding: str
+    source: str
+
+
+class AppraisalListResponse(BaseModel):
+    """Status, staleness and visibility are derived on every read."""
+
+    protocol_version_id: Optional[UUID] = None
+    instrument: Optional[AppraisalInstrument] = None
+    outcomes: Dict[str, List[str]] = Field(default_factory=dict)
+    results: List[AppraisalResult]
+
+
 # --- Search import / corpus (GOO-300) --------------------------------------
 
 

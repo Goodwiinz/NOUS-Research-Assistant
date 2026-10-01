@@ -79,6 +79,8 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-309: appraisals reference reports, studies and protocol versions.
+    "appraisal_assessments",
     # GOO-307: releases reference drafts and nothing rebuilt; dropped first.
     "draft_releases",
     # GOO-306: claim tables reference the extraction tables; rebuilt last.
@@ -126,6 +128,7 @@ def _upgrade(connection: Connection) -> None:
         "b8d0f2a4c6e9_add_extraction_source_anchors.py",
         "c4e6a8b0d2f5_create_research_claims.py",
         "d7f9b1c3e5a8_create_draft_releases.py",
+        "e2a4c6b8d0f1_create_appraisal_assessments.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename
