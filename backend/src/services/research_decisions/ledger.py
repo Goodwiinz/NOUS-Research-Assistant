@@ -3,8 +3,11 @@
 Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
-``research_evidence``) registers its subject type, payload vocabulary, value validation and replay transition
-rules in ``_FAMILIES``.
+``research_evidence``, ``research_synthesis``, ``research_experiment``,
+``research_reproduction``, ``research_peer_review``, ``research_manuscript``,
+``research_statements``, ``research_deposit``)
+registers its subject type, payload vocabulary, value validation and replay
+transition rules in ``_FAMILIES``.
 
 Idempotency is scoped to one aggregate stream. Protocol approval derives one
 stable subkey per emitted event (for example ``<request>:superseded`` and
@@ -19,7 +22,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 from uuid import UUID, uuid4
 
@@ -33,6 +36,7 @@ from src.services.research_engine import (
     appraisal_rules,
     evidence_rules,
     screening_rules,
+    synthesis_rules,
 )
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -311,6 +315,14 @@ _CLAIMS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
         }
     ),
 }
+# GOO-311: v2 adds the ``synthesis_result`` link target; v1 keeps replaying.
+_CLAIMS_PAYLOAD_KEYS[("claim.linked", 2)] = _CLAIMS_PAYLOAD_KEYS[
+    ("claim.linked", 1)
+] | {"synthesis_result_id"}
+# GOO-312: v3 adds the ``figure`` link target; v1 and v2 keep replaying.
+_CLAIMS_PAYLOAD_KEYS[("claim.linked", 3)] = _CLAIMS_PAYLOAD_KEYS[
+    ("claim.linked", 2)
+] | {"figure_id"}
 # GOO-307: verified draft releases, one stream per Collection so promotion
 # and cross-draft invalidation share one total order. A promotion's subject is
 # its release; a staling's subject is the Collection.
@@ -318,7 +330,13 @@ _RELEASE_AGGREGATE = "research_release"
 _RELEASE_SUBJECT = "draft_release"
 _RELEASE_PROMOTERS = frozenset({"adjudicator", "supervisor"})
 _RELEASE_CAUSE_FAMILIES = frozenset(
-    {"research_extraction", "research_claims", "research_release"}
+    {
+        "research_extraction",
+        "research_claims",
+        "research_release",
+        "research_synthesis",  # GOO-311: a successor synthesis result
+        "research_experiment",  # GOO-312: a successor figure
+    }
 )
 _RELEASE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     ("release.promoted", 1): frozenset(
@@ -421,12 +439,272 @@ _EVIDENCE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
         }
     ),
 }
+# GOO-311: quantitative synthesis results, one stream per Collection. The
+# subject of each event is the result row it inserted.
+_SYNTHESIS_AGGREGATE = "research_synthesis"
+_SYNTHESIS_SUBJECT = "synthesis_result"
+_SYNTHESIS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("synthesis.executed", 1): frozenset(
+        {
+            "collection_id",
+            "result_id",
+            "supersedes_result_id",
+            "table_version_id",
+            "protocol_version_id",
+            "outcome_key",
+            "timepoint",
+            "measure",
+            "model",
+            "config_hash",
+            "estimator_version",
+            "status",
+            "input_hash",
+            "result_hash",
+            "included_units",
+            "excluded",
+        }
+    ),
+}
+# GOO-312: run manifests and figure records, one stream per Collection. The
+# subject of each event is the manifest or figure row it inserted.
+_EXPERIMENT_AGGREGATE = "research_experiment"
+_EXPERIMENT_SUBJECT = "experiment"
+_EXPERIMENT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("run.manifest_recorded", 1): frozenset(
+        {
+            "collection_id",
+            "run_id",
+            "manifest_id",
+            "manifest_hash",
+            "completeness",
+            "missing",
+            "status",
+            "output_artifact_ids",
+        }
+    ),
+    ("figure.registered", 1): frozenset(
+        {
+            "collection_id",
+            "figure_id",
+            "figure_key",
+            "kind",
+            "output_artifact_id",
+            "run_id",
+            "manifest_id",
+            "supersedes_figure_id",
+        }
+    ),
+}
+# GOO-313: fresh reruns of a manifested run, one stream per Collection. The
+# subject of every event is the rerun; attempts are numbered within it.
+_REPRODUCTION_AGGREGATE = "research_reproduction"
+_REPRODUCTION_SUBJECT = "experiment_rerun"
+_RERUN_STATUSES = frozenset(
+    {
+        "restoration_failed",
+        "environment_unavailable",
+        "execution_failed",
+        "cancelled",
+        "interrupted",
+        "executed",
+    }
+)
+_REPRODUCTION_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("rerun.admitted", 1): frozenset(
+        {
+            "collection_id",
+            "rerun_id",
+            "run_id",
+            "manifest_id",
+            "manifest_hash",
+            "rule_hash",
+        }
+    ),
+    ("rerun.attempt_started", 1): frozenset(
+        {"collection_id", "rerun_id", "attempt", "lease_expires_at"}
+    ),
+    ("rerun.attempt_finished", 1): frozenset(
+        {
+            "collection_id",
+            "rerun_id",
+            "attempt",
+            "status",
+            "reproduction",
+            "comparison_hash",
+            "output_sha256s",
+            "reasons",
+        }
+    ),
+}
+# GOO-314: external peer review, one stream per Collection. The subject of a
+# round event is the round; every other event's subject is the comment root.
+_PEER_REVIEW_AGGREGATE = "research_peer_review"
+_PEER_REVIEW_SUBJECT = "peer_review_comment"
+_PEER_REVIEW_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("review_round.recorded", 1): frozenset(
+        {"collection_id", "round_id", "draft_id", "draft_content_hash", "reviewer_ids"}
+    ),
+    ("review_comment.versioned", 1): frozenset(
+        {
+            "collection_id",
+            "round_id",
+            "comment_id",
+            "comment_root_id",
+            "supersedes_comment_id",
+            "reviewer_id",
+            "draft_content_hash",
+            "anchored",
+            "quote_sha256",
+        }
+    ),
+    ("review_response.versioned", 1): frozenset(
+        {
+            "collection_id",
+            "comment_root_id",
+            "response_id",
+            "supersedes_response_id",
+            "kind",
+            "revised_draft_id",
+            "diff_sha256",
+            "evidence_claim_version_ids",
+        }
+    ),
+    ("review_decision.recorded", 1): frozenset(
+        {
+            "collection_id",
+            "comment_root_id",
+            "decision_id",
+            "kind",
+            "assignee_id",
+            "response_id",
+            "supersedes_decision_id",
+        }
+    ),
+}
+# GOO-315: manuscript releases, one stream per Collection; the subject of
+# both events is the release row the event inserts.
+_MANUSCRIPT_AGGREGATE = "research_manuscript"
+_MANUSCRIPT_SUBJECT = "manuscript_release"
+_MANUSCRIPT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("manuscript.candidate_created", 1): frozenset(
+        {
+            "collection_id",
+            "release_id",
+            "draft_id",
+            "draft_version",
+            "content_hash",
+            "snapshot_hash",
+            "checks_hash",
+            "package_sha256",
+        }
+    ),
+    ("manuscript.verified", 1): frozenset(
+        {
+            "collection_id",
+            "release_id",
+            "candidate_release_id",
+            "draft_release_id",
+            "content_hash",
+            "snapshot_hash",
+            "package_sha256",
+            "obligations",
+        }
+    ),
+}
+_STATEMENTS_AGGREGATE = "research_statements"
+_STATEMENTS_SUBJECT = "statement_set"
+_STATEMENTS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("statements.versioned", 1): frozenset(
+        {
+            "collection_id",
+            "statement_set_id",
+            "supersedes_set_id",
+            "set_hash",
+            "author_keys",
+            "missing_fields",
+        }
+    ),
+    ("statements.approved", 1): frozenset(
+        {
+            "collection_id",
+            "statement_set_id",
+            "author_key",
+            "set_hash",
+            "method",
+            "approval_id",
+        }
+    ),
+    ("venue.checked", 1): frozenset(
+        {
+            "collection_id",
+            "venue_check_id",
+            "release_id",
+            "profile_id",
+            "profile_version",
+            "package_sha256",
+            "anonymized_sha256",
+            "status",
+            "failing_rules",
+        }
+    ),
+}
+_APPROVAL_METHODS = ("in_app_self", "recorded_attestation")
+# GOO-318: archive deposits, one stream per Collection. Approvals bind the
+# exact release, package hash, repository, account label and action; the
+# worker records each phase attempt as ``machine`` on the requester's behalf.
+_DEPOSIT_AGGREGATE = "research_deposit"
+_DEPOSIT_SUBJECT = "archive_deposit"
+_DEPOSIT_APPROVAL_KEYS = frozenset(
+    {
+        "collection_id",
+        "approval_id",
+        "release_id",
+        "package_sha256",
+        "repository",
+        "account_ref",
+        "action",
+    }
+)
+_DEPOSIT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("deposit.approved", 1): _DEPOSIT_APPROVAL_KEYS,
+    ("deposit.revoked", 1): _DEPOSIT_APPROVAL_KEYS,
+    ("deposit.requested", 1): frozenset(
+        {
+            "collection_id",
+            "operation_id",
+            "release_id",
+            "package_sha256",
+            "repository",
+            "account_ref",
+            "approval_id",
+            "file_count",
+        }
+    ),
+    ("deposit.phase_recorded", 1): frozenset(
+        {
+            "collection_id",
+            "operation_id",
+            "attempt_id",
+            "previous_id",
+            "approval_id",
+            "phase",
+            "outcome",
+            "remote_deposition_id",
+            "remote_record_id",
+            "doi",
+        }
+    ),
+}
+_DEPOSIT_PHASES = ("draft_created", "files_uploaded", "published", "verified")
+_DEPOSIT_OUTCOMES = ("succeeded", "failed", "unknown")
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
     "extraction.accepted",
     "claim.assessed",
     "appraisal.adjudicated",
     "evidence.contradiction_recorded",
     "evidence.certainty_assessed",
+    "deposit.approved",
+    "deposit.revoked",
 }
 
 
@@ -1040,6 +1318,12 @@ def _validate_claims_payload(
                 quote=payload["quote_sha256"],
                 status=payload["status"],
                 supersedes_link_id=supersedes,
+                synthesis_result_id=_validated_optional_uuid(
+                    payload.get("synthesis_result_id"), "synthesis_result_id"
+                ),
+                figure_id=_validated_optional_uuid(
+                    payload.get("figure_id"), "figure_id"
+                ),
             )
         except ValueError as error:
             raise DecisionValidationError(f"claim link: {error}") from error
@@ -2025,7 +2309,7 @@ def _validate_claims_transitions(
             row = live(link)
             if (
                 row is None
-                or row["kind"] == "legacy_unanchored"
+                or row["kind"] in ("legacy_unanchored", "synthesis_result", "figure")
                 or version_claim[link_version[link]] != claim
             ):
                 raise DecisionReplayError("stance observation needs a live link")
@@ -2205,6 +2489,697 @@ def _validate_evidence_transitions(
             certainty_tips[key] = str(payload["certainty_id"])
 
 
+def _validate_synthesis_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["result_id"], "result_id") != subject_id:
+        raise DecisionValidationError("synthesis event subject is not its result")
+    _validated_optional_uuid(payload["supersedes_result_id"], "supersedes_result_id")
+    for key in ("table_version_id", "protocol_version_id"):
+        _validated_payload_uuid(payload[key], key)
+    for key in ("outcome_key", "timepoint", "estimator_version"):
+        if not isinstance(payload[key], str) or not payload[key]:
+            raise DecisionValidationError(f"synthesis {key} is invalid")
+    if (payload["measure"], payload["model"]) != (
+        synthesis_rules.MEASURE,
+        synthesis_rules.MODEL,
+    ):
+        raise DecisionValidationError("synthesis method is unsupported")
+    if payload["status"] not in synthesis_rules.STATUSES:
+        raise DecisionValidationError("synthesis status is invalid")
+    for key in ("config_hash", "input_hash", "result_hash"):
+        _validated_sha256(payload[key], key)
+    units = payload["included_units"]
+    if (
+        not isinstance(units, list)
+        or not all(isinstance(u, str) and u for u in units)
+        or len(set(units)) != len(units)
+    ):
+        raise DecisionValidationError("included_units must be unique unit keys")
+    excluded = payload["excluded"]
+    if not isinstance(excluded, list) or not all(
+        isinstance(e, dict) and set(e) == {"unit", "report_ids", "reason", "detail"}
+        for e in excluded
+    ):
+        raise DecisionValidationError("synthesis exclusions are invalid")
+
+
+def _validate_synthesis_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Each (outcome, timepoint) has one result chain and every successor
+    names its tip; an unchanged input never makes a successor; a result is
+    computed iff it pooled at least two units; a reviewer executes."""
+    tips: dict[tuple[str, str], tuple[str, str]] = {}  # key -> (id, input_hash)
+    seen: set[str] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.actor_role != "reviewer":
+            raise DecisionReplayError("synthesis execution requires a reviewer")
+        key = (str(payload["outcome_key"]), str(payload["timepoint"]))
+        tip = tips.get(key)
+        if payload["supersedes_result_id"] != (None if tip is None else tip[0]):
+            raise DecisionReplayError("synthesis result supersedes a non-tip")
+        if tip is not None and tip[1] == payload["input_hash"]:
+            raise DecisionReplayError("synthesis successor with an unchanged input")
+        if (payload["status"] == "computed") != (len(payload["included_units"]) >= 2):
+            raise DecisionReplayError("synthesis status disagrees with its units")
+        result = str(payload["result_id"])
+        if result in seen:
+            raise DecisionReplayError("synthesis result id reused")
+        seen.add(result)
+        tips[key] = (result, str(payload["input_hash"]))
+
+
+def _validate_experiment_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    _validated_payload_uuid(payload["run_id"], "run_id")
+    manifest = _validated_payload_uuid(payload["manifest_id"], "manifest_id")
+    if event_type == "run.manifest_recorded":
+        if manifest != subject_id:
+            raise DecisionValidationError("manifest event subject is not its manifest")
+        _validated_sha256(payload["manifest_hash"], "manifest_hash")
+        if payload["completeness"] not in ("complete", "incomplete"):
+            raise DecisionValidationError("manifest completeness is invalid")
+        missing = payload["missing"]
+        if not isinstance(missing, list) or not all(
+            isinstance(m, str) and m for m in missing
+        ):
+            raise DecisionValidationError("manifest missing must list paths")
+        if (payload["completeness"] == "complete") != (not missing):
+            raise DecisionValidationError("manifest completeness disagrees")
+        if not isinstance(payload["status"], str) or not payload["status"]:
+            raise DecisionValidationError("manifest status is invalid")
+        ids = _validated_uuid_list(
+            payload["output_artifact_ids"], "output_artifact_ids"
+        )
+        if len(set(ids)) != len(ids):
+            raise DecisionValidationError("output_artifact_ids must be unique")
+        return
+    figure = _validated_payload_uuid(payload["figure_id"], "figure_id")
+    if figure != subject_id:
+        raise DecisionValidationError("figure event subject is not its figure")
+    if figure == _validated_optional_uuid(
+        payload["supersedes_figure_id"], "supersedes_figure_id"
+    ):
+        raise DecisionValidationError("figure cannot supersede itself")
+    key = payload["figure_key"]
+    if not isinstance(key, str) or not key or len(key) > 64:
+        raise DecisionValidationError("figure_key is invalid")
+    if payload["kind"] not in ("figure", "table"):
+        raise DecisionValidationError("figure kind is invalid")
+    _validated_payload_uuid(payload["output_artifact_id"], "output_artifact_id")
+
+
+def _validate_experiment_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """The machine records at most one manifest per run; an editor registers
+    a figure on an output of a manifest recorded earlier in the stream, and
+    each figure_key has one chain whose successors name its tip."""
+    manifests: dict[str, tuple[str, set[str]]] = {}  # manifest -> (run, outputs)
+    runs: set[str] = set()
+    tips: dict[str, str] = {}  # figure_key -> tip figure id
+    figures: set[str] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        run, manifest = str(payload["run_id"]), str(payload["manifest_id"])
+        if event.event_type == "run.manifest_recorded":
+            if event.actor_role != "machine":
+                raise DecisionReplayError("run manifest requires the machine")
+            if run in runs or manifest in manifests:
+                raise DecisionReplayError("run already has a manifest")
+            runs.add(run)
+            manifests[manifest] = (
+                run,
+                {str(v) for v in payload["output_artifact_ids"]},
+            )
+            continue
+        if event.actor_role != "editor":
+            raise DecisionReplayError("figure registration requires an editor")
+        recorded = manifests.get(manifest)
+        if recorded is None or recorded[0] != run:
+            raise DecisionReplayError("figure names no prior manifest")
+        if str(payload["output_artifact_id"]) not in recorded[1]:
+            raise DecisionReplayError("figure output is not in its manifest")
+        key = str(payload["figure_key"])
+        if payload["supersedes_figure_id"] != tips.get(key):
+            raise DecisionReplayError("figure supersedes a non-tip")
+        figure = str(payload["figure_id"])
+        if figure in figures:
+            raise DecisionReplayError("figure id reused")
+        figures.add(figure)
+        tips[key] = figure
+
+
+def _validate_reproduction_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["rerun_id"], "rerun_id") != subject_id:
+        raise DecisionValidationError("rerun event subject is not its rerun")
+    if event_type == "rerun.admitted":
+        _validated_payload_uuid(payload["run_id"], "run_id")
+        _validated_payload_uuid(payload["manifest_id"], "manifest_id")
+        _validated_sha256(payload["manifest_hash"], "manifest_hash")
+        _validated_sha256(payload["rule_hash"], "rule_hash")
+        return
+    attempt = payload["attempt"]
+    if not _is_int(attempt) or attempt < 1:
+        raise DecisionValidationError("rerun attempt must be a positive integer")
+    if event_type == "rerun.attempt_started":
+        try:
+            datetime.fromisoformat(payload["lease_expires_at"])
+        except (TypeError, ValueError):
+            raise DecisionValidationError("rerun lease is not a timestamp") from None
+        return
+    if payload["status"] not in _RERUN_STATUSES:
+        raise DecisionValidationError("rerun status is invalid")
+    if payload["reproduction"] not in (None, "reproduced", "not_reproduced"):
+        raise DecisionValidationError("rerun reproduction is invalid")
+    if (payload["status"] == "executed") != (payload["reproduction"] is not None):
+        raise DecisionValidationError("reproduction requires an executed attempt")
+    _validated_optional_sha256(payload["comparison_hash"], "comparison_hash")
+    digests = payload["output_sha256s"]
+    if not isinstance(digests, list):
+        raise DecisionValidationError("output_sha256s must be a list")
+    for digest in digests:
+        _validated_sha256(digest, "output_sha256s")
+    reasons = payload["reasons"]
+    if not isinstance(reasons, list) or not all(
+        isinstance(r, str) and r for r in reasons
+    ):
+        raise DecisionValidationError("rerun reasons must be strings")
+
+
+def _validate_reproduction_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """A reviewer admits each rerun once; its attempts start in order
+    (1, 2, ...) after the previous one finished, each finishes at most once
+    (an attempt may finish without starting: a cancel or a lifecycle stop
+    before the worker claimed it), a reproduction verdict exists iff the
+    attempt executed, and nothing starts after an executed attempt."""
+    admitted: set[str] = set()
+    started: dict[str, set[int]] = {}
+    finished: dict[str, set[int]] = {}
+    executed: set[str] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        rerun = str(payload["rerun_id"])
+        if event.event_type == "rerun.admitted":
+            if event.actor_role != "reviewer":
+                raise DecisionReplayError("rerun admission requires a reviewer")
+            if rerun in admitted:
+                raise DecisionReplayError("rerun admitted twice")
+            admitted.add(rerun)
+            started[rerun], finished[rerun] = set(), set()
+            continue
+        if rerun not in admitted:
+            raise DecisionReplayError("rerun attempt names no admitted rerun")
+        if event.actor_role not in ("machine", "reviewer"):
+            raise DecisionReplayError("rerun attempt actor is invalid")
+        attempt = int(payload["attempt"])
+        current = max(finished[rerun], default=0) + 1
+        if rerun in executed:
+            raise DecisionReplayError("rerun attempt after an executed attempt")
+        if attempt != current:
+            raise DecisionReplayError("rerun attempts out of order")
+        if event.event_type == "rerun.attempt_started":
+            if attempt in started[rerun]:
+                raise DecisionReplayError("rerun attempt started twice")
+            started[rerun].add(attempt)
+            continue
+        if (payload["status"] == "executed") != (payload["reproduction"] is not None):
+            raise DecisionReplayError("reproduction without an executed attempt")
+        finished[rerun].add(attempt)
+        if payload["status"] == "executed":
+            executed.add(rerun)
+
+
+def _validate_peer_review_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if event_type == "review_round.recorded":
+        if _validated_payload_uuid(payload["round_id"], "round_id") != subject_id:
+            raise DecisionValidationError("round event subject is not its round")
+        _validated_payload_uuid(payload["draft_id"], "draft_id")
+        _validated_sha256(payload["draft_content_hash"], "draft_content_hash")
+        _validated_unique_ids(payload["reviewer_ids"], "reviewer_ids", 1)
+        return
+    root = _validated_payload_uuid(payload["comment_root_id"], "comment_root_id")
+    if root != subject_id:
+        raise DecisionValidationError("review event subject is not its comment root")
+    if event_type == "review_comment.versioned":
+        _validated_payload_uuid(payload["round_id"], "round_id")
+        comment = _validated_payload_uuid(payload["comment_id"], "comment_id")
+        supersedes = _validated_optional_uuid(
+            payload["supersedes_comment_id"], "supersedes_comment_id"
+        )
+        if (supersedes is None) != (comment == root):
+            raise DecisionValidationError("only a comment's first version is its root")
+        _validated_payload_uuid(payload["reviewer_id"], "reviewer_id")
+        _validated_sha256(payload["draft_content_hash"], "draft_content_hash")
+        if not isinstance(payload["anchored"], bool):
+            raise DecisionValidationError("anchored must be a boolean")
+        if payload["anchored"]:
+            _validated_sha256(payload["quote_sha256"], "quote_sha256")
+        elif payload["quote_sha256"] is not None:
+            raise DecisionValidationError("a general comment carries no quote")
+        return
+    if event_type == "review_response.versioned":
+        _validated_payload_uuid(payload["response_id"], "response_id")
+        _validated_optional_uuid(
+            payload["supersedes_response_id"], "supersedes_response_id"
+        )
+        if payload["kind"] not in ("change", "no_change"):
+            raise DecisionValidationError("response kind is invalid")
+        revised = _validated_optional_uuid(
+            payload["revised_draft_id"], "revised_draft_id"
+        )
+        _validated_optional_sha256(payload["diff_sha256"], "diff_sha256")
+        is_change = payload["kind"] == "change"
+        if is_change != (revised is not None and payload["diff_sha256"] is not None):
+            raise DecisionValidationError("a change response needs a revision and diff")
+        _validated_uuid_list(
+            payload["evidence_claim_version_ids"], "evidence_claim_version_ids"
+        )
+        return
+    _validated_payload_uuid(payload["decision_id"], "decision_id")
+    _validated_optional_uuid(
+        payload["supersedes_decision_id"], "supersedes_decision_id"
+    )
+    kind = payload["kind"]
+    if kind not in ("assigned", "resolved", "reopened"):
+        raise DecisionValidationError("decision kind is invalid")
+    assignee = _validated_optional_uuid(payload["assignee_id"], "assignee_id")
+    response = _validated_optional_uuid(payload["response_id"], "response_id")
+    if (kind == "assigned") != (assignee is not None):
+        raise DecisionValidationError("only an assignment names an assignee")
+    if kind == "resolved" and response is None:
+        raise DecisionValidationError("a resolution names the accepted response")
+
+
+def _validate_peer_review_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Comments name a recorded round; each comment root, response chain and
+    decision chain (assignment vs resolution) has exactly one tip, every
+    successor superseding it; a resolution names a response recorded earlier
+    for the same root; assignment is an editor's, resolution and reopening an
+    adjudicator's; a change response carries its diff hash."""
+    rounds: set[str] = set()
+    comment_tips: dict[str, str] = {}
+    response_tips: dict[str, str] = {}
+    responses: dict[str, set[str]] = {}
+    decision_tips: dict[tuple[str, bool], str] = {}
+
+    def advance(tips: dict[Any, str], key: Any, new: str, old: Any) -> None:
+        if tips.get(key) != (None if old is None else str(old)):
+            raise DecisionReplayError("peer-review chain forked")
+        tips[key] = new
+
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.event_type == "review_round.recorded":
+            rounds.add(str(payload["round_id"]))
+            continue
+        root = str(payload["comment_root_id"])
+        if event.event_type == "review_comment.versioned":
+            if str(payload["round_id"]) not in rounds:
+                raise DecisionReplayError("comment names no recorded round")
+            advance(
+                comment_tips,
+                root,
+                str(payload["comment_id"]),
+                payload["supersedes_comment_id"],
+            )
+            continue
+        if root not in comment_tips:
+            raise DecisionReplayError("review event names no recorded comment")
+        if event.event_type == "review_response.versioned":
+            if payload["kind"] == "change" and not payload["diff_sha256"]:
+                raise DecisionReplayError("change response without a diff")
+            response = str(payload["response_id"])
+            advance(response_tips, root, response, payload["supersedes_response_id"])
+            responses.setdefault(root, set()).add(response)
+            continue
+        kind = payload["kind"]
+        expected_role = "editor" if kind == "assigned" else "adjudicator"
+        if event.actor_role != expected_role:
+            raise DecisionReplayError(f"{kind} decision requires an {expected_role}")
+        if kind == "resolved" and str(payload["response_id"]) not in responses.get(
+            root, set()
+        ):
+            raise DecisionReplayError("resolution names an unknown response")
+        advance(
+            decision_tips,
+            (root, kind == "assigned"),
+            str(payload["decision_id"]),
+            payload["supersedes_decision_id"],
+        )
+
+
+def _validate_manuscript_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["release_id"], "release_id") != subject_id:
+        raise DecisionValidationError("manuscript event subject is not its release")
+    for key in ("content_hash", "snapshot_hash", "package_sha256"):
+        _validated_sha256(payload[key], key)
+    if event_type == "manuscript.candidate_created":
+        _validated_payload_uuid(payload["draft_id"], "draft_id")
+        if not _is_int(payload["draft_version"]) or payload["draft_version"] < 1:
+            raise DecisionValidationError("draft_version must be a positive integer")
+        _validated_sha256(payload["checks_hash"], "checks_hash")
+        return
+    _validated_payload_uuid(payload["candidate_release_id"], "candidate_release_id")
+    _validated_payload_uuid(payload["draft_release_id"], "draft_release_id")
+    obligations = payload["obligations"]
+    if (
+        not isinstance(obligations, dict)
+        or not obligations
+        or not all(v in ("pass", "not_applicable") for v in obligations.values())
+    ):
+        raise DecisionValidationError("a verified release needs passing obligations")
+
+
+def _validate_manuscript_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Candidates are an editor's; a verification is an adjudicator's or
+    supervisor's, names a candidate created earlier with the same snapshot
+    and package hashes, and happens at most once per candidate."""
+    candidates: dict[str, tuple[str, str]] = {}
+    verified: set[str] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        hashes = (str(payload["snapshot_hash"]), str(payload["package_sha256"]))
+        if event.event_type == "manuscript.candidate_created":
+            if event.actor_role != "editor":
+                raise DecisionReplayError("a candidate release is an editor's")
+            candidates[str(payload["release_id"])] = hashes
+            continue
+        if event.actor_role not in _RELEASE_PROMOTERS:
+            raise DecisionReplayError(
+                "manuscript verification requires an adjudicator or supervisor"
+            )
+        candidate = str(payload["candidate_release_id"])
+        if candidate not in candidates:
+            raise DecisionReplayError("verification names no recorded candidate")
+        if candidates[candidate] != hashes:
+            raise DecisionReplayError("verified package differs from its candidate")
+        if candidate in verified:
+            raise DecisionReplayError("candidate already verified")
+        verified.add(candidate)
+
+
+def _string_list(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+        raise DecisionValidationError(f"{field} must be a list of strings")
+    return list(value)
+
+
+def _validate_statements_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if event_type == "venue.checked":
+        if _validated_payload_uuid(payload["venue_check_id"], "venue_check_id") != (
+            subject_id
+        ):
+            raise DecisionValidationError("venue event subject is not its check")
+        _validated_payload_uuid(payload["release_id"], "release_id")
+        _validated_sha256(payload["package_sha256"], "package_sha256")
+        _validated_optional_sha256(payload["anonymized_sha256"], "anonymized_sha256")
+        if not isinstance(payload["profile_id"], str) or not payload["profile_id"]:
+            raise DecisionValidationError("profile_id is invalid")
+        if not _is_int(payload["profile_version"]) or payload["profile_version"] < 1:
+            raise DecisionValidationError("profile_version must be positive")
+        if payload["status"] not in ("pass", "fail"):
+            raise DecisionValidationError("venue status is invalid")
+        failing = payload["failing_rules"]
+        if not isinstance(failing, list) or (payload["status"] == "pass") != (
+            not failing
+        ):
+            raise DecisionValidationError("failing_rules contradict the status")
+        return
+    set_id = _validated_payload_uuid(payload["statement_set_id"], "statement_set_id")
+    if set_id != subject_id:
+        raise DecisionValidationError("statement event subject is not its set")
+    _validated_sha256(payload["set_hash"], "set_hash")
+    if event_type == "statements.versioned":
+        _validated_optional_uuid(payload["supersedes_set_id"], "supersedes_set_id")
+        keys = _string_list(payload["author_keys"], "author_keys")
+        if len(set(keys)) != len(keys):
+            raise DecisionValidationError("author_keys must be unique")
+        _string_list(payload["missing_fields"], "missing_fields")
+        return
+    if not isinstance(payload["author_key"], str) or not payload["author_key"]:
+        raise DecisionValidationError("author_key is invalid")
+    if payload["method"] not in _APPROVAL_METHODS:
+        raise DecisionValidationError("approval method is invalid")
+    _validated_payload_uuid(payload["approval_id"], "approval_id")
+
+
+def _validate_statements_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """One statement-set chain per Collection; an approval names a recorded
+    set, binds that set's exact hash, names one of its authors, and exists
+    at most once per author per set. Every event is an editor's."""
+    sets: dict[str, tuple[str, frozenset[str]]] = {}
+    approved: set[tuple[str, str]] = set()
+    tip: str | None = None
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.actor_role != "editor":
+            raise DecisionReplayError("statement and venue events are an editor's")
+        if event.event_type == "venue.checked":
+            continue
+        set_id = str(payload["statement_set_id"])
+        if event.event_type == "statements.versioned":
+            supersedes = payload["supersedes_set_id"]
+            if set_id in sets or (None if supersedes is None else str(supersedes)) != (
+                tip
+            ):
+                raise DecisionReplayError("statement set does not extend the tip")
+            sets[set_id] = (
+                str(payload["set_hash"]),
+                frozenset(payload["author_keys"]),
+            )
+            tip = set_id
+            continue
+        recorded = sets.get(set_id)
+        if recorded is None:
+            raise DecisionReplayError("approval names no recorded statement set")
+        if recorded[0] != payload["set_hash"]:
+            raise DecisionReplayError("approval binds another set hash")
+        author = str(payload["author_key"])
+        if author not in recorded[1]:
+            raise DecisionReplayError("approval names no author of the set")
+        if (set_id, author) in approved:
+            raise DecisionReplayError("author already approved this set")
+        approved.add((set_id, author))
+
+
+def _optional_text(value: Any, field: str, limit: int) -> None:
+    if value is not None and (
+        not isinstance(value, str) or not value or len(value) > limit
+    ):
+        raise DecisionValidationError(f"{field} is invalid")
+
+
+def _validate_deposit_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if event_type == "deposit.phase_recorded":
+        if _validated_payload_uuid(payload["attempt_id"], "attempt_id") != subject_id:
+            raise DecisionValidationError("deposit event subject is not its attempt")
+        _validated_payload_uuid(payload["operation_id"], "operation_id")
+        _validated_payload_uuid(payload["previous_id"], "previous_id")
+        _validated_optional_uuid(payload["approval_id"], "approval_id")
+        if payload["phase"] not in _DEPOSIT_PHASES:
+            raise DecisionValidationError("deposit phase is invalid")
+        if payload["outcome"] not in _DEPOSIT_OUTCOMES:
+            raise DecisionValidationError("deposit outcome is invalid")
+        _optional_text(payload["remote_deposition_id"], "remote_deposition_id", 64)
+        _optional_text(payload["remote_record_id"], "remote_record_id", 64)
+        _optional_text(payload["doi"], "doi", 255)
+        return
+    subject_key = (
+        "operation_id" if event_type == "deposit.requested" else ("approval_id")
+    )
+    if _validated_payload_uuid(payload[subject_key], subject_key) != subject_id:
+        raise DecisionValidationError("deposit event subject is not its row")
+    _validated_payload_uuid(payload["release_id"], "release_id")
+    _validated_payload_uuid(payload["approval_id"], "approval_id")
+    _validated_sha256(payload["package_sha256"], "package_sha256")
+    if payload["repository"] != "zenodo_sandbox":
+        raise DecisionValidationError("deposit repository is invalid")
+    _optional_text(payload["account_ref"], "account_ref", 128)
+    if payload["account_ref"] is None:
+        raise DecisionValidationError("account_ref is invalid")
+    if event_type == "deposit.requested":
+        if not _is_int(payload["file_count"]) or payload["file_count"] < 1:
+            raise DecisionValidationError("file_count must be positive")
+    elif payload["action"] != "publish":
+        raise DecisionValidationError("deposit action is invalid")
+
+
+def _validate_deposit_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Approvals and revocations are an adjudicator's or supervisor's; the
+    newest one per (release, repository, account) is in force. A request
+    names the approval in force for its exact package hash, and its
+    requester never approved it. Phase attempts are the worker's, extend
+    their operation's chain tip, never publish or verify before a succeeded
+    upload, and a succeeded draft or publish names the approval in force."""
+    approvals: dict[str, tuple[tuple[str, str, str], str, Any]] = {}
+    in_force: dict[tuple[str, str, str], str | None] = {}
+    operations: dict[str, dict[str, Any]] = {}
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.event_type in ("deposit.approved", "deposit.revoked"):
+            if event.actor_role not in _RELEASE_PROMOTERS:
+                raise DecisionReplayError(
+                    "deposit approval requires an adjudicator or supervisor"
+                )
+            scope = (
+                str(payload["release_id"]),
+                str(payload["repository"]),
+                str(payload["account_ref"]),
+            )
+            approvals[str(payload["approval_id"])] = (
+                scope,
+                str(payload["package_sha256"]),
+                event.actor_user_id,
+            )
+            approved = event.event_type == "deposit.approved"
+            in_force[scope] = str(payload["approval_id"]) if approved else None
+            continue
+        if event.event_type == "deposit.requested":
+            if event.actor_role not in _RELEASE_PROMOTERS:
+                raise DecisionReplayError(
+                    "deposit request requires an adjudicator or supervisor"
+                )
+            scope = (
+                str(payload["release_id"]),
+                str(payload["repository"]),
+                str(payload["account_ref"]),
+            )
+            approval = str(payload["approval_id"])
+            if in_force.get(scope) != approval or (
+                approvals[approval][1] != payload["package_sha256"]
+            ):
+                raise DecisionReplayError("deposit request has no approval in force")
+            if approvals[approval][2] == event.actor_user_id:
+                raise DecisionReplayError("the requester approved their own deposit")
+            operation = str(payload["operation_id"])
+            if operation in operations:
+                raise DecisionReplayError("deposit operation already requested")
+            operations[operation] = {
+                "scope": scope,
+                "sha": payload["package_sha256"],
+                "tip": operation,
+                "uploaded": False,
+            }
+            continue
+        if event.actor_role != "machine":
+            raise DecisionReplayError("deposit phase attempts are the worker's")
+        state = operations.get(str(payload["operation_id"]))
+        if state is None:
+            raise DecisionReplayError("deposit attempt names no requested operation")
+        if str(payload["previous_id"]) != state["tip"]:
+            raise DecisionReplayError("deposit attempt does not extend the chain tip")
+        state["tip"] = str(payload["attempt_id"])
+        if payload["outcome"] != "succeeded":
+            continue
+        phase = payload["phase"]
+        if phase in ("published", "verified") and not state["uploaded"]:
+            raise DecisionReplayError("deposit published before its files uploaded")
+        if phase in ("draft_created", "published"):
+            approval = payload["approval_id"]
+            if (
+                approval is None
+                or in_force.get(state["scope"]) != str(approval)
+                or approvals[str(approval)][1] != state["sha"]
+            ):
+                raise DecisionReplayError("deposit attempt has no approval in force")
+        if phase == "files_uploaded":
+            state["uploaded"] = True
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -2294,6 +3269,55 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_EVIDENCE_PAYLOAD_KEYS,
         validate_payload=_validate_evidence_payload,
         validate_transitions=_validate_evidence_transitions,
+        requires_subject_version=False,
+    ),
+    _SYNTHESIS_AGGREGATE: _Family(
+        subject_type=_SYNTHESIS_SUBJECT,
+        payload_keys=_SYNTHESIS_PAYLOAD_KEYS,
+        validate_payload=_validate_synthesis_payload,
+        validate_transitions=_validate_synthesis_transitions,
+        requires_subject_version=False,
+    ),
+    _EXPERIMENT_AGGREGATE: _Family(
+        subject_type=_EXPERIMENT_SUBJECT,
+        payload_keys=_EXPERIMENT_PAYLOAD_KEYS,
+        validate_payload=_validate_experiment_payload,
+        validate_transitions=_validate_experiment_transitions,
+        requires_subject_version=False,
+    ),
+    _REPRODUCTION_AGGREGATE: _Family(
+        subject_type=_REPRODUCTION_SUBJECT,
+        payload_keys=_REPRODUCTION_PAYLOAD_KEYS,
+        validate_payload=_validate_reproduction_payload,
+        validate_transitions=_validate_reproduction_transitions,
+        requires_subject_version=False,
+    ),
+    _PEER_REVIEW_AGGREGATE: _Family(
+        subject_type=_PEER_REVIEW_SUBJECT,
+        payload_keys=_PEER_REVIEW_PAYLOAD_KEYS,
+        validate_payload=_validate_peer_review_payload,
+        validate_transitions=_validate_peer_review_transitions,
+        requires_subject_version=False,
+    ),
+    _MANUSCRIPT_AGGREGATE: _Family(
+        subject_type=_MANUSCRIPT_SUBJECT,
+        payload_keys=_MANUSCRIPT_PAYLOAD_KEYS,
+        validate_payload=_validate_manuscript_payload,
+        validate_transitions=_validate_manuscript_transitions,
+        requires_subject_version=False,
+    ),
+    _STATEMENTS_AGGREGATE: _Family(
+        subject_type=_STATEMENTS_SUBJECT,
+        payload_keys=_STATEMENTS_PAYLOAD_KEYS,
+        validate_payload=_validate_statements_payload,
+        validate_transitions=_validate_statements_transitions,
+        requires_subject_version=False,
+    ),
+    _DEPOSIT_AGGREGATE: _Family(
+        subject_type=_DEPOSIT_SUBJECT,
+        payload_keys=_DEPOSIT_PAYLOAD_KEYS,
+        validate_payload=_validate_deposit_payload,
+        validate_transitions=_validate_deposit_transitions,
         requires_subject_version=False,
     ),
 }

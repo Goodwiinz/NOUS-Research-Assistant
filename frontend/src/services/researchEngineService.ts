@@ -38,6 +38,12 @@ import type {
 } from '@/types/api/research-corpus-contract';
 import type { ApiJourneyResponse } from '@/types/api/research-journey-contract';
 import type {
+  ApiRerun,
+  ApiRerunCreate,
+  ApiRerunEligibility,
+  ApiRerunList,
+} from '@/types/api/research-rerun-contract';
+import type {
   ApiAppraisal,
   ApiAppraisalAdjudicate,
   ApiAppraisalList,
@@ -53,6 +59,20 @@ import type {
   ApiEvidenceTableCreate,
   ApiEvidenceTablePreview,
 } from '@/types/api/research-evidence-contract';
+import type {
+  ApiSynthesisExecute,
+  ApiSynthesisList,
+  ApiSynthesisPreview,
+  ApiSynthesisResult,
+  ApiSynthesisRoles,
+} from '@/types/api/research-synthesis-contract';
+import type {
+  ApiFigure,
+  ApiFigureCreate,
+  ApiFigureLineage,
+  ApiFigureList,
+  ApiRunManifestV2,
+} from '@/types/api/research-experiment-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -589,3 +609,130 @@ export const assessCertainty = (
 /** Every version, stale ones included; the server names the file. */
 export const exportEvidence = (projectId: string): Promise<void> =>
   api.download(`/research-engine/projects/${projectId}/evidence/export`);
+
+// --- Quantitative synthesis (GOO-311) ----------------------------------------
+
+export type {
+  ApiSynthesisExclusion as SynthesisExclusion,
+  ApiSynthesisExecute as SynthesisExecute,
+  ApiSynthesisIncluded as SynthesisIncluded,
+  ApiSynthesisList as SynthesisList,
+  ApiSynthesisPreview as SynthesisPreview,
+  ApiSynthesisResult as SynthesisResult,
+  ApiSynthesisRoles as SynthesisRoles,
+  ApiSynthesisSelection as SynthesisSelection,
+} from '@/types/api/research-synthesis-contract';
+
+const synthesis = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/synthesis`;
+
+export const listSynthesis = (projectId: string): Promise<ApiSynthesisList> =>
+  api.get<ApiSynthesisList>(synthesis(projectId));
+
+export const previewSynthesis = (
+  projectId: string,
+  tableVersionId: string,
+  roles: ApiSynthesisRoles
+): Promise<ApiSynthesisPreview> => {
+  const params = new URLSearchParams({
+    table_version_id: tableVersionId,
+    ...roles,
+  });
+  return api.get<ApiSynthesisPreview>(
+    `${synthesis(projectId)}/preview?${params.toString()}`
+  );
+};
+
+export const executeSynthesis = (
+  projectId: string,
+  data: ApiSynthesisExecute
+): Promise<ApiSynthesisResult> =>
+  api.post<ApiSynthesisResult>(synthesis(projectId), data);
+
+/** Every result with its inputs; the numbers recompute offline. */
+export const exportSynthesis = (projectId: string): Promise<void> =>
+  api.download(`/research-engine/projects/${projectId}/synthesis/export`);
+
+// --- Run manifests and figures (GOO-312) -------------------------------------
+
+export type {
+  ApiFigure as Figure,
+  ApiFigureCreate as FigureCreate,
+  ApiFigureLineage as FigureLineage,
+  ApiFigureList as FigureList,
+  ApiRunArtifact as RunArtifact,
+  ApiRunManifestV2 as RunManifestV2,
+} from '@/types/api/research-experiment-contract';
+
+/** The v2 manifest, or the legacy view (``schema`` names which). */
+export const getManifestV2 = (runId: string): Promise<ApiRunManifestV2> =>
+  api.get<ApiRunManifestV2>(`${BASE}/runs/${runId}/manifest/v2`);
+
+/** Exactly the hashed manifest bytes; the server names the file. */
+export const downloadManifestV2 = (runId: string): Promise<void> =>
+  api.download(`/research-engine/runs/${runId}/manifest/v2/download`);
+
+/** One retained run file, streamed with its sha256. */
+export const downloadRunArtifact = (
+  runId: string,
+  artifactId: string
+): Promise<void> =>
+  api.download(`/research-engine/runs/${runId}/artifacts/${artifactId}`);
+
+const figures = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/figures`;
+
+export const listFigures = (projectId: string): Promise<ApiFigureList> =>
+  api.get<ApiFigureList>(figures(projectId));
+
+export const registerFigure = (
+  projectId: string,
+  data: ApiFigureCreate
+): Promise<ApiFigure> => api.post<ApiFigure>(figures(projectId), data);
+
+export const getFigureLineage = (
+  projectId: string,
+  figureId: string
+): Promise<ApiFigureLineage> =>
+  api.get<ApiFigureLineage>(`${figures(projectId)}/${figureId}/lineage`);
+
+// --- Fresh reruns (GOO-313) ---------------------------------------------------
+
+export type {
+  ApiRerun as Rerun,
+  ApiRerunAttempt as RerunAttempt,
+  ApiRerunComparisonRow as RerunComparisonRow,
+  ApiRerunCreate as RerunCreate,
+  ApiRerunEligibility as RerunEligibility,
+  ApiRerunList as RerunList,
+} from '@/types/api/research-rerun-contract';
+
+/** Structured reasons (zero writes) and the byte-equality default rule. */
+export const getRerunEligibility = (
+  runId: string
+): Promise<ApiRerunEligibility> =>
+  api.get<ApiRerunEligibility>(`${BASE}/runs/${runId}/rerun-eligibility`);
+
+export const listReruns = (runId: string): Promise<ApiRerunList> =>
+  api.get<ApiRerunList>(`${BASE}/runs/${runId}/reruns`);
+
+/** REVIEW: the rule is hashed server-side before anything executes. */
+export const admitRerun = (
+  runId: string,
+  data: ApiRerunCreate
+): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/runs/${runId}/reruns`, data);
+
+export const getRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.get<ApiRerun>(`${BASE}/reruns/${rerunId}`);
+
+export const cancelRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/reruns/${rerunId}/cancel`, {});
+
+/** Attempt n+1 under the stored rule; the request carries no rule. */
+export const retryRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/reruns/${rerunId}/retry`, {});
+
+/** ``nous.rerun-comparison/1`` for every attempt; the server names the file. */
+export const downloadRerunComparison = (rerunId: string): Promise<void> =>
+  api.download(`/research-engine/reruns/${rerunId}/comparison`);

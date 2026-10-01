@@ -79,6 +79,42 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-318: the outbox references attempts; attempts reference approvals
+    # and manuscript releases.
+    "archive_deposit_outbox",
+    "archive_deposit_attempts",
+    "archive_deposit_approvals",
+    # GOO-316: venue checks reference manuscript releases; approvals
+    # reference statement sets.
+    "venue_checks",
+    "manuscript_statement_approvals",
+    "manuscript_statement_sets",
+    "orcid_authentications",
+    # GOO-315: manuscript releases reference drafts and draft releases only.
+    "manuscript_releases",
+    # GOO-314: peer-review tables reference drafts and each other only.
+    "peer_review_decisions",
+    "peer_review_responses",
+    "peer_review_comments",
+    "peer_review_reviewers",
+    "peer_review_rounds",
+    # GOO-306: claim tables reference the extraction tables and (GOO-311's
+    # column) synthesis results, so they come off first.
+    "research_claim_assessments",
+    "research_claim_stance_observations",
+    "research_claim_evidence_links",
+    # GOO-313: reruns reference manifests and runs; attempts reference reruns.
+    "experiment_rerun_attempts",
+    "experiment_reruns",
+    # GOO-312: figures reference run artifacts and manifests; claim links
+    # (figure_id) reference figures, so these come off after the links.
+    "research_figures",
+    "research_run_artifacts",
+    "research_run_manifests",
+    "research_claim_versions",
+    "research_claims",
+    # GOO-311: synthesis results reference evidence tables.
+    "synthesis_results",
     # GOO-310: certainty and contradictions reference evidence tables, which
     # reference extraction tables, matrices and protocol versions.
     "outcome_certainty_assessments",
@@ -86,14 +122,8 @@ _REBUILT_TABLES = (
     "evidence_table_versions",
     # GOO-309: appraisals reference reports, studies and protocol versions.
     "appraisal_assessments",
-    # GOO-307: releases reference drafts and nothing rebuilt; dropped first.
+    # GOO-307: releases reference drafts and nothing rebuilt.
     "draft_releases",
-    # GOO-306: claim tables reference the extraction tables; rebuilt last.
-    "research_claim_assessments",
-    "research_claim_stance_observations",
-    "research_claim_evidence_links",
-    "research_claim_versions",
-    "research_claims",
     # GOO-304: extraction tables reference documents, users and protocol
     # versions only; rebuilt by their own migration below.
     "extraction_accepted_values",
@@ -135,6 +165,13 @@ def _upgrade(connection: Connection) -> None:
         "d7f9b1c3e5a8_create_draft_releases.py",
         "e2a4c6b8d0f1_create_appraisal_assessments.py",
         "f4b6d8a0c2e3_create_evidence_certainty.py",
+        "a6c8e0b2d4f5_create_synthesis_results.py",
+        "b8e0c2d4f6a7_create_run_manifests.py",
+        "c0f2a4b6d8e9_create_experiment_reruns.py",
+        "d2a4c6e8f0b1_create_peer_review.py",
+        "e4c6a8b0d2f3_create_manuscript_releases.py",
+        "f6a8c0d2e4b5_create_statements_venue.py",
+        "b0e2a4c6d8f9_create_archive_deposits.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename

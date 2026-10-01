@@ -444,10 +444,12 @@ async def _export(factory: Factory, w: Any, draft: UUID) -> str:
     return cast(str, result["content"])
 
 
-def _migration(connection: Connection, direction: str) -> None:
-    spec = importlib.util.spec_from_file_location(
-        "release_migration", VERSIONS / "d7f9b1c3e5a8_create_draft_releases.py"
-    )
+def _migration(
+    connection: Connection,
+    direction: str,
+    filename: str = "d7f9b1c3e5a8_create_draft_releases.py",
+) -> None:
+    spec = importlib.util.spec_from_file_location(filename[:-3], VERSIONS / filename)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -742,9 +744,27 @@ async def test_release_gate_invalidation_graph_and_races(
     assert [e.seq for e in events] == list(range(1, len(events) + 1))
     assert [str(e.event_type) for e in events].count("release.promoted") == 3
 
-    # 15. Downgrade drops only draft_releases.
+    # 15. Downgrade drops only draft_releases (GOO-315's empty
+    # manuscript_releases references it, so it comes off first, after
+    # GOO-316's empty venue checks and GOO-318's empty deposit tables that
+    # reference it).
     async with factory() as db:
         connection = await db.connection()
+        await connection.run_sync(
+            lambda sync: _migration(
+                sync, "downgrade", "b0e2a4c6d8f9_create_archive_deposits.py"
+            )
+        )
+        await connection.run_sync(
+            lambda sync: _migration(
+                sync, "downgrade", "f6a8c0d2e4b5_create_statements_venue.py"
+            )
+        )
+        await connection.run_sync(
+            lambda sync: _migration(
+                sync, "downgrade", "e4c6a8b0d2f3_create_manuscript_releases.py"
+            )
+        )
         await connection.run_sync(lambda sync: _migration(sync, "downgrade"))
         await db.commit()
         remaining = set((await db.execute(text("""SELECT tablename FROM pg_tables
