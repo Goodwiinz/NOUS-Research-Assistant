@@ -1950,7 +1950,7 @@ Pre-mutation SHA-256 of each mutated file:
 - `backend/src/services/sandbox/e2b_sandbox_manager.py`
   `4d5daa36432861ced7be728cdc60c9d23c48bd72c5b483755f05058de2aecdbd`
 - `backend/src/services/research_engine/rerun_service.py`
-  `0a37f6189f86e03e30ae79d5f8d694626f9a9b7931c609f347913274194668af`
+  `e52c1c08bab4498e1a984f1860e4ec1a8959ba76d691dd997028476ac4d78674`
 - `backend/alembic/versions/c0f2a4b6d8e9_create_experiment_reruns.py`
   `10a8b596f355c50d7ab319962c11a1c25519e5e22719ac16b0373762fec8a8ac`
 
@@ -1965,9 +1965,9 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architectur
 |---|---|---|
 | Rule covers every output (`rerun_rules.py:95`) | `if False:` | `-k cover` (`:73`): `DID NOT RAISE ValueError`; the partial rule is accepted. |
 | In-sandbox re-hash (`e2b_sandbox_manager.py:369`) | `mismatched: List[str] = []` | `-k input_hash` (`:316`): `('completed', ()) == ('restoration_failed', ('input_mismatch:data.csv',))`; the command runs. |
-| `UNIQUE(rerun_id, attempt)` publication (`rerun_service.py:482`, `:886`) | a unique loss returns `True` and the loser keeps its blobs | Proof step 5 (`:561`): three output blobs exist for the cancelled attempt. |
-| Lease sweep (`rerun_service.py:643`) | `return 0` first | Proof step 6 (`:576`): `assert 0 == 1`; no `interrupted` row. |
-| `require_run_conformance` at admission (`rerun_service.py:496`) | call removed | Proof step 9 (`:674`): `202 == 409`; the copy with a drifted plan hash is admitted. `test_rerun_boundary.py::test_admission_goes_through_retained_plan_conformance` fails too. |
+| `UNIQUE(rerun_id, attempt)` publication (`rerun_service.py:485`, `:891`) | a unique loss returns `True` and the loser keeps its blobs | Proof step 5 (`:561`): three output blobs exist for the cancelled attempt. |
+| Lease sweep (`rerun_service.py:646`) | `return 0` first | Proof step 6 (`:576`): `assert 0 == 1`; no `interrupted` row. |
+| `require_run_conformance` at admission (`rerun_service.py:499`) | call removed | Proof step 9 (`:674`): `202 == 409`; the copy with a drifted plan hash is admitted. `test_rerun_boundary.py::test_admission_goes_through_retained_plan_conformance` fails too. |
 | Reproduction CHECK (`c0f2a4b6d8e9:124`) | `ck_experiment_rerun_attempts_executed` removed from the migration | Proof step 3 (`:516`): `DID NOT RAISE IntegrityError`; a `restoration_failed` row with `reproduced` is accepted. |
 
 The first run of the rules mutant failed with `KeyError` instead of the
