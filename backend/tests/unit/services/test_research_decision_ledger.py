@@ -22,6 +22,7 @@ from src.services.research_decisions.ledger import (
     _validate_release_transitions,
     _validate_reproduction_transitions,
     _validate_screening_transitions,
+    _validate_statements_transitions,
     _validate_synthesis_transitions,
     decision_request_fingerprint,
     replay_screening_resolutions,
@@ -3225,3 +3226,122 @@ def test_manuscript_replay_rejects_editor_promotion() -> None:
         m.replay(m.created(), m.verified("editor"))
     with pytest.raises(DecisionReplayError, match="editor's"):
         m.replay(m.created("adjudicator"))
+
+
+# --- GOO-316: research_statements --------------------------------------------
+
+
+class _Statements:
+    """Hand-built events for one Collection's research_statements stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.v1, self.v2 = uuid4(), uuid4()
+
+    def versioned(self, set_id: UUID, supersedes: UUID | None, digest: str) -> Event:
+        return (
+            "statements.versioned",
+            "editor",
+            {
+                "collection_id": str(self.collection_id),
+                "statement_set_id": str(set_id),
+                "supersedes_set_id": None if supersedes is None else str(supersedes),
+                "set_hash": digest,
+                "author_keys": ["a", "b"],
+                "missing_fields": ["limitations"],
+            },
+        )
+
+    def approved(self, set_id: UUID, author: str, digest: str) -> Event:
+        return (
+            "statements.approved",
+            "editor",
+            {
+                "collection_id": str(self.collection_id),
+                "statement_set_id": str(set_id),
+                "author_key": author,
+                "set_hash": digest,
+                "method": "recorded_attestation",
+                "approval_id": str(uuid4()),
+            },
+        )
+
+    def checked(self, status: str = "fail") -> Event:
+        check_id = uuid4()
+        return (
+            "venue.checked",
+            "editor",
+            {
+                "collection_id": str(self.collection_id),
+                "venue_check_id": str(check_id),
+                "release_id": str(uuid4()),
+                "profile_id": "generic-icmje-credit",
+                "profile_version": 1,
+                "package_sha256": "d" * 64,
+                "anonymized_sha256": "e" * 64,
+                "status": status,
+                "failing_rules": ["required"] if status == "fail" else [],
+            },
+        )
+
+    def validate(self, event: Event) -> None:
+        event_type, _, payload = event
+        subject = payload.get("venue_check_id") or payload["statement_set_id"]
+        _validate_event(
+            aggregate_type="research_statements",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="statement_set",
+            subject_id=UUID(str(subject)),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="f" * 64,
+        )
+
+    def replay(self, *events: Event) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_statements_transitions(stored, self.collection_id)
+
+
+def test_statements_payloads_validate() -> None:
+    s = _Statements()
+    s.validate(s.versioned(s.v1, None, "a" * 64))
+    s.validate(s.approved(s.v1, "a", "a" * 64))
+    s.validate(s.checked())
+    s.validate(s.checked("pass"))
+    event_type, role, payload = s.checked("pass")
+    with pytest.raises(DecisionValidationError, match="contradict"):
+        s.validate((event_type, role, {**payload, "failing_rules": ["required"]}))
+    event_type, role, payload = s.approved(s.v1, "a", "a" * 64)
+    with pytest.raises(DecisionValidationError, match="method"):
+        s.validate((event_type, role, {**payload, "method": "name_match"}))
+
+
+def test_statements_replay_rejects_approval_with_other_set_hash() -> None:
+    s = _Statements()
+    v1, v2 = s.versioned(s.v1, None, "a" * 64), s.versioned(s.v2, s.v1, "b" * 64)
+    s.replay(v1, v2, s.approved(s.v2, "a", "b" * 64), s.checked())
+    with pytest.raises(DecisionReplayError, match="another set hash"):
+        s.replay(v1, v2, s.approved(s.v2, "a", "a" * 64))
+    with pytest.raises(DecisionReplayError, match="no recorded"):
+        s.replay(v1, s.approved(s.v2, "a", "b" * 64))
+    with pytest.raises(DecisionReplayError, match="no author"):
+        s.replay(v1, s.approved(s.v1, "z", "a" * 64))
+    with pytest.raises(DecisionReplayError, match="extend the tip"):
+        s.replay(v1, s.versioned(s.v2, None, "b" * 64))
+
+
+def test_statements_replay_rejects_duplicate_author_approval() -> None:
+    s = _Statements()
+    v1 = s.versioned(s.v1, None, "a" * 64)
+    with pytest.raises(DecisionReplayError, match="already approved"):
+        s.replay(v1, s.approved(s.v1, "a", "a" * 64), s.approved(s.v1, "a", "a" * 64))
+    event_type, _, payload = s.approved(s.v1, "a", "a" * 64)
+    with pytest.raises(DecisionReplayError, match="editor's"):
+        s.replay(v1, (event_type, "adjudicator", payload))

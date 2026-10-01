@@ -4,7 +4,8 @@ Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
 ``research_evidence``, ``research_synthesis``, ``research_experiment``,
-``research_reproduction``, ``research_peer_review``, ``research_manuscript``)
+``research_reproduction``, ``research_peer_review``, ``research_manuscript``,
+``research_statements``)
 registers its subject type, payload vocabulary, value validation and replay
 transition rules in ``_FAMILIES``.
 
@@ -610,6 +611,44 @@ _MANUSCRIPT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
         }
     ),
 }
+_STATEMENTS_AGGREGATE = "research_statements"
+_STATEMENTS_SUBJECT = "statement_set"
+_STATEMENTS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("statements.versioned", 1): frozenset(
+        {
+            "collection_id",
+            "statement_set_id",
+            "supersedes_set_id",
+            "set_hash",
+            "author_keys",
+            "missing_fields",
+        }
+    ),
+    ("statements.approved", 1): frozenset(
+        {
+            "collection_id",
+            "statement_set_id",
+            "author_key",
+            "set_hash",
+            "method",
+            "approval_id",
+        }
+    ),
+    ("venue.checked", 1): frozenset(
+        {
+            "collection_id",
+            "venue_check_id",
+            "release_id",
+            "profile_id",
+            "profile_version",
+            "package_sha256",
+            "anonymized_sha256",
+            "status",
+            "failing_rules",
+        }
+    ),
+}
+_APPROVAL_METHODS = ("in_app_self", "recorded_attestation")
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
     "extraction.accepted",
     "claim.assessed",
@@ -2855,6 +2894,104 @@ def _validate_manuscript_transitions(
         verified.add(candidate)
 
 
+def _string_list(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+        raise DecisionValidationError(f"{field} must be a list of strings")
+    return list(value)
+
+
+def _validate_statements_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if event_type == "venue.checked":
+        if _validated_payload_uuid(payload["venue_check_id"], "venue_check_id") != (
+            subject_id
+        ):
+            raise DecisionValidationError("venue event subject is not its check")
+        _validated_payload_uuid(payload["release_id"], "release_id")
+        _validated_sha256(payload["package_sha256"], "package_sha256")
+        _validated_optional_sha256(payload["anonymized_sha256"], "anonymized_sha256")
+        if not isinstance(payload["profile_id"], str) or not payload["profile_id"]:
+            raise DecisionValidationError("profile_id is invalid")
+        if not _is_int(payload["profile_version"]) or payload["profile_version"] < 1:
+            raise DecisionValidationError("profile_version must be positive")
+        if payload["status"] not in ("pass", "fail"):
+            raise DecisionValidationError("venue status is invalid")
+        failing = payload["failing_rules"]
+        if not isinstance(failing, list) or (payload["status"] == "pass") != (
+            not failing
+        ):
+            raise DecisionValidationError("failing_rules contradict the status")
+        return
+    set_id = _validated_payload_uuid(payload["statement_set_id"], "statement_set_id")
+    if set_id != subject_id:
+        raise DecisionValidationError("statement event subject is not its set")
+    _validated_sha256(payload["set_hash"], "set_hash")
+    if event_type == "statements.versioned":
+        _validated_optional_uuid(payload["supersedes_set_id"], "supersedes_set_id")
+        keys = _string_list(payload["author_keys"], "author_keys")
+        if len(set(keys)) != len(keys):
+            raise DecisionValidationError("author_keys must be unique")
+        _string_list(payload["missing_fields"], "missing_fields")
+        return
+    if not isinstance(payload["author_key"], str) or not payload["author_key"]:
+        raise DecisionValidationError("author_key is invalid")
+    if payload["method"] not in _APPROVAL_METHODS:
+        raise DecisionValidationError("approval method is invalid")
+    _validated_payload_uuid(payload["approval_id"], "approval_id")
+
+
+def _validate_statements_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """One statement-set chain per Collection; an approval names a recorded
+    set, binds that set's exact hash, names one of its authors, and exists
+    at most once per author per set. Every event is an editor's."""
+    sets: dict[str, tuple[str, frozenset[str]]] = {}
+    approved: set[tuple[str, str]] = set()
+    tip: str | None = None
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.actor_role != "editor":
+            raise DecisionReplayError("statement and venue events are an editor's")
+        if event.event_type == "venue.checked":
+            continue
+        set_id = str(payload["statement_set_id"])
+        if event.event_type == "statements.versioned":
+            supersedes = payload["supersedes_set_id"]
+            if set_id in sets or (None if supersedes is None else str(supersedes)) != (
+                tip
+            ):
+                raise DecisionReplayError("statement set does not extend the tip")
+            sets[set_id] = (
+                str(payload["set_hash"]),
+                frozenset(payload["author_keys"]),
+            )
+            tip = set_id
+            continue
+        recorded = sets.get(set_id)
+        if recorded is None:
+            raise DecisionReplayError("approval names no recorded statement set")
+        if recorded[0] != payload["set_hash"]:
+            raise DecisionReplayError("approval binds another set hash")
+        author = str(payload["author_key"])
+        if author not in recorded[1]:
+            raise DecisionReplayError("approval names no author of the set")
+        if (set_id, author) in approved:
+            raise DecisionReplayError("author already approved this set")
+        approved.add((set_id, author))
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -2979,6 +3116,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_MANUSCRIPT_PAYLOAD_KEYS,
         validate_payload=_validate_manuscript_payload,
         validate_transitions=_validate_manuscript_transitions,
+        requires_subject_version=False,
+    ),
+    _STATEMENTS_AGGREGATE: _Family(
+        subject_type=_STATEMENTS_SUBJECT,
+        payload_keys=_STATEMENTS_PAYLOAD_KEYS,
+        validate_payload=_validate_statements_payload,
+        validate_transitions=_validate_statements_transitions,
         requires_subject_version=False,
     ),
 }
