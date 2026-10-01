@@ -18,6 +18,7 @@ import {
   removeProjectRole,
   type ResearchProjectRole,
 } from '@/services/researchEngineService';
+import { AppraisalPanel } from './AppraisalPanel';
 import { BlueprintEditor } from './BlueprintEditor';
 import { CorpusPanel } from './CorpusPanel';
 import { JourneyRail } from './JourneyRail';
@@ -239,6 +240,11 @@ export function ProjectWorkflow({
         <PrismaFlowCard projectId={project.id} />
       </Stage>
       <Stage id="extract" title="Extract">
+        <AppraisalPanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
         {onOpenTab && (
           <OpenTab label="Open matrix" onClick={() => onOpenTab('matrix')} />
         )}

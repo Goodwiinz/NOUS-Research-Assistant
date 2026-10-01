@@ -10,6 +10,7 @@ from src.services.research_decisions.ledger import (
     DecisionReplayError,
     DecisionValidationError,
     _validate_acquisition_transitions,
+    _validate_appraisal_transitions,
     _validate_claims_transitions,
     _validate_event,
     _validate_extraction_transitions,
@@ -2026,3 +2027,182 @@ def test_release_payload_keys_exact() -> None:
         )
     with pytest.raises(DecisionValidationError, match="release_ids"):
         r.validate("release.staled", {**staled, "release_ids": []}, r.collection_id)
+
+
+class _Appraisal:
+    """Hand-built events for one Collection's research_appraisal stream."""
+
+    def __init__(self, mode: str = "dual_independent") -> None:
+        self.collection_id = uuid4()
+        self.mode = mode
+        self.events: list[ResearchDecisionEvent] = []
+
+    def payload(
+        self, assessment: UUID, supersedes: UUID | None = None, **extra: Any
+    ) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "assessment_id": str(assessment),
+            "supersedes_assessment_id": None if supersedes is None else str(supersedes),
+            "target_key": "study:" + str(self.collection_id),
+            "outcome_key": "depressive_symptoms",
+            "timepoint": "12 weeks",
+            "instrument_key": "rob2",
+            "instrument_version": "2019-08-22",
+            "instrument_spec_hash": "a" * 64,
+            "protocol_version_id": str(uuid4()),
+            "mode": self.mode,
+            "study_design": "randomized_parallel_group",
+            "applicability": "applicable",
+            "overall": None,
+            "unresolved_domains": ["D3"],
+            "input_hash": "b" * 64,
+            **extra,
+        }
+
+    def add(
+        self,
+        event_type: str,
+        role: str,
+        actor: UUID,
+        assessment: UUID,
+        supersedes: UUID | None = None,
+        **extra: Any,
+    ) -> UUID:
+        event = _stored(event_type, self.payload(assessment, supersedes, **extra))
+        event.actor_role = role
+        event.actor_user_id = actor
+        self.events.append(event)
+        return assessment
+
+    def submit(self, actor: UUID, supersedes: UUID | None = None) -> UUID:
+        return self.add("appraisal.submitted", "reviewer", actor, uuid4(), supersedes)
+
+    def adjudicate(
+        self, actor: UUID, resolves: list[UUID], supersedes: UUID | None = None
+    ) -> UUID:
+        return self.add(
+            "appraisal.adjudicated",
+            "adjudicator",
+            actor,
+            uuid4(),
+            supersedes,
+            resolves_assessment_ids=[str(r) for r in resolves],
+        )
+
+    def replay(self) -> None:
+        _validate_appraisal_transitions(self.events, self.collection_id)
+
+    def validate(self, event_type: str, payload: dict[str, Any]) -> None:
+        _validate_event(
+            aggregate_type="research_appraisal",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="appraisal_assessment",
+            subject_id=UUID(payload["assessment_id"]),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="c" * 64,
+            reason="adjudicated",
+        )
+
+
+def test_appraisal_replay_rejects_post_reveal_independent_edit() -> None:
+    a, b = uuid4(), uuid4()
+    r = _Appraisal()
+    first = r.submit(a)
+    first = r.submit(a, supersedes=first)  # before reveal: allowed
+    r.submit(b)
+    r.replay()
+    r.submit(a, supersedes=first)
+    with pytest.raises(DecisionReplayError, match="after reveal"):
+        r.replay()
+    # A forked chain is refused too; single mode may keep superseding.
+    fork = _Appraisal()
+    fork.submit(a)
+    fork.submit(a, supersedes=uuid4())
+    with pytest.raises(DecisionReplayError, match="non-tip"):
+        fork.replay()
+    single = _Appraisal("single")
+    tip = single.submit(a)
+    single.submit(a, supersedes=tip)
+    single.replay()
+    wrong_role = _Appraisal()
+    wrong_role.add("appraisal.submitted", "adjudicator", a, uuid4())
+    with pytest.raises(DecisionReplayError, match="requires a reviewer"):
+        wrong_role.replay()
+
+
+def test_appraisal_replay_rejects_self_adjudication() -> None:
+    a, b, j = uuid4(), uuid4(), uuid4()
+    r = _Appraisal()
+    tips = [r.submit(a), r.submit(b)]
+    r.adjudicate(a, tips)
+    with pytest.raises(DecisionReplayError, match="assessed this result"):
+        r.replay()
+    ok = _Appraisal()
+    tips = [ok.submit(a), ok.submit(b)]
+    first = ok.adjudicate(j, tips)
+    ok.adjudicate(j, tips, supersedes=first)
+    ok.replay()
+    reviewer = _Appraisal()
+    tips = [reviewer.submit(a), reviewer.submit(b)]
+    reviewer.add(
+        "appraisal.adjudicated",
+        "reviewer",
+        j,
+        uuid4(),
+        resolves_assessment_ids=[str(t) for t in tips],
+    )
+    with pytest.raises(DecisionReplayError, match="requires an adjudicator"):
+        reviewer.replay()
+
+
+def test_appraisal_replay_rejects_resolving_stale_tips() -> None:
+    a, b, j = uuid4(), uuid4(), uuid4()
+    r = _Appraisal()
+    old = r.submit(a)
+    new = r.submit(a, supersedes=old)
+    other = r.submit(b)
+    r.adjudicate(j, [old, other])
+    with pytest.raises(DecisionReplayError, match="stale tips"):
+        r.replay()
+    r.events.pop()
+    r.adjudicate(j, [new, other])
+    r.replay()
+
+
+def test_appraisal_payload_keys_exact() -> None:
+    r = _Appraisal()
+    submitted = r.payload(uuid4())
+    adjudicated = {**r.payload(uuid4()), "resolves_assessment_ids": [str(uuid4())]}
+    for event_type, payload in (
+        ("appraisal.submitted", submitted),
+        ("appraisal.adjudicated", adjudicated),
+    ):
+        r.validate(event_type, payload)
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            r.validate(event_type, {**payload, "extra": 1})
+        trimmed = dict(payload)
+        trimmed.pop("input_hash")
+        with pytest.raises(DecisionValidationError, match="event schema"):
+            r.validate(event_type, trimmed)
+        with pytest.raises(DecisionValidationError, match="another collection"):
+            r.validate(event_type, {**payload, "collection_id": str(uuid4())})
+    bad = (
+        ({"overall": "medium"}, "overall"),
+        ({"mode": "triple"}, "mode"),
+        ({"study_design": "anecdote"}, "study_design"),
+        ({"target_key": "document:1"}, "target_key"),
+        ({"unresolved_domains": ["D9"]}, "unresolved_domains"),
+        ({"input_hash": "x"}, "SHA-256"),
+    )
+    for change, message in bad:
+        with pytest.raises(DecisionValidationError, match=message):
+            r.validate("appraisal.submitted", {**submitted, **change})
+    with pytest.raises(DecisionValidationError, match="1\\+ unique"):
+        r.validate(
+            "appraisal.adjudicated", {**adjudicated, "resolves_assessment_ids": []}
+        )

@@ -476,6 +476,8 @@ def test_academic_wave_migrations_upgrade_downgrade_round_trip(
     assert "research_project_role_assignments" in inspect(connection).get_table_names()
 
 
+# GOO-309: references research_reports and research_studies.
+_APPRAISAL_TABLES = ("appraisal_assessments",)
 # GOO-303: references research_reports, documents and protocol versions.
 _ACQUISITION_TABLES = ("research_fulltext_attempts", "research_fulltext_requests")
 _RESOLUTION_TABLES = ("screening_resolutions",)  # GOO-302: drop first
@@ -501,6 +503,7 @@ def test_report_identity_migration_upgrade_downgrade_round_trip(
     connection = pre_wave_connection
     # GOO-301/302 screening tables reference research_reports: drop them first.
     for table in (
+        *_APPRAISAL_TABLES,
         *_ACQUISITION_TABLES,
         *_RESOLUTION_TABLES,
         *_SCREENING_TABLES,

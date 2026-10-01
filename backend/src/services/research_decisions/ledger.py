@@ -2,7 +2,7 @@
 
 Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
-``research_claims``, ``research_release``) registers
+``research_claims``, ``research_release``, ``research_appraisal``) registers
 its subject type, payload vocabulary, value validation and replay transition
 rules in ``_FAMILIES``.
 
@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
 from src.services.research import claim_rules, extraction_rules
-from src.services.research_engine import screening_rules
+from src.services.research_engine import appraisal_rules, screening_rules
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PROTOCOL_AGGREGATE = "research_protocol"
@@ -336,9 +336,38 @@ _RELEASE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
         {"collection_id", "release_ids", "cause", "changed_nodes", "assessment_ids"}
     ),
 }
+# GOO-309: study-design appraisal, one stream per Collection. The subject of
+# each event is the assessment row it inserted.
+_APPRAISAL_AGGREGATE = "research_appraisal"
+_APPRAISAL_SUBJECT = "appraisal_assessment"
+_APPRAISAL_KEYS = frozenset(
+    {
+        "collection_id",
+        "assessment_id",
+        "supersedes_assessment_id",
+        "target_key",
+        "outcome_key",
+        "timepoint",
+        "instrument_key",
+        "instrument_version",
+        "instrument_spec_hash",
+        "protocol_version_id",
+        "mode",
+        "study_design",
+        "applicability",
+        "overall",
+        "unresolved_domains",
+        "input_hash",
+    }
+)
+_APPRAISAL_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("appraisal.submitted", 1): _APPRAISAL_KEYS,
+    ("appraisal.adjudicated", 1): _APPRAISAL_KEYS | {"resolves_assessment_ids"},
+}
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
     "extraction.accepted",
     "claim.assessed",
+    "appraisal.adjudicated",
 }
 
 
@@ -1042,6 +1071,59 @@ def _validate_release_payload(
         raise DecisionValidationError("changed_nodes must be a non-empty list")
     if not all(isinstance(n, str) and ":" in n for n in nodes):
         raise DecisionValidationError("changed_nodes must be kind:id strings")
+
+
+def _validate_appraisal_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["assessment_id"], "assessment_id") != (
+        subject_id
+    ):
+        raise DecisionValidationError("appraisal event subject is not its assessment")
+    _validated_optional_uuid(
+        payload["supersedes_assessment_id"], "supersedes_assessment_id"
+    )
+    _validated_payload_uuid(payload["protocol_version_id"], "protocol_version_id")
+    target = payload["target_key"]
+    if not isinstance(target, str) or not target.startswith(("study:", "report:")):
+        raise DecisionValidationError("appraisal target_key is invalid")
+    for key in ("outcome_key", "timepoint", "instrument_key", "instrument_version"):
+        if not isinstance(payload[key], str) or not payload[key]:
+            raise DecisionValidationError(f"appraisal {key} is invalid")
+    _validated_sha256(payload["instrument_spec_hash"], "instrument_spec_hash")
+    _validated_sha256(payload["input_hash"], "input_hash")
+    vocabulary = (
+        ("mode", screening_rules.MODES),
+        ("study_design", appraisal_rules.DESIGNS),
+        ("applicability", appraisal_rules.APPLICABILITY),
+    )
+    for key, allowed in vocabulary:
+        if payload[key] not in allowed:
+            raise DecisionValidationError(f"appraisal {key} is invalid")
+    overall = payload["overall"]
+    if overall is not None and overall not in appraisal_rules.JUDGMENTS:
+        raise DecisionValidationError("appraisal overall is invalid")
+    unresolved = payload["unresolved_domains"]
+    if not isinstance(unresolved, list) or not set(unresolved) <= set(
+        appraisal_rules.SPEC["domains"]
+    ):
+        raise DecisionValidationError("appraisal unresolved_domains is invalid")
+    if event_type == "appraisal.adjudicated":
+        ids = _validated_uuid_list(
+            payload["resolves_assessment_ids"], "resolves_assessment_ids"
+        )
+        if not ids or len(set(ids)) != len(ids):
+            raise DecisionValidationError(
+                "resolves_assessment_ids must be 1+ unique ids"
+            )
 
 
 async def _locked_stream(
@@ -1865,6 +1947,60 @@ def _validate_release_transitions(
             del live_draft[release]
 
 
+def _validate_appraisal_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """A reviewer supersedes only their own tip, and in ``dual_independent``
+    mode never after the key revealed; an adjudicator resolves exactly the
+    current independent tips and assessed none of them."""
+    tips: dict[tuple[str, ...], dict[UUID, str]] = {}  # key -> assessor -> tip
+    revealed: set[tuple[str, ...]] = set()
+    adjudicated: dict[tuple[str, ...], str] = {}
+    assessor_of: dict[str, UUID] = {}
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        key = tuple(
+            str(payload[k])
+            for k in (
+                "target_key",
+                "outcome_key",
+                "timepoint",
+                "instrument_key",
+                "instrument_version",
+            )
+        )
+        assessment = str(payload["assessment_id"])
+        if assessment in assessor_of:
+            raise DecisionReplayError("appraisal assessment id reused")
+        actor = cast(UUID, event.actor_user_id)
+        assessor_of[assessment] = actor
+        current = tips.setdefault(key, {})
+        supersedes = payload["supersedes_assessment_id"]
+        if event.event_type == "appraisal.submitted":
+            if event.actor_role != "reviewer":
+                raise DecisionReplayError("appraisal submission requires a reviewer")
+            if supersedes != current.get(actor):
+                raise DecisionReplayError("appraisal supersedes a non-tip")
+            if payload["mode"] == "dual_independent" and key in revealed:
+                raise DecisionReplayError("independent appraisal edited after reveal")
+            current[actor] = assessment
+            if len(current) >= screening_rules.REQUIRED[str(payload["mode"])]:
+                revealed.add(key)
+            continue
+        if event.actor_role != "adjudicator":
+            raise DecisionReplayError("appraisal adjudication requires an adjudicator")
+        resolves = {str(v) for v in payload["resolves_assessment_ids"]}
+        if resolves != set(current.values()):
+            raise DecisionReplayError("appraisal adjudication resolves stale tips")
+        if actor in {assessor_of.get(v) for v in resolves}:
+            raise DecisionReplayError("adjudicator assessed this result")
+        if supersedes != adjudicated.get(key):
+            raise DecisionReplayError("appraisal adjudication supersedes a non-tip")
+        adjudicated[key] = assessment
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -1940,6 +2076,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_RELEASE_PAYLOAD_KEYS,
         validate_payload=_validate_release_payload,
         validate_transitions=_validate_release_transitions,
+        requires_subject_version=False,
+    ),
+    _APPRAISAL_AGGREGATE: _Family(
+        subject_type=_APPRAISAL_SUBJECT,
+        payload_keys=_APPRAISAL_PAYLOAD_KEYS,
+        validate_payload=_validate_appraisal_payload,
+        validate_transitions=_validate_appraisal_transitions,
         requires_subject_version=False,
     ),
 }
