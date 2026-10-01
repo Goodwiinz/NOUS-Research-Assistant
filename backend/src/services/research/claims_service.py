@@ -763,10 +763,11 @@ async def link(
             "end_char": row.end_char,
             "quote_sha256": anchors.text_sha256(columns["quote"]),
             "synthesis_result_id": _str(row.synthesis_result_id),
+            "figure_id": _str(row.figure_id),
         },
         key=key,
         fingerprint=fingerprint,
-        schema_version=2,  # GOO-311: v2 carries synthesis_result_id
+        schema_version=3,  # GOO-312: v3 adds figure_id to v2's synthesis_result_id
     )
     if data.supersedes_link_id is not None:  # re-pointed or withdrawn
         await _invalidate(
