@@ -4,24 +4,24 @@ Security Deployment Script
 Automates the deployment of all security measures and configurations
 """
 
-import os
-import sys
-import json
-import subprocess
-import secrets
 import hashlib
+import json
+import logging
+import os
+import secrets
+import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-import logging
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
 
 class SecurityDeployer:
     """Automated security deployment system"""
@@ -150,7 +150,7 @@ class SecurityDeployer:
             "0123456789"
             "!@#$%^&*()_+-=[]{}|;:,.<>?"
         )
-        return ''.join(secrets.choice(alphabet) for _ in range(length))
+        return "".join(secrets.choice(alphabet) for _ in range(length))
 
     def _deploy_backend_security(self):
         """Deploy backend security middleware and services"""
@@ -158,7 +158,6 @@ class SecurityDeployer:
 
         # Copy security middleware
         security_files = [
-            ("file_upload_security.py", "src/middleware/"),
             ("api_security.py", "src/middleware/"),
             ("enhanced_security_service.py", "src/services/"),
             ("security_audit_service.py", "src/services/"),
@@ -237,7 +236,6 @@ class SecurityDeployer:
 
         # Add imports
         imports = [
-            "from middleware.file_upload_security import file_upload_security_service",
             "from middleware.api_security import APISecurityMiddleware",
             "from services.security_audit_service import SecurityEventType, SecuritySeverity, get_audit_service",
         ]
@@ -250,19 +248,19 @@ class SecurityDeployer:
         middleware_line = "app.add_middleware(APISecurityMiddleware)"
         if middleware_line not in content:
             # Find where to insert (after other middleware)
-            lines = content.split('\n')
+            lines = content.split("\n")
             for i, line in enumerate(lines):
                 if "app.add_middleware" in line:
                     lines.insert(i + 1, middleware_line)
                     break
-            content = '\n'.join(lines)
+            content = "\n".join(lines)
 
         main_file.write_text(content)
         logger.info("  ✓ Updated main.py with security middleware")
 
     def _update_requirements(self, requirements_file: Path):
         """Add security dependencies to requirements.txt"""
-        content = requirements_file.read_text().split('\n')
+        content = requirements_file.read_text().split("\n")
 
         security_packages = [
             "cryptography>=41.0.0",
@@ -280,7 +278,7 @@ class SecurityDeployer:
             if package not in content:
                 content.append(package)
 
-        requirements_file.write_text('\n'.join(content))
+        requirements_file.write_text("\n".join(content))
         logger.info("  ✓ Updated security dependencies")
 
     def _update_package_json(self, package_file: Path):
@@ -569,7 +567,7 @@ ExcludePath ^/sys/
         ]
 
         for line in security_env:
-            if line not in content and not line.startswith('#'):
+            if line not in content and not line.startswith("#"):
                 content += f"\n{line}"
 
         env_file.write_text(content)
@@ -655,7 +653,11 @@ ExcludePath ^/sys/
             ],
         }
 
-        report_file = self.project_root / "security" / f"deployment_report_{int(time.time())}.json"
+        report_file = (
+            self.project_root
+            / "security"
+            / f"deployment_report_{int(time.time())}.json"
+        )
         report_file.write_text(json.dumps(report, indent=2))
 
         # Print summary
