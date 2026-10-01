@@ -582,7 +582,13 @@ async def export_draft(
                 content = file_data.get("content", "")
                 if not name:
                     continue
-                zip_file.writestr(name, content)
+                # GOO-394: writestr(name) stamps the build clock, so equal
+                # drafts gave unequal zips. Pin it; 0o600 and DEFLATE are what
+                # writestr(name) already set, so only the timestamp changed.
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o600 << 16
+                zip_file.writestr(info, content)
 
         zip_buffer.seek(0)
         filename = (result.get("files", [{}])[0].get("filename", "draft.tex")).replace(
