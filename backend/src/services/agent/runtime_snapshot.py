@@ -52,6 +52,36 @@ class RuntimeSnapshot:
     expires_at: datetime | None
 
 
+def turn_reset_fields() -> dict[str, Any]:
+    """Per-turn resets shared by the streaming and queued ``initial_state``.
+
+    Every key here overwrites the checkpoint's last value when the turn input
+    is applied, so only state that must NOT carry across turns belongs here.
+    Never add cross-turn state (``turn_index``, ``identity_ledger``, ...):
+    seeding it clobbers the checkpoint every turn (R8-A3).
+    ``preprocessing_node`` keeps its own in-graph resets for callers that
+    bypass these builders (``langgraph.json``, evals).
+    """
+    return {
+        "retrieved_contexts": [],
+        "attachment_status": [],
+        "tool_executions": [],
+        "tool_loop_count": 0,
+        "error_count": 0,
+        "last_error": "",
+        "pending_confirmation": {},
+        "user_confirmed": False,
+        "intent": "",
+        "user_memories": [],
+        "plan": [],
+        "plan_reasoning": "",
+        "reflection_count": 0,
+        "compaction_count": 0,
+        "intent_confidence": 0.0,
+        "last_error_info": {},
+    }
+
+
 def runtime_state_fields(
     snapshot: RuntimeSnapshot, project_id: str | None
 ) -> dict[str, Any]:
