@@ -18,6 +18,7 @@ import {
   removeProjectRole,
   type ResearchProjectRole,
 } from '@/services/researchEngineService';
+import { useProjectStore } from '@/store/projectStore';
 import { AppraisalPanel } from './AppraisalPanel';
 import { BlueprintEditor } from './BlueprintEditor';
 import { CorpusPanel } from './CorpusPanel';
@@ -138,6 +139,9 @@ export function ProjectWorkflow({
         projectId: project.id,
         engineProjectId: extension.research_engine_project_id,
       });
+      // The page reads `project` from the project store; refresh it so the
+      // engine id survives a remount (GOO-321).
+      void useProjectStore.getState().fetchProject(project.id);
       void queryClient.invalidateQueries({ queryKey: ['project', project.id] });
     },
   });
