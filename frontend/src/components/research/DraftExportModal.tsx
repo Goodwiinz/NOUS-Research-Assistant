@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { X, Download, FileText, Code, Loader2 } from 'lucide-react';
+import { X, Download, FileText, Code, Loader2, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -24,17 +24,35 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import type { DraftExportFormat } from '@/services/projectService';
+
+/** GOO-317: references-only files; the bibliography options do not apply. */
+const REFERENCE_FILES: {
+  value: DraftExportFormat;
+  label: string;
+  ext: string;
+}[] = [
+  { value: 'csl-json', label: 'CSL JSON', ext: 'references.json' },
+  { value: 'ris', label: 'RIS', ext: 'references.ris' },
+];
+
+const optionClass = (selected: boolean): string =>
+  `flex flex-col items-center gap-2 p-4 rounded-lg border transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring ${
+    selected
+      ? 'bg-primary/10 border-primary/50 text-primary'
+      : 'bg-muted border-border text-muted-foreground hover:border-muted-foreground/50'
+  }`;
 
 export interface DraftExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onExport: (
-    format: 'markdown' | 'latex',
+    format: DraftExportFormat,
     includeBibliography: boolean,
     bibliographyFormat: 'bibtex' | 'biblatex'
   ) => Promise<void>;
   draftTitle: string;
-  initialFormat?: 'markdown' | 'latex';
+  initialFormat?: DraftExportFormat;
 }
 
 export const DraftExportModal: React.FC<DraftExportModalProps> = ({
@@ -44,7 +62,8 @@ export const DraftExportModal: React.FC<DraftExportModalProps> = ({
   draftTitle,
   initialFormat = 'markdown',
 }) => {
-  const [format, setFormat] = useState<'markdown' | 'latex'>(initialFormat);
+  const [format, setFormat] = useState<DraftExportFormat>(initialFormat);
+  const referencesOnly = format === 'csl-json' || format === 'ris';
   const [includeBibliography, setIncludeBibliography] = useState(true);
   const [bibliographyFormat, setBibliographyFormat] = useState<
     'bibtex' | 'biblatex'
@@ -114,23 +133,51 @@ export const DraftExportModal: React.FC<DraftExportModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
-            <div>
-              <span className="text-sm">Include bibliography</span>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {format === 'latex'
-                  ? 'Export references.bib file'
-                  : 'Add references section'}
-              </p>
+          <div>
+            <span className="text-sm font-medium block mb-2">
+              Reference file
+            </span>
+            <div className="grid grid-cols-2 gap-3">
+              {REFERENCE_FILES.map(({ value, label, ext }) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={format === value}
+                  onClick={() => setFormat(value)}
+                  className={optionClass(format === value)}
+                >
+                  <BookOpen className="h-6 w-6" />
+                  <span className="text-sm font-medium">{label}</span>
+                  <span className="text-xs text-muted-foreground">{ext}</span>
+                </button>
+              ))}
             </div>
-            <Switch
-              checked={includeBibliography}
-              onCheckedChange={setIncludeBibliography}
-              aria-label="Include bibliography"
-            />
           </div>
 
-          {includeBibliography && (
+          {referencesOnly ? (
+            <div className="p-3 bg-muted rounded text-xs text-muted-foreground">
+              References only, keyed doc1, doc2, … as cited in the draft.
+              Missing metadata is left out, never filled in.
+            </div>
+          ) : (
+            <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+              <div>
+                <span className="text-sm">Include bibliography</span>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {format === 'latex'
+                    ? 'Export references.bib file'
+                    : 'Add references section'}
+                </p>
+              </div>
+              <Switch
+                checked={includeBibliography}
+                onCheckedChange={setIncludeBibliography}
+                aria-label="Include bibliography"
+              />
+            </div>
+          )}
+
+          {includeBibliography && !referencesOnly && (
             <div>
               <span className="text-sm font-medium block mb-1.5">
                 Bibliography format

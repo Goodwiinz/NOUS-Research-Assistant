@@ -16,6 +16,8 @@ vi.mock('@/services/projectService', () => ({
     verifyManuscriptRelease: vi.fn(),
     listVenueChecks: vi.fn(),
     runVenueCheck: vi.fn(),
+    downloadReleaseReferences: vi.fn(),
+    getReleaseReferenceReport: vi.fn(),
   },
 }));
 
@@ -85,6 +87,39 @@ function withReleases(...releases: ApiManuscriptRelease[]): void {
 describe('ManuscriptReleaseSection (GOO-315)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(projectService.getReleaseReferenceReport).mockResolvedValue({
+      format: 'csl-json',
+      records: 2,
+      omissions: [
+        { key: 'doc2', field: 'year', reason: 'absent', value: null },
+      ],
+    });
+  });
+
+  it('release reference download uses release endpoint', async () => {
+    withReleases(release());
+    render(
+      <ManuscriptReleaseSection
+        projectId="project-1"
+        draft={draft}
+        canPromote={false}
+      />
+    );
+    for (const [name, format] of [
+      ['BibTeX', 'bibtex'],
+      ['CSL JSON', 'csl-json'],
+      ['RIS', 'ris'],
+    ] as const) {
+      (await screen.findByRole('button', { name })).click();
+      expect(projectService.downloadReleaseReferences).toHaveBeenLastCalledWith(
+        'project-1',
+        'release-candidate-1',
+        format
+      );
+    }
+    expect(
+      await screen.findByText(/2 references; 1 missing field omitted/)
+    ).toBeInTheDocument();
   });
 
   it('checks rendered separately', async () => {
