@@ -16,6 +16,7 @@ from .project_chat import router as project_chat_router
 from .project_report import router as project_report_router
 from .project_skills import router as project_skills_router
 from .projects import router as projects_router
+from .statements import router as statements_router
 from .tone_engine import router as tone_engine_router
 from .writer import router as writer_router
 
@@ -28,6 +29,7 @@ __all__ = [
     "claims_router",
     "peer_review_router",
     "manuscript_releases_router",
+    "statements_router",
     "chat_router",
     "export_router",
     "project_chat_router",

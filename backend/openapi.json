@@ -1517,6 +1517,57 @@
         "title": "AppraisalSubmit",
         "type": "object"
       },
+      "ApprovalCreate": {
+        "description": "``in_app_self`` only by the author's own linked user;\n``recorded_attestation`` records an off-platform approval with a note.",
+        "properties": {
+          "attestation_note": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attestation Note"
+          },
+          "author_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Author Key",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "in_app_self",
+              "recorded_attestation"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "set_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Set Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "author_key",
+          "set_hash",
+          "method",
+          "idempotency_key"
+        ],
+        "title": "ApprovalCreate",
+        "type": "object"
+      },
       "ApprovalRequest": {
         "properties": {
           "audit_note": {
@@ -1543,6 +1594,68 @@
           }
         },
         "title": "ApprovalRequest",
+        "type": "object"
+      },
+      "ApprovalResponse": {
+        "properties": {
+          "approved_by_id": {
+            "format": "uuid",
+            "title": "Approved By Id",
+            "type": "string"
+          },
+          "attestation_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attestation Note"
+          },
+          "author_key": {
+            "title": "Author Key",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "in_app_self",
+              "recorded_attestation"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "set_hash": {
+            "title": "Set Hash",
+            "type": "string"
+          },
+          "statement_set_id": {
+            "format": "uuid",
+            "title": "Statement Set Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "statement_set_id",
+          "author_key",
+          "set_hash",
+          "method",
+          "approved_by_id",
+          "created_at"
+        ],
+        "title": "ApprovalResponse",
         "type": "object"
       },
       "ArXivIngestRequest": {
@@ -2176,6 +2289,187 @@
           "created_at"
         ],
         "title": "AuditEventResponse",
+        "type": "object"
+      },
+      "AuthorIdentity": {
+        "properties": {
+          "approval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "author_key": {
+            "title": "Author Key",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "orcid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orcid"
+          },
+          "orcid_receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrcidReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "orcid_status": {
+            "enum": [
+              "authenticated",
+              "unauthenticated",
+              "unknown"
+            ],
+            "title": "Orcid Status",
+            "type": "string"
+          },
+          "order": {
+            "title": "Order",
+            "type": "integer"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "author_key",
+          "order",
+          "orcid_status"
+        ],
+        "title": "AuthorIdentity",
+        "type": "object"
+      },
+      "AuthorIn": {
+        "properties": {
+          "affiliations": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Affiliations"
+          },
+          "author_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Author Key",
+            "type": "string"
+          },
+          "corresponding": {
+            "default": false,
+            "title": "Corresponding",
+            "type": "boolean"
+          },
+          "credit_roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Roles"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "orcid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orcid"
+          },
+          "order": {
+            "minimum": 1.0,
+            "title": "Order",
+            "type": "integer"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "author_key",
+          "order"
+        ],
+        "title": "AuthorIn",
         "type": "object"
       },
       "BatchEntityRequest": {
@@ -12216,6 +12510,37 @@
         "title": "FulltextStateResponse",
         "type": "object"
       },
+      "FundingIn": {
+        "properties": {
+          "grants": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/GrantIn"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grants"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "title": "FundingIn",
+        "type": "object"
+      },
       "GrantDecision": {
         "additionalProperties": false,
         "properties": {
@@ -12228,6 +12553,34 @@
           "approved"
         ],
         "title": "GrantDecision",
+        "type": "object"
+      },
+      "GrantIn": {
+        "properties": {
+          "award_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Award Id"
+          },
+          "funder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funder"
+          }
+        },
+        "title": "GrantIn",
         "type": "object"
       },
       "GrantRequestCreate": {
@@ -13801,6 +14154,45 @@
         "title": "LegacyProjectResponse",
         "type": "object"
       },
+      "LicensesIn": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "title": "LicensesIn",
+        "type": "object"
+      },
       "LinkThreadRequest": {
         "description": "Request to link an existing thread to a project",
         "properties": {
@@ -15063,6 +15455,118 @@
           "size"
         ],
         "title": "NoteListResponse",
+        "type": "object"
+      },
+      "OrcidAuthenticationListResponse": {
+        "properties": {
+          "authentications": {
+            "items": {
+              "$ref": "#/components/schemas/OrcidAuthenticationResponse"
+            },
+            "title": "Authentications",
+            "type": "array"
+          }
+        },
+        "required": [
+          "authentications"
+        ],
+        "title": "OrcidAuthenticationListResponse",
+        "type": "object"
+      },
+      "OrcidAuthenticationResponse": {
+        "description": "A non-secret receipt: no access, refresh or ID token, ever.",
+        "properties": {
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name_claim": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name Claim"
+          },
+          "orcid": {
+            "title": "Orcid",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "token_received_at": {
+            "format": "date-time",
+            "title": "Token Received At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orcid",
+          "environment",
+          "scope",
+          "client_id",
+          "token_received_at",
+          "created_at"
+        ],
+        "title": "OrcidAuthenticationResponse",
+        "type": "object"
+      },
+      "OrcidReceipt": {
+        "properties": {
+          "authentication_id": {
+            "format": "uuid",
+            "title": "Authentication Id",
+            "type": "string"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "token_received_at": {
+            "format": "date-time",
+            "title": "Token Received At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authentication_id",
+          "environment",
+          "token_received_at"
+        ],
+        "title": "OrcidReceipt",
+        "type": "object"
+      },
+      "OrcidStartResponse": {
+        "properties": {
+          "authorize_url": {
+            "title": "Authorize Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorize_url"
+        ],
+        "title": "OrcidStartResponse",
         "type": "object"
       },
       "OrganizationProfileEncryptionRequest": {
@@ -24029,6 +24533,286 @@
         "title": "StartEvaluationResponse",
         "type": "object"
       },
+      "StatementBody": {
+        "description": "``credit_roles`` are ``credit/1`` slugs; ``licenses.text`` an SPDX id.",
+        "properties": {
+          "authors": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AuthorIn"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authors"
+          },
+          "code_availability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Availability"
+          },
+          "conflicts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conflicts"
+          },
+          "data_availability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Availability"
+          },
+          "ethics": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ethics"
+          },
+          "funding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "licenses": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicensesIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limitations": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limitations"
+          }
+        },
+        "title": "StatementBody",
+        "type": "object"
+      },
+      "StatementSetCreate": {
+        "description": "A new version; ``supersedes_set_id`` must be the current tip.",
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/StatementBody"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "supersedes_set_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Set Id"
+          }
+        },
+        "required": [
+          "body",
+          "idempotency_key"
+        ],
+        "title": "StatementSetCreate",
+        "type": "object"
+      },
+      "StatementSetResponse": {
+        "properties": {
+          "all_approved": {
+            "title": "All Approved",
+            "type": "boolean"
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalResponse"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "authors": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorIdentity"
+            },
+            "title": "Authors",
+            "type": "array"
+          },
+          "body": {
+            "additionalProperties": true,
+            "title": "Body",
+            "type": "object"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "credit_vocabulary": {
+            "title": "Credit Vocabulary",
+            "type": "string"
+          },
+          "grants_permissions": {
+            "const": false,
+            "default": false,
+            "title": "Grants Permissions",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_tip": {
+            "title": "Is Tip",
+            "type": "boolean"
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Fields",
+            "type": "array"
+          },
+          "missing_items": {
+            "items": {
+              "$ref": "#/components/schemas/VenueItem"
+            },
+            "title": "Missing Items",
+            "type": "array"
+          },
+          "schema_id": {
+            "title": "Schema Id",
+            "type": "string"
+          },
+          "set_hash": {
+            "title": "Set Hash",
+            "type": "string"
+          },
+          "supersedes_set_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Set Id"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "body",
+          "set_hash",
+          "schema_id",
+          "credit_vocabulary",
+          "created_by_id",
+          "created_at",
+          "is_tip",
+          "missing_fields",
+          "missing_items",
+          "authors",
+          "approvals",
+          "all_approved"
+        ],
+        "title": "StatementSetResponse",
+        "type": "object"
+      },
+      "StatementsListResponse": {
+        "properties": {
+          "credit_roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Credit Roles",
+            "type": "array"
+          },
+          "credit_vocabulary": {
+            "title": "Credit Vocabulary",
+            "type": "string"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/StatementSetResponse"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "tip": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StatementSetResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "history",
+          "credit_roles",
+          "credit_vocabulary"
+        ],
+        "title": "StatementsListResponse",
+        "type": "object"
+      },
       "StepResponse": {
         "description": "Schema for step API responses.",
         "properties": {
@@ -26419,6 +27203,157 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VenueCheckCreate": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "VenueCheckCreate",
+        "type": "object"
+      },
+      "VenueCheckListResponse": {
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/VenueCheckResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "checks"
+        ],
+        "title": "VenueCheckListResponse",
+        "type": "object"
+      },
+      "VenueCheckResponse": {
+        "properties": {
+          "anonymized_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anonymized Sha256"
+          },
+          "checked_by_id": {
+            "format": "uuid",
+            "title": "Checked By Id",
+            "type": "string"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VenueItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "package_sha256": {
+            "title": "Package Sha256",
+            "type": "string"
+          },
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "profile_version": {
+            "title": "Profile Version",
+            "type": "integer"
+          },
+          "release_id": {
+            "format": "uuid",
+            "title": "Release Id",
+            "type": "string"
+          },
+          "rules": {
+            "additionalProperties": {
+              "enum": [
+                "pass",
+                "fail",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Rules",
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "release_id",
+          "profile_id",
+          "profile_version",
+          "package_sha256",
+          "status",
+          "checked_by_id",
+          "created_at"
+        ],
+        "title": "VenueCheckResponse",
+        "type": "object"
+      },
+      "VenueItem": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "fix": {
+            "title": "Fix",
+            "type": "string"
+          },
+          "rule": {
+            "title": "Rule",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "field",
+          "detail",
+          "fix"
+        ],
+        "title": "VenueItem",
         "type": "object"
       },
       "WeightExperimentRequest": {
@@ -34045,6 +34980,159 @@
         "summary": "Update Profile",
         "tags": [
           "authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/orcid/authentications": {
+      "get": {
+        "description": "The current user's own receipts only.",
+        "operationId": "orcid_authentications_api_v1_auth_orcid_authentications_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcidAuthenticationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Orcid Authentications",
+        "tags": [
+          "orcid"
+        ]
+      }
+    },
+    "/api/v1/auth/orcid/callback": {
+      "get": {
+        "description": "Complete the flow for the session user and keep the receipt.",
+        "operationId": "orcid_callback_api_v1_auth_orcid_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcidAuthenticationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "orcid_denied or orcid_state_invalid"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "orcid_exchange_failed"
+          },
+          "503": {
+            "description": "ORCID not configured"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Orcid Callback",
+        "tags": [
+          "orcid"
+        ]
+      }
+    },
+    "/api/v1/auth/orcid/start": {
+      "get": {
+        "description": "The ORCID authorize URL with a signed, 10-minute state.",
+        "operationId": "orcid_start_api_v1_auth_orcid_start_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcidStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "description": "ORCID not configured"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Orcid Start",
+        "tags": [
+          "orcid"
         ]
       }
     },
@@ -44644,6 +45732,20 @@
               "title": "Release Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "variant",
+            "required": false,
+            "schema": {
+              "default": "identified",
+              "enum": [
+                "identified",
+                "anonymized"
+              ],
+              "title": "Variant",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -44742,6 +45844,132 @@
           }
         ],
         "summary": "Promote",
+        "tags": [
+          "manuscript-releases"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/venue-checks": {
+      "get": {
+        "description": "Venue check results with actionable items (VIEW).",
+        "operationId": "list_venue_checks_api_v1_projects__project_id__manuscript_releases__release_id__venue_checks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Release Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCheckListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Venue Checks",
+        "tags": [
+          "manuscript-releases"
+        ]
+      },
+      "post": {
+        "description": "Run ``generic-icmje-credit/1`` on the stored package bytes (EDIT).",
+        "operationId": "run_venue_check_api_v1_projects__project_id__manuscript_releases__release_id__venue_checks_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Release Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VenueCheckCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Run Venue Check",
         "tags": [
           "manuscript-releases"
         ]
@@ -46555,6 +47783,190 @@
         "summary": "Propose Version",
         "tags": [
           "project-skills"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/statements": {
+      "get": {
+        "description": "The tip and history with missing fields, ORCID states and approvals.",
+        "operationId": "list_sets_api_v1_projects__project_id__statements_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementsListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Sets",
+        "tags": [
+          "manuscript-statements"
+        ]
+      },
+      "post": {
+        "description": "Record a new statement set version (EDIT).",
+        "operationId": "version_set_api_v1_projects__project_id__statements_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementSetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementSetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "The statement set changed (stale tip)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Version Set",
+        "tags": [
+          "manuscript-statements"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/statements/{set_id}/approvals": {
+      "post": {
+        "description": "One author's approval of the set's exact hash (EDIT).",
+        "operationId": "approve_api_v1_projects__project_id__statements__set_id__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "set_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Set Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "Self-approval by someone other than the author"
+          },
+          "409": {
+            "description": "The set changed, or the author already approved"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve",
+        "tags": [
+          "manuscript-statements"
         ]
       }
     },

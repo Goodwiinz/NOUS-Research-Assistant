@@ -142,7 +142,10 @@ class OrcidAuthentication(Base):
             "token_received_at",
             name="uq_orcid_authentications_receipt",
         ),
-        CheckConstraint(ORCID_CHECK, name="ck_orcid_authentications_orcid"),
+        # A PostgreSQL regex; the SQLite unit schema skips it.
+        CheckConstraint(ORCID_CHECK, name="ck_orcid_authentications_orcid").ddl_if(
+            dialect="postgresql"
+        ),
         CheckConstraint(ENVIRONMENT_CHECK, name="ck_orcid_authentications_env"),
         Index("idx_orcid_authentications_user", "user_id"),
     )

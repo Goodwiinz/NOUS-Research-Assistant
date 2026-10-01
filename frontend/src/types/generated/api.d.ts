@@ -2187,6 +2187,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/orcid/authentications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Orcid Authentications
+         * @description The current user's own receipts only.
+         */
+        get: operations["orcid_authentications_api_v1_auth_orcid_authentications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/orcid/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Orcid Callback
+         * @description Complete the flow for the session user and keep the receipt.
+         */
+        get: operations["orcid_callback_api_v1_auth_orcid_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/orcid/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Orcid Start
+         * @description The ORCID authorize URL with a signed, 10-minute state.
+         */
+        get: operations["orcid_start_api_v1_auth_orcid_start_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/session": {
         parameters: {
             query?: never;
@@ -5573,6 +5633,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/venue-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Venue Checks
+         * @description Venue check results with actionable items (VIEW).
+         */
+        get: operations["list_venue_checks_api_v1_projects__project_id__manuscript_releases__release_id__venue_checks_get"];
+        put?: never;
+        /**
+         * Run Venue Check
+         * @description Run ``generic-icmje-credit/1`` on the stored package bytes (EDIT).
+         */
+        post: operations["run_venue_check_api_v1_projects__project_id__manuscript_releases__release_id__venue_checks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/verify": {
         parameters: {
             query?: never;
@@ -6075,6 +6159,50 @@ export interface paths {
         put?: never;
         /** Propose Version */
         post: operations["propose_version_api_v1_projects__project_id__skills__skill_name__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/statements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sets
+         * @description The tip and history with missing fields, ORCID states and approvals.
+         */
+        get: operations["list_sets_api_v1_projects__project_id__statements_get"];
+        put?: never;
+        /**
+         * Version Set
+         * @description Record a new statement set version (EDIT).
+         */
+        post: operations["version_set_api_v1_projects__project_id__statements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/statements/{set_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve
+         * @description One author's approval of the set's exact hash (EDIT).
+         */
+        post: operations["approve_api_v1_projects__project_id__statements__set_id__approvals_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11016,6 +11144,26 @@ export interface components {
             /** Timepoint */
             timepoint: string;
         };
+        /**
+         * ApprovalCreate
+         * @description ``in_app_self`` only by the author's own linked user;
+         *     ``recorded_attestation`` records an off-platform approval with a note.
+         */
+        ApprovalCreate: {
+            /** Attestation Note */
+            attestation_note?: string | null;
+            /** Author Key */
+            author_key: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "in_app_self" | "recorded_attestation";
+            /** Set Hash */
+            set_hash: string;
+        };
         /** ApprovalRequest */
         ApprovalRequest: {
             /** Audit Note */
@@ -11030,6 +11178,40 @@ export interface components {
              * @default false
              */
             warning_acknowledged: boolean;
+        };
+        /** ApprovalResponse */
+        ApprovalResponse: {
+            /**
+             * Approved By Id
+             * Format: uuid
+             */
+            approved_by_id: string;
+            /** Attestation Note */
+            attestation_note?: string | null;
+            /** Author Key */
+            author_key: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "in_app_self" | "recorded_attestation";
+            /** Set Hash */
+            set_hash: string;
+            /**
+             * Statement Set Id
+             * Format: uuid
+             */
+            statement_set_id: string;
         };
         /** ArXivIngestRequest */
         ArXivIngestRequest: {
@@ -11259,6 +11441,50 @@ export interface components {
             user_agent: string | null;
             /** User Id */
             user_id: string | null;
+        };
+        /** AuthorIdentity */
+        AuthorIdentity: {
+            approval?: components["schemas"]["ApprovalResponse"] | null;
+            /** Author Key */
+            author_key: string;
+            /** Display Name */
+            display_name?: string | null;
+            /** Orcid */
+            orcid?: string | null;
+            orcid_receipt?: components["schemas"]["OrcidReceipt"] | null;
+            /**
+             * Orcid Status
+             * @enum {string}
+             */
+            orcid_status: "authenticated" | "unauthenticated" | "unknown";
+            /** Order */
+            order: number;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /** AuthorIn */
+        AuthorIn: {
+            /** Affiliations */
+            affiliations?: string[] | null;
+            /** Author Key */
+            author_key: string;
+            /**
+             * Corresponding
+             * @default false
+             */
+            corresponding: boolean;
+            /** Credit Roles */
+            credit_roles?: string[] | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Orcid */
+            orcid?: string | null;
+            /** Order */
+            order: number;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * BatchEntityRequest
@@ -15533,10 +15759,24 @@ export interface components {
              */
             state: "pending" | "requested" | "retrieved" | "unavailable";
         };
+        /** FundingIn */
+        FundingIn: {
+            /** Grants */
+            grants?: components["schemas"]["GrantIn"][] | null;
+            /** Text */
+            text?: string | null;
+        };
         /** GrantDecision */
         GrantDecision: {
             /** Approved */
             approved: boolean;
+        };
+        /** GrantIn */
+        GrantIn: {
+            /** Award Id */
+            award_id?: string | null;
+            /** Funder */
+            funder?: string | null;
         };
         /** GrantRequestCreate */
         GrantRequestCreate: {
@@ -16348,6 +16588,15 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** LicensesIn */
+        LicensesIn: {
+            /** Code */
+            code?: string | null;
+            /** Data */
+            data?: string | null;
+            /** Text */
+            text?: string | null;
+        };
         /**
          * LinkThreadRequest
          * @description Request to link an existing thread to a project
@@ -16862,6 +17111,62 @@ export interface components {
             size: number;
             /** Total */
             total: number;
+        };
+        /** OrcidAuthenticationListResponse */
+        OrcidAuthenticationListResponse: {
+            /** Authentications */
+            authentications: components["schemas"]["OrcidAuthenticationResponse"][];
+        };
+        /**
+         * OrcidAuthenticationResponse
+         * @description A non-secret receipt: no access, refresh or ID token, ever.
+         */
+        OrcidAuthenticationResponse: {
+            /** Client Id */
+            client_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Environment */
+            environment: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name Claim */
+            name_claim?: string | null;
+            /** Orcid */
+            orcid: string;
+            /** Scope */
+            scope: string;
+            /**
+             * Token Received At
+             * Format: date-time
+             */
+            token_received_at: string;
+        };
+        /** OrcidReceipt */
+        OrcidReceipt: {
+            /**
+             * Authentication Id
+             * Format: uuid
+             */
+            authentication_id: string;
+            /** Environment */
+            environment: string;
+            /**
+             * Token Received At
+             * Format: date-time
+             */
+            token_received_at: string;
+        };
+        /** OrcidStartResponse */
+        OrcidStartResponse: {
+            /** Authorize Url */
+            authorize_url: string;
         };
         /**
          * OrganizationProfileEncryptionRequest
@@ -20746,6 +21051,100 @@ export interface components {
             websocket_channel: string;
         };
         /**
+         * StatementBody
+         * @description ``credit_roles`` are ``credit/1`` slugs; ``licenses.text`` an SPDX id.
+         */
+        StatementBody: {
+            /** Authors */
+            authors?: components["schemas"]["AuthorIn"][] | null;
+            /** Code Availability */
+            code_availability?: string | null;
+            /** Conflicts */
+            conflicts?: string | null;
+            /** Data Availability */
+            data_availability?: string | null;
+            /** Ethics */
+            ethics?: string | null;
+            funding?: components["schemas"]["FundingIn"] | null;
+            licenses?: components["schemas"]["LicensesIn"] | null;
+            /** Limitations */
+            limitations?: string | null;
+        };
+        /**
+         * StatementSetCreate
+         * @description A new version; ``supersedes_set_id`` must be the current tip.
+         */
+        StatementSetCreate: {
+            body: components["schemas"]["StatementBody"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Supersedes Set Id */
+            supersedes_set_id?: string | null;
+        };
+        /** StatementSetResponse */
+        StatementSetResponse: {
+            /** All Approved */
+            all_approved: boolean;
+            /** Approvals */
+            approvals: components["schemas"]["ApprovalResponse"][];
+            /** Authors */
+            authors: components["schemas"]["AuthorIdentity"][];
+            /** Body */
+            body: {
+                [key: string]: unknown;
+            };
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Credit Vocabulary */
+            credit_vocabulary: string;
+            /**
+             * Grants Permissions
+             * @default false
+             * @constant
+             */
+            grants_permissions: false;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Tip */
+            is_tip: boolean;
+            /** Missing Fields */
+            missing_fields: string[];
+            /** Missing Items */
+            missing_items: components["schemas"]["VenueItem"][];
+            /** Schema Id */
+            schema_id: string;
+            /** Set Hash */
+            set_hash: string;
+            /** Supersedes Set Id */
+            supersedes_set_id?: string | null;
+        };
+        /** StatementsListResponse */
+        StatementsListResponse: {
+            /** Credit Roles */
+            credit_roles: string[];
+            /** Credit Vocabulary */
+            credit_vocabulary: string;
+            /** History */
+            history: components["schemas"]["StatementSetResponse"][];
+            tip?: components["schemas"]["StatementSetResponse"] | null;
+        };
+        /**
          * StepResponse
          * @description Schema for step API responses.
          */
@@ -21735,6 +22134,74 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** VenueCheckCreate */
+        VenueCheckCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** VenueCheckListResponse */
+        VenueCheckListResponse: {
+            /** Checks */
+            checks: components["schemas"]["VenueCheckResponse"][];
+        };
+        /** VenueCheckResponse */
+        VenueCheckResponse: {
+            /** Anonymized Sha256 */
+            anonymized_sha256?: string | null;
+            /**
+             * Checked By Id
+             * Format: uuid
+             */
+            checked_by_id: string;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Items */
+            items?: components["schemas"]["VenueItem"][];
+            /** Package Sha256 */
+            package_sha256: string;
+            /** Profile Id */
+            profile_id: string;
+            /** Profile Version */
+            profile_version: number;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+            /** Rules */
+            rules?: {
+                [key: string]: "pass" | "fail" | "unknown";
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pass" | "fail";
+        };
+        /** VenueItem */
+        VenueItem: {
+            /** Detail */
+            detail: string;
+            /** Field */
+            field: string;
+            /** Fix */
+            fix: string;
+            /** Rule */
+            rule: string;
         };
         /**
          * WeightExperimentRequest
@@ -26033,6 +26500,107 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    orcid_authentications_api_v1_auth_orcid_authentications_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrcidAuthenticationListResponse"];
+                };
+            };
+        };
+    };
+    orcid_callback_api_v1_auth_orcid_callback_get: {
+        parameters: {
+            query?: {
+                code?: string | null;
+                state?: string | null;
+                error?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrcidAuthenticationResponse"];
+                };
+            };
+            /** @description orcid_denied or orcid_state_invalid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description orcid_exchange_failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description ORCID not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    orcid_start_api_v1_auth_orcid_start_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrcidStartResponse"];
+                };
+            };
+            /** @description ORCID not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -31882,7 +32450,9 @@ export interface operations {
     };
     download_package_api_v1_projects__project_id__manuscript_releases__release_id__package_get: {
         parameters: {
-            query?: never;
+            query?: {
+                variant?: "identified" | "anonymized";
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -31943,6 +32513,74 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_venue_checks_api_v1_projects__project_id__manuscript_releases__release_id__venue_checks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                release_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenueCheckListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_venue_check_api_v1_projects__project_id__manuscript_releases__release_id__venue_checks_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                release_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VenueCheckCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenueCheckResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -32922,6 +33560,129 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChangeRequestResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sets_api_v1_projects__project_id__statements_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatementsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_set_api_v1_projects__project_id__statements_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StatementSetCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatementSetResponse"];
+                };
+            };
+            /** @description The statement set changed (stale tip) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_api_v1_projects__project_id__statements__set_id__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                set_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalResponse"];
+                };
+            };
+            /** @description Self-approval by someone other than the author */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The set changed, or the author already approved */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
