@@ -109,10 +109,6 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def account_ref() -> str:
-    return f"{rules.REPOSITORY}:{settings.ZENODO_ACCOUNT_LABEL}"
-
-
 def _role(context: ProjectContext) -> str:
     if ResearchProjectRole.ADJUDICATOR in context.effective_roles:
         return "adjudicator"
@@ -312,7 +308,7 @@ async def list_deposits(
     label = settings.ZENODO_ACCOUNT_LABEL
     return DepositListResponse(
         configured=zenodo.from_settings() is not None,
-        account_ref=account_ref() if label else None,
+        account_ref=zenodo.account_ref() if label else None,
         approvals=[_approval_response(a, approvals, releases_by_id) for a in approvals],
         deposits=[_response(c, approvals, queue.get(c[0].id)) for c in chains],
     )
@@ -468,7 +464,7 @@ async def approve(
         release_id=release.id,
         package_sha256=release.package_sha256,
         repository=rules.REPOSITORY,
-        account_ref=account_ref(),
+        account_ref=zenodo.account_ref(),
         action=rules.ACTION,
         kind="approved",
         approved_by_id=actor_id,
@@ -587,7 +583,7 @@ async def request_deposit(
     if replay is not None:
         return await _one(db, collection_id, UUID(replay["operation_id"])), True
     release = await _verified_release(db, context, data.release_id, data.package_sha256)
-    account = account_ref()
+    account = zenodo.account_ref()
     approval = _in_force(
         await _approvals(db, collection_id),
         release.id,

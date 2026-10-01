@@ -216,3 +216,10 @@ def from_settings() -> ZenodoAdapter | None:
     ):
         return None
     return ZenodoAdapter(settings.ZENODO_BASE_URL, token)
+
+
+def account_ref() -> str:
+    """The non-secret label an approval binds; a changed label voids it."""
+    from src.core.config import settings
+
+    return f"zenodo_sandbox:{settings.ZENODO_ACCOUNT_LABEL}"
