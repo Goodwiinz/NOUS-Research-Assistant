@@ -504,13 +504,14 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
                         f"{listed_updated_at.isoformat() if listed_updated_at else 'unknown'}"
                     )
 
-                winning_run = await agent_run_service.upsert_run(
+                # One transaction: status + terminal ledger event + outbox
+                # retirement, so a swept run is closed everywhere (R8-C4).
+                winning_run = await agent_run_service.terminalize_stale_run(
                     db,
                     job_id=job_id,
                     status=requested_status,
                     organization_id=run.organization_id,
                     user_id=run.user_id,
-                    thread_id=run.thread_id,
                     error=error,
                 )
                 decision = agent_run_service._decision_from_run(
