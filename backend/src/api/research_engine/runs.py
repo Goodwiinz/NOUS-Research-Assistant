@@ -32,6 +32,7 @@ from src.schemas.research_engine import (
     validate_blueprint_runtime,
 )
 from src.services.expensive_work_admission import admit_expensive_work
+from src.services.research_engine import experiment_service
 from src.services.research_engine.connectors import (
     ArxivConnector,
     RagStoreConnector,
@@ -844,8 +845,10 @@ async def stream_run(
                 "effective_plan_hash": run.effective_plan_hash,
                 "blueprint_id": approved_plan["blueprint_id"],
                 "blueprint_version": approved_plan["blueprint_version"],
+                "organization_id": str(organization_id),
             },
             on_search_page=receipt_journal.persist_page,
+            analyze_inputs=experiment_service.input_loader(db, canonical_project_id),
         )
         engine = WorkflowEngine(step_executor=executor)
         await db.refresh(run)
@@ -854,6 +857,16 @@ async def stream_run(
             lifecycle.release_stream_claim(run=run, claim=stream_claim)
         )
         raise
+
+    async def _record_manifest(run: ResearchRun) -> None:
+        await experiment_service.record_manifest(
+            db,
+            run,
+            steps=blueprint_dict["steps"],
+            collection_id=canonical_project_id,
+            organization_id=organization_id,
+            actor_id=actor_user_id,
+        )
 
     async def event_generator():
         """Yield SSE-formatted events from the workflow engine."""
@@ -1031,6 +1044,11 @@ async def stream_run(
                     run.status = RunStatus.FAILED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
+                    # GOO-312: a failed experiment is recorded, incomplete.
+                    try:
+                        await _record_manifest(run)
+                    except experiment_service.ManifestSecretDetected:
+                        pass  # the run already failed; nothing is recorded
                     await db.commit()
                 elif event_type == "step_error":
                     consumed_tokens = max(0, int(event.get("consumed_tokens") or 0))
@@ -1085,6 +1103,22 @@ async def stream_run(
                         "parameters_override": parameter_overrides,
                         "parameters": effective_parameters,
                     }
+                    # GOO-312: the v2 manifest commits with the terminal status.
+                    try:
+                        await _record_manifest(run)
+                    except experiment_service.ManifestSecretDetected as exc:
+                        run.status = RunStatus.FAILED.value
+                        run.reproducibility_manifest = {
+                            **run.reproducibility_manifest,
+                            "final_status": "failed",
+                            "failure": str(exc),
+                        }
+                        event = {
+                            "event": "run_failed",
+                            "run_id": str(run.id),
+                            "error": str(exc),
+                            "error_category": str(exc),
+                        }
                     await db.commit()
 
                 event_type = event.get("event", "message")

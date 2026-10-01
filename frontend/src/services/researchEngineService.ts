@@ -37,6 +37,42 @@ import type {
   ApiImportReceiptDetail,
 } from '@/types/api/research-corpus-contract';
 import type { ApiJourneyResponse } from '@/types/api/research-journey-contract';
+import type {
+  ApiRerun,
+  ApiRerunCreate,
+  ApiRerunEligibility,
+  ApiRerunList,
+} from '@/types/api/research-rerun-contract';
+import type {
+  ApiAppraisal,
+  ApiAppraisalAdjudicate,
+  ApiAppraisalList,
+  ApiAppraisalSubmit,
+} from '@/types/api/research-appraisal-contract';
+import type {
+  ApiCertainty,
+  ApiCertaintyCreate,
+  ApiContradiction,
+  ApiContradictionCreate,
+  ApiEvidenceOutcomeList,
+  ApiEvidenceTable,
+  ApiEvidenceTableCreate,
+  ApiEvidenceTablePreview,
+} from '@/types/api/research-evidence-contract';
+import type {
+  ApiSynthesisExecute,
+  ApiSynthesisList,
+  ApiSynthesisPreview,
+  ApiSynthesisResult,
+  ApiSynthesisRoles,
+} from '@/types/api/research-synthesis-contract';
+import type {
+  ApiFigure,
+  ApiFigureCreate,
+  ApiFigureLineage,
+  ApiFigureList,
+  ApiRunManifestV2,
+} from '@/types/api/research-experiment-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -462,3 +498,241 @@ export const getJourney = (projectId: string): Promise<ApiJourneyResponse> =>
 /** One zip: every export, a manifest and SHA256SUMS (the server names it). */
 export const downloadAuditBundle = (projectId: string): Promise<void> =>
   api.download(`/research-engine/projects/${projectId}/audit-bundle`);
+
+// --- Study-design appraisal (GOO-309) ----------------------------------------
+
+export type {
+  ApiAppraisal as Appraisal,
+  ApiAppraisalAdjudicate as AppraisalAdjudicate,
+  ApiAppraisalDesign as AppraisalDesign,
+  ApiAppraisalDomain as AppraisalDomain,
+  ApiAppraisalEvidenceOption as AppraisalEvidenceOption,
+  ApiAppraisalInstrument as AppraisalInstrument,
+  ApiAppraisalList as AppraisalList,
+  ApiAppraisalResult as AppraisalResult,
+  ApiAppraisalStatus as AppraisalStatus,
+  ApiAppraisalSubmit as AppraisalSubmit,
+} from '@/types/api/research-appraisal-contract';
+
+const appraisals = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/appraisals`;
+
+export const listAppraisals = (projectId: string): Promise<ApiAppraisalList> =>
+  api.get<ApiAppraisalList>(appraisals(projectId));
+
+export const submitAppraisal = (
+  projectId: string,
+  data: ApiAppraisalSubmit
+): Promise<ApiAppraisal> => api.post<ApiAppraisal>(appraisals(projectId), data);
+
+export const adjudicateAppraisal = (
+  projectId: string,
+  data: ApiAppraisalAdjudicate
+): Promise<ApiAppraisal> =>
+  api.post<ApiAppraisal>(`${appraisals(projectId)}/adjudications`, data);
+
+/** The visible rows only; the server names the file. */
+export const exportAppraisals = (projectId: string): Promise<void> =>
+  api.download(`/research-engine/projects/${projectId}/appraisals/export`);
+
+// --- Evidence tables, contradictions and certainty (GOO-310) ----------------
+
+export type {
+  ApiCertainty as Certainty,
+  ApiCertaintyCreate as CertaintyCreate,
+  ApiCertaintyLevel as CertaintyLevel,
+  ApiCertaintyRatings as CertaintyRatings,
+  ApiContradiction as Contradiction,
+  ApiContradictionCreate as ContradictionCreate,
+  ApiContradictionDissent as ContradictionDissent,
+  ApiEvidenceCell as EvidenceCell,
+  ApiEvidenceCellState as EvidenceCellState,
+  ApiEvidenceOutcome as EvidenceOutcome,
+  ApiEvidenceOutcomeList as EvidenceOutcomeList,
+  ApiEvidenceRow as EvidenceRow,
+  ApiEvidenceTable as EvidenceTable,
+  ApiEvidenceTableCreate as EvidenceTableCreate,
+  ApiEvidenceTablePreview as EvidenceTablePreview,
+  ApiEvidenceTip as EvidenceTip,
+  ApiEvidenceUnreviewedCell as EvidenceUnreviewedCell,
+  ApiStanceSuggestionGroup as StanceSuggestionGroup,
+} from '@/types/api/research-evidence-contract';
+
+const evidence = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/evidence`;
+
+export const listEvidence = (
+  projectId: string
+): Promise<ApiEvidenceOutcomeList> =>
+  api.get<ApiEvidenceOutcomeList>(evidence(projectId));
+
+export interface EvidencePreviewQuery {
+  outcome_key: string;
+  timepoint: string;
+  matrix_id: string;
+  field_ids: string[];
+}
+
+export const previewEvidenceTable = (
+  projectId: string,
+  query: EvidencePreviewQuery
+): Promise<ApiEvidenceTablePreview> => {
+  const params = new URLSearchParams({
+    outcome_key: query.outcome_key,
+    timepoint: query.timepoint,
+    matrix_id: query.matrix_id,
+  });
+  query.field_ids.forEach((id) => params.append('field_ids', id));
+  return api.get<ApiEvidenceTablePreview>(
+    `${evidence(projectId)}/tables/preview?${params.toString()}`
+  );
+};
+
+export const createEvidenceTable = (
+  projectId: string,
+  data: ApiEvidenceTableCreate
+): Promise<ApiEvidenceTable> =>
+  api.post<ApiEvidenceTable>(`${evidence(projectId)}/tables`, data);
+
+export const recordContradiction = (
+  projectId: string,
+  data: ApiContradictionCreate
+): Promise<ApiContradiction> =>
+  api.post<ApiContradiction>(`${evidence(projectId)}/contradictions`, data);
+
+export const assessCertainty = (
+  projectId: string,
+  data: ApiCertaintyCreate
+): Promise<ApiCertainty> =>
+  api.post<ApiCertainty>(`${evidence(projectId)}/certainty`, data);
+
+/** Every version, stale ones included; the server names the file. */
+export const exportEvidence = (projectId: string): Promise<void> =>
+  api.download(`/research-engine/projects/${projectId}/evidence/export`);
+
+// --- Quantitative synthesis (GOO-311) ----------------------------------------
+
+export type {
+  ApiSynthesisExclusion as SynthesisExclusion,
+  ApiSynthesisExecute as SynthesisExecute,
+  ApiSynthesisIncluded as SynthesisIncluded,
+  ApiSynthesisList as SynthesisList,
+  ApiSynthesisPreview as SynthesisPreview,
+  ApiSynthesisResult as SynthesisResult,
+  ApiSynthesisRoles as SynthesisRoles,
+  ApiSynthesisSelection as SynthesisSelection,
+} from '@/types/api/research-synthesis-contract';
+
+const synthesis = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/synthesis`;
+
+export const listSynthesis = (projectId: string): Promise<ApiSynthesisList> =>
+  api.get<ApiSynthesisList>(synthesis(projectId));
+
+export const previewSynthesis = (
+  projectId: string,
+  tableVersionId: string,
+  roles: ApiSynthesisRoles
+): Promise<ApiSynthesisPreview> => {
+  const params = new URLSearchParams({
+    table_version_id: tableVersionId,
+    ...roles,
+  });
+  return api.get<ApiSynthesisPreview>(
+    `${synthesis(projectId)}/preview?${params.toString()}`
+  );
+};
+
+export const executeSynthesis = (
+  projectId: string,
+  data: ApiSynthesisExecute
+): Promise<ApiSynthesisResult> =>
+  api.post<ApiSynthesisResult>(synthesis(projectId), data);
+
+/** Every result with its inputs; the numbers recompute offline. */
+export const exportSynthesis = (projectId: string): Promise<void> =>
+  api.download(`/research-engine/projects/${projectId}/synthesis/export`);
+
+// --- Run manifests and figures (GOO-312) -------------------------------------
+
+export type {
+  ApiFigure as Figure,
+  ApiFigureCreate as FigureCreate,
+  ApiFigureLineage as FigureLineage,
+  ApiFigureList as FigureList,
+  ApiRunArtifact as RunArtifact,
+  ApiRunManifestV2 as RunManifestV2,
+} from '@/types/api/research-experiment-contract';
+
+/** The v2 manifest, or the legacy view (``schema`` names which). */
+export const getManifestV2 = (runId: string): Promise<ApiRunManifestV2> =>
+  api.get<ApiRunManifestV2>(`${BASE}/runs/${runId}/manifest/v2`);
+
+/** Exactly the hashed manifest bytes; the server names the file. */
+export const downloadManifestV2 = (runId: string): Promise<void> =>
+  api.download(`/research-engine/runs/${runId}/manifest/v2/download`);
+
+/** One retained run file, streamed with its sha256. */
+export const downloadRunArtifact = (
+  runId: string,
+  artifactId: string
+): Promise<void> =>
+  api.download(`/research-engine/runs/${runId}/artifacts/${artifactId}`);
+
+const figures = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/figures`;
+
+export const listFigures = (projectId: string): Promise<ApiFigureList> =>
+  api.get<ApiFigureList>(figures(projectId));
+
+export const registerFigure = (
+  projectId: string,
+  data: ApiFigureCreate
+): Promise<ApiFigure> => api.post<ApiFigure>(figures(projectId), data);
+
+export const getFigureLineage = (
+  projectId: string,
+  figureId: string
+): Promise<ApiFigureLineage> =>
+  api.get<ApiFigureLineage>(`${figures(projectId)}/${figureId}/lineage`);
+
+// --- Fresh reruns (GOO-313) ---------------------------------------------------
+
+export type {
+  ApiRerun as Rerun,
+  ApiRerunAttempt as RerunAttempt,
+  ApiRerunComparisonRow as RerunComparisonRow,
+  ApiRerunCreate as RerunCreate,
+  ApiRerunEligibility as RerunEligibility,
+  ApiRerunList as RerunList,
+} from '@/types/api/research-rerun-contract';
+
+/** Structured reasons (zero writes) and the byte-equality default rule. */
+export const getRerunEligibility = (
+  runId: string
+): Promise<ApiRerunEligibility> =>
+  api.get<ApiRerunEligibility>(`${BASE}/runs/${runId}/rerun-eligibility`);
+
+export const listReruns = (runId: string): Promise<ApiRerunList> =>
+  api.get<ApiRerunList>(`${BASE}/runs/${runId}/reruns`);
+
+/** REVIEW: the rule is hashed server-side before anything executes. */
+export const admitRerun = (
+  runId: string,
+  data: ApiRerunCreate
+): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/runs/${runId}/reruns`, data);
+
+export const getRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.get<ApiRerun>(`${BASE}/reruns/${rerunId}`);
+
+export const cancelRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/reruns/${rerunId}/cancel`, {});
+
+/** Attempt n+1 under the stored rule; the request carries no rule. */
+export const retryRerun = (rerunId: string): Promise<ApiRerun> =>
+  api.post<ApiRerun>(`${BASE}/reruns/${rerunId}/retry`, {});
+
+/** ``nous.rerun-comparison/1`` for every attempt; the server names the file. */
+export const downloadRerunComparison = (rerunId: string): Promise<void> =>
+  api.download(`/research-engine/reruns/${rerunId}/comparison`);

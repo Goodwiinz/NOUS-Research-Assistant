@@ -24,6 +24,7 @@ from src.core.dependencies import get_current_user
 from src.main import app
 from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.evidence import StanceClassificationModel
+from tests.conftest import _patch_multi_tenancy_middleware, _test_auth_headers
 
 # Test database setup
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test_evidence.db"
@@ -93,8 +94,10 @@ def test_client():
     # Only create the specific tables we need for testing (avoid PostgreSQL-specific types)
     Document.__table__.create(bind=engine, checkfirst=True)
     StanceClassificationModel.__table__.create(bind=engine, checkfirst=True)
-    with TestClient(app) as client:
-        yield client
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _patch_multi_tenancy_middleware(monkeypatch)
+        with TestClient(app, headers=_test_auth_headers()) as client:
+            yield client
     StanceClassificationModel.__table__.drop(bind=engine, checkfirst=True)
     Document.__table__.drop(bind=engine, checkfirst=True)
 

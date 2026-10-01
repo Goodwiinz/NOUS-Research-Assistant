@@ -4,7 +4,8 @@ Workers (``src/tasks/``), the agent (``src/services/agent/``) and the draft
 generation service (the agent's ``create_draft``/``revise_draft`` path) may
 not name ``promote``, construct ``DraftRelease`` or spell
 ``release.promoted``. ``promote`` requires a resolved ``ProjectContext``, and
-its only caller is the route that resolves ``ResearchAction.RELEASE``. Ledger
+its only callers are routes that resolve ``ResearchAction.RELEASE`` (GOO-307's
+draft promotion and GOO-315's manuscript release promotion). Ledger
 replay rejecting a non-adjudicator, non-supervisor promotion is the third
 enforcement (``test_release_replay_rejects_reviewer_promotion``).
 """
@@ -18,7 +19,10 @@ pytestmark = pytest.mark.unit
 
 SRC = Path(__file__).resolve().parents[3] / "src"
 SERVICE = SRC / "services/research/draft_release_service.py"
-ROUTE = SRC / "api/research/drafts.py"
+ROUTES = [
+    SRC / "api/research/drafts.py",
+    SRC / "api/research/manuscript_releases.py",  # GOO-315
+]
 
 
 def _automation_modules() -> list[Path]:
@@ -71,7 +75,7 @@ def test_promote_requires_a_resolved_project_context() -> None:
     assert annotations.get("context") == "ProjectContext"
 
 
-def test_only_the_release_route_calls_promote() -> None:
+def test_only_the_release_routes_call_promote() -> None:
     callers = [
         path
         for path in sorted(SRC.rglob("*.py"))
@@ -81,14 +85,16 @@ def test_only_the_release_route_calls_promote() -> None:
             for n in ast.walk(ast.parse(path.read_text()))
         )
     ]
-    assert callers == [ROUTE]
-    tree = ast.parse(ROUTE.read_text())
-    (route,) = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.AsyncFunctionDef)
-        and any(
-            isinstance(c, ast.Attribute) and c.attr == "promote" for c in ast.walk(n)
-        )
-    ]
-    assert "ResearchAction.RELEASE" in ast.unparse(route)
+    assert callers == ROUTES
+    for path in ROUTES:
+        tree = ast.parse(path.read_text())
+        (route,) = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.AsyncFunctionDef)
+            and any(
+                isinstance(c, ast.Attribute) and c.attr == "promote"
+                for c in ast.walk(n)
+            )
+        ]
+        assert "ResearchAction.RELEASE" in ast.unparse(route), path
