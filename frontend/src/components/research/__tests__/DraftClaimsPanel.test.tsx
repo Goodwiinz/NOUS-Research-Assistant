@@ -6,7 +6,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DraftClaimsPanel } from '../DraftClaimsPanel';
 import { projectService } from '@/services/projectService';
-import type { ResearchProjectRole } from '@/services/researchEngineService';
+import {
+  listSynthesis,
+  type ResearchProjectRole,
+  type SynthesisList,
+} from '@/services/researchEngineService';
 import { APIErrorClass } from '@/types/api';
 import type {
   ApiClaimLink,
@@ -23,6 +27,9 @@ vi.mock('@/services/projectService', () => ({
     observeClaimLink: vi.fn(),
     assessClaim: vi.fn(),
   },
+}));
+vi.mock('@/services/researchEngineService', () => ({
+  listSynthesis: vi.fn(async () => ({ results: [] })),
 }));
 vi.mock('@/services/scispaceService', () => ({
   listMatrices: vi.fn(async () => ({ matrices: [], total: 0 })),
@@ -264,6 +271,52 @@ describe('DraftClaimsPanel', () => {
     expect(
       screen.getByRole('checkbox', { name: /Extraction link l-extrac/ })
     ).toBeInTheDocument();
+  });
+
+  it('links only a current computed synthesis result', async () => {
+    vi.mocked(projectService.listClaims).mockResolvedValue(
+      response([linkedClaim()])
+    );
+    const base = {
+      outcome_key: 'depressive_symptoms',
+      timepoint: '12 weeks',
+      status: 'computed',
+      stale: false,
+      superseded: false,
+      estimate: -0.31,
+    };
+    vi.mocked(listSynthesis).mockResolvedValue({
+      results: [
+        { ...base, id: 'r-old', superseded: true },
+        {
+          ...base,
+          id: 'r-failed',
+          status: 'validation_failed',
+          estimate: null,
+        },
+        { ...base, id: 'r-current' },
+      ],
+    } as unknown as SynthesisList);
+    vi.mocked(projectService.linkClaimEvidence).mockResolvedValue(
+      link({ kind: 'synthesis_result' })
+    );
+    renderPanel({ content: 'Body.', canEdit: true });
+    const select = await screen.findByLabelText('Synthesis result to link');
+    expect(
+      [...(select as HTMLSelectElement).options].map((o) => o.value)
+    ).toEqual(['', 'r-current']);
+    fireEvent.change(select, { target: { value: 'r-current' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Link result' }));
+    await waitFor(() =>
+      expect(projectService.linkClaimEvidence).toHaveBeenCalledWith(
+        'project-1',
+        'c-1',
+        expect.objectContaining({
+          kind: 'synthesis_result',
+          synthesis_result_id: 'r-current',
+        })
+      )
+    );
   });
 
   it('stale 409 refetches claims and shows server detail', async () => {

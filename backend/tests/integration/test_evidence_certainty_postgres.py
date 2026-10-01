@@ -391,8 +391,11 @@ async def _outcomes(w: Any, user: str = "V") -> dict[tuple[str, str], Any]:
     return {(o.outcome_key, o.timepoint): o for o in listing.outcomes}
 
 
-def _migration(connection: Connection, direction: str) -> None:
-    filename = "f4b6d8a0c2e3_create_evidence_certainty.py"
+def _migration(
+    connection: Connection,
+    direction: str,
+    filename: str = "f4b6d8a0c2e3_create_evidence_certainty.py",
+) -> None:
     spec = importlib.util.spec_from_file_location(filename[:-3], VERSIONS / filename)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -809,8 +812,14 @@ async def test_evidence_table_contradiction_certainty_and_selective_staleness(
     ]
 
     # 13. Downgrade drops only the three tables; GOO-309's function stays.
+    # GOO-311's synthesis results reference them, so that steps down first.
     async with factory() as db:
         connection = await db.connection()
+        await connection.run_sync(
+            lambda sync: _migration(
+                sync, "downgrade", "a6c8e0b2d4f5_create_synthesis_results.py"
+            )
+        )
         await connection.run_sync(lambda sync: _migration(sync, "downgrade"))
         await db.commit()
     async with factory() as db:
