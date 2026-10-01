@@ -367,8 +367,10 @@ async def test_audit_bundle_matches_rows_scope_and_snapshot(
     manifest = json.loads(members["manifest.json"])
     assert verified["manifest_sha256"] == _sha(members["manifest.json"])
     statuses = {part["path"]: part["status"] for part in manifest["parts"]}
-    # GOO-309: no appraisal in this world, so its part is present but empty.
+    # GOO-309/310: no appraisal or evidence table in this world, so those
+    # parts are present but empty.
     assert statuses.pop("appraisal.json") == "empty"
+    assert statuses.pop("evidence.json") == "empty"
     assert set(statuses.values()) == {"ok"}
 
     # 3. Hashes match rows.

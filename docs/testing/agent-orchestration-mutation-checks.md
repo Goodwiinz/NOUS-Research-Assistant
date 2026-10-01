@@ -1781,3 +1781,46 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/te
 | `graph_part` edge selection (`:433`) | each row walks every row's cited evidence | Step 10: A's R3 row (which cites nothing on D1) is reported stale after the D1 `Blinding` value is superseded. |
 | The insert-only trigger (`e2a4c6b8d0f1…py:166`) | the function body's `RAISE … '55000'` replaced with `RETURN NEW;` (the plan's `DROP TRIGGER` would also break step 2's downgrade/upgrade) | Step 9: `DID NOT RAISE DBAPIError`; the UPDATE succeeds. A first run with an unfiltered UPDATE failed on `ck_appraisal_not_applicable_overall` (SQLSTATE 23514) instead, so step 9 now updates applicable rows only and pins the trigger. |
 | The `overall` null-while-unknown rule (`appraisal_rules.py:197`) | both overall checks replaced by `if floor is not None and _rank(overall) < _rank(floor):` | `test_overall_below_floor_or_over_unknown_is_rejected`: `DID NOT RAISE ValueError`; gold case `d3_unknown` validates with a non-null overall. |
+
+## GOO-310 evidence tables, contradiction review and outcome certainty — 2026-09-30
+
+PostgreSQL proof: `backend/tests/integration/test_evidence_certainty_postgres.py`.
+It ran against local PostgreSQL 14 on GOO-301's `screening_factory` schema,
+whose chain now ends at `f4b6d8a0c2e3` (connection URL from the environment;
+value omitted).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy.
+
+`filecmp` against the copy and `git diff --quiet` on the mutated file both
+succeeded for every mutant, on committed files. The proof (1 test), the rules
+tests (10) and the boundary guard (4) passed again afterwards. No mutant was
+committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/evidence_rules.py`
+  `e4e12bb23b930bef1997085b150cd14848afefdb1be8defd6cdcfe9b196a68ed`
+- `backend/src/services/research_engine/evidence_service.py`
+  `3e6101f45b833bb9a559b8160f9001454cae1e500dd9bcdf4eaf1d691f84403c`
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_evidence_certainty_postgres.py   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_evidence_rules.py -k "one_study or missing"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_evidence_boundary.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| One row per analysis unit in `build_rows` (`evidence_rules.py:139`) | a row per report of each unit (`for unit in sorted(units) for _report in units[unit]`) | `-k one_study`: the unit list holds S twice. Proof step 2 (`:412`): `assert 2 == 1`, study S appears twice. |
+| The `missing` cell state (`evidence_rules.py:84`) | `return "value"` when no tip | `-k missing`: the tip-less cell reports `state: value`, i.e. agreement. |
+| Adjudicator-only resolution in `record_contradiction` (`evidence_service.py:898`) | `if False:` | Step 4: reviewer A's `resolved` row reaches the insert, where only the `ck_evidence_contradiction_decider` CHECK refuses it (`IntegrityError`, not the expected 403). The database backstop holds; the service guard is what turns it into a 403. |
+| Stale-tip exclusion in `_tips` (`evidence_service.py:286`) | the `stale_nodes` filter removed | Step 9 (`:711`): the rebuilt T2 still carries D3's source-changed `Mean age` tip (`'value' == 'missing'`). The plan named T1's superseded value here, but `_is_tip()` already drops a superseded row, so only a source-changed tip reaches this filter; the proof asserts that case. |
+| Risk-of-bias resolved check in `check_certainty` (`evidence_rules.py:232`) | `if False:` | Step 5: `DID NOT RAISE HTTPException`; a `risk_of_bias: -1` assessment is accepted while R3's appraisal is still awaiting. A first run failed on the inconsistency rule instead, so step 5's RoB request now cites the contradiction too and pins this check. |
+| `graph_part` edge selection (`evidence_service.py:543`) | every table walks every table's cell tips | Step 7 (`:659`): T2 (mean age) reads stale after D1's intervention value is superseded (`[True] == [False]`). |
+| Organization filter on the stance query (`evidence_service.py:638`) | the `organization_id ==` clause removed | Step 2 (`:430`): the org-B row joins the suggestion group. |
+| Organization filter on the suggestion snapshot (`evidence_service.py:876`) | the `organization_id ==` clause removed | Step 4: `DID NOT RAISE HTTPException`; citing the org-B stance row is snapshotted instead of 404. |
+| Certainty/model-confidence separation (`evidence_rules.py:203`) | `values.append(ratings.get("confidence"))` in `certainty_level` | `test_evidence_boundary.py::test_certainty_rules_never_name_model_signals`: `evidence_rules.py:204 names 'confidence'`; the rules tests' level derivations fail too. |
