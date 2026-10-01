@@ -55,7 +55,8 @@ DOCUMENT_ID = uuid.UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
 def _schema(name: str) -> dict[str, Any]:
     descriptor = TOOL_REGISTRY.descriptor(name)
     assert descriptor is not None
-    return cast(type[BaseModel], descriptor.tool.args_schema).model_json_schema()
+    model = cast(type[BaseModel], descriptor.tool.args_schema)
+    return dict(model.model_json_schema())
 
 
 _IMPL_NAMES = {"ingest_arxiv_papers": "_tool_ingest_arxiv"}
