@@ -9,7 +9,11 @@ import threading
 import time
 from typing import Any, Optional
 
+from fastapi import Depends, HTTPException, status
+
 from src.core.config import get_settings
+from src.core.dependencies import get_current_user
+from src.models.user import User
 from src.shared.utils import RateLimiter
 
 EXPENSIVE_WORK_RATE_KEY = "research_expensive_work"
@@ -67,3 +71,28 @@ async def admit_expensive_work(*, user_id: Any, organization_id: Any) -> bool:
         identifier=identifier,
     )
     return bool(allowed)
+
+
+async def require_expensive_work_admission(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Route dependency: consume one shared org-budget slot or reject.
+
+    GOO-289: sibling arXiv routes (KG bulk ingest, feature extraction, local
+    PDF extraction, change tracking) share the budget of ``/ingest`` so the
+    aggregate limit cannot be bypassed by switching endpoint.
+    """
+    organization_id = getattr(current_user, "organization_id", None)
+    if not organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No organization associated with this account",
+        )
+    if not await admit_expensive_work(
+        user_id=current_user.id, organization_id=organization_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many expensive research jobs; retry later",
+        )
+    return current_user
