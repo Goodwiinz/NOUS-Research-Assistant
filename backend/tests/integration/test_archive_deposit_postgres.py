@@ -152,8 +152,13 @@ class FakeZenodo:
         self.corrupt: set[str] = set()
         self._next = 100
 
-    def _view(self, dep_id: int) -> dict[str, Any]:
+    def _view(self, dep_id: int, echo: str = "") -> dict[str, Any]:
+        """``echo``: a misconfigured server echoing the caller's token in a
+        link query string, which ``redact`` must strip before retention."""
         dep = self.depositions[dep_id]
+        links = dict(dep["links"])
+        if echo:
+            links["self"] = f"{BASE}/deposit/depositions/{dep_id}?access_token={echo}"
         files = [
             {
                 "id": name,
@@ -163,10 +168,11 @@ class FakeZenodo:
             }
             for name, data in self.stored[dep_id].items()
         ]
-        return {**dep, "files": files}
+        return {**dep, "links": links, "files": files}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.authorization.add(request.headers.get("Authorization", ""))
+        echo = request.headers.get("Authorization", "").removeprefix("Bearer ")
         path = request.url.path.removeprefix("/api")
         parts = path.strip("/").split("/")
         if request.method == "POST" and path == "/deposit/depositions":
@@ -193,10 +199,10 @@ class FakeZenodo:
             if self.timeout_after_create:
                 self.timeout_after_create = False
                 raise httpx.ReadTimeout("acted, then timed out", request=request)
-            return httpx.Response(201, json=self._view(dep_id))
+            return httpx.Response(201, json=self._view(dep_id, echo))
         if request.method == "GET" and path == "/deposit/depositions":
             newest = sorted(self.depositions, reverse=True)
-            return httpx.Response(200, json=[self._view(d) for d in newest])
+            return httpx.Response(200, json=[self._view(d, echo) for d in newest])
         if parts[:2] == ["deposit", "depositions"] and len(parts) >= 3:
             dep_id = int(parts[2])
             if dep_id not in self.depositions:
@@ -209,8 +215,8 @@ class FakeZenodo:
                     submitted=True,
                     doi=dep["metadata"]["prereserve_doi"]["doi"],
                 )
-                return httpx.Response(202, json=self._view(dep_id))
-            return httpx.Response(200, json=self._view(dep_id))
+                return httpx.Response(202, json=self._view(dep_id, echo))
+            return httpx.Response(200, json=self._view(dep_id, echo))
         if request.method == "PUT" and parts[0] == "files":
             if self.crash_on_put is not None:
                 self.crash_on_put -= 1
@@ -574,10 +580,10 @@ async def test_deposit_resumes_reconciles_and_never_duplicates(
     assert state.attempts[-1].phase == "draft_created" and state.doi is None
     assert len(fake.depositions) == 1
     assert await _drain(w) == 1
+    assert len(fake.depositions) == 1, "a retry created a second deposition"
     state = await _deposit(w, op)
     assert state.status == "draft_created"
     assert state.attempts[-1].reason == svc.RECONCILED
-    assert len(fake.depositions) == 1, "a retry created a second deposition"
     (dep_id,) = fake.depositions
     assert state.remote_deposition_id == str(dep_id)
 
@@ -672,7 +678,8 @@ async def test_deposit_resumes_reconciles_and_never_duplicates(
     v3 = await _seed_release(w, "v3")
     await _refused(_request(w, "S", v3, "req-v3"), 409, svc.NO_APPROVAL)
 
-    # 10. The token is retained nowhere; it was sent as a header only.
+    # 10. The token is retained nowhere (the fake echoed it in link query
+    # strings); it was sent as a header only.
     assert fake.authorization == {f"Bearer {TOKEN}"}
     for sql in (
         "SELECT coalesce(string_agg(t::text, ''), '') FROM archive_deposit_attempts t",
