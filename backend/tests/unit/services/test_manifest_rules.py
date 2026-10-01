@@ -187,7 +187,7 @@ def test_assert_no_secrets_rejects_key_value_and_patterns() -> None:
         {"lock": "tiktoken==0.7.0\npython-secret==1.0\n"}, secret_values=[]
     )
     for leak in (
-        "E2B_API_KEY=e2b_live_0123456789",
+        "E2B_API_KEY=" + "e2b_live_" + "0123456789",  # split so scanners see no token
         "x e2b_live_0123456789 y",
         "password = hunter2",
         "API-KEY=abc",
