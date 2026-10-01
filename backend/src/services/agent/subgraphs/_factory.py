@@ -235,7 +235,8 @@ def make_specialist_subgraph(
     _rename(should_continue, f"{name}_should_continue")
 
     async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dict:
-        """Final-answer LLM call when the tool-loop ceiling was hit.
+        """Final-answer LLM call when the tool-loop ceiling was hit (or a
+        fully-deduped batch left nothing new to run — see R8-A8 guidance).
 
         The model has fired ``max_tool_loops`` tool calls and still wants
         more. We strip the unanswered tool_calls and re-invoke the LLM with
@@ -256,8 +257,11 @@ def make_specialist_subgraph(
         """
         from src.services.agent.observability import record_loop_exhaustion
 
-        # Degraded-answer signal: reached this subgraph's tool-loop ceiling.
-        record_loop_exhaustion(loop_exhaustion_intent, name)
+        # Degraded-answer signal only for the tool-loop ceiling; a fully
+        # deduped batch (route_after_tool_node) is not an exhaustion (R8-A8).
+        deduped = bool(state.get("tools_all_deduped"))
+        if not deduped:
+            record_loop_exhaustion(loop_exhaustion_intent, name)
 
         messages = list(state["messages"])
 
@@ -292,6 +296,7 @@ def make_specialist_subgraph(
         )
         from src.services.agent.llm_factory import resolve_chat_deployment
         from src.services.agent.runtime_context import (
+            DEDUPED_BATCH_SYNTHESIS_GUIDANCE,
             forced_synthesis_static_prompt,
             render_dynamic_context,
         )
@@ -304,7 +309,11 @@ def make_specialist_subgraph(
             execution_closed=True,
             branch=name,
             messages=sanitized,
-            server_guidance=(addendum, limit_contract),
+            server_guidance=(
+                DEDUPED_BATCH_SYNTHESIS_GUIDANCE
+                if deduped
+                else (addendum, limit_contract)
+            ),
         )
         full = [
             SystemMessage(
