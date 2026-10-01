@@ -426,15 +426,17 @@ def write_zip(
     deployment_sha: str | None,
     protocol_version_id: str | None,
     stream_heads: dict[str, int],
+    schema: str = SCHEMA,
 ) -> tuple[bytes, str]:
     """(zip, manifest sha256). Sorted members and a fixed timestamp, so
-    identical parts give identical member bytes (``generated_at`` aside)."""
+    identical parts give identical member bytes (``generated_at`` aside).
+    ``schema``: GOO-315's manuscript package reuses this writer."""
     paths = [p.path for p in parts]
     if len(set(paths)) != len(paths) or {MANIFEST, SUMS} & set(paths):
         raise ValueError("duplicate or reserved part path")
     manifest = _dump(
         {
-            "schema": SCHEMA,
+            "schema": schema,
             "project_id": project_id,
             "generated_at": generated_at,
             "deployment_sha": deployment_sha,
@@ -483,9 +485,11 @@ def _json(members: dict[str, bytes], path: str) -> Any:
         raise BundleError(f"{path} is missing or not JSON") from exc
 
 
-def verify_bundle(data: bytes) -> dict[str, Any]:
+def verify_bundle(data: bytes, *, schema: str = SCHEMA) -> dict[str, Any]:
     """Check SHA256SUMS, each part's body hash, the draft hashes against the
-    claims package and release checks, and GOO-300's corpus package (pure)."""
+    claims package and release checks, and GOO-300's corpus package (pure).
+    Another ``schema`` (GOO-315's manuscript package) gets the generic member
+    checks only: it has no claims, release-check or corpus part."""
     members = _read(data)
     sums: dict[str, str] = {}
     for line in members.get(SUMS, b"").decode().splitlines():
@@ -500,7 +504,7 @@ def verify_bundle(data: bytes) -> dict[str, Any]:
             raise BundleError(f"{path} does not match SHA256SUMS")
 
     manifest = _json(members, MANIFEST)
-    if manifest.get("schema") != SCHEMA:
+    if manifest.get("schema") != schema:
         raise BundleError("unsupported bundle schema")
     listed = {p["path"]: p for p in manifest["parts"]}
     if set(listed) != set(members) - {SUMS, MANIFEST}:
@@ -518,6 +522,12 @@ def verify_bundle(data: bytes) -> dict[str, Any]:
             body_sha = _sha(member)
         if entry["body_sha256"] != body_sha:
             raise BundleError(f"{path} body_sha256 does not match the manifest")
+    if schema != SCHEMA:
+        return {
+            "manifest_sha256": _sha(members[MANIFEST]),
+            "project_id": manifest["project_id"],
+            "parts": sorted(listed),
+        }
 
     claims = _json(members, "claims.json")["body"]
     checks = _json(members, "drafts/release-checks.json")["body"]
