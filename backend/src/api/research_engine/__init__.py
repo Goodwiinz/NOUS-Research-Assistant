@@ -14,6 +14,7 @@ from .reviews import router as research_engine_reviews_router
 from .runs import router as research_engine_runs_router
 from .screening import router as research_engine_screening_router
 from .steps import router as research_engine_steps_router
+from .synthesis import router as research_engine_synthesis_router
 
 __all__ = [
     "research_engine_projects_router",
@@ -29,5 +30,6 @@ __all__ = [
     "research_engine_journey_router",
     "research_engine_appraisals_router",
     "research_engine_evidence_router",
+    "research_engine_synthesis_router",
     "research_engine_steps_router",
 ]

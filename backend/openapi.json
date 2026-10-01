@@ -4699,7 +4699,7 @@
         "type": "object"
       },
       "ClaimLinkCreate": {
-        "description": "Link the claim's tip version to evidence, or withdraw/re-point a link.\n\n``extraction`` takes ``accepted_value_id``; ``source_span`` takes\n``document_id``, ``start_char``, ``end_char`` and ``quote``;\n``legacy_unanchored`` takes ``draft_citation_id``. The server copies the\nsource hashes. A ``withdrawn`` row supersedes a link and copies its target.",
+        "description": "Link the claim's tip version to evidence, or withdraw/re-point a link.\n\n``extraction`` takes ``accepted_value_id``; ``source_span`` takes\n``document_id``, ``start_char``, ``end_char`` and ``quote``;\n``legacy_unanchored`` takes ``draft_citation_id``; ``synthesis_result``\n(GOO-311) takes ``synthesis_result_id``. The server copies the source\nhashes. A ``withdrawn`` row supersedes a link and copies its target.",
         "properties": {
           "accepted_value_id": {
             "anyOf": [
@@ -4764,7 +4764,8 @@
             "enum": [
               "extraction",
               "source_span",
-              "legacy_unanchored"
+              "legacy_unanchored",
+              "synthesis_result"
             ],
             "title": "Kind",
             "type": "string"
@@ -4814,6 +4815,18 @@
               }
             ],
             "title": "Supersedes Link Id"
+          },
+          "synthesis_result_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Synthesis Result Id"
           }
         },
         "required": [
@@ -4897,7 +4910,8 @@
             "enum": [
               "extraction",
               "source_span",
-              "legacy_unanchored"
+              "legacy_unanchored",
+              "synthesis_result"
             ],
             "title": "Kind",
             "type": "string"
@@ -4969,6 +4983,18 @@
               }
             ],
             "title": "Supersedes Link Id"
+          },
+          "synthesis_result_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Synthesis Result Id"
           },
           "text_sha256": {
             "anyOf": [
@@ -21543,6 +21569,647 @@
           "suggestions"
         ],
         "title": "SuggestionsResponse",
+        "type": "object"
+      },
+      "SynthesisExclusion": {
+        "description": "A structured reason; run-level failures name no unit.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "report_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Report Ids",
+            "type": "array"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "report_ids",
+          "reason",
+          "detail"
+        ],
+        "title": "SynthesisExclusion",
+        "type": "object"
+      },
+      "SynthesisExecute": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_input_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Input Hash",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "roles": {
+            "$ref": "#/components/schemas/SynthesisRoles"
+          },
+          "supersedes_result_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Result Id"
+          },
+          "table_version_id": {
+            "format": "uuid",
+            "title": "Table Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table_version_id",
+          "roles",
+          "expected_input_hash",
+          "idempotency_key"
+        ],
+        "title": "SynthesisExecute",
+        "type": "object"
+      },
+      "SynthesisIncluded": {
+        "description": "One analysis unit; ``g``, ``v`` and weights only once computed.",
+        "properties": {
+          "accepted_value_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Accepted Value Ids",
+            "type": "array"
+          },
+          "g": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "G"
+          },
+          "inputs": {
+            "$ref": "#/components/schemas/SynthesisInputs"
+          },
+          "report_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Report Ids",
+            "type": "array"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "v": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "V"
+          },
+          "w_fixed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "W Fixed"
+          },
+          "w_random": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "W Random"
+          }
+        },
+        "required": [
+          "unit",
+          "report_ids",
+          "accepted_value_ids",
+          "inputs"
+        ],
+        "title": "SynthesisIncluded",
+        "type": "object"
+      },
+      "SynthesisInputs": {
+        "properties": {
+          "mean_c": {
+            "title": "Mean C",
+            "type": "number"
+          },
+          "mean_i": {
+            "title": "Mean I",
+            "type": "number"
+          },
+          "n_c": {
+            "title": "N C",
+            "type": "integer"
+          },
+          "n_i": {
+            "title": "N I",
+            "type": "integer"
+          },
+          "sd_c": {
+            "title": "Sd C",
+            "type": "number"
+          },
+          "sd_i": {
+            "title": "Sd I",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mean_i",
+          "sd_i",
+          "n_i",
+          "mean_c",
+          "sd_c",
+          "n_c"
+        ],
+        "title": "SynthesisInputs",
+        "type": "object"
+      },
+      "SynthesisListResponse": {
+        "description": "Every result, stale and failed ones included; staleness is derived.",
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SynthesisResultResponse"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SynthesisSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selection_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Error"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "SynthesisListResponse",
+        "type": "object"
+      },
+      "SynthesisPreview": {
+        "description": "Exactly the input set ``POST`` would use, with zero writes.",
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "config_hash": {
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "estimator_version": {
+            "title": "Estimator Version",
+            "type": "string"
+          },
+          "excluded": {
+            "items": {
+              "$ref": "#/components/schemas/SynthesisExclusion"
+            },
+            "title": "Excluded",
+            "type": "array"
+          },
+          "included": {
+            "items": {
+              "$ref": "#/components/schemas/SynthesisIncluded"
+            },
+            "title": "Included",
+            "type": "array"
+          },
+          "input_hash": {
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "run_failures": {
+            "items": {
+              "$ref": "#/components/schemas/SynthesisExclusion"
+            },
+            "title": "Run Failures",
+            "type": "array"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/SynthesisSelection"
+          },
+          "table_version_id": {
+            "format": "uuid",
+            "title": "Table Version Id",
+            "type": "string"
+          },
+          "tip_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tip Id"
+          },
+          "tip_input_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tip Input Hash"
+          }
+        },
+        "required": [
+          "selection",
+          "table_version_id",
+          "protocol_version_id",
+          "config",
+          "config_hash",
+          "estimator_version",
+          "included",
+          "excluded",
+          "run_failures",
+          "input_hash"
+        ],
+        "title": "SynthesisPreview",
+        "type": "object"
+      },
+      "SynthesisResultResponse": {
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "ci_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci High"
+          },
+          "ci_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Low"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "config_hash": {
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "df": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Df"
+          },
+          "estimate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimate"
+          },
+          "estimator_version": {
+            "title": "Estimator Version",
+            "type": "string"
+          },
+          "excluded": {
+            "items": {
+              "$ref": "#/components/schemas/SynthesisExclusion"
+            },
+            "title": "Excluded",
+            "type": "array"
+          },
+          "executed_by_id": {
+            "format": "uuid",
+            "title": "Executed By Id",
+            "type": "string"
+          },
+          "i2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "I2"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "included": {
+            "items": {
+              "$ref": "#/components/schemas/SynthesisIncluded"
+            },
+            "title": "Included",
+            "type": "array"
+          },
+          "input_hash": {
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "measure": {
+            "title": "Measure",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "outcome_key": {
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "q": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q"
+          },
+          "result_hash": {
+            "title": "Result Hash",
+            "type": "string"
+          },
+          "se": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Se"
+          },
+          "software": {
+            "additionalProperties": true,
+            "title": "Software",
+            "type": "object"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "computed",
+              "validation_failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "superseded": {
+            "default": false,
+            "title": "Superseded",
+            "type": "boolean"
+          },
+          "supersedes_result_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Result Id"
+          },
+          "table_version_id": {
+            "format": "uuid",
+            "title": "Table Version Id",
+            "type": "string"
+          },
+          "tau2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tau2"
+          },
+          "timepoint": {
+            "title": "Timepoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "protocol_version_id",
+          "table_version_id",
+          "outcome_key",
+          "timepoint",
+          "measure",
+          "model",
+          "config",
+          "config_hash",
+          "estimator_version",
+          "software",
+          "status",
+          "included",
+          "excluded",
+          "input_hash",
+          "result_hash",
+          "executed_by_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "SynthesisResultResponse",
+        "type": "object"
+      },
+      "SynthesisRoles": {
+        "additionalProperties": false,
+        "description": "Which evidence-table field carries each arm statistic.",
+        "properties": {
+          "mean_c": {
+            "format": "uuid",
+            "title": "Mean C",
+            "type": "string"
+          },
+          "mean_i": {
+            "format": "uuid",
+            "title": "Mean I",
+            "type": "string"
+          },
+          "n_c": {
+            "format": "uuid",
+            "title": "N C",
+            "type": "string"
+          },
+          "n_i": {
+            "format": "uuid",
+            "title": "N I",
+            "type": "string"
+          },
+          "sd_c": {
+            "format": "uuid",
+            "title": "Sd C",
+            "type": "string"
+          },
+          "sd_i": {
+            "format": "uuid",
+            "title": "Sd I",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mean_i",
+          "sd_i",
+          "n_i",
+          "mean_c",
+          "sd_c",
+          "n_c"
+        ],
+        "title": "SynthesisRoles",
+        "type": "object"
+      },
+      "SynthesisSelection": {
+        "properties": {
+          "measure": {
+            "title": "Measure",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "outcome_key": {
+            "title": "Outcome Key",
+            "type": "string"
+          },
+          "timepoint": {
+            "title": "Timepoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "measure",
+          "model",
+          "outcome_key",
+          "timepoint"
+        ],
+        "title": "SynthesisSelection",
         "type": "object"
       },
       "SystemMetricsResponse": {
@@ -46102,6 +46769,272 @@
         "summary": "Reopen Screening Report Route",
         "tags": [
           "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/synthesis": {
+      "get": {
+        "operationId": "list_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynthesisListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Synthesis Route",
+        "tags": [
+          "research-engine-synthesis"
+        ]
+      },
+      "post": {
+        "operationId": "execute_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SynthesisExecute"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynthesisResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Execute Synthesis Route",
+        "tags": [
+          "research-engine-synthesis"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/synthesis/export": {
+      "get": {
+        "operationId": "export_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "nous.academic.synthesis.v1 package (every result)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Synthesis Route",
+        "tags": [
+          "research-engine-synthesis"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/synthesis/preview": {
+      "get": {
+        "operationId": "preview_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "table_version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Table Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mean_i",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Mean I",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sd_i",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Sd I",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "n_i",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "N I",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mean_c",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Mean C",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sd_c",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Sd C",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "n_c",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "N C",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynthesisPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Synthesis Route",
+        "tags": [
+          "research-engine-synthesis"
         ]
       }
     },
