@@ -59728,7 +59728,7 @@
     },
     "/api/v1/security/encryption/audit/logs": {
       "get": {
-        "description": "Get encryption audit logs\n\nThis endpoint returns encryption operation audit logs.\nRequires encryption:audit permission.",
+        "description": "Get encryption audit logs\n\nThis endpoint returns encryption operation audit logs.\nRequires the system_admin permission (see module docstring, audit I12).",
         "operationId": "get_encryption_audit_logs_api_v1_security_encryption_audit_logs_get",
         "parameters": [
           {
@@ -59835,7 +59835,7 @@
     },
     "/api/v1/security/encryption/config/sensitive-fields": {
       "get": {
-        "description": "Get list of configured sensitive field patterns\n\nThis endpoint returns the list of field patterns that are automatically encrypted.\nRequires encryption:view permission.",
+        "description": "Get list of configured sensitive field patterns\n\nThis endpoint returns the list of field patterns that are automatically encrypted.\nRequires the system_admin permission (see module docstring, audit I12).",
         "operationId": "get_sensitive_fields_config_api_v1_security_encryption_config_sensitive_fields_get",
         "responses": {
           "200": {
@@ -59866,7 +59866,7 @@
     },
     "/api/v1/security/encryption/decrypt": {
       "post": {
-        "description": "Decrypt sensitive data\n\nThis endpoint decrypts sensitive data for authorized users.\nRequires encryption:decrypt permission.",
+        "description": "Decrypt sensitive data\n\nThis endpoint decrypts sensitive data for authorized users.\nRequires the system_admin permission (see module docstring, audit I12).",
         "operationId": "decrypt_data_api_v1_security_encryption_decrypt_post",
         "requestBody": {
           "content": {
@@ -59915,7 +59915,7 @@
     },
     "/api/v1/security/encryption/keys/rotate": {
       "post": {
-        "description": "Rotate encryption keys\n\nThis endpoint rotates encryption keys for enhanced security.\nRequires encryption:key_rotate permission.",
+        "description": "Rotate encryption keys\n\nThis endpoint rotates encryption keys for enhanced security.\nRequires the system_admin permission (see module docstring, audit I12).",
         "operationId": "rotate_encryption_key_api_v1_security_encryption_keys_rotate_post",
         "requestBody": {
           "content": {
@@ -59962,7 +59962,7 @@
     },
     "/api/v1/security/encryption/profiles/organization": {
       "post": {
-        "description": "Encrypt organization profile data\n\nThis endpoint encrypts sensitive business information in organization profiles.\nRequires encryption:manage and organization:manage permissions.",
+        "description": "Encrypt organization profile data\n\nThis endpoint encrypts sensitive business information in organization profiles.\nRequires the system_admin permission (audit I12: no encryption:*\npermission exists in SYSTEM_PERMISSIONS).",
         "operationId": "encrypt_organization_profile_api_v1_security_encryption_profiles_organization_post",
         "requestBody": {
           "content": {
@@ -60011,7 +60011,7 @@
     },
     "/api/v1/security/encryption/profiles/user": {
       "post": {
-        "description": "Encrypt user profile data\n\nThis endpoint encrypts sensitive personal information in user profiles.\nRequires encryption:manage permission.",
+        "description": "Encrypt user profile data\n\nThis endpoint encrypts sensitive personal information in user profiles.\nRequires the system_admin permission (see module docstring, audit I12).",
         "operationId": "encrypt_user_profile_api_v1_security_encryption_profiles_user_post",
         "requestBody": {
           "content": {
@@ -60060,7 +60060,7 @@
     },
     "/api/v1/security/encryption/status": {
       "get": {
-        "description": "Get encryption status and statistics\n\nThis endpoint returns the current encryption status and statistics.\nRequires encryption:view permission.",
+        "description": "Get encryption status and statistics\n\nThis endpoint returns the current encryption status and statistics.\nRequires the system_admin permission (see module docstring, audit I12).",
         "operationId": "get_encryption_status_api_v1_security_encryption_status_get",
         "parameters": [
           {
@@ -60118,7 +60118,7 @@
     },
     "/api/v1/security/encryption/validate": {
       "post": {
-        "description": "Validate encryption integrity\n\nThis endpoint validates the integrity of encrypted data by testing sample records.\nRequires encryption:validate permission.",
+        "description": "Validate encryption integrity\n\nThis endpoint validates the integrity of encrypted data by testing sample records.\nRequires the system_admin permission (see module docstring, audit I12).",
         "operationId": "validate_encryption_integrity_api_v1_security_encryption_validate_post",
         "parameters": [
           {
