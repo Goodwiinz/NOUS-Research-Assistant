@@ -5325,6 +5325,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/drafts/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Diff Drafts
+         * @description GOO-314: sentence-level anchored diff between two saved versions.
+         */
+        get: operations["diff_drafts_api_v1_projects__project_id__drafts_diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/drafts/reviews": {
         parameters: {
             query?: never;
@@ -5657,6 +5677,128 @@ export interface paths {
          *         Updated pin status
          */
         post: operations["toggle_note_pin_api_v1_projects__project_id__notes__note_id__pin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/peer-review/comments/{comment_root_id}/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide
+         * @description Assign (EDIT) or resolve/reopen (ADJUDICATE) a comment.
+         */
+        post: operations["decide_api_v1_projects__project_id__peer_review_comments__comment_root_id__decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/peer-review/comments/{comment_root_id}/responses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Respond
+         * @description Record a response version (EDIT); 409 on a stale tip.
+         */
+        post: operations["respond_api_v1_projects__project_id__peer_review_comments__comment_root_id__responses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/peer-review/rounds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Rounds */
+        get: operations["list_rounds_api_v1_projects__project_id__peer_review_rounds_get"];
+        put?: never;
+        /**
+         * Create Round
+         * @description Record a round of one exact saved draft version (EDIT).
+         */
+        post: operations["create_round_api_v1_projects__project_id__peer_review_rounds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/peer-review/rounds/{round_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Round
+         * @description Comments with derived status and anchor state against the target
+         *     version (default: the current draft).
+         */
+        get: operations["get_round_api_v1_projects__project_id__peer_review_rounds__round_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/peer-review/rounds/{round_id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Comment
+         * @description Add a comment or a new version of one (EDIT).
+         */
+        post: operations["add_comment_api_v1_projects__project_id__peer_review_rounds__round_id__comments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/peer-review/rounds/{round_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Round
+         * @description Download the response export (VIEW), ending with unresolved items.
+         */
+        get: operations["export_round_api_v1_projects__project_id__peer_review_rounds__round_id__export_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -10451,6 +10593,18 @@ export interface components {
             start_date: string;
         };
         /**
+         * AnchorCreate
+         * @description ``quote == content[start:end]`` of the round's reviewed version.
+         */
+        AnchorCreate: {
+            /** End */
+            end: number;
+            /** Quote */
+            quote: string;
+            /** Start */
+            start: number;
+        };
+        /**
          * ApiDocumentStatus
          * @description Public, client-facing document processing status vocabulary.
          *
@@ -12616,6 +12770,174 @@ export interface components {
             title?: string | null;
         };
         /**
+         * CommentCreate
+         * @description A new comment, or a new version superseding the comment's tip.
+         */
+        CommentCreate: {
+            anchor?: components["schemas"]["AnchorCreate"] | null;
+            /** Body */
+            body: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Number */
+            number: number;
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /** Supersedes Comment Id */
+            supersedes_comment_id?: string | null;
+        };
+        /**
+         * CommentDetail
+         * @description One comment's full history with derived status and anchor state
+         *     against the target version (the original quote is always kept).
+         */
+        CommentDetail: {
+            /** Anchor End */
+            anchor_end?: number | null;
+            /** Anchor Start */
+            anchor_start?: number | null;
+            /**
+             * Anchor State
+             * @enum {string}
+             */
+            anchor_state: "exact" | "carried" | "unresolved_anchor" | "general";
+            assignment?: components["schemas"]["DecisionResponse"] | null;
+            /**
+             * Comment Root Id
+             * Format: uuid
+             */
+            comment_root_id: string;
+            current: components["schemas"]["CommentVersionResponse"];
+            /** Decisions */
+            decisions: components["schemas"]["DecisionResponse"][];
+            /** Number */
+            number: number;
+            resolution?: components["schemas"]["DecisionResponse"] | null;
+            response?: components["schemas"]["ResponseView"] | null;
+            /** Responses */
+            responses: components["schemas"]["ResponseVersionResponse"][];
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /** Reviewer Label */
+            reviewer_label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "responded" | "resolved";
+            /** Versions */
+            versions: components["schemas"]["CommentVersionResponse"][];
+        };
+        /** CommentResponse */
+        CommentResponse: {
+            /**
+             * Author Id
+             * Format: uuid
+             */
+            author_id: string;
+            /** Body */
+            body: string;
+            /**
+             * Comment Root Id
+             * Format: uuid
+             */
+            comment_root_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Draft Content Hash */
+            draft_content_hash: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** End Char */
+            end_char?: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Number */
+            number: number;
+            /** Quote */
+            quote?: string | null;
+            /** Quote Sha256 */
+            quote_sha256?: string | null;
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /**
+             * Round Id
+             * Format: uuid
+             */
+            round_id: string;
+            /** Start Char */
+            start_char?: number | null;
+            /** Supersedes Comment Id */
+            supersedes_comment_id?: string | null;
+        };
+        /** CommentVersionResponse */
+        CommentVersionResponse: {
+            /**
+             * Author Id
+             * Format: uuid
+             */
+            author_id: string;
+            /** Body */
+            body: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Draft Content Hash */
+            draft_content_hash: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** End Char */
+            end_char?: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Number */
+            number: number;
+            /** Quote */
+            quote?: string | null;
+            /** Quote Sha256 */
+            quote_sha256?: string | null;
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /**
+             * Round Id
+             * Format: uuid
+             */
+            round_id: string;
+            /** Start Char */
+            start_char?: number | null;
+            /** Supersedes Comment Id */
+            supersedes_comment_id?: string | null;
+        };
+        /**
          * ComparisonRequest
          * @description Request for evaluation comparison
          */
@@ -13274,6 +13596,66 @@ export interface components {
             search_type: string;
         };
         /**
+         * DecisionCreate
+         * @description ``assigned`` (EDIT) names a project member; ``resolved`` (ADJUDICATE)
+         *     names the response tip it accepts; ``reopened`` (ADJUDICATE).
+         */
+        DecisionCreate: {
+            /** Assignee Id */
+            assignee_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "assigned" | "resolved" | "reopened";
+            /** Rationale */
+            rationale?: string | null;
+            /** Response Id */
+            response_id?: string | null;
+            /** Supersedes Decision Id */
+            supersedes_decision_id?: string | null;
+        };
+        /** DecisionResponse */
+        DecisionResponse: {
+            /**
+             * Actor Id
+             * Format: uuid
+             */
+            actor_id: string;
+            /** Actor Role */
+            actor_role: string;
+            /** Assignee Id */
+            assignee_id?: string | null;
+            /**
+             * Comment Root Id
+             * Format: uuid
+             */
+            comment_root_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "assigned" | "resolved" | "reopened";
+            /** Rationale */
+            rationale?: string | null;
+            /** Response Id */
+            response_id?: string | null;
+            /** Supersedes Decision Id */
+            supersedes_decision_id?: string | null;
+        };
+        /**
          * DecryptionRequest
          * @description Request model for decrypting data
          */
@@ -13320,6 +13702,22 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+        };
+        /** DiffHunk */
+        DiffHunk: {
+            /** New */
+            new: number[];
+            /** New Text */
+            new_text: string;
+            /** Old */
+            old: number[];
+            /** Old Text */
+            old_text: string;
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "replace" | "insert" | "delete";
         };
         /**
          * DocumentDateRange
@@ -13493,6 +13891,16 @@ export interface components {
          */
         DocumentType: "text" | "image" | "audio" | "video" | "pdf" | "spreadsheet" | "presentation" | "multimodal";
         /**
+         * DraftDiffResponse
+         * @description Sentence-level anchored diff between two saved versions.
+         */
+        DraftDiffResponse: {
+            from: components["schemas"]["DraftRef"];
+            /** Hunks */
+            hunks: components["schemas"]["DiffHunk"][];
+            to: components["schemas"]["DraftRef"];
+        };
+        /**
          * DraftPromoteRequest
          * @description Promote the exact version whose content hashes to ``content_hash``.
          */
@@ -13503,6 +13911,18 @@ export interface components {
             idempotency_key: string;
             /** Rationale */
             rationale?: string | null;
+        };
+        /** DraftRef */
+        DraftRef: {
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Version */
+            version: number;
         };
         /**
          * DraftReleaseResponse
@@ -13909,6 +14329,23 @@ export interface components {
             starting_levels: string[];
             /** Version */
             version: string;
+        };
+        /** EvidenceClaim */
+        EvidenceClaim: {
+            /** Assessment Stance */
+            assessment_stance?: string | null;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /** Text */
+            text: string;
         };
         /** EvidenceExcluded */
         EvidenceExcluded: {
@@ -18080,6 +18517,129 @@ export interface components {
             sha256: string;
         };
         /**
+         * ResponseCreate
+         * @description ``change`` links a later saved version (its anchored diff must touch
+         *     the commented passage); ``no_change`` carries an attributed rationale.
+         */
+        ResponseCreate: {
+            /** Base Draft Id */
+            base_draft_id?: string | null;
+            /** Body */
+            body: string;
+            /** Evidence Claim Version Ids */
+            evidence_claim_version_ids?: string[];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "change" | "no_change";
+            /** Rationale */
+            rationale?: string | null;
+            /** Revised Draft Id */
+            revised_draft_id?: string | null;
+            /** Supersedes Response Id */
+            supersedes_response_id?: string | null;
+        };
+        /** ResponseVersionResponse */
+        ResponseVersionResponse: {
+            /**
+             * Author Id
+             * Format: uuid
+             */
+            author_id: string;
+            /** Base Draft Id */
+            base_draft_id?: string | null;
+            /** Body */
+            body: string;
+            /**
+             * Comment Root Id
+             * Format: uuid
+             */
+            comment_root_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Diff Sha256 */
+            diff_sha256?: string | null;
+            /** Evidence Claim Version Ids */
+            evidence_claim_version_ids: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "change" | "no_change";
+            /** Rationale */
+            rationale?: string | null;
+            /** Revised Content Hash */
+            revised_content_hash?: string | null;
+            /** Revised Draft Id */
+            revised_draft_id?: string | null;
+            /** Supersedes Response Id */
+            supersedes_response_id?: string | null;
+        };
+        /**
+         * ResponseView
+         * @description A response with its diff recomputed from the retained versions.
+         */
+        ResponseView: {
+            /**
+             * Author Id
+             * Format: uuid
+             */
+            author_id: string;
+            /** Base Draft Id */
+            base_draft_id?: string | null;
+            /** Body */
+            body: string;
+            /**
+             * Comment Root Id
+             * Format: uuid
+             */
+            comment_root_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Diff Sha256 */
+            diff_sha256?: string | null;
+            /** Diff Verified */
+            diff_verified?: boolean | null;
+            /** Evidence */
+            evidence?: components["schemas"]["EvidenceClaim"][];
+            /** Evidence Claim Version Ids */
+            evidence_claim_version_ids: string[];
+            /** Hunks */
+            hunks?: components["schemas"]["DiffHunk"][];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "change" | "no_change";
+            /** Rationale */
+            rationale?: string | null;
+            /** Revised Content Hash */
+            revised_content_hash?: string | null;
+            /** Revised Draft Id */
+            revised_draft_id?: string | null;
+            /** Supersedes Response Id */
+            supersedes_response_id?: string | null;
+        };
+        /**
          * RetrievedContext
          * @description Retrieved document context
          */
@@ -18159,6 +18719,43 @@ export interface components {
             item_decisions?: string[];
             /** Reason Required For */
             reason_required_for?: string[];
+        };
+        /**
+         * ReviewerCreate
+         * @description An external reviewer: a label such as "Reviewer 2", never a user.
+         */
+        ReviewerCreate: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Label */
+            label: string;
+        };
+        /** ReviewerResponse */
+        ReviewerResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Round Id
+             * Format: uuid
+             */
+            round_id: string;
         };
         /**
          * RewriteRequest
@@ -18308,6 +18905,77 @@ export interface components {
              * Format: uuid
              */
             version_id: string;
+        };
+        /**
+         * RoundCreate
+         * @description A review round of one exact saved draft version (bound by hash).
+         */
+        RoundCreate: {
+            /** Draft Content Hash */
+            draft_content_hash: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Label */
+            label: string;
+            /** Received At */
+            received_at?: string | null;
+            /** Reviewers */
+            reviewers: components["schemas"]["ReviewerCreate"][];
+        };
+        /** RoundDetail */
+        RoundDetail: {
+            /** Comments */
+            comments: components["schemas"]["CommentDetail"][];
+            round: components["schemas"]["RoundResponse"];
+            target: components["schemas"]["DraftRef"];
+        };
+        /** RoundListResponse */
+        RoundListResponse: {
+            /** Rounds */
+            rounds: components["schemas"]["RoundResponse"][];
+        };
+        /** RoundResponse */
+        RoundResponse: {
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Draft Content Hash */
+            draft_content_hash: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Draft Version */
+            draft_version: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /** Received At */
+            received_at?: string | null;
+            /** Reviewers */
+            reviewers: components["schemas"]["ReviewerResponse"][];
         };
         /**
          * RunArtifactResponse
@@ -30547,6 +31215,42 @@ export interface operations {
             };
         };
     };
+    diff_drafts_api_v1_projects__project_id__drafts_diff_get: {
+        parameters: {
+            query: {
+                /** @description Base saved version */
+                from_draft_id: string;
+                /** @description Revised saved version */
+                to_draft_id: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_draft_reviews_api_v1_projects__project_id__drafts_reviews_get: {
         parameters: {
             query?: {
@@ -31137,6 +31841,250 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_api_v1_projects__project_id__peer_review_comments__comment_root_id__decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                comment_root_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    respond_api_v1_projects__project_id__peer_review_comments__comment_root_id__responses_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                comment_root_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResponseCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseVersionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_rounds_api_v1_projects__project_id__peer_review_rounds_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoundListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_round_api_v1_projects__project_id__peer_review_rounds_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoundCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoundResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_round_api_v1_projects__project_id__peer_review_rounds__round_id__get: {
+        parameters: {
+            query?: {
+                target_draft_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                round_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoundDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_comment_api_v1_projects__project_id__peer_review_rounds__round_id__comments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                round_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_round_api_v1_projects__project_id__peer_review_rounds__round_id__export_get: {
+        parameters: {
+            query?: {
+                format?: "markdown" | "json";
+                target_draft_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                round_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "text/markdown": unknown;
                 };
             };
             /** @description Validation Error */

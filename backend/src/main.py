@@ -71,6 +71,7 @@ from src.api.research import (
     drafts_router,
     export_router,
     extraction_matrix_router,
+    peer_review_router,
     pipeline_router,
     project_chat_router,
     project_report_router,
@@ -652,6 +653,7 @@ app.include_router(project_skills_router)  # Project skill catalog and staged ap
 app.include_router(project_chat_router)  # Project-Chat integration endpoints
 app.include_router(drafts_router)  # Research Assistant drafts endpoints
 app.include_router(claims_router)  # GOO-306 versioned claims and evidence links
+app.include_router(peer_review_router)  # GOO-314 external peer-review responses
 app.include_router(tone_engine_router)  # Scholarly Tone Engine endpoints
 app.include_router(extraction_matrix_router)  # Extraction Matrix endpoints
 app.include_router(writer_router)  # AI Writer endpoints

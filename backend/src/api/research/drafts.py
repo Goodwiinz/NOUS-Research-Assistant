@@ -31,6 +31,7 @@ from src.services.research.draft_generation_service import (
     reconcile_task,
 )
 from src.services.research_engine.project_access import ResearchAction, resolve_project
+from src.shared.peer_review_schemas import DraftDiffResponse
 from src.shared.research_schemas import (
     DraftPromoteRequest,
     DraftReleaseResponse,
@@ -492,6 +493,24 @@ async def compare_drafts(
         raise HTTPException(status_code=404, detail=result["error"])
 
     return result
+
+
+@router.get("/diff", response_model=DraftDiffResponse)
+async def diff_drafts(
+    project_id: UUID,
+    from_draft_id: UUID = Query(..., description="Base saved version"),
+    to_draft_id: UUID = Query(..., description="Revised saved version"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DraftDiffResponse:
+    """GOO-314: sentence-level anchored diff between two saved versions."""
+    await _validate_project_ownership(project_id, current_user, db)
+    result = await DraftGenerationService(db).diff_drafts(
+        project_id, from_draft_id, to_draft_id
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return DraftDiffResponse.model_validate(result)
 
 
 # ============================================================================

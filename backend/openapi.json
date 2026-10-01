@@ -592,6 +592,34 @@
         "title": "AnalyticsExportRequest",
         "type": "object"
       },
+      "AnchorCreate": {
+        "description": "``quote == content[start:end]`` of the round's reviewed version.",
+        "properties": {
+          "end": {
+            "minimum": 1.0,
+            "title": "End",
+            "type": "integer"
+          },
+          "quote": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Quote",
+            "type": "string"
+          },
+          "start": {
+            "minimum": 0.0,
+            "title": "Start",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "quote"
+        ],
+        "title": "AnchorCreate",
+        "type": "object"
+      },
       "ApiDocumentStatus": {
         "description": "Public, client-facing document processing status vocabulary.\n\nThe database stores raw ``ProcessingStatus`` values\n(``pending``/``processing``/``completed``/``failed``/``retrying``). The API\nexposes a stable, narrower vocabulary to clients. These classmethods are the\nsingle source of truth for translating between the two in both directions,\nreplacing the per-router inline dicts that had drifted apart and caused two\nproduction incidents (a filter 500 and a false ``queued`` state).\n\nDirection quirks (encoded below, do not \"simplify\"):\n  * db ``pending``   -> api ``queued``\n  * db ``completed`` -> api ``indexed``\n  * db ``retrying``  -> api ``processing`` (collapsed; never surfaced raw)\nSo the mapping is *not* a clean bijection: ``retrying`` folds into\n``processing`` on the way out. ``to_db`` therefore maps ``processing`` back\nto ``PROCESSING`` (not ``RETRYING``) and additionally accepts the raw db\nspellings (``pending``/``completed``/``retrying``) as filter input for\nbackwards compatibility.",
         "enum": [
@@ -5943,6 +5971,432 @@
         "title": "CombinedSearchResult",
         "type": "object"
       },
+      "CommentCreate": {
+        "description": "A new comment, or a new version superseding the comment's tip.",
+        "properties": {
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnchorCreate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "body": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "number": {
+            "maximum": 32767.0,
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "supersedes_comment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Comment Id"
+          }
+        },
+        "required": [
+          "reviewer_id",
+          "number",
+          "body",
+          "idempotency_key"
+        ],
+        "title": "CommentCreate",
+        "type": "object"
+      },
+      "CommentDetail": {
+        "description": "One comment's full history with derived status and anchor state\nagainst the target version (the original quote is always kept).",
+        "properties": {
+          "anchor_end": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor End"
+          },
+          "anchor_start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Start"
+          },
+          "anchor_state": {
+            "enum": [
+              "exact",
+              "carried",
+              "unresolved_anchor",
+              "general"
+            ],
+            "title": "Anchor State",
+            "type": "string"
+          },
+          "assignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "comment_root_id": {
+            "format": "uuid",
+            "title": "Comment Root Id",
+            "type": "string"
+          },
+          "current": {
+            "$ref": "#/components/schemas/CommentVersionResponse"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionResponse"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResponseView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "responses": {
+            "items": {
+              "$ref": "#/components/schemas/ResponseVersionResponse"
+            },
+            "title": "Responses",
+            "type": "array"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "reviewer_label": {
+            "title": "Reviewer Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "responded",
+              "resolved"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/CommentVersionResponse"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "comment_root_id",
+          "reviewer_id",
+          "reviewer_label",
+          "number",
+          "status",
+          "anchor_state",
+          "current",
+          "versions",
+          "responses",
+          "decisions"
+        ],
+        "title": "CommentDetail",
+        "type": "object"
+      },
+      "CommentResponse": {
+        "properties": {
+          "author_id": {
+            "format": "uuid",
+            "title": "Author Id",
+            "type": "string"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "comment_root_id": {
+            "format": "uuid",
+            "title": "Comment Root Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_content_hash": {
+            "title": "Draft Content Hash",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "end_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Char"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "quote_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote Sha256"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "round_id": {
+            "format": "uuid",
+            "title": "Round Id",
+            "type": "string"
+          },
+          "start_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Char"
+          },
+          "supersedes_comment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Comment Id"
+          }
+        },
+        "required": [
+          "id",
+          "round_id",
+          "reviewer_id",
+          "number",
+          "body",
+          "draft_id",
+          "draft_content_hash",
+          "author_id",
+          "created_at",
+          "comment_root_id"
+        ],
+        "title": "CommentResponse",
+        "type": "object"
+      },
+      "CommentVersionResponse": {
+        "properties": {
+          "author_id": {
+            "format": "uuid",
+            "title": "Author Id",
+            "type": "string"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_content_hash": {
+            "title": "Draft Content Hash",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "end_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Char"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "quote_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote Sha256"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "round_id": {
+            "format": "uuid",
+            "title": "Round Id",
+            "type": "string"
+          },
+          "start_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Char"
+          },
+          "supersedes_comment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Comment Id"
+          }
+        },
+        "required": [
+          "id",
+          "round_id",
+          "reviewer_id",
+          "number",
+          "body",
+          "draft_id",
+          "draft_content_hash",
+          "author_id",
+          "created_at"
+        ],
+        "title": "CommentVersionResponse",
+        "type": "object"
+      },
       "ComparisonRequest": {
         "description": "Request for evaluation comparison",
         "properties": {
@@ -7353,6 +7807,174 @@
         "title": "DatasetEvaluationRequest",
         "type": "object"
       },
+      "DecisionCreate": {
+        "description": "``assigned`` (EDIT) names a project member; ``resolved`` (ADJUDICATE)\nnames the response tip it accepts; ``reopened`` (ADJUDICATE).",
+        "properties": {
+          "assignee_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Id"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "assigned",
+              "resolved",
+              "reopened"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "response_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Id"
+          },
+          "supersedes_decision_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Decision Id"
+          }
+        },
+        "required": [
+          "kind",
+          "idempotency_key"
+        ],
+        "title": "DecisionCreate",
+        "type": "object"
+      },
+      "DecisionResponse": {
+        "properties": {
+          "actor_id": {
+            "format": "uuid",
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "assignee_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Id"
+          },
+          "comment_root_id": {
+            "format": "uuid",
+            "title": "Comment Root Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "assigned",
+              "resolved",
+              "reopened"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "response_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Id"
+          },
+          "supersedes_decision_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Decision Id"
+          }
+        },
+        "required": [
+          "id",
+          "comment_root_id",
+          "kind",
+          "actor_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "DecisionResponse",
+        "type": "object"
+      },
       "DecryptionRequest": {
         "description": "Request model for decrypting data",
         "properties": {
@@ -7441,6 +8063,50 @@
           "id"
         ],
         "title": "DeviceDTO",
+        "type": "object"
+      },
+      "DiffHunk": {
+        "properties": {
+          "new": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "New",
+            "type": "array"
+          },
+          "new_text": {
+            "title": "New Text",
+            "type": "string"
+          },
+          "old": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Old",
+            "type": "array"
+          },
+          "old_text": {
+            "title": "Old Text",
+            "type": "string"
+          },
+          "op": {
+            "enum": [
+              "replace",
+              "insert",
+              "delete"
+            ],
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "old",
+          "new",
+          "old_text",
+          "new_text"
+        ],
+        "title": "DiffHunk",
         "type": "object"
       },
       "DocumentDateRange": {
@@ -7951,6 +8617,31 @@
         "title": "DocumentType",
         "type": "string"
       },
+      "DraftDiffResponse": {
+        "description": "Sentence-level anchored diff between two saved versions.",
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/DraftRef"
+          },
+          "hunks": {
+            "items": {
+              "$ref": "#/components/schemas/DiffHunk"
+            },
+            "title": "Hunks",
+            "type": "array"
+          },
+          "to": {
+            "$ref": "#/components/schemas/DraftRef"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "hunks"
+        ],
+        "title": "DraftDiffResponse",
+        "type": "object"
+      },
       "DraftPromoteRequest": {
         "description": "Promote the exact version whose content hashes to ``content_hash``.",
         "properties": {
@@ -7983,6 +8674,30 @@
           "idempotency_key"
         ],
         "title": "DraftPromoteRequest",
+        "type": "object"
+      },
+      "DraftRef": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "content_hash"
+        ],
+        "title": "DraftRef",
         "type": "object"
       },
       "DraftReleaseResponse": {
@@ -8939,6 +9654,42 @@
           "starting_levels"
         ],
         "title": "EvidenceCertaintyMethod",
+        "type": "object"
+      },
+      "EvidenceClaim": {
+        "properties": {
+          "assessment_stance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment Stance"
+          },
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_version_id",
+          "claim_id",
+          "text"
+        ],
+        "title": "EvidenceClaim",
         "type": "object"
       },
       "EvidenceExcluded": {
@@ -18484,6 +19235,369 @@
         "title": "ReserveArtifactUploadRequest",
         "type": "object"
       },
+      "ResponseCreate": {
+        "description": "``change`` links a later saved version (its anchored diff must touch\nthe commented passage); ``no_change`` carries an attributed rationale.",
+        "properties": {
+          "base_draft_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Draft Id"
+          },
+          "body": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "evidence_claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Evidence Claim Version Ids",
+            "type": "array"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "change",
+              "no_change"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "revised_draft_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revised Draft Id"
+          },
+          "supersedes_response_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Response Id"
+          }
+        },
+        "required": [
+          "kind",
+          "body",
+          "idempotency_key"
+        ],
+        "title": "ResponseCreate",
+        "type": "object"
+      },
+      "ResponseVersionResponse": {
+        "properties": {
+          "author_id": {
+            "format": "uuid",
+            "title": "Author Id",
+            "type": "string"
+          },
+          "base_draft_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Draft Id"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "comment_root_id": {
+            "format": "uuid",
+            "title": "Comment Root Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "diff_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Sha256"
+          },
+          "evidence_claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Evidence Claim Version Ids",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "change",
+              "no_change"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "revised_content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revised Content Hash"
+          },
+          "revised_draft_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revised Draft Id"
+          },
+          "supersedes_response_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Response Id"
+          }
+        },
+        "required": [
+          "id",
+          "comment_root_id",
+          "kind",
+          "body",
+          "evidence_claim_version_ids",
+          "author_id",
+          "created_at"
+        ],
+        "title": "ResponseVersionResponse",
+        "type": "object"
+      },
+      "ResponseView": {
+        "description": "A response with its diff recomputed from the retained versions.",
+        "properties": {
+          "author_id": {
+            "format": "uuid",
+            "title": "Author Id",
+            "type": "string"
+          },
+          "base_draft_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Draft Id"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "comment_root_id": {
+            "format": "uuid",
+            "title": "Comment Root Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "diff_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Sha256"
+          },
+          "diff_verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Verified"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceClaim"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "evidence_claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Evidence Claim Version Ids",
+            "type": "array"
+          },
+          "hunks": {
+            "items": {
+              "$ref": "#/components/schemas/DiffHunk"
+            },
+            "title": "Hunks",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "change",
+              "no_change"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "revised_content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revised Content Hash"
+          },
+          "revised_draft_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revised Draft Id"
+          },
+          "supersedes_response_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Response Id"
+          }
+        },
+        "required": [
+          "id",
+          "comment_root_id",
+          "kind",
+          "body",
+          "evidence_claim_version_ids",
+          "author_id",
+          "created_at"
+        ],
+        "title": "ResponseView",
+        "type": "object"
+      },
       "RetrievedContext": {
         "description": "Retrieved document context",
         "properties": {
@@ -18677,6 +19791,83 @@
           }
         },
         "title": "ReviewValidationVocabulary",
+        "type": "object"
+      },
+      "ReviewerCreate": {
+        "description": "An external reviewer: a label such as \"Reviewer 2\", never a user.",
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "label": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "ReviewerCreate",
+        "type": "object"
+      },
+      "ReviewerResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "round_id": {
+            "format": "uuid",
+            "title": "Round Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "round_id",
+          "label",
+          "created_by_id",
+          "created_at"
+        ],
+        "title": "ReviewerResponse",
         "type": "object"
       },
       "RewriteRequest": {
@@ -19002,6 +20193,177 @@
           "version_id"
         ],
         "title": "RollbackRequest",
+        "type": "object"
+      },
+      "RoundCreate": {
+        "description": "A review round of one exact saved draft version (bound by hash).",
+        "properties": {
+          "draft_content_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Draft Content Hash",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "received_at": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Received At"
+          },
+          "reviewers": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewerCreate"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Reviewers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "draft_id",
+          "draft_content_hash",
+          "label",
+          "reviewers",
+          "idempotency_key"
+        ],
+        "title": "RoundCreate",
+        "type": "object"
+      },
+      "RoundDetail": {
+        "properties": {
+          "comments": {
+            "items": {
+              "$ref": "#/components/schemas/CommentDetail"
+            },
+            "title": "Comments",
+            "type": "array"
+          },
+          "round": {
+            "$ref": "#/components/schemas/RoundResponse"
+          },
+          "target": {
+            "$ref": "#/components/schemas/DraftRef"
+          }
+        },
+        "required": [
+          "round",
+          "target",
+          "comments"
+        ],
+        "title": "RoundDetail",
+        "type": "object"
+      },
+      "RoundListResponse": {
+        "properties": {
+          "rounds": {
+            "items": {
+              "$ref": "#/components/schemas/RoundResponse"
+            },
+            "title": "Rounds",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rounds"
+        ],
+        "title": "RoundListResponse",
+        "type": "object"
+      },
+      "RoundResponse": {
+        "properties": {
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "draft_content_hash": {
+            "title": "Draft Content Hash",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "received_at": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Received At"
+          },
+          "reviewers": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewerResponse"
+            },
+            "title": "Reviewers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "draft_id",
+          "draft_version",
+          "draft_content_hash",
+          "label",
+          "created_by_id",
+          "created_at",
+          "reviewers"
+        ],
+        "title": "RoundResponse",
         "type": "object"
       },
       "RunArtifactResponse": {
@@ -42043,6 +43405,79 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/drafts/diff": {
+      "get": {
+        "description": "GOO-314: sentence-level anchored diff between two saved versions.",
+        "operationId": "diff_drafts_api_v1_projects__project_id__drafts_diff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base saved version",
+            "in": "query",
+            "name": "from_draft_id",
+            "required": true,
+            "schema": {
+              "description": "Base saved version",
+              "format": "uuid",
+              "title": "From Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Revised saved version",
+            "in": "query",
+            "name": "to_draft_id",
+            "required": true,
+            "schema": {
+              "description": "Revised saved version",
+              "format": "uuid",
+              "title": "To Draft Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftDiffResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Diff Drafts",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/drafts/reviews": {
       "get": {
         "description": "List durable candidate reviews, including blocked candidates.",
@@ -43184,6 +44619,481 @@
         "summary": "Toggle Note Pin",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/peer-review/comments/{comment_root_id}/decisions": {
+      "post": {
+        "description": "Assign (EDIT) or resolve/reopen (ADJUDICATE) a comment.",
+        "operationId": "decide_api_v1_projects__project_id__peer_review_comments__comment_root_id__decisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "comment_root_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Comment Root Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide",
+        "tags": [
+          "peer-review"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/peer-review/comments/{comment_root_id}/responses": {
+      "post": {
+        "description": "Record a response version (EDIT); 409 on a stale tip.",
+        "operationId": "respond_api_v1_projects__project_id__peer_review_comments__comment_root_id__responses_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "comment_root_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Comment Root Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResponseCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseVersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Respond",
+        "tags": [
+          "peer-review"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/peer-review/rounds": {
+      "get": {
+        "operationId": "list_rounds_api_v1_projects__project_id__peer_review_rounds_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoundListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Rounds",
+        "tags": [
+          "peer-review"
+        ]
+      },
+      "post": {
+        "description": "Record a round of one exact saved draft version (EDIT).",
+        "operationId": "create_round_api_v1_projects__project_id__peer_review_rounds_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoundCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoundResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Round",
+        "tags": [
+          "peer-review"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/peer-review/rounds/{round_id}": {
+      "get": {
+        "description": "Comments with derived status and anchor state against the target\nversion (default: the current draft).",
+        "operationId": "get_round_api_v1_projects__project_id__peer_review_rounds__round_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "round_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Round Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_draft_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoundDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Round",
+        "tags": [
+          "peer-review"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/peer-review/rounds/{round_id}/comments": {
+      "post": {
+        "description": "Add a comment or a new version of one (EDIT).",
+        "operationId": "add_comment_api_v1_projects__project_id__peer_review_rounds__round_id__comments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "round_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Round Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add Comment",
+        "tags": [
+          "peer-review"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/peer-review/rounds/{round_id}/export": {
+      "get": {
+        "description": "Download the response export (VIEW), ending with unresolved items.",
+        "operationId": "export_round_api_v1_projects__project_id__peer_review_rounds__round_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "round_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Round Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "markdown",
+              "enum": [
+                "markdown",
+                "json"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_draft_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {},
+              "text/markdown": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Round",
+        "tags": [
+          "peer-review"
         ]
       }
     },

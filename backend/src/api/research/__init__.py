@@ -9,6 +9,7 @@ from .claims import router as claims_router
 from .drafts import router as drafts_router
 from .export import router as export_router
 from .extraction_matrix import router as extraction_matrix_router
+from .peer_review import router as peer_review_router
 from .pipeline import router as pipeline_router
 from .project_chat import router as project_chat_router
 from .project_report import router as project_report_router
@@ -24,6 +25,7 @@ __all__ = [
     "project_skills_router",
     "drafts_router",
     "claims_router",
+    "peer_review_router",
     "chat_router",
     "export_router",
     "project_chat_router",

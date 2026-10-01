@@ -4,7 +4,7 @@ Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
 ``research_evidence``, ``research_synthesis``, ``research_experiment``,
-``research_reproduction``)
+``research_reproduction``, ``research_peer_review``)
 registers its subject type, payload vocabulary, value validation and replay
 transition rules in ``_FAMILIES``.
 
@@ -532,6 +532,51 @@ _REPRODUCTION_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
             "comparison_hash",
             "output_sha256s",
             "reasons",
+        }
+    ),
+}
+# GOO-314: external peer review, one stream per Collection. The subject of a
+# round event is the round; every other event's subject is the comment root.
+_PEER_REVIEW_AGGREGATE = "research_peer_review"
+_PEER_REVIEW_SUBJECT = "peer_review_comment"
+_PEER_REVIEW_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("review_round.recorded", 1): frozenset(
+        {"collection_id", "round_id", "draft_id", "draft_content_hash", "reviewer_ids"}
+    ),
+    ("review_comment.versioned", 1): frozenset(
+        {
+            "collection_id",
+            "round_id",
+            "comment_id",
+            "comment_root_id",
+            "supersedes_comment_id",
+            "reviewer_id",
+            "draft_content_hash",
+            "anchored",
+            "quote_sha256",
+        }
+    ),
+    ("review_response.versioned", 1): frozenset(
+        {
+            "collection_id",
+            "comment_root_id",
+            "response_id",
+            "supersedes_response_id",
+            "kind",
+            "revised_draft_id",
+            "diff_sha256",
+            "evidence_claim_version_ids",
+        }
+    ),
+    ("review_decision.recorded", 1): frozenset(
+        {
+            "collection_id",
+            "comment_root_id",
+            "decision_id",
+            "kind",
+            "assignee_id",
+            "response_id",
+            "supersedes_decision_id",
         }
     ),
 }
@@ -2583,6 +2628,139 @@ def _validate_reproduction_transitions(
             executed.add(rerun)
 
 
+def _validate_peer_review_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if event_type == "review_round.recorded":
+        if _validated_payload_uuid(payload["round_id"], "round_id") != subject_id:
+            raise DecisionValidationError("round event subject is not its round")
+        _validated_payload_uuid(payload["draft_id"], "draft_id")
+        _validated_sha256(payload["draft_content_hash"], "draft_content_hash")
+        _validated_unique_ids(payload["reviewer_ids"], "reviewer_ids", 1)
+        return
+    root = _validated_payload_uuid(payload["comment_root_id"], "comment_root_id")
+    if root != subject_id:
+        raise DecisionValidationError("review event subject is not its comment root")
+    if event_type == "review_comment.versioned":
+        _validated_payload_uuid(payload["round_id"], "round_id")
+        comment = _validated_payload_uuid(payload["comment_id"], "comment_id")
+        supersedes = _validated_optional_uuid(
+            payload["supersedes_comment_id"], "supersedes_comment_id"
+        )
+        if (supersedes is None) != (comment == root):
+            raise DecisionValidationError("only a comment's first version is its root")
+        _validated_payload_uuid(payload["reviewer_id"], "reviewer_id")
+        _validated_sha256(payload["draft_content_hash"], "draft_content_hash")
+        if not isinstance(payload["anchored"], bool):
+            raise DecisionValidationError("anchored must be a boolean")
+        if payload["anchored"]:
+            _validated_sha256(payload["quote_sha256"], "quote_sha256")
+        elif payload["quote_sha256"] is not None:
+            raise DecisionValidationError("a general comment carries no quote")
+        return
+    if event_type == "review_response.versioned":
+        _validated_payload_uuid(payload["response_id"], "response_id")
+        _validated_optional_uuid(
+            payload["supersedes_response_id"], "supersedes_response_id"
+        )
+        if payload["kind"] not in ("change", "no_change"):
+            raise DecisionValidationError("response kind is invalid")
+        revised = _validated_optional_uuid(
+            payload["revised_draft_id"], "revised_draft_id"
+        )
+        _validated_optional_sha256(payload["diff_sha256"], "diff_sha256")
+        is_change = payload["kind"] == "change"
+        if is_change != (revised is not None and payload["diff_sha256"] is not None):
+            raise DecisionValidationError("a change response needs a revision and diff")
+        _validated_uuid_list(
+            payload["evidence_claim_version_ids"], "evidence_claim_version_ids"
+        )
+        return
+    _validated_payload_uuid(payload["decision_id"], "decision_id")
+    _validated_optional_uuid(
+        payload["supersedes_decision_id"], "supersedes_decision_id"
+    )
+    kind = payload["kind"]
+    if kind not in ("assigned", "resolved", "reopened"):
+        raise DecisionValidationError("decision kind is invalid")
+    assignee = _validated_optional_uuid(payload["assignee_id"], "assignee_id")
+    response = _validated_optional_uuid(payload["response_id"], "response_id")
+    if (kind == "assigned") != (assignee is not None):
+        raise DecisionValidationError("only an assignment names an assignee")
+    if kind == "resolved" and response is None:
+        raise DecisionValidationError("a resolution names the accepted response")
+
+
+def _validate_peer_review_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Comments name a recorded round; each comment root, response chain and
+    decision chain (assignment vs resolution) has exactly one tip, every
+    successor superseding it; a resolution names a response recorded earlier
+    for the same root; assignment is an editor's, resolution and reopening an
+    adjudicator's; a change response carries its diff hash."""
+    rounds: set[str] = set()
+    comment_tips: dict[str, str] = {}
+    response_tips: dict[str, str] = {}
+    responses: dict[str, set[str]] = {}
+    decision_tips: dict[tuple[str, bool], str] = {}
+
+    def advance(tips: dict[Any, str], key: Any, new: str, old: Any) -> None:
+        if tips.get(key) != (None if old is None else str(old)):
+            raise DecisionReplayError("peer-review chain forked")
+        tips[key] = new
+
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.event_type == "review_round.recorded":
+            rounds.add(str(payload["round_id"]))
+            continue
+        root = str(payload["comment_root_id"])
+        if event.event_type == "review_comment.versioned":
+            if str(payload["round_id"]) not in rounds:
+                raise DecisionReplayError("comment names no recorded round")
+            advance(
+                comment_tips,
+                root,
+                str(payload["comment_id"]),
+                payload["supersedes_comment_id"],
+            )
+            continue
+        if root not in comment_tips:
+            raise DecisionReplayError("review event names no recorded comment")
+        if event.event_type == "review_response.versioned":
+            if payload["kind"] == "change" and not payload["diff_sha256"]:
+                raise DecisionReplayError("change response without a diff")
+            response = str(payload["response_id"])
+            advance(response_tips, root, response, payload["supersedes_response_id"])
+            responses.setdefault(root, set()).add(response)
+            continue
+        kind = payload["kind"]
+        expected_role = "editor" if kind == "assigned" else "adjudicator"
+        if event.actor_role != expected_role:
+            raise DecisionReplayError(f"{kind} decision requires an {expected_role}")
+        if kind == "resolved" and str(payload["response_id"]) not in responses.get(
+            root, set()
+        ):
+            raise DecisionReplayError("resolution names an unknown response")
+        advance(
+            decision_tips,
+            (root, kind == "assigned"),
+            str(payload["decision_id"]),
+            payload["supersedes_decision_id"],
+        )
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -2693,6 +2871,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_REPRODUCTION_PAYLOAD_KEYS,
         validate_payload=_validate_reproduction_payload,
         validate_transitions=_validate_reproduction_transitions,
+        requires_subject_version=False,
+    ),
+    _PEER_REVIEW_AGGREGATE: _Family(
+        subject_type=_PEER_REVIEW_SUBJECT,
+        payload_keys=_PEER_REVIEW_PAYLOAD_KEYS,
+        validate_payload=_validate_peer_review_payload,
+        validate_transitions=_validate_peer_review_transitions,
         requires_subject_version=False,
     ),
 }

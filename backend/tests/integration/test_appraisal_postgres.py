@@ -390,6 +390,8 @@ _SYNTHESIS_MIGRATION = "a6c8e0b2d4f5_create_synthesis_results.py"
 _MANIFEST_MIGRATION = "b8e0c2d4f6a7_create_run_manifests.py"
 # GOO-313's reruns reference GOO-312's manifests and use the function too.
 _RERUN_MIGRATION = "c0f2a4b6d8e9_create_experiment_reruns.py"
+# GOO-314's peer-review triggers use the function too.
+_PEER_REVIEW_MIGRATION = "d2a4c6e8f0b1_create_peer_review.py"
 
 
 def _migration(connection: Connection, direction: str, filename: str) -> None:
@@ -403,6 +405,7 @@ def _migration(connection: Connection, direction: str, filename: str) -> None:
 
 async def _run_migration(factory: Factory, direction: str) -> None:
     order = [
+        _PEER_REVIEW_MIGRATION,
         _RERUN_MIGRATION,
         _MANIFEST_MIGRATION,
         _SYNTHESIS_MIGRATION,

@@ -1978,3 +1978,56 @@ coverage check is the only thing refusing a partial rule.
 Not performed: a live E2B rerun (needs `E2B_API_KEY` and authorization to
 spend sandbox minutes) and a Celery worker restart mid-attempt on a real
 broker. The fake sandbox proves the state machine only.
+
+## GOO-314 peer-review responses against manuscript revisions — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_peer_review_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `d2a4c6e8f0b1`
+(connection URL from the environment; value omitted). The five peer-review
+tables, their CHECKs, the partial unique initial indexes and the insert-only
+triggers come from the migration. Every write goes through the real
+`resolve_project` and the real service; the race in step 8 is two sessions
+under `asyncio.gather`.
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty (and the SHA-256 below matches).
+
+The rules (9), route (4), boundary (3) and proof (1) tests passed again
+after every restore. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/peer_review_rules.py`
+  `c4ccc03fe31036c5063cd3f663d16966cb859803fc8ef604ba189b9b3f9fb38e`
+- `backend/src/services/research/peer_review_service.py`
+  `8837fe1067400ff403bd5873c2f496fd7cf5aa399e554470231ca9c325fe4b2d`
+- `backend/alembic/versions/d2a4c6e8f0b1_create_peer_review.py`
+  `02cf32d1eeb9bd84aa4c5852399a6668693c30d385c9957a94c1e612f262f19d`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_peer_review_rules.py -k ambiguous   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_peer_review_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Exact-once re-anchoring (`peer_review_rules.py:65`) | `if first == -1:` (accept the first match) | `-k ambiguous`: `('carried', 0, 12) == ('unresolved_anchor', None, None)`; an ambiguous quote is carried. |
+| Change-or-rationale CHECK (`d2a4c6e8f0b1:205`) | `ck_peer_review_responses_rationale` removed from the migration | Proof step 4 (`:360`): `DID NOT RAISE IntegrityError`; a whitespace-only no-change rationale is stored. |
+| Response tip check (`peer_review_service.py:607`) plus `UNIQUE(supersedes_response_id)` (`d2a4c6e8f0b1:198`) | `if False:` and the unique constraint removed | Proof step 8 (`:448`): both concurrent responses succeed; two tips on C2. |
+| ADJUDICATE on resolution (`peer_review_service.py:95`, `:664`) | `decision_action` returns EDIT and the service's adjudicator check is `if False:` | Proof step 5 (`:364`): `DID NOT RAISE HTTPException`; the role-less owner resolves C1. |
+| `touches` overlap (`peer_review_rules.py:110`) | `return True` first | Proof step 3 (`:291`): `DID NOT RAISE HTTPException`; the v3 revision that only edits another sentence is accepted for C1. |
+
+Backstop check (not a failing mutant, by design): with only the tip check
+removed, the `UNIQUE(supersedes_response_id)` hit is mapped by
+`_flush_or_stale` to the same 409 naming the winner, and the proof passes.
+The ADJUDICATE guard is two layers (route action and service role check),
+so the mutant neutralizes both; either layer alone refuses the owner (by construction, not mutated separately).
+
+Not performed: a real journal review import (no pilot round exists; the
+proof uses a synthetic round) and the live journey (needs a deployed stack
+at `d2a4c6e8f0b1`).
