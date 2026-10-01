@@ -20,6 +20,7 @@ from src.services.research.manuscript_rules import (
     FigureIn,
     ReleaseIn,
     RunIn,
+    VenueIn,
     VersionIn,
 )
 from src.services.research_engine.audit_bundle import (
@@ -192,6 +193,7 @@ def test_failing_obligations_lists_each() -> None:
     assert rules.failing_obligations({}) == list(rules.VERIFIED_OBLIGATIONS)
     passing = {key: {"state": "not_applicable"} for key in rules.CHECK_KEYS}
     assert rules.failing_obligations(passing) == []
+    del passing["venue"]  # a missing result fails
     assert rules.failing_obligations(passing, ("claim_support", "venue")) == ["venue"]
 
 
@@ -227,3 +229,73 @@ def test_write_zip_schema_keyword_default_unchanged() -> None:
         manifest = json.loads(archive.read("manifest.json"))
     assert manifest["schema"] == rules.PACKAGE_SCHEMA
     assert verify_bundle(other, schema=rules.PACKAGE_SCHEMA)["parts"] == ["a.md"]
+
+
+# --- GOO-316: statements and venue -------------------------------------------
+
+
+def test_statements_and_venue_are_obligations_only_when_bound() -> None:
+    plain = rules.evaluate(CheckInputs(HASH))
+    assert plain["statements"]["state"] == plain["venue"]["state"] == "not_applicable"
+    assert rules.obligations({}) == rules.VERIFIED_OBLIGATIONS
+    bound = {"statements": {"statement_set_id": "s", "set_hash": HASH}}
+    assert rules.obligations(bound)[-2:] == ("statements", "venue")
+    unapproved = rules.evaluate(
+        CheckInputs(HASH, statements_bound=True, unapproved_authors=("b",))
+    )
+    assert unapproved["statements"] == {
+        "state": "fail",
+        "items": [
+            {
+                "code": "author_not_approved",
+                "detail": "No approval of the bound statement set",
+                "ref": "b",
+            }
+        ],
+    }
+    assert "statements" in rules.failing_obligations(
+        unapproved, rules.obligations(bound)
+    )
+    assert "statements" not in rules.failing_obligations(unapproved)
+
+
+def test_venue_check_binds_the_exact_package_hash() -> None:
+    passed = VenueIn("v1", HASH, 1, "pass")
+    current = CheckInputs(
+        HASH, statements_bound=True, package_sha256=HASH, venue_checks=(passed,)
+    )
+    assert _state(current, "venue") == "pass"
+    changed = CheckInputs(
+        HASH, statements_bound=True, package_sha256=OTHER, venue_checks=(passed,)
+    )
+    stale = rules.evaluate(changed)["venue"]
+    assert stale["state"] == "unknown"
+    assert stale["items"][0]["code"] == "venue_check_stale"
+    old_profile = VenueIn("v0", HASH, 0, "pass")
+    assert (
+        _state(
+            CheckInputs(
+                HASH,
+                statements_bound=True,
+                package_sha256=HASH,
+                venue_checks=(old_profile,),
+            ),
+            "venue",
+        )
+        == "unknown"
+    )
+    failed = VenueIn("v2", HASH, 1, "fail", ("required",))
+    latest = rules.evaluate(
+        CheckInputs(
+            HASH,
+            statements_bound=True,
+            package_sha256=HASH,
+            venue_checks=(passed, failed),
+        )
+    )["venue"]
+    assert latest["state"] == "fail"
+    assert latest["items"][0]["detail"] == "required"
+    unpackaged = CheckInputs(HASH, statements_bound=True)
+    assert rules.evaluate(unpackaged)["venue"]["items"][0]["code"] == (
+        "venue_not_checked"
+    )

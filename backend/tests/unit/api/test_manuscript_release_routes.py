@@ -173,6 +173,9 @@ def test_candidate_with_failing_claims_exposes_blockers(
     monkeypatch.setattr(svc, "_parts", parts)
     monkeypatch.setattr(svc, "_append", AsyncMock())
     monkeypatch.setattr(
+        svc.statements_service, "identities", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
         svc,
         "get_artifact_storage",
         lambda: SimpleNamespace(put=put, delete=AsyncMock()),
@@ -205,8 +208,11 @@ def test_candidate_with_failing_claims_exposes_blockers(
         ],
     }
     assert "claim_support" in body["failing_obligations"]
-    (package,) = stored.values()
+    # GOO-316: the identified package plus its anonymized variant.
+    package = next(v for k, v in stored.items() if k.endswith("/package.zip"))
+    anonymized = next(v for k, v in stored.items() if k.endswith(".anonymized.zip"))
     assert body["package_sha256"] == svc._sha(package)
+    assert body["anonymized_sha256"] == svc._sha(anonymized)
     paths = {f["path"] for f in body["package_files"]}
     assert paths == {"manuscript.source.md", "manifest.json", "SHA256SUMS"}
     harness.db.commit.assert_awaited_once()

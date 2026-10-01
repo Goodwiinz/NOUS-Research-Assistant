@@ -4,8 +4,9 @@ A release keeps six results apart (never one score). Four are obligations a
 verified promotion needs on fresh re-evaluation; reporting completeness and
 experiment reproducibility are reported only. Claim support is never decided
 here: it is read from GOO-307's live ``draft_release`` for the same content
-hash. GOO-316 adds ``statements`` and ``venue`` (and passes them as extra
-obligations to ``failing_obligations``).
+hash. GOO-316 adds ``statements`` and ``venue``: obligations only when the
+snapshot binds a statement set (``obligations``), ``not_applicable``
+otherwise, so a release without statements keeps GOO-315's semantics.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
 
+from src.services.research.venue_rules import PROFILE_VERSION
 from src.services.research_engine.contracts import canonical_json_sha256
 
 SNAPSHOT_SCHEMA = "nous.manuscript-snapshot/1"
@@ -26,6 +28,8 @@ CHECK_KEYS = (
     "experiment_reproducibility",
     "peer_review",
     "synthesis_appraisal",
+    "statements",
+    "venue",
 )
 VERIFIED_OBLIGATIONS = (
     "claim_support",
@@ -33,6 +37,7 @@ VERIFIED_OBLIGATIONS = (
     "synthesis_appraisal",
     "peer_review",
 )
+STATEMENT_OBLIGATIONS = ("statements", "venue")
 PASSING = frozenset({"pass", "not_applicable"})
 AMENDMENT_STATUSES = frozenset({"approved", "superseded"})
 State = Literal["pass", "fail", "unknown", "not_applicable"]
@@ -83,6 +88,17 @@ class FigureIn:
 
 
 @dataclass(frozen=True)
+class VenueIn:
+    """A ``venue_checks`` row of the release being evaluated (oldest first)."""
+
+    id: str
+    package_sha256: str
+    profile_version: int
+    status: str
+    failing_rules: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class CheckInputs:
     content_hash: str
     draft_release: ReleaseIn | None = None
@@ -99,6 +115,18 @@ class CheckInputs:
     open_obligations: tuple[Mapping[str, Any], ...] = ()
     figures: tuple[FigureIn, ...] = ()
     prisma: Prisma = "none"
+    statements_bound: bool = False
+    unapproved_authors: tuple[str, ...] = ()
+    package_sha256: str | None = None
+    venue_checks: tuple[VenueIn, ...] = ()
+
+
+def obligations(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
+    """GOO-315's obligations, plus ``statements`` and ``venue`` when the
+    snapshot binds a statement set."""
+    if snapshot.get("statements"):
+        return (*VERIFIED_OBLIGATIONS, *STATEMENT_OBLIGATIONS)
+    return VERIFIED_OBLIGATIONS
 
 
 def snapshot_hash(snapshot: Mapping[str, Any]) -> str:
@@ -228,6 +256,51 @@ def _reporting(inputs: CheckInputs) -> dict[str, Any]:
     return _result("pass")
 
 
+def _statements(inputs: CheckInputs) -> dict[str, Any]:
+    if not inputs.statements_bound:
+        return _result("not_applicable")
+    items = [
+        _item("author_not_approved", "No approval of the bound statement set", key)
+        for key in inputs.unapproved_authors
+    ]
+    return _result("fail" if items else "pass", items)
+
+
+def _venue(inputs: CheckInputs) -> dict[str, Any]:
+    """Only a check of this exact package hash and the current profile
+    version counts; a check of any other package is stale."""
+    if not inputs.statements_bound:
+        return _result("not_applicable")
+    current = [
+        v
+        for v in inputs.venue_checks
+        if v.package_sha256 == inputs.package_sha256
+        and v.profile_version == PROFILE_VERSION
+    ]
+    if inputs.package_sha256 is None or not current:
+        stale = inputs.package_sha256 is not None and bool(inputs.venue_checks)
+        return _result(
+            "unknown",
+            [
+                _item(
+                    "venue_check_stale" if stale else "venue_not_checked",
+                    (
+                        "No venue check of this exact package"
+                        if inputs.package_sha256
+                        else "The venue check runs on the packaged candidate"
+                    ),
+                )
+            ],
+        )
+    latest = current[-1]
+    if latest.status == "pass":
+        return _result("pass")
+    return _result(
+        "fail",
+        [_item("venue_rule_failed", rule, latest.id) for rule in latest.failing_rules],
+    )
+
+
 def evaluate(inputs: CheckInputs) -> dict[str, dict[str, Any]]:
     """Every result in ``CHECK_KEYS``, each ``{state, items}``."""
     return {
@@ -237,6 +310,8 @@ def evaluate(inputs: CheckInputs) -> dict[str, dict[str, Any]]:
         "experiment_reproducibility": _reproducibility(inputs),
         "peer_review": _peer_review(inputs),
         "synthesis_appraisal": _synthesis_appraisal(inputs),
+        "statements": _statements(inputs),
+        "venue": _venue(inputs),
     }
 
 

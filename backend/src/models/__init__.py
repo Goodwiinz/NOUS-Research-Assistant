@@ -154,6 +154,12 @@ from .research_experiment import (
 )
 from .research_rerun import ExperimentRerun, ExperimentRerunAttempt
 from .manuscript_release import ManuscriptRelease
+from .manuscript_statements import (
+    ManuscriptStatementApproval,
+    ManuscriptStatementSet,
+    OrcidAuthentication,
+    VenueCheck,
+)
 from .peer_review import (
     PeerReviewComment,
     PeerReviewDecision,
@@ -334,6 +340,10 @@ __all__ = [
     "PeerReviewResponse",
     "PeerReviewDecision",
     "ManuscriptRelease",
+    "ManuscriptStatementSet",
+    "ManuscriptStatementApproval",
+    "OrcidAuthentication",
+    "VenueCheck",
     "ResearchClaim",
     "ResearchClaimVersion",
     "ResearchClaimEvidenceLink",

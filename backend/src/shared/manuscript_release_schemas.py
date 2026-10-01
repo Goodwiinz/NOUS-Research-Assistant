@@ -1,17 +1,19 @@
 """Manuscript release contracts (GOO-315). Every POST carries an
 ``idempotency_key`` and the hashes the caller saw; status is derived on read.
 ``external_submission`` is constant: packaging never authorizes a submission
-(GOO-318 owns deposits)."""
+(GOO-318 owns deposits). GOO-316 adds the ``anonymized`` package variant:
+``package_files`` stays the identified variant's members."""
 
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 CheckState = Literal["pass", "fail", "unknown", "not_applicable"]
 ReleaseStage = Literal["candidate", "verified"]
 ReleaseStatus = Literal["candidate", "verified", "stale"]
+PackageVariant = Literal["identified", "anonymized"]
 _KEY = Field(..., min_length=1, max_length=255)
 _HASH = Field(..., min_length=64, max_length=64)
 
@@ -68,10 +70,18 @@ class ManuscriptReleaseResponse(BaseModel):
     failing_obligations: List[str] = Field(default_factory=list)
     package_files: List[PackageFile]
     package_sha256: str
+    anonymized_files: Optional[List[PackageFile]] = None
+    anonymized_sha256: Optional[str] = None
     created_by_id: UUID
     actor_role: str
     created_at: datetime
     external_submission: Literal["not_authorized"] = "not_authorized"
+
+    @field_validator("package_files", mode="before")
+    @classmethod
+    def _identified(cls, value: Any) -> Any:
+        """GOO-316 rows store ``{identified, anonymized, ...}``."""
+        return value["identified"] if isinstance(value, dict) else value
 
 
 class ManuscriptReleaseListResponse(BaseModel):

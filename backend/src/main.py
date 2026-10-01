@@ -39,6 +39,7 @@ from src.api.arxiv import (
 )
 from src.api.auth import auth_router, cli_auth_router
 from src.api.auth.api_keys import router as api_keys_router
+from src.api.auth_orcid import router as orcid_router
 from src.api.connectors import connectors_router
 from src.api.diagnostics import diagnostics_router
 from src.api.documents import (
@@ -78,6 +79,7 @@ from src.api.research import (
     project_report_router,
     project_skills_router,
     projects_router,
+    statements_router,
     tone_engine_router,
     writer_router,
 )
@@ -656,6 +658,8 @@ app.include_router(drafts_router)  # Research Assistant drafts endpoints
 app.include_router(claims_router)  # GOO-306 versioned claims and evidence links
 app.include_router(peer_review_router)  # GOO-314 external peer-review responses
 app.include_router(manuscript_releases_router)  # GOO-315 manuscript releases
+app.include_router(statements_router)  # GOO-316 statement sets and approvals
+app.include_router(orcid_router)  # GOO-316 ORCID /authenticate receipts
 app.include_router(tone_engine_router)  # Scholarly Tone Engine endpoints
 app.include_router(extraction_matrix_router)  # Extraction Matrix endpoints
 app.include_router(writer_router)  # AI Writer endpoints
