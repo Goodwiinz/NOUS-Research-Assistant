@@ -7,6 +7,7 @@
 
 import type { ReactElement } from 'react';
 import { Button } from '@/components/ui/button';
+import { useBackendCapabilities } from '@/hooks/useBackendCapabilities';
 import { useDraftClaims } from '@/hooks/useDraftClaims';
 import { projectService } from '@/services/projectService';
 import type {
@@ -105,8 +106,9 @@ export function DraftClaimsPanel({
   projectId: string;
   draftId: string;
 }): ReactElement | null {
+  const capabilities = useBackendCapabilities();
   const claims = useDraftClaims(projectId, draftId);
-  if (!claims.data) return null;
+  if (!capabilities.draftClaims || !claims.data) return null;
   const { items, counts } = claims.data;
   return (
     <section
