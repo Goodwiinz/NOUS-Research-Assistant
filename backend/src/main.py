@@ -69,6 +69,7 @@ from src.api.research import (
     chat_router,
     citations_router,
     claims_router,
+    deposits_router,
     drafts_router,
     export_router,
     extraction_matrix_router,
@@ -499,7 +500,24 @@ if OBSERVABILITY_ENABLED:
     except ImportError:
         instrument_services(sql_engine=engine)
 
-# Add CORS middleware
+# Compress JSON/text responses (list_messages/list_threads/thread-detail/
+# search) — SSE + export routes are excluded so token streaming isn't buffered.
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
+
+# Add rate limiting middleware for analytics endpoints
+app.add_middleware(AnalyticsRateLimitMiddleware, redis_client=redis_client)
+
+# Add multi-tenancy middleware — runs before rate limiting so tenant context is
+# available when rate limit decisions are made (registered after = executes first).
+app.add_middleware(MultiTenancyMiddleware)
+
+# Add CORS middleware — registered AFTER MultiTenancyMiddleware so it runs
+# OUTSIDE it (and outside rate limiting/GZip): the tenancy gate's own 401/500
+# and the rate limiter's 429 then carry Access-Control-Allow-Origin, so the
+# browser can read them (an expired token must reach the frontend as a 401,
+# not an opaque "Failed to fetch"). CORS also answers true preflights itself
+# before the tenancy gate. Pinned by
+# tests/unit/middleware/test_tenancy_cors_and_raw_path.py.
 # SECURITY: Strict CORS configuration - only allow specified origins, headers, and methods
 # Never use allow_origins=["*"] or allow_headers=["*"] in production
 app.add_middleware(
@@ -512,17 +530,6 @@ app.add_middleware(
     expose_headers=settings.cors_expose_list,
     max_age=settings.CORS_MAX_AGE,  # Cache preflight for 24 hours
 )
-
-# Compress JSON/text responses (list_messages/list_threads/thread-detail/
-# search) — SSE + export routes are excluded so token streaming isn't buffered.
-app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
-
-# Add rate limiting middleware for analytics endpoints
-app.add_middleware(AnalyticsRateLimitMiddleware, redis_client=redis_client)
-
-# Add multi-tenancy middleware — runs before rate limiting so tenant context is
-# available when rate limit decisions are made (registered after = executes first).
-app.add_middleware(MultiTenancyMiddleware)
 
 # Add trusted host middleware for production.
 # Kubelet HTTP probes set Host header to the pod IP, which is not in the
@@ -659,6 +666,7 @@ app.include_router(claims_router)  # GOO-306 versioned claims and evidence links
 app.include_router(peer_review_router)  # GOO-314 external peer-review responses
 app.include_router(manuscript_releases_router)  # GOO-315 manuscript releases
 app.include_router(statements_router)  # GOO-316 statement sets and approvals
+app.include_router(deposits_router)  # GOO-318 archive deposits
 app.include_router(orcid_router)  # GOO-316 ORCID /authenticate receipts
 app.include_router(tone_engine_router)  # Scholarly Tone Engine endpoints
 app.include_router(extraction_matrix_router)  # Extraction Matrix endpoints

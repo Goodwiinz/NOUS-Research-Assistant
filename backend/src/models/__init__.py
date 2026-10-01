@@ -154,6 +154,11 @@ from .research_experiment import (
 )
 from .research_rerun import ExperimentRerun, ExperimentRerunAttempt
 from .manuscript_release import ManuscriptRelease
+from .research_deposit import (
+    ArchiveDepositApproval,
+    ArchiveDepositAttempt,
+    ArchiveDepositOutbox,
+)
 from .manuscript_statements import (
     ManuscriptStatementApproval,
     ManuscriptStatementSet,
@@ -344,6 +349,9 @@ __all__ = [
     "ManuscriptStatementApproval",
     "OrcidAuthentication",
     "VenueCheck",
+    "ArchiveDepositApproval",
+    "ArchiveDepositAttempt",
+    "ArchiveDepositOutbox",
     "ResearchClaim",
     "ResearchClaimVersion",
     "ResearchClaimEvidenceLink",

@@ -314,3 +314,54 @@ Record the SHA/PR, CI and oasdiff links, the Zenodo sandbox deposition URL, the 
 ## Out of scope
 
 Each item has a `ponytail:` marker at its seam: production Zenodo; a second repository; new-version deposits; editing published metadata; embargo/restricted access; OAuth per-user Zenodo accounts (one service account label); remote deletion of drafts on revocation.
+
+## Amendment 2026-10-01: as implemented
+
+The plan text above is kept as the dated record; these are the differences
+in the implementation.
+
+- **Locations.** GOO-315/316/317 landed under `services/research/`,
+  `api/research/` and `src/shared/*_schemas.py`, so the deposit code
+  follows them: `services/research/{deposit_rules,deposit_service}.py`,
+  `services/research/archives/zenodo.py`, `api/research/deposits.py`
+  (prefix `/api/v1/projects/{project_id}/deposits`),
+  `src/shared/deposit_schemas.py`. Frontend calls live in
+  `services/projectService.ts` (next to the release calls), the panel in
+  `components/research/DepositPanel.tsx`, mounted on verified releases in
+  `ManuscriptReleaseSection.tsx`.
+- **Migration head.** GOO-317 added no migration: `b0e2a4c6d8f9` revises
+  `f6a8c0d2e4b5` (GOO-316).
+- **Deposited files.** Two files: `package.zip` (the release's exact package
+  bytes, sha256 = `package_sha256`) and `references.csl.json` (GOO-317's
+  CSL file from the snapshot, checked equal to the package's sealed
+  `references.json` body). Creators and the licence come from the package's
+  sealed `statements.json`; a release without them is refused (409
+  `metadata_incomplete:<fields>`), never guessed.
+- **Adapter.** A sixth call, `get_record`, does the `GET /records/{id}`
+  read-back. `find_by_operation` lists the account's 100 most recent
+  depositions and matches the marker client-side (`ponytail:` ceiling
+  noted) instead of trusting search relevance. The token is read only by
+  `zenodo.from_settings()`; the adapter refuses to send it to any host but
+  the configured one.
+- **Rules.** `valid_approval` returns the approval in force (the plan's
+  `approval_valid` remains as the boolean wrapper); `reached` and
+  `phase_after` are public so the worker shares one definition of
+  "confirmed by the remote side".
+- **Ledger.** `deposit.requested` and `deposit.phase_recorded` also carry
+  `approval_id`, so replay can check "the approval in force" and
+  self-approval. Worker events use the existing `machine` actor role
+  instead of a new `system` role.
+- **Local preconditions.** An invalid approval, a lost requester role or
+  an archived/deleted project records a `failed`, `retryable = true`
+  attempt (`approval_invalid`, `requester_unauthorized`,
+  `project_unavailable`) and sets the outbox `done`; `requeue` resumes it.
+  Only a Zenodo 4xx and a read-back mismatch are terminal.
+- **One remote state change per worker pass**, except publish, which is
+  followed by the read-back in the same pass. A reconcile that finds
+  progress records it and ends the pass.
+- **`external_submission`** on a release response becomes `authorized`
+  only while a deposit approval is in force for that exact package hash
+  and account (an additive response enum value).
+- **PostgreSQL proof seeds** verified releases by direct insert (candidate +
+  verified rows over a real package zip) instead of GOO-315's promotion
+  path, and the downgrade check runs on a fresh empty schema.
