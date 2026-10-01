@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import uuid
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -43,8 +43,14 @@ _EMAIL = "ada@example.com"
 
 
 def _request(page_context: dict) -> AgentExecuteRequest:
-    return AgentExecuteRequest.model_validate(
-        {"messages": [{"role": "user", "content": "hi"}], "page_context": page_context}
+    return cast(
+        AgentExecuteRequest,
+        AgentExecuteRequest.model_validate(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "page_context": page_context,
+            }
+        ),
     )
 
 
