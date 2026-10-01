@@ -50,6 +50,21 @@ jobs:
           fi
           echo "needed=true" >> "$GITHUB_OUTPUT"
 
+      - name: Verify release branch protection
+        if: steps.source.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # Preserve GraphQL variables as literals instead of shell expressions.
+          GRAPHQL_QUERY: >-
+            query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: "refs/heads/develop") { branchProtectionRule { requiresStatusChecks requiresStrictStatusChecks requiredStatusChecks { context app { databaseId } } } } } }
+        run: |
+          OWNER="${GH_REPO%/*}"
+          REPO="${GH_REPO#*/}"
+          gh api graphql -f owner="$OWNER" -f name="$REPO" \
+            -f query="$GRAPHQL_QUERY" \
+            --jq '.data.repository.ref.branchProtectionRule' | python3 scripts/ci/check_release_protection.py
+
   build:
     name: Build tested image
     needs: prepare
@@ -72,6 +87,20 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: develop
+
+      - name: Verify release branch protection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # Preserve GraphQL variables as literals instead of shell expressions.
+          GRAPHQL_QUERY: >-
+            query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: "refs/heads/develop") { branchProtectionRule { requiresStatusChecks requiresStrictStatusChecks requiredStatusChecks { context app { databaseId } } } } } }
+        run: |
+          OWNER="${GH_REPO%/*}"
+          REPO="${GH_REPO#*/}"
+          gh api graphql -f owner="$OWNER" -f name="$REPO" \
+            -f query="$GRAPHQL_QUERY" \
+            --jq '.data.repository.ref.branchProtectionRule' | python3 scripts/ci/check_release_protection.py
 
       - name: Install yq
         run: |

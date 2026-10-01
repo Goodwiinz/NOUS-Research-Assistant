@@ -138,6 +138,8 @@ export interface AgentStreamCallbacks {
   onStatus?: (phase: AgentStreamPhase, detail?: string) => void;
   /** Durable run id from the accepted status frame, used by Stop. */
   onRunId?: (runId: string) => void;
+  /** ID-only announcement that an artifact version was committed for this run. */
+  onArtifactVersion?: (ref: { artifactId: string; versionId: string }) => void;
   onUsage?: (inputTokens: number, outputTokens: number) => void;
   /** Fires for every frame carrying an `id: <seq>` line — the resumable-SSE
    * cursor. Persist the latest value to resume after a disconnect. */
@@ -259,6 +261,7 @@ export const HANDLED_STREAM_EVENTS: ReadonlySet<AgentStreamEvent> = new Set([
   'usage',
   'done',
   'error',
+  'artifact',
 ]);
 
 /**
@@ -415,6 +418,17 @@ async function consumeSse(
         case 'approval_required':
           if (typeof data.request_id === 'string' && data.request_id) {
             callbacks.onApprovalRequired?.(data.request_id);
+          }
+          break;
+        case 'artifact':
+          if (
+            typeof data.artifact_id === 'string' &&
+            typeof data.version_id === 'string'
+          ) {
+            callbacks.onArtifactVersion?.({
+              artifactId: data.artifact_id,
+              versionId: data.version_id,
+            });
           }
           break;
         case 'usage':

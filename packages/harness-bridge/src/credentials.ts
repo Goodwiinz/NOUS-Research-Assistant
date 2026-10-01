@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, rename } from "node:fs/promises";
+import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { record } from "./rpc.ts";
@@ -7,6 +7,9 @@ import { record } from "./rpc.ts";
 export type IntegrationCredentials = {
   accessToken: string;
   grantToken: string;
+  // Present on connections made since grant renewal; see grants.ts.
+  grantId?: string;
+  renewedAt?: number;
 };
 export function integrationHeaders(
   credentials: IntegrationCredentials,
@@ -100,6 +103,25 @@ export class CredentialStore {
     const credentialHandle = randomUUID();
     await this.writeLocal(credentialHandle, credentials);
     return credentialHandle;
+  }
+  /** Delete one stored file; a missing file is already gone. */
+  async removeLocal(name: string): Promise<void> {
+    await this.ready();
+    try {
+      await unlink(this.path(name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  /** Replace stored credentials under the same handle (atomic rename). */
+  async update(
+    credentialHandle: string,
+    credentials: IntegrationCredentials,
+  ): Promise<void> {
+    if (!validHandle.test(credentialHandle))
+      throw new Error("invalid credential handle");
+    this.validate(credentials);
+    await this.writeLocal(credentialHandle, credentials);
   }
   async load(credentialHandle: string): Promise<IntegrationCredentials> {
     if (!validHandle.test(credentialHandle))

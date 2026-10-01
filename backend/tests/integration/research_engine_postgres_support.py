@@ -149,6 +149,7 @@ async def seed_approved_protocol_binding(
     steps: list[dict[str, Any]],
     parameters: dict[str, Any],
     blueprint_version: int = 1,
+    snapshot: Mapping[str, Any] = _PROTOCOL_SNAPSHOT,
 ) -> ApprovedProtocolBinding:
     """Bind an isolated run fixture to the exact approved blueprint plan."""
     question_id = uuid4()
@@ -165,7 +166,7 @@ async def seed_approved_protocol_binding(
         protocol_content(
             question_version_id,
             blueprint_id,
-            _PROTOCOL_SNAPSHOT,
+            snapshot,
             execution_plan,
         )
     )
@@ -243,7 +244,7 @@ async def seed_approved_protocol_binding(
             "question_version_id": question_version_id,
             "blueprint_id": blueprint_id,
             "execution_plan": json.dumps(execution_plan),
-            "snapshot": json.dumps(_PROTOCOL_SNAPSHOT),
+            "snapshot": json.dumps(snapshot),
             "content_hash": content_hash,
             "author_user_id": author_id,
         },

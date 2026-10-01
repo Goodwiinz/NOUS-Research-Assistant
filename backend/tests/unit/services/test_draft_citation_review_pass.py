@@ -303,7 +303,7 @@ async def test_end_to_end_identifier_hijacking_forces_major_despite_llm_exact():
 
     structured = AsyncMock()
     structured.ainvoke = AsyncMock(
-        return_value=_LLMVerdict(verdict="exact", evidence="Looks fine.")
+        return_value=_LLMVerdict(verdict="exact", quote="", evidence="Looks fine.")
     )
     llm = MagicMock()
     llm.with_structured_output.return_value = structured
