@@ -54,6 +54,19 @@ the published sample-size table but do not become product passes or failures.
 The retained boolean `passed` must exactly match the four dimension verdicts,
 and every planned trial is explicitly either `canonical` or `near_boundary`.
 
+## Release-gate hook (GOO-307)
+
+`tests/test_release_gate_seeded.py` feeds the pure release gate
+(`backend/src/services/research/release_rules.py`) one supported sentence and
+one seeded failure per corpus condition: an invented number
+(`dev-unsupported-number`) blocks as `model_only`, an opposed claim
+(`held-contradictory-sources`) as `opposed`, an assessment citing a link
+outside the project (`held-hijacked-id`) as `stale_evidence`, and an
+unattributed interpretation (`dev-invalid-revision`) as
+`unattributed_interpretation`. It reads only each task's condition, never a
+gold judgment, and edits no corpus. It is a hook, not a trial: the 14-trial
+baseline above is still required.
+
 ## Collect retained evidence
 
 Run from the repository root after all 14 declared trial bundles exist:

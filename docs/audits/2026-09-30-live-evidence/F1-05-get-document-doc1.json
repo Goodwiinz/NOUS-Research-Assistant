@@ -1,0 +1,76 @@
+{
+  "step": "F1-05-get-document-doc1",
+  "as": "owner",
+  "at": "2026-09-30T05:24:23.516500+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/documents/74c232ea-e007-4a73-b8ed-df0f88bae654",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "74c232ea-e007-4a73-b8ed-df0f88bae654",
+    "title": "Attention Is All You Need",
+    "filename": "1706.03762v7.pdf",
+    "document_type": "pdf",
+    "file_size_bytes": 2215244,
+    "file_size_mb": 2.112621307373047,
+    "mime_type": "application/pdf",
+    "processing_status": "indexed",
+    "tags": null,
+    "is_public": false,
+    "content_preview": "# Abstract\n\nThe dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while...",
+    "content_summary": null,
+    "created_at": "2026-08-20T22:33:07.700745+00:00",
+    "updated_at": "2026-08-20T22:33:11.724552+00:00",
+    "uploaded_by_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "organization_id": "e050bd43-6b0b-4425-9848-1bc5ad9d5cc2",
+    "content_text": null,
+    "metadata": {
+      "title": "Attention Is All You Need",
+      "description": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more ...",
+      "authors": [
+        "Ashish Vaswani",
+        "Noam Shazeer",
+        "Niki Parmar",
+        "Jakob Uszkoreit",
+        "Llion Jones",
+        "Aidan N. Gomez",
+        "Lukasz Kaiser",
+        "Illia Polosukhin"
+      ],
+      "publication_date": "2017-06-12T17:57:34+00:00",
+      "categories": [
+        "cs.CL",
+        "cs.LG"
+      ],
+      "tags": [
+        "cs.CL",
+        "cs.LG"
+      ],
+      "arxiv_id": "1706.03762v7",
+      "arxiv_categories": [
+        "cs.CL",
+        "cs.LG"
+      ],
+      "arxiv_primary_category": "cs.CL",
+      "journal_reference": null,
+      "doi": null,
+      "comment": "15 pages, 5 figures",
+      "source": "arxiv",
+      "language": "en",
+      "modality": "text",
+      "content_type": "academic_paper",
+      "num_pages": 15,
+      "pdf_path": "data/arxiv/1706.03762v7.pdf",
+      "has_full_text": true
+    },
+    "processing_started_at": null,
+    "processing_completed_at": null,
+    "processing_error": null,
+    "processing_retry_count": 0
+  }
+}

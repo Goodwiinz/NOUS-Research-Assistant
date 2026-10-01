@@ -85,6 +85,15 @@ def pre_wave_connection(request: pytest.FixtureRequest) -> Iterator[Connection]:
     with scoped_engine.begin() as connection:
         connection.exec_driver_sql("DROP TABLE research_project_role_assignments")
         connection.exec_driver_sql("DROP TYPE researchprojectrole")
+        # GOO-306 claim versions reference draft_reviews; this fixture predates them.
+        for table in (
+            "research_claim_assessments",
+            "research_claim_stance_observations",
+            "research_claim_evidence_links",
+            "research_claim_versions",
+            "research_claims",
+        ):
+            connection.exec_driver_sql(f'DROP TABLE "{table}"')
         connection.exec_driver_sql("DROP TABLE draft_reviews")
         connection.exec_driver_sql(
             "ALTER TABLE research_projects DROP COLUMN collection_id CASCADE"
@@ -467,6 +476,15 @@ def test_academic_wave_migrations_upgrade_downgrade_round_trip(
     assert "research_project_role_assignments" in inspect(connection).get_table_names()
 
 
+# GOO-303: references research_reports, documents and protocol versions.
+_ACQUISITION_TABLES = ("research_fulltext_attempts", "research_fulltext_requests")
+_RESOLUTION_TABLES = ("screening_resolutions",)  # GOO-302: drop first
+_SCREENING_TABLES = (
+    "screening_suggestions",
+    "screening_observations",
+    "screening_assignments",
+    "screening_queues",
+)
 _IMPORT_TABLES = ("research_import_records", "research_import_receipts")
 _IDENTITY_TABLES = (
     "research_report_observations",
@@ -481,7 +499,14 @@ def test_report_identity_migration_upgrade_downgrade_round_trip(
 ) -> None:
     """GOO-299 tables are created by the revision itself, with RLS enabled."""
     connection = pre_wave_connection
-    for table in (*_IMPORT_TABLES, *_IDENTITY_TABLES):
+    # GOO-301/302 screening tables reference research_reports: drop them first.
+    for table in (
+        *_ACQUISITION_TABLES,
+        *_RESOLUTION_TABLES,
+        *_SCREENING_TABLES,
+        *_IMPORT_TABLES,
+        *_IDENTITY_TABLES,
+    ):
         connection.exec_driver_sql(f'DROP TABLE "{table}"')
     migration = _load_migration("c9d2e4f6a8b1_create_report_identities.py")
 
@@ -546,3 +571,104 @@ def test_search_import_migration_upgrade_downgrade_round_trip(
     _run_migration(connection, migration, "downgrade")
     inspector = inspect(connection)
     assert not any(inspector.has_table(table) for table in _IMPORT_TABLES)
+
+
+def test_screening_queue_migration_upgrade_downgrade_round_trip(
+    pre_wave_connection: Connection,
+) -> None:
+    """GOO-301 tables are created by e1f3a5c7d9b2 itself, with RLS enabled."""
+    connection = pre_wave_connection
+    for table in (*_RESOLUTION_TABLES, *_SCREENING_TABLES):
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    connection.exec_driver_sql("DROP INDEX idx_research_decision_event_idempotency")
+    migration = _load_migration("e1f3a5c7d9b2_create_screening_queues.py")
+    assert migration.down_revision == "aw02_artifact_lifecycle"
+
+    _run_migration(connection, migration, "upgrade")
+    inspector = inspect(connection)
+    for table in _SCREENING_TABLES:
+        assert inspector.has_table(table)
+        assert connection.execute(
+            text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
+            {"t": table},
+        ).scalar_one()
+    partial = {
+        index["name"]: index["dialect_options"].get("postgresql_where")
+        for table in ("screening_assignments", "screening_observations")
+        for index in inspector.get_indexes(table)
+        if index["unique"] and index["dialect_options"].get("postgresql_where")
+    }
+    assert partial == {
+        "uq_screening_assignment_active": "(revoked_at IS NULL)",
+        "uq_screening_observation_initial": "(supersedes_observation_id IS NULL)",
+    }
+    assert "idx_research_decision_event_idempotency" in {
+        index["name"] for index in inspector.get_indexes("research_decision_events")
+    }
+
+    _run_migration(connection, migration, "downgrade")
+    inspector = inspect(connection)
+    assert not any(inspector.has_table(table) for table in _SCREENING_TABLES)
+    assert "idx_research_decision_event_idempotency" not in {
+        index["name"] for index in inspector.get_indexes("research_decision_events")
+    }
+
+
+def test_screening_resolution_migration_upgrade_downgrade_round_trip(
+    pre_wave_connection: Connection,
+) -> None:
+    """GOO-302's table is created by f3b5d7e9a1c4 itself, with RLS enabled."""
+    connection = pre_wave_connection
+    for table in _RESOLUTION_TABLES:
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    migration = _load_migration("f3b5d7e9a1c4_create_screening_resolutions.py")
+    assert migration.down_revision == "e1f3a5c7d9b2"
+
+    _run_migration(connection, migration, "upgrade")
+    inspector = inspect(connection)
+    assert inspector.has_table("screening_resolutions")
+    assert connection.execute(
+        text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
+        {"t": "screening_resolutions"},
+    ).scalar_one()
+    assert {
+        index["name"]: index["dialect_options"].get("postgresql_where")
+        for index in inspector.get_indexes("screening_resolutions")
+        if index["unique"] and index["dialect_options"].get("postgresql_where")
+    } == {"uq_screening_resolution_initial": "(supersedes_resolution_id IS NULL)"}
+
+    _run_migration(connection, migration, "downgrade")
+    assert not inspect(connection).has_table("screening_resolutions")
+
+
+def test_fulltext_acquisition_migration_upgrade_downgrade_round_trip(
+    pre_wave_connection: Connection,
+) -> None:
+    """GOO-303's tables are created by f2a4c6e8b0d3 itself, with RLS enabled."""
+    connection = pre_wave_connection
+    for table in _ACQUISITION_TABLES:
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')
+    migration = _load_migration("f2a4c6e8b0d3_create_fulltext_acquisition.py")
+    assert migration.down_revision == "f3b5d7e9a1c4"
+
+    _run_migration(connection, migration, "upgrade")
+    inspector = inspect(connection)
+    for table in _ACQUISITION_TABLES:
+        assert inspector.has_table(table)
+        assert connection.execute(
+            text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"),
+            {"t": table},
+        ).scalar_one()
+    assert {
+        index["name"]: index["dialect_options"].get("postgresql_where")
+        for index in inspector.get_indexes("research_fulltext_attempts")
+        if index["unique"] and index["dialect_options"].get("postgresql_where")
+    } == {"uq_research_fulltext_attempt_head": "(previous_attempt_id IS NULL)"}
+    assert "uq_research_fulltext_request_report" in {
+        c["name"]
+        for c in inspector.get_unique_constraints("research_fulltext_requests")
+    }
+
+    _run_migration(connection, migration, "downgrade")
+    inspector = inspect(connection)
+    assert not any(inspector.has_table(table) for table in _ACQUISITION_TABLES)

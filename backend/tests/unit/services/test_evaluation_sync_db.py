@@ -1,8 +1,9 @@
 """R5-H7: `next(get_db())` on an async, request-scoped generator.
 
-`get_db` is `async def get_db(request: Request)` (src/core/database.py) —
-calling it with no arguments raises `TypeError` immediately (missing
-`request`), before `next()` even runs. `evaluate_search_pipeline` and
+`get_db` was `async def get_db(request: Request)` (src/core/database.py) —
+calling it with no arguments raised `TypeError` immediately (missing
+`request`), before `next()` even ran. (It is still an async request-scoped
+generator, so `next()` on it can never yield a sync session.) `evaluate_search_pipeline` and
 `get_evaluation_metrics` (rag_evaluation_service.py) both ran from sync
 Celery task contexts (via `loop.run_until_complete`) and called `next(get_db())`
 to get a session — the TypeError was swallowed by a bare `except Exception:
@@ -23,15 +24,6 @@ from unittest.mock import MagicMock
 import pytest
 
 pytestmark = pytest.mark.unit
-
-
-def test_calling_get_db_with_no_arguments_raises_immediately() -> None:
-    """Pins the exact failure mode `next(get_db())` hit: get_db needs a
-    Request, so calling it bare raises before next() is ever reached."""
-    from src.core.database import get_db
-
-    with pytest.raises(TypeError):
-        get_db()  # type: ignore[call-arg]
 
 
 @pytest.mark.asyncio
