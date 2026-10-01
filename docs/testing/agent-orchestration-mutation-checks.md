@@ -1920,3 +1920,61 @@ Not performed: "manifest in the run transaction" (commit the manifest after
 the status) needs a failure injected between the two writes, which the proof
 does not stage; the single-commit placement is reviewed in `runs.py`'s
 `run_complete` branch instead.
+
+## GOO-313 fresh reruns from a run manifest — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_experiment_rerun_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `c0f2a4b6d8e9`
+(connection URL from the environment; value omitted). The original run is
+GOO-312's seed. The rerun goes through the real routes, the real
+`execute_attempt` worker and the real `SandboxManager.run_isolated` restore
+mode; only the e2b `AsyncSandbox` is fake (a temporary directory whose
+`sha256sum` really hashes the restored files and whose command runs the
+archived script with the local interpreter).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and assert byte equality.
+
+`git diff --quiet` on every mutated file succeeded afterwards. The proof
+(1 test), the rules (8), isolated-sandbox (9), route (3) and boundary (5)
+tests passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/rerun_rules.py`
+  `d5050ab80abcf86cce5f6e7e75e158dc2301b8dc74f34235b7a30c4cb4d130e9`
+- `backend/src/services/sandbox/e2b_sandbox_manager.py`
+  `4d5daa36432861ced7be728cdc60c9d23c48bd72c5b483755f05058de2aecdbd`
+- `backend/src/services/research_engine/rerun_service.py`
+  `0a37f6189f86e03e30ae79d5f8d694626f9a9b7931c609f347913274194668af`
+- `backend/alembic/versions/c0f2a4b6d8e9_create_experiment_reruns.py`
+  `10a8b596f355c50d7ab319962c11a1c25519e5e22719ac16b0373762fec8a8ac`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_rerun_rules.py -k cover   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_sandbox_isolated.py -k input_hash   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_experiment_rerun_postgres.py   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_rerun_boundary.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Rule covers every output (`rerun_rules.py:95`) | `if False:` | `-k cover` (`:73`): `DID NOT RAISE ValueError`; the partial rule is accepted. |
+| In-sandbox re-hash (`e2b_sandbox_manager.py:369`) | `mismatched: List[str] = []` | `-k input_hash` (`:316`): `('completed', ()) == ('restoration_failed', ('input_mismatch:data.csv',))`; the command runs. |
+| `UNIQUE(rerun_id, attempt)` publication (`rerun_service.py:482`, `:886`) | a unique loss returns `True` and the loser keeps its blobs | Proof step 5 (`:561`): three output blobs exist for the cancelled attempt. |
+| Lease sweep (`rerun_service.py:643`) | `return 0` first | Proof step 6 (`:576`): `assert 0 == 1`; no `interrupted` row. |
+| `require_run_conformance` at admission (`rerun_service.py:496`) | call removed | Proof step 9 (`:674`): `202 == 409`; the copy with a drifted plan hash is admitted. `test_rerun_boundary.py::test_admission_goes_through_retained_plan_conformance` fails too. |
+| Reproduction CHECK (`c0f2a4b6d8e9:124`) | `ck_experiment_rerun_attempts_executed` removed from the migration | Proof step 3 (`:516`): `DID NOT RAISE IntegrityError`; a `restoration_failed` row with `reproduced` is accepted. |
+
+The first run of the rules mutant failed with `KeyError` instead of the
+intended "partial rule accepted": the normalization indexed every manifest
+output. `validate_rule` now normalizes only declared entries, so the
+coverage check is the only thing refusing a partial rule.
+
+Not performed: a live E2B rerun (needs `E2B_API_KEY` and authorization to
+spend sandbox minutes) and a Celery worker restart mid-attempt on a real
+broker. The fake sandbox proves the state machine only.

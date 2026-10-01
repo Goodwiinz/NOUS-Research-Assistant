@@ -93,17 +93,23 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Harness]:
             raise HTTPException(403, "reviewer role required")
         return SimpleNamespace(collection=SimpleNamespace(id=COLLECTION)), blueprint
 
-    code_key = f"artifacts/org/research-runs/{RUN}/{_sha(SVG)}"
-    asyncio.run(h.storage.put(code_key, SVG, "image/svg+xml"))
-    artifact = SimpleNamespace(
-        role="output", name="fig.svg", sha256=_sha(SVG), storage_key=code_key
-    )
+    archived = []
+    for role, name, data in (
+        ("output", "fig.svg", SVG),
+        ("code", "main.py", b"code"),
+        ("environment", "pip-freeze.txt", b"lock"),
+    ):
+        key = f"artifacts/org/research-runs/{RUN}/{_sha(data)}"
+        asyncio.run(h.storage.put(key, data, "application/octet-stream"))
+        archived.append(
+            SimpleNamespace(role=role, name=name, sha256=_sha(data), storage_key=key)
+        )
 
     async def fake_manifest(_db: object, _run_id: object) -> Any:
         return SimpleNamespace(id=uuid4(), manifest=MANIFEST, manifest_hash="m" * 64)
 
     async def fake_artifacts(_db: object, _run_id: object) -> list[Any]:
-        return [artifact]
+        return archived
 
     async def fake_append(_db: object, _rerun: object, **kwargs: Any) -> None:
         h.appended.append(kwargs)
@@ -156,7 +162,7 @@ def test_eligibility_zero_writes(harness: _Harness) -> None:
     harness.db.commit.assert_not_awaited()
     assert harness.storage.objects == before and harness.appended == []
     # A corrupt archived output is a structured reason, still with no writes.
-    key = next(iter(harness.storage.objects))
+    key = f"artifacts/org/research-runs/{RUN}/{_sha(SVG)}"
     harness.storage.objects[key] = b"<svg>tampered</svg>"
     body = harness.client.get(f"/research-engine/runs/{RUN}/rerun-eligibility").json()
     assert body["eligible"] is False and body["reasons"] == ["artifact_corrupt:fig.svg"]

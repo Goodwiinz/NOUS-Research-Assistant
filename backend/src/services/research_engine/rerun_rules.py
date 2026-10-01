@@ -95,7 +95,10 @@ def validate_rule(
     if len(set(declared)) != len(declared) or set(declared) != set(names):
         raise ValueError("rule_must_cover_every_output")
     by_name = {e["name"]: e for e in entries}
-    return {"schema": RULE_SCHEMA, "outputs": [by_name[n] for n in names]}
+    return {
+        "schema": RULE_SCHEMA,
+        "outputs": [by_name[n] for n in names if n in by_name],
+    }
 
 
 def rule_hash(rule: Mapping[str, Any]) -> str:

@@ -143,9 +143,24 @@ async def _artifacts(db: AsyncSession, run_id: Any) -> list[Any]:
     )
 
 
-async def _archived(rows: Sequence[Any]) -> tuple[dict[tuple[str, str], bytes], dict]:
+def _required(manifest: Mapping[str, Any] | None) -> list[str]:
+    """Every archived file a rerun restores or compares against."""
+    if manifest is None:
+        return []
+    return [
+        manifest_rules.CODE_NAME,
+        manifest_rules.LOCK_NAME,
+        *(str(i.get("name")) for i in manifest.get("inputs") or []),
+        *(str(o.get("name")) for o in manifest.get("outputs") or []),
+    ]
+
+
+async def _archived(
+    rows: Sequence[Any], required: Sequence[str]
+) -> tuple[dict[tuple[str, str], bytes], dict]:
     """Archived bytes by (role, name), re-hashed on read, and the
-    eligibility view ``name -> (exists, hash_ok)``."""
+    eligibility view ``name -> (exists, hash_ok)``; a required file with no
+    archived row is missing."""
     storage = get_artifact_storage()
     data: dict[tuple[str, str], bytes] = {}
     checks: dict[str, tuple[bool, bool]] = {}
@@ -157,6 +172,8 @@ async def _archived(rows: Sequence[Any]) -> tuple[dict[tuple[str, str], bytes], 
         checks[row.name] = (prior[0] and exists, prior[1] and ok)
         if ok:
             data[(str(row.role), str(row.name))] = cast(bytes, blob)
+    for name in required:
+        checks.setdefault(name, (False, False))
     return data, checks
 
 
@@ -172,7 +189,8 @@ async def _eligibility(
     db: AsyncSession, run: Any, blueprint: Any, manifest_row: Any
 ) -> list[str]:
     rows = await _artifacts(db, run.id)
-    _, checks = await _archived(rows)
+    manifest = None if manifest_row is None else manifest_row.manifest
+    _, checks = await _archived(rows, _required(manifest))
     return rules.eligibility(
         run_status=str(run.status),
         conformance=str(run.conformance_status),
@@ -766,7 +784,7 @@ async def execute_attempt(
         artifacts = await _artifacts(db, rerun.run_id)
         organization_id = artifacts[0].organization_id
         await db.commit()
-    data, checks = await _archived(artifacts)
+    data, checks = await _archived(artifacts, _required(manifest))
     corrupt = [
         f"artifact_corrupt:{name}"
         for name, (exists, ok) in sorted(checks.items())
