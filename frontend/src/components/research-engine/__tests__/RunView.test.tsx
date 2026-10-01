@@ -23,6 +23,10 @@ import { useResearchEngineStore } from '@/store/research-engine-store';
 import { APIErrorClass } from '@/types/api';
 import { RunView } from '../RunView';
 
+// GOO-312: the reproducibility section owns its own query; tested apart.
+vi.mock('../RunReproducibility', () => ({ RunReproducibility: () => null }));
+vi.mock('../RunRerun', () => ({ RunRerun: () => null }));
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ back: vi.fn() }),
 }));

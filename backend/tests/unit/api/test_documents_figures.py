@@ -73,23 +73,23 @@ def mock_organization():
 
 
 @pytest.fixture()
-def client(mock_user, mock_organization):
+def client(test_app, test_auth_headers, mock_user, mock_organization):
     @asynccontextmanager
     async def _no_lifespan(_app):
         yield
 
-    original_lifespan = app.router.lifespan_context
-    app.router.lifespan_context = _no_lifespan
+    original_lifespan = test_app.router.lifespan_context
+    test_app.router.lifespan_context = _no_lifespan
 
-    app.dependency_overrides[get_current_user] = lambda: mock_user
-    app.dependency_overrides[get_current_organization] = lambda: mock_organization
+    test_app.dependency_overrides[get_current_user] = lambda: mock_user
+    test_app.dependency_overrides[get_current_organization] = lambda: mock_organization
 
     try:
-        with TestClient(app) as c:
+        with TestClient(test_app, headers=test_auth_headers) as c:
             yield c
     finally:
-        app.dependency_overrides.clear()
-        app.router.lifespan_context = original_lifespan
+        test_app.dependency_overrides.clear()
+        test_app.router.lifespan_context = original_lifespan
 
 
 def _override_db(mock_db):
