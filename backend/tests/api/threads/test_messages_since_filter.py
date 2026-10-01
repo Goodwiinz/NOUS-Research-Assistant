@@ -20,7 +20,6 @@ from src.core.dependencies import get_current_user
 from src.models.chat_message import ChatMessage, MessageRole
 from src.services.threads.chat_service import ChatService
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -51,7 +50,9 @@ async def _seed_messages(db_session, thread, user, count: int = 3):
     return msgs
 
 
-async def test_since_filter_returns_only_newer(db_session, thread_factory, user_factory):
+async def test_since_filter_returns_only_newer(
+    db_session, thread_factory, user_factory
+):
     """``since=<ts>`` excludes the row at that timestamp and returns only strictly newer rows."""
     user = await user_factory()
     thread = await thread_factory(user=user)
@@ -92,12 +93,15 @@ async def test_no_since_returns_all(db_session, thread_factory, user_factory):
 # ---------------------------------------------------------------------------
 
 
-def test_route_accepts_since_query_param_and_forwards_to_service(test_app, monkeypatch):
+def test_route_accepts_since_query_param_and_forwards_to_service(
+    test_app, test_auth_headers, monkeypatch
+):
     """The route must accept ``?since=<iso>`` (no 422) and pass it through to the service."""
     received: dict = {}
 
-    async def fake_list_messages(thread_id, user_id, limit=100, offset=0,
-                                 before_id=None, since=None, order="asc"):
+    async def fake_list_messages(
+        thread_id, user_id, limit=100, offset=0, before_id=None, since=None, order="asc"
+    ):
         received["thread_id"] = thread_id
         received["since"] = since
         return [], 0
@@ -127,7 +131,7 @@ def test_route_accepts_since_query_param_and_forwards_to_service(test_app, monke
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app) as client:
+        with TestClient(test_app, headers=test_auth_headers) as client:
             tid = uuid4()
             since_iso = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
             resp = client.get(
