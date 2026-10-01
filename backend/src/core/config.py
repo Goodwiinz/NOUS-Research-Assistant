@@ -7,6 +7,7 @@ variables. Default values are only used for local development.
 
 import re
 from typing import Dict, List, Literal, Optional
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
@@ -141,6 +142,15 @@ class Settings(BaseSettings):
     ORCID_CLIENT_ID: str = ""
     ORCID_CLIENT_SECRET: str = ""
     ORCID_BASE_URL: str = "https://sandbox.orcid.org"
+
+    # GOO-318: archive deposits to the Zenodo sandbox. With no token the
+    # deposit request answers 503. The token is read only by the adapter and
+    # never logged or retained; the account label is the non-secret
+    # ``account_ref`` an approval binds (changing it voids every approval).
+    ZENODO_BASE_URL: str = "https://sandbox.zenodo.org/api"
+    ZENODO_SANDBOX_TOKEN: Optional[SecretStr] = None
+    ZENODO_ACCOUNT_LABEL: str = ""
+    ZENODO_SANDBOX_ONLY: bool = True
 
     # CORS Configuration (comma-separated string from env, parsed to list)
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
@@ -327,6 +337,15 @@ class Settings(BaseSettings):
     # flag. Default False preserves current behavior — flip to True to harden;
     # rollback is a flag flip, no logic redeploy. (audit D7)
     CLI_TOKEN_REVOCATION_FAIL_CLOSED: bool = False
+
+    @model_validator(mode="after")
+    def _zenodo_sandbox_only(self):
+        """GOO-318 enables the sandbox only; production Zenodo is out of scope."""
+        if self.ZENODO_SANDBOX_ONLY and (
+            urlsplit(self.ZENODO_BASE_URL).hostname != "sandbox.zenodo.org"
+        ):
+            raise ValueError("ZENODO_BASE_URL must be sandbox.zenodo.org")
+        return self
 
     @model_validator(mode="after")
     def _enforce_debug_off_in_prod(self):
