@@ -189,8 +189,125 @@
         "title": "ActionDecision",
         "type": "object"
       },
+      "ActionReview": {
+        "description": "What the interactive owner sees before deciding: the exact stored target.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "invocation_id": {
+            "format": "uuid",
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "project_available": {
+            "title": "Project Available",
+            "type": "boolean"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_label": {
+            "title": "Project Label",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "awaiting_approval",
+              "approved",
+              "executing",
+              "succeeded",
+              "failed",
+              "outcome_unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invocation_id",
+          "state",
+          "tool_name",
+          "project_id",
+          "project_label",
+          "project_available",
+          "title",
+          "content",
+          "tags",
+          "requested_at"
+        ],
+        "title": "ActionReview",
+        "type": "object"
+      },
       "ActionStatus": {
         "properties": {
+          "approval_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Url"
+          },
           "invocation_id": {
             "format": "uuid",
             "title": "Invocation Id",
@@ -34539,6 +34656,55 @@
           }
         ],
         "summary": "Decide",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/actions/{invocation_id}/review": {
+      "get": {
+        "operationId": "review_action_api_v1_integrations_actions__invocation_id__review_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionReview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Review Action",
         "tags": [
           "integrations",
           "integrations"
