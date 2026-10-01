@@ -33,8 +33,18 @@ from src.models.research_decision import ResearchDecisionStream
 from src.models.research_protocol import ResearchProtocol, ResearchProtocolVersion
 from src.services.research import claims_service, draft_release_service
 from src.services.research import extraction_forms_service as forms
+from src.services.research import peer_review_service
 from src.services.research.draft_generation_service import DraftGenerationService
-from src.services.research_engine import corpus_export, identity_service, prisma
+from src.services.research_engine import (
+    appraisal_service,
+    corpus_export,
+    evidence_service,
+    experiment_service,
+    identity_service,
+    prisma,
+    rerun_service,
+    synthesis_service,
+)
 from src.services.research_engine.contracts import canonical_json_sha256
 from src.services.research_engine.prisma_service import load_inputs
 from src.services.research_engine.project_access import (
@@ -47,6 +57,7 @@ SCHEMA = "nous.academic.audit-bundle.v1"
 METHODS_SCHEMA = "nous.academic.audit-methods.v1"
 EXTRACTION_SCHEMA = "nous.academic.audit-extraction.v1"
 RELEASE_CHECKS_SCHEMA = "nous.academic.release-checks.v1"
+MANUSCRIPT_RELEASES_SCHEMA = "nous.academic.manuscript-releases.v1"
 MANIFEST = "manifest.json"
 SUMS = "SHA256SUMS"
 _ZIP_TIME = (1980, 1, 1, 0, 0, 0)  # fixed: identical parts, identical members
@@ -287,14 +298,127 @@ async def _extraction(db: AsyncSession, context: ProjectContext) -> list[Part]:
     return [_sealed_part("extraction.json", EXTRACTION_SCHEMA, matrices, not matrices)]
 
 
+async def _appraisal(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-309's export with no viewer: only revealed results' rows."""
+    package = await appraisal_service.export_package(db, context, viewer_id=None)
+    body = package["body"]
+    return [
+        _sealed_part(
+            "appraisal.json", appraisal_service.EXPORT_SCHEMA, body, not body["results"]
+        )
+    ]
+
+
+async def _evidence(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-310's export: every table version, chain and certainty row."""
+    package = await evidence_service.export_package(db, context)
+    body = package["body"]
+    empty = not any(o["tables"] for o in body["outcomes"])
+    return [_sealed_part("evidence.json", evidence_service.EXPORT_SCHEMA, body, empty)]
+
+
+async def _synthesis(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-311's export: every result, failed and stale ones included."""
+    package = await synthesis_service.export_package(db, context)
+    body = package["body"]
+    return [
+        _sealed_part(
+            "synthesis.json",
+            synthesis_service.EXPORT_SCHEMA,
+            body,
+            not body["results"],
+        )
+    ]
+
+
+async def _experiments(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-312: every run manifest and figure version (no storage keys)."""
+    body = await experiment_service.export_body(db, context)
+    empty = not body["manifests"] and not body["figures"]
+    return [
+        _sealed_part("experiments.json", experiment_service.EXPORT_SCHEMA, body, empty)
+    ]
+
+
+async def _reproduction(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-313: every rerun with its rule, hash and attempts (no storage keys)."""
+    body = await rerun_service.export_body(db, context)
+    return [
+        _sealed_part(
+            "reproduction.json", rerun_service.EXPORT_SCHEMA, body, not body["reruns"]
+        )
+    ]
+
+
+async def _peer_review(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-314: every peer-review round with responses and decisions."""
+    body = await peer_review_service.export_body(db, context)
+    return [
+        _sealed_part(
+            "peer_review.json",
+            peer_review_service.EXPORT_SCHEMA,
+            body,
+            not body["rounds"],
+        )
+    ]
+
+
+async def _manuscript_releases(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-315: every manuscript release's snapshot, checks and package
+    hashes (never the package bytes). Local import: that service reuses
+    this module's writer."""
+    from src.services.research import manuscript_release_service
+
+    body = await manuscript_release_service.export_body(db, context)
+    return [
+        _sealed_part(
+            "manuscript-releases.json",
+            MANUSCRIPT_RELEASES_SCHEMA,
+            body,
+            not body["releases"],
+        )
+    ]
+
+
 async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
     """The builders, in a fixed order (looked up at call time). PRISMA reads
     last: without the caller's snapshot, ``load_inputs`` would open its own
     and expire ``context`` for every builder after it."""
     parts: list[Part] = []
-    for build in (_corpus, _claims, _drafts, _methods, _extraction, _prisma):
+    for build in (
+        _corpus,
+        _claims,
+        _drafts,
+        _methods,
+        _extraction,
+        _appraisal,
+        _evidence,
+        _synthesis,
+        _experiments,
+        _reproduction,
+        _peer_review,
+        _manuscript_releases,
+        _deposits,
+        _prisma,
+    ):
         parts.extend(await build(db, context))
     return parts
+
+
+async def _deposits(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-318: every archive deposit's attempt chain, derived status and
+    approvals (redacted rows; never a credential)."""
+    from src.services.research import deposit_service
+
+    body = await deposit_service.export_part(db, context)
+    return [
+        _sealed_part(
+            "deposits.json",
+            deposit_service.EXPORT_SCHEMA,
+            body,
+            not body["deposits"] and not body["approvals"],
+        )
+    ]
 
 
 async def _stream_heads(db: AsyncSession, cid: UUID) -> dict[str, int]:
@@ -338,15 +462,17 @@ def write_zip(
     deployment_sha: str | None,
     protocol_version_id: str | None,
     stream_heads: dict[str, int],
+    schema: str = SCHEMA,
 ) -> tuple[bytes, str]:
     """(zip, manifest sha256). Sorted members and a fixed timestamp, so
-    identical parts give identical member bytes (``generated_at`` aside)."""
+    identical parts give identical member bytes (``generated_at`` aside).
+    ``schema``: GOO-315's manuscript package reuses this writer."""
     paths = [p.path for p in parts]
     if len(set(paths)) != len(paths) or {MANIFEST, SUMS} & set(paths):
         raise ValueError("duplicate or reserved part path")
     manifest = _dump(
         {
-            "schema": SCHEMA,
+            "schema": schema,
             "project_id": project_id,
             "generated_at": generated_at,
             "deployment_sha": deployment_sha,
@@ -395,9 +521,11 @@ def _json(members: dict[str, bytes], path: str) -> Any:
         raise BundleError(f"{path} is missing or not JSON") from exc
 
 
-def verify_bundle(data: bytes) -> dict[str, Any]:
+def verify_bundle(data: bytes, *, schema: str = SCHEMA) -> dict[str, Any]:
     """Check SHA256SUMS, each part's body hash, the draft hashes against the
-    claims package and release checks, and GOO-300's corpus package (pure)."""
+    claims package and release checks, and GOO-300's corpus package (pure).
+    Another ``schema`` (GOO-315's manuscript package) gets the generic member
+    checks only: it has no claims, release-check or corpus part."""
     members = _read(data)
     sums: dict[str, str] = {}
     for line in members.get(SUMS, b"").decode().splitlines():
@@ -412,7 +540,7 @@ def verify_bundle(data: bytes) -> dict[str, Any]:
             raise BundleError(f"{path} does not match SHA256SUMS")
 
     manifest = _json(members, MANIFEST)
-    if manifest.get("schema") != SCHEMA:
+    if manifest.get("schema") != schema:
         raise BundleError("unsupported bundle schema")
     listed = {p["path"]: p for p in manifest["parts"]}
     if set(listed) != set(members) - {SUMS, MANIFEST}:
@@ -430,6 +558,12 @@ def verify_bundle(data: bytes) -> dict[str, Any]:
             body_sha = _sha(member)
         if entry["body_sha256"] != body_sha:
             raise BundleError(f"{path} body_sha256 does not match the manifest")
+    if schema != SCHEMA:
+        return {
+            "manifest_sha256": _sha(members[MANIFEST]),
+            "project_id": manifest["project_id"],
+            "parts": sorted(listed),
+        }
 
     claims = _json(members, "claims.json")["body"]
     checks = _json(members, "drafts/release-checks.json")["body"]

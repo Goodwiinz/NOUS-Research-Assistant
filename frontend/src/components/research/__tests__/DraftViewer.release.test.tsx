@@ -13,7 +13,11 @@ vi.mock('@/services/researchEngineService', () => ({
   listProjectRoles: vi.fn(),
 }));
 vi.mock('@/services/projectService', () => ({
-  projectService: { getDraftRelease: vi.fn(), promoteDraft: vi.fn() },
+  projectService: {
+    getDraftRelease: vi.fn(),
+    promoteDraft: vi.fn(),
+    listManuscriptReleases: vi.fn(),
+  },
 }));
 
 const draft: Draft = {
@@ -64,6 +68,9 @@ function withRole(role: 'adjudicator' | 'reviewer' | null): void {
 describe('DraftViewer release status (GOO-307)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(projectService.listManuscriptReleases).mockResolvedValue({
+      releases: [],
+    });
   });
 
   it('renders candidate badge by default', async () => {

@@ -5,10 +5,14 @@ Supports multiple citation formats:
 - IEEE
 - APA
 - MLA
+- CSL JSON and RIS reference files (GOO-317)
 """
 
+import json
+import re
+import unicodedata
 from io import StringIO
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import structlog
 
@@ -25,6 +29,90 @@ except ImportError:
 from src.models import Citation
 
 logger = structlog.get_logger()
+
+CSL_JSON_MIME = "application/vnd.citationstyles.csl+json"
+RIS_MIME = "application/x-research-info-systems"
+
+# GOO-317: record ``type`` -> (CSL type, RIS type). Anything else falls back
+# to the venue/identifier rules in ``_types`` and then to a generic
+# ``document``/``GEN`` record reported as ``type_unmapped``; never guessed.
+_TYPE_MAP: Dict[str, Tuple[str, str]] = {
+    "journal_article": ("article-journal", "JOUR"),
+    "article-journal": ("article-journal", "JOUR"),
+    "conference_paper": ("paper-conference", "CONF"),
+    "book": ("book", "BOOK"),
+    "chapter": ("chapter", "CHAP"),
+    "report": ("report", "RPRT"),
+    "thesis": ("thesis", "THES"),
+    "dataset": ("dataset", "DATA"),
+    "webpage": ("webpage", "ELEC"),
+    "preprint": ("article", "UNPB"),
+}
+_GENERIC = ("document", "GEN")
+_LINE_BREAKS = re.compile(r"[\r\n]+")
+
+
+def _get(record: Any, name: str) -> Any:
+    """One accessor for canonical records: ``SimpleNamespace`` (ad-hoc draft
+    exports) or a GOO-315 snapshot mapping. ``title`` reads either name."""
+    names = ("document_title", "title") if name == "title" else (name,)
+    for field in names:
+        value = (
+            record.get(field)
+            if isinstance(record, Mapping)
+            else getattr(record, field, None)
+        )
+        if isinstance(value, str):
+            value = unicodedata.normalize("NFC", value).strip()
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _authors(record: Any) -> List[Any]:
+    """Author entries in order. Strings stay whole (never split into
+    family/given: ``_canonical_author_names`` already flattened them, so a
+    split would be a guess). ``{family, given}`` mappings stay structured.
+    ``# ponytail: name parsing is out of scope; literals are lossless.``"""
+    out: List[Any] = []
+    for author in _get(record, "authors") or []:
+        if isinstance(author, Mapping):
+            name = {
+                k: unicodedata.normalize("NFC", str(author[k])).strip()
+                for k in ("family", "given")
+                if author.get(k)
+            }
+            if name:
+                out.append(name)
+        elif str(author).strip():
+            out.append(unicodedata.normalize("NFC", str(author)).strip())
+    return out
+
+
+def _types(record: Any) -> Tuple[str, str, Optional[str]]:
+    """(CSL type, RIS type, the unmapped raw type or ``None`` when mapped)."""
+    raw = _get(record, "type")
+    mapped = _TYPE_MAP.get(str(raw).lower()) if raw is not None else None
+    if mapped:
+        return mapped[0], mapped[1], None
+    if _get(record, "venue") and _get(record, "doi"):
+        return "article-journal", "JOUR", None
+    if _get(record, "arxiv_id") and not (_get(record, "venue") or _get(record, "doi")):
+        return "article", "UNPB", None
+    return _GENERIC[0], _GENERIC[1], str(raw) if raw is not None else None
+
+
+def _year(record: Any) -> Any:
+    year = _get(record, "year")
+    if isinstance(year, str) and year.isdigit():
+        return int(year)
+    return year
+
+
+def _checked_keys(records: Sequence[Any], keys: Sequence[str]) -> Sequence[str]:
+    if len(keys) != len(records):
+        raise ValueError("Reference keys must match the record count")
+    return keys
 
 
 class BibliographyService:
@@ -314,6 +402,117 @@ class BibliographyService:
         return "\n\n".join(lines)
 
     @staticmethod
+    def format_csl_json(records: Sequence[Any], keys: Sequence[str]) -> str:
+        """CSL JSON (CSL-data 1.0) for canonical records, ``id`` = ``docN``.
+
+        Only present fields are written; ``omissions`` lists the rest. No
+        abstract, no snippet: a missing title stays missing.
+        ``# ponytail: abstracts/keywords and citeproc rendering are out of
+        scope; add them here if a pilot asks.``
+        """
+        items = []
+        for record, key in zip(records, _checked_keys(records, keys)):
+            csl_type, _ris, _unmapped = _types(record)
+            item: Dict[str, Any] = {"id": key, "type": csl_type}
+            title = _get(record, "title")
+            if title:
+                item["title"] = title
+            authors = _authors(record)
+            if authors:
+                item["author"] = [
+                    a if isinstance(a, dict) else {"literal": a} for a in authors
+                ]
+            year = _year(record)
+            if year is not None:
+                item["issued"] = {"date-parts": [[year]]}
+            venue = _get(record, "venue")
+            if venue:
+                item["container-title"] = venue
+            doi = _get(record, "doi")
+            if doi:
+                item["DOI"] = doi
+            arxiv_id = _get(record, "arxiv_id")
+            if arxiv_id:
+                item["archive"] = "arXiv"
+                item["archive_location"] = str(arxiv_id)
+            items.append(item)
+        logger.info("bibliography_generated", format="csl-json", count=len(items))
+        return json.dumps(items, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+    @staticmethod
+    def format_ris(records: Sequence[Any], keys: Sequence[str]) -> str:
+        """RIS for canonical records: UTF-8 (no BOM), CRLF, NFC, ``ID`` = ``docN``."""
+
+        def line(tag: str, value: Any) -> str:
+            text = _LINE_BREAKS.sub(" ", str(value)).strip()
+            return f"{tag}  - {text}"
+
+        blocks = []
+        for record, key in zip(records, _checked_keys(records, keys)):
+            _csl, ris_type, _unmapped = _types(record)
+            lines = [line("TY", ris_type), line("ID", key)]
+            title = _get(record, "title")
+            if title:
+                lines.append(line("TI", title))
+            for author in _authors(record):
+                if isinstance(author, dict):
+                    author = ", ".join(
+                        author[k] for k in ("family", "given") if k in author
+                    )
+                lines.append(line("AU", author))
+            year = _year(record)
+            if year is not None:
+                lines.append(line("PY", year))
+            venue = _get(record, "venue")
+            if venue:
+                lines.append(line("T2", venue))
+                if ris_type == "JOUR":
+                    lines.append(line("JO", venue))
+            doi = _get(record, "doi")
+            if doi:
+                lines.append(line("DO", doi))
+            arxiv_id = _get(record, "arxiv_id")
+            if arxiv_id:
+                lines.append(line("AN", f"arXiv:{arxiv_id}"))
+            lines.append("ER  - ")
+            blocks.append("\r\n".join(lines) + "\r\n")
+        logger.info("bibliography_generated", format="ris", count=len(blocks))
+        return "\r\n".join(blocks)
+
+    @staticmethod
+    def omissions(records: Sequence[Any], keys: Sequence[str]) -> List[Dict[str, Any]]:
+        """Every field a CSL/RIS export leaves out, so nothing is silently
+        dropped: ``{key, field, reason: absent, value: None}`` for a missing
+        title, authors, year, venue or identifier (DOI and arXiv id), and
+        ``{key, field: type, reason: type_unmapped, value}`` for a generic
+        record."""
+        out: List[Dict[str, Any]] = []
+        for record, key in zip(records, _checked_keys(records, keys)):
+            csl_type, _ris, unmapped = _types(record)
+            if csl_type == _GENERIC[0]:
+                out.append(
+                    {
+                        "key": key,
+                        "field": "type",
+                        "reason": "type_unmapped",
+                        "value": unmapped,
+                    }
+                )
+            present = {
+                "title": _get(record, "title"),
+                "authors": _authors(record),
+                "year": _year(record),
+                "venue": _get(record, "venue"),
+                "identifier": _get(record, "doi") or _get(record, "arxiv_id"),
+            }
+            out += [
+                {"key": key, "field": field, "reason": "absent", "value": None}
+                for field, value in present.items()
+                if value in (None, "", [])
+            ]
+        return out
+
+    @staticmethod
     def format_bibliography(citations: List[Citation], format_type: str) -> str:
         """Format bibliography in specified format.
 
@@ -341,3 +540,12 @@ class BibliographyService:
             raise ValueError(
                 f"Unsupported format: {format_type}. Supported: bibtex, ieee, apa, mla"
             )
+
+
+# GOO-317: reference-file format -> (serializer, download filename, MIME).
+REFERENCE_FILES: Dict[
+    str, Tuple[Callable[[Sequence[Any], Sequence[str]], str], str, str]
+] = {
+    "csl-json": (BibliographyService.format_csl_json, "references.json", CSL_JSON_MIME),
+    "ris": (BibliographyService.format_ris, "references.ris", RIS_MIME),
+}

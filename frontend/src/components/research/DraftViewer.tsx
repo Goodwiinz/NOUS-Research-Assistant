@@ -16,6 +16,7 @@ import { WriterToolbar } from './WriterToolbar';
 import { InsertPreview } from './InsertPreview';
 import { OutlineDialog } from './OutlineDialog';
 import { DraftReleasePanel, ReleaseBadge } from './DraftReleasePanel';
+import { PeerReviewPanel, type PassageTarget } from './PeerReviewPanel';
 import { useDraftRelease } from '@/hooks/useDraftRelease';
 import { useBackendCapabilities } from '@/hooks/useBackendCapabilities';
 import type {
@@ -61,6 +62,8 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
   // Captured at click time: reading contentRef during render is not allowed.
   const [cursorContext, setCursorContext] = useState('');
   const [showOutlineDialog, setShowOutlineDialog] = useState(false);
+  // GOO-314: a peer-review "Old text / New text" link opens that version.
+  const [passage, setPassage] = useState<PassageTarget | null>(null);
   const capabilities = useBackendCapabilities(Boolean(projectId));
   const release = useDraftRelease(projectId, draft.id, draft.version);
 
@@ -225,6 +228,28 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
 
       {projectId && capabilities.draftRelease && (
         <DraftReleasePanel projectId={projectId} draft={draft} />
+      )}
+      {projectId && capabilities.draftRelease && (
+        <PeerReviewPanel
+          projectId={projectId}
+          draft={draft}
+          onOpenPassage={(target) => {
+            setPassage(target);
+            if (
+              target.version !== undefined &&
+              target.version !== draft.version
+            ) {
+              onVersionChange?.(target.version);
+            }
+          }}
+        />
+      )}
+      {passage && (
+        <p role="status" className="px-4 py-2 border-b border-border text-xs">
+          Passage
+          {passage.version !== undefined ? ` in v${passage.version}` : ''} (
+          {passage.start}–{passage.end}): “{passage.text}”
+        </p>
       )}
 
       {/* Themes */}

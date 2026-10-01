@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "description": "Canonical reference records (GOO-315 snapshot shape) for the GOO-317 CSL JSON and RIS exports. 'snippet' is the source citation's evidence snippet; it must never appear in an export.",
+  "records": [
+    {
+      "case": "journal",
+      "key": "doc1",
+      "type": "journal_article",
+      "title": "Ångström-scale imaging of cell membranes",
+      "authors": ["Zoë Ångström", "José Núñez", "Ada Lovelace"],
+      "year": 2021,
+      "venue": "Journal of Microscopy",
+      "doi": "10.1000/jm.2021.001",
+      "arxiv_id": null,
+      "snippet": "Membranes were imaged at sub-nanometre resolution."
+    },
+    {
+      "case": "corporate",
+      "key": "doc2",
+      "type": "report",
+      "title": "Global tuberculosis report",
+      "authors": ["World Health Organization"],
+      "year": null,
+      "venue": null,
+      "doi": null,
+      "arxiv_id": null,
+      "snippet": null
+    },
+    {
+      "case": "preprint",
+      "key": "doc3",
+      "type": null,
+      "title": "Attention is all you need",
+      "authors": ["Ashish Vaswani", "Noam Shazeer"],
+      "year": 2017,
+      "venue": null,
+      "doi": null,
+      "arxiv_id": "1706.03762",
+      "snippet": null
+    },
+    {
+      "case": "untitled_with_snippet",
+      "key": "doc4",
+      "type": "journal_article",
+      "title": null,
+      "authors": ["Grace Hopper"],
+      "year": 2019,
+      "venue": "Computing Surveys",
+      "doi": "10.1000/cs.2019.042",
+      "arxiv_id": null,
+      "snippet": "This evidence snippet must never become a title."
+    },
+    {
+      "case": "unknown_type",
+      "key": "doc5",
+      "type": "hologram",
+      "title": "A record of an unsupported type",
+      "authors": ["Alan Turing"],
+      "year": 1950,
+      "venue": null,
+      "doi": null,
+      "arxiv_id": null,
+      "snippet": null
+    },
+    {
+      "case": "cjk",
+      "key": "doc6",
+      "type": "book",
+      "title": "日本語の文献管理入門",
+      "authors": ["山田 太郎"],
+      "year": 2020,
+      "venue": "東京大学出版会",
+      "doi": "10.1000/jp.2020.7",
+      "arxiv_id": null,
+      "snippet": null
+    }
+  ]
+}
