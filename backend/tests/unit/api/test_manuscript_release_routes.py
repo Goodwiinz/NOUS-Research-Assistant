@@ -280,3 +280,48 @@ def test_no_outbound_http_in_service() -> None:
                 continue
             for name in names:
                 assert name.split(".")[0] not in banned, f"{path.name}: {name}"
+
+
+def test_promote_reevaluates_obligations_fresh(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The candidate's stored checks all pass, the rebuilt snapshot is equal,
+    but a fresh evaluation fails: promotion refuses (never trusts the row)."""
+    snapshot: dict[str, Any] = {"draft": {"id": str(uuid4())}, "x": 1}
+    passing = {key: {"state": "pass", "items": []} for key in rules.CHECK_KEYS}
+    candidate = SimpleNamespace(
+        id=uuid4(),
+        stage="candidate",
+        draft_id=uuid4(),
+        snapshot_hash=rules.snapshot_hash(snapshot),
+        content_hash="c" * 64,
+        checks=passing,
+    )
+
+    async def begin(*_: object, **__: object) -> tuple[str, str, None]:
+        return "promote:k", "f" * 64, None
+
+    async def returns(value: Any) -> Any:
+        return value
+
+    async def stale_inputs(*_: object) -> rules.CheckInputs:
+        return rules.CheckInputs("c" * 64)  # no live draft release
+
+    monkeypatch.setattr(svc, "_begin", begin)
+    monkeypatch.setattr(svc, "_release", lambda *_: returns(candidate))
+    monkeypatch.setattr(svc, "_verified_for", lambda *_: returns(None))
+    monkeypatch.setattr(svc, "_draft", lambda *_: returns(SimpleNamespace()))
+    monkeypatch.setattr(svc, "build_snapshot", lambda *_: returns(snapshot))
+    monkeypatch.setattr(svc, "check_inputs", stale_inputs)
+    harness.roles = frozenset({Role.ADJUDICATOR})
+    response = harness.client.post(
+        f"{_base()}/{candidate.id}/promote",
+        json={
+            "expected_snapshot_hash": candidate.snapshot_hash,
+            "expected_content_hash": candidate.content_hash,
+            "idempotency_key": KEY,
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["failing"] == ["claim_support", "method_adherence"]
+    harness.db.commit.assert_not_awaited()

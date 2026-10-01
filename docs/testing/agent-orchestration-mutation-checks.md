@@ -2031,3 +2031,64 @@ so the mutant neutralizes both; either layer alone refuses the owner (by constru
 Not performed: a real journal review import (no pilot round exists; the
 proof uses a synthetic round) and the live journey (needs a deployed stack
 at `d2a4c6e8f0b1`).
+
+## GOO-315 immutable candidate and verified manuscript releases — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_manuscript_release_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `e4c6a8b0d2f3`
+(connection URL from the environment; value omitted). `manuscript_releases`,
+its CHECKs, `UNIQUE(candidate_release_id)` and the insert-only trigger come
+from the migration. Every write goes through the real `resolve_project` and
+the real service; the concurrent promotion in step 2 is two sessions under
+`asyncio.gather`. Package bytes go to a temporary `LocalArtifactStorage`.
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty (and the SHA-256 below matches).
+
+The rules (9), ledger (103), route (7) and proof (1) tests passed again
+after every restore. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/manuscript_release_service.py`
+  `8b4a352b00b7fc328d6729cdc7967b589a50d707a1dfca82052a0f8b1d5d1fa5`
+- `backend/src/services/research/manuscript_rules.py`
+  `a889507aaa3ece161870f75a580897f50d3c2390aa2d4d8b1eeb2bb662bd4e1d`
+- `backend/alembic/versions/e4c6a8b0d2f3_create_manuscript_releases.py`
+  `47af4e3d09cec7c4794047be12248fa54d75da0516b5978706651edfd1fccea9`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_manuscript_rules.py -k claim_support   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/api/test_manuscript_release_routes.py -k reevaluates   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_manuscript_release_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Fresh re-evaluation at promotion (`manuscript_release_service.py:905`) | `checks = candidate.checks` (trust the stored checks) | `-k reevaluates` (`test_manuscript_release_routes.py:325`): `assert 500 == 409`; a candidate whose stored checks pass, with an equal rebuilt snapshot but no live draft release, is not refused. |
+| Snapshot rebuild equality (`manuscript_release_service.py:903`) | `if False:` | Proof step 5 (`:485`): `ObligationsNotMet` instead of the 409 `Candidate is stale; rebuild`; the stale candidate C reaches the obligation check. |
+| Live `draft_release` same-hash rule (`manuscript_rules.py:121`) | the `content_hash` comparison removed (any live release for the draft passes) | `-k claim_support` (`test_manuscript_rules.py:56`): `'pass' == 'fail'`; another version's release passes. |
+| Existing-verified check (`manuscript_release_service.py:898`) plus `UNIQUE(candidate_release_id)` (`e4c6a8b0d2f3:100`) | `existing = None` and the unique constraint removed from the migration | Proof step 2 (`:404`): `[False, False] == [False, True]`; both concurrent promotions insert a verified row for candidate B. |
+| Snapshotted references (`manuscript_release_service.py:1026`) | `verify` rebuilds `references.bib` from the live `Citation`/`Document` rows | Proof step 4 (`:451`): `references_ok` is false after the citation title edit; B's package no longer reconciles with its snapshot. |
+
+Backstop and masking checks (not failing mutants, by design):
+
+- With only the existing-verified check removed, the
+  `UNIQUE(candidate_release_id)` hit is mapped to the winner (replayed) and
+  the proof passes; the constraint alone keeps one verified row.
+- With only "trust the stored checks" applied, the PostgreSQL proof passes:
+  the snapshot binds every obligation input it can (the live draft release
+  id, claim ids, runs, deviations, open review comments), so any change to
+  them makes the rebuilt snapshot differ and step 5's stale refusal fires
+  first. The focused route test isolates the fresh re-evaluation.
+
+Not performed: the methods-expert signoff on the obligation set (none is
+available), a GOO-311 synthesis link in the proof (the synthesis seed needs a
+full evidence-table chain; the synthesis snapshot and package paths are
+covered only by review), and the live journey (needs a deployed stack at
+`e4c6a8b0d2f3`).
