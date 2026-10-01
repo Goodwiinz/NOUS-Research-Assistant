@@ -122,6 +122,7 @@ class FakeProvider(SourceConnector):
         self.searches = 0
         self.notices: dict[str, list[dict[str, Any]]] = {}
         self.notice_fail = False
+        self.notice_crash = False
         self.notice_calls: list[list[str]] = []
 
     async def search(
@@ -148,6 +149,8 @@ class FakeProvider(SourceConnector):
 
     async def update_notices(self, dois: list[str]) -> dict[str, list[dict]]:
         self.notice_calls.append(list(dois))
+        if self.notice_crash:
+            raise Crash()
         if self.notice_fail:
             raise RuntimeError("crossref outage")
         return {doi: list(self.notices.get(doi, [])) for doi in dois}
@@ -556,9 +559,26 @@ async def test_schedule_claims_once_classifies_and_survives_restart(
     pubmed.docs = [_pubmed("900", "Unrelated one"), _pubmed("901", "Unrelated two")]
     pubmed.has_more = True
     crossref.notices = {DOI["a"]: [NOTICE]}
-    assert await _run(w, exec1, real + timedelta(minutes=31)) == "succeeded"
+
+    def later() -> datetime:
+        return datetime.now(timezone.utc) + timedelta(minutes=31)
+
+    # The second attempt dies after its import committed: the third reuses
+    # that receipt (dedup_key per execution) and never searches again.
+    crossref.notice_crash = True
+    with pytest.raises(Crash):
+        await _run(w, exec1, later())
+    searches = crossref.searches
+    scheduled = (
+        "SELECT count(*) FROM research_import_receipts WHERE kind = 'scheduled_search'"
+    )
+    assert await _scalar(factory, scheduled) == 1
+    crossref.notice_crash = False
+    assert await _run(w, exec1, later()) == "succeeded"
+    assert crossref.searches == searches
+    assert await _scalar(factory, scheduled) == 1
     attempts = await _attempts(w, exec1)
-    assert [a[0] for a in attempts] == ["started", "started", "succeeded"]
+    assert [a[0] for a in attempts] == ["started", "started", "started", "succeeded"]
 
     # 6. Classified delta against the explicit baseline.
     delta = await _delta(w, exec1)
