@@ -26,9 +26,10 @@ executes first on the inbound path and last on the outbound path.
    enumerated. Preflight responses are cached for `CORS_MAX_AGE` (24 h by
    default).
 
-`RBACMiddleware`, `AuditMiddleware`, `EncryptionMiddleware`, and
+`AuditMiddleware`, `EncryptionMiddleware`, and
 `APISecurityMiddleware` are implemented in this package but are not currently
-wired into `main.py`.
+wired into `main.py`. (`RBACMiddleware` was removed in audit I12 — it was
+never mounted and its decorators were broken; see `rbac.py` below.)
 
 ## Key files
 
@@ -38,7 +39,7 @@ wired into `main.py`.
 | `multi_tenancy.py`         | `MultiTenancyMiddleware`                                                  | JWT decode → DB org lookup → JIT user provisioning. Sets `tenant_context`, `user_context`, `role_context` ContextVars used by RBAC helpers. Includes PostgreSQL RLS helpers and `TenantAwareQuery` for service-layer tenant isolation.                                                                      |
 | `rate_limiting.py`         | `AnalyticsRateLimitMiddleware`, `RedisRateLimiter`, `InMemoryRateLimiter` | Sliding-window rate limiting for analytics endpoints. Redis-backed when available; in-memory deque as fallback. Emits standard `X-RateLimit-*` headers.                                                                                                                                                     |
 | `api_security.py`          | `APISecurityMiddleware`                                                   | Regex-based pattern matching for SQL injection, XSS, path traversal, and command injection in URLs, headers, and JSON/form bodies. Also does IP blocking (in-memory), per-IP request anomaly detection, and logs security events. Body size limit 50 MB. _Not currently registered._                        |
-| `rbac.py`                  | `RBACMiddleware`, `require_permission`, `require_role`                    | Pattern-matched endpoint → permission mapping; 5-minute in-process permission cache. Decorators (`require_permission`, `require_any_permission`, `require_role`) for handler-level checks. _Not currently registered._                                                                                      |
+| `rbac.py`                  | `require_permission_dep`                                                  | FastAPI dependency enforcing a named permission via `RBACService` with the request-scoped sync session (401 unauthenticated, 403 missing permission). Used by the compliance, RBAC-management, and encryption routers. Audit I12 removed the never-mounted `RBACMiddleware` class and the broken `@require_*` decorators (they called `RBACService()` with no session → always 403). |
 | `audit.py`                 | `AuditMiddleware`                                                         | Full request/response audit trail via `AuditService`. Masks `Authorization`, `Cookie`, and `X-API-Key` headers; redacts auth path bodies. _Not currently registered._                                                                                                                                       |
 | `encryption_middleware.py` | `EncryptionMiddleware`                                                    | Field-level encryption of sensitive request fields (SSN, API keys, passwords, etc.) and PII masking in responses. _Not currently registered._                                                                                                                                                               |
 | `file_upload_security.py`  | `FileUploadSecurityService`                                               | Not a Starlette middleware; injected per-endpoint. ClamAV virus scan, magic-byte MIME validation, archive-bomb detection (zip/tar/rar), EXIF stripping, and content scanning for PII patterns.                                                                                                              |
