@@ -46,7 +46,7 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
   }
   if (session.actions) {
     // Requests only: approval stays a browser action the model cannot take.
-    const actions = new ActionHttpClient(session.apiOrigin, credentials);
+    const actions = new ActionHttpClient(session.apiOrigin, credentials, keeper.fetch);
     local.push(requestActionTool(actions), actionStatusTool(actions));
   }
   const server = createNousMcpServer(
