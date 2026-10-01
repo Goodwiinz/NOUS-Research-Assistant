@@ -17,6 +17,7 @@ import {
   type UseMutationResult,
 } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
+import { useBackendCapabilities } from '@/hooks/useBackendCapabilities';
 import { draftClaimsQueryKey, useDraftClaims } from '@/hooks/useDraftClaims';
 import { projectService } from '@/services/projectService';
 import type { ResearchProjectRole } from '@/services/researchEngineService';
@@ -478,6 +479,7 @@ export function DraftClaimsPanel({
   roles?: ResearchProjectRole[];
   canEdit?: boolean;
 }): ReactElement | null {
+  const capabilities = useBackendCapabilities();
   const claims = useDraftClaims(projectId, draftId);
   const authoring = canEdit && content !== undefined;
   const adjudicator = authoring && (roles ?? []).includes('adjudicator');
@@ -487,7 +489,7 @@ export function DraftClaimsPanel({
     enabled: authoring,
     retry: false,
   });
-  if (!claims.data) return null;
+  if (!capabilities.draftClaims || !claims.data) return null;
   const { items, counts } = claims.data;
   return (
     <section

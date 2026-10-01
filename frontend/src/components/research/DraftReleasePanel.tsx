@@ -8,6 +8,7 @@
  */
 
 import React from 'react';
+import { useBackendCapabilities } from '@/hooks/useBackendCapabilities';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
@@ -71,10 +72,12 @@ export const DraftReleasePanel: React.FC<DraftReleasePanelProps> = ({
   projectId,
   draft,
 }) => {
+  const capabilities = useBackendCapabilities();
   const userId = useAuth().user?.id;
   const queryClient = useQueryClient();
   const release = useDraftRelease(projectId, draft.id, draft.version);
   const { data: roles } = useQuery({
+    enabled: capabilities.draftRelease,
     queryKey: ['project', projectId, 'research-engine', 'roles'],
     queryFn: () => listProjectRoles(projectId),
     retry: false,
@@ -99,6 +102,8 @@ export const DraftReleasePanel: React.FC<DraftReleasePanelProps> = ({
   const status = release.data?.release_status;
   const cause = release.data?.invalidation?.cause;
   const blockers = blockersFrom(promote.error) ?? release.data?.blockers ?? [];
+
+  if (!capabilities.draftRelease) return null;
 
   return (
     <div className="px-4 py-2 border-b border-border space-y-2">
