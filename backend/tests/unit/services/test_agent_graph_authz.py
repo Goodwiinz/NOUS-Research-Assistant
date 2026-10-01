@@ -126,29 +126,39 @@ def _client(app) -> TestClient:
 
 class TestGraphTrace:
     def test_graph_trace_returns_404_for_non_owner(self):
-        """Non-owner gets 404 because ownership query returns None."""
+        """No access through workspace_access.get_thread → 404."""
         user = _make_mock_user("user-aaa")
-        db = _make_mock_db(thread_result=None)
+        db = _make_mock_db()
         app = _build_app(user, db)
 
         valid_thread_id = str(uuid4())
-        with _client(app) as c:
-            resp = c.get(f"/api/v1/agent/graph/trace/{valid_thread_id}")
+        with patch(
+            "src.api.agent.execute.workspace_access.get_thread",
+            new=AsyncMock(return_value=None),
+        ) as get_thread:
+            with _client(app) as c:
+                resp = c.get(f"/api/v1/agent/graph/trace/{valid_thread_id}")
 
         assert resp.status_code == 404
+        assert get_thread.await_args.args[2] == user.id
 
     def test_graph_trace_returns_200_for_owner(self):
         """Owner gets 200 and a mermaid diagram."""
         user = _make_mock_user("user-aaa")
-        owned_thread = Mock()  # non-None → owned
-        db = _make_mock_db(thread_result=owned_thread)
+        db = _make_mock_db()
         app = _build_app(user, db)
 
         valid_thread_id = str(uuid4())
 
-        with patch(
-            "src.services.agent.visualization.get_execution_trace_mermaid",
-            new=AsyncMock(return_value="sequenceDiagram\nAlice->>Bob: hello"),
+        with (
+            patch(
+                "src.services.agent.visualization.get_execution_trace_mermaid",
+                new=AsyncMock(return_value="sequenceDiagram\nAlice->>Bob: hello"),
+            ),
+            patch(
+                "src.api.agent.execute.workspace_access.get_thread",
+                new=AsyncMock(return_value=Mock()),
+            ),
         ):
             with _client(app) as c:
                 resp = c.get(f"/api/v1/agent/graph/trace/{valid_thread_id}")

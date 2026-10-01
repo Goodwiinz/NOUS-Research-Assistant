@@ -12,6 +12,7 @@ Router-only schemas (job start/status, confirmation, thread listing) stay in
 ``execute.py`` — nothing below the API layer needs them.
 """
 
+import json
 from typing import Annotated, Any, Dict, List, Literal, Optional, get_args
 from uuid import UUID
 
@@ -49,22 +50,67 @@ class AgentMessage(BaseModel):
         return v
 
 
+# R8-D4: page context is copied into the job cache (L1 + Redis) and the
+# Celery message, so it is bounded at the wire. String caps stay at or below
+# the sanitizer's 400-char field cap, which keeps a sanitized copy valid here.
+PAGE_CONTEXT_METADATA_MAX_BYTES = 8192
+PAGE_CONTEXT_METADATA_MAX_DEPTH = 8
+
+
+def _nested_deeper_than(value: Any, limit: int) -> bool:
+    """True when containers nest more than *limit* levels below *value*.
+
+    Recursion stops at *limit*, so a hostile payload cannot exhaust the stack.
+    """
+    if isinstance(value, dict):
+        children: Any = value.values()
+    elif isinstance(value, list):
+        children = value
+    else:
+        return False
+    if limit == 0:
+        return True
+    return any(_nested_deeper_than(child, limit - 1) for child in children)
+
+
 class PageContextRequest(BaseModel):
-    type: str = Field(default="unknown", description="Page context type")
+    type: str = Field(default="unknown", max_length=64, description="Page context type")
     workspace_id: Optional[UUID] = Field(
         default=None,
         description="Active chat workspace for durable thread creation",
     )
     project_id: Optional[str] = Field(
-        default=None, description="Project ID if on project page"
+        default=None, max_length=255, description="Project ID if on project page"
     )
     project_name: Optional[str] = Field(
-        default=None, description="Project name for display"
+        default=None, max_length=255, description="Project name for display"
     )
     label: Optional[str] = Field(
-        default=None, description="Current page label (e.g., 'Documents', 'Notes')"
+        default=None,
+        max_length=255,
+        description="Current page label (e.g., 'Documents', 'Notes')",
     )
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Free-form page metadata; at most 8 KB as compact JSON and 8 "
+            "levels of nesting"
+        ),
+    )
+
+    @field_validator("metadata")
+    @classmethod
+    def _bounded_metadata(
+        cls, value: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return value
+        if _nested_deeper_than(value, PAGE_CONTEXT_METADATA_MAX_DEPTH):
+            raise ValueError("metadata is nested too deeply")
+        encoded = json.dumps(value, separators=(",", ":"), default=str)
+        if len(encoded.encode("utf-8")) > PAGE_CONTEXT_METADATA_MAX_BYTES:
+            raise ValueError("metadata is too large")
+        return value
 
 
 SupportedModel = Literal["", "model-router", "gpt-5-mini", "gpt-5.6-luna"]

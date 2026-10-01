@@ -16236,6 +16236,7 @@
           "label": {
             "anyOf": [
               {
+                "maxLength": 255,
                 "type": "string"
               },
               {
@@ -16255,11 +16256,13 @@
                 "type": "null"
               }
             ],
+            "description": "Free-form page metadata; at most 8 KB as compact JSON and 8 levels of nesting",
             "title": "Metadata"
           },
           "project_id": {
             "anyOf": [
               {
+                "maxLength": 255,
                 "type": "string"
               },
               {
@@ -16272,6 +16275,7 @@
           "project_name": {
             "anyOf": [
               {
+                "maxLength": 255,
                 "type": "string"
               },
               {
@@ -16284,6 +16288,7 @@
           "type": {
             "default": "unknown",
             "description": "Page context type",
+            "maxLength": 64,
             "title": "Type",
             "type": "string"
           },
@@ -30944,7 +30949,7 @@
     },
     "/api/v1/agent/threads": {
       "get": {
-        "description": "List threads for the current user, ordered by most recently updated.",
+        "description": "List agent threads the caller can reach, most recently updated first.",
         "operationId": "list_agent_threads_api_v1_agent_threads_get",
         "responses": {
           "200": {

@@ -67,10 +67,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, Optional, TypeVar, cast
 from uuid import UUID, uuid4
 
 from asyncpg.exceptions import ConnectionDoesNotExistError
@@ -594,6 +594,26 @@ async def request_run_cancellation(
         status=current_status,
         claimed=False,
     )
+
+
+_T = TypeVar("_T")
+
+
+async def commit_cancellation(db: AsyncSession, claim: Awaitable[_T]) -> _T:
+    """Own a Stop route's one transaction: await the claim, then commit.
+
+    ``request_run_cancellation`` and ``abandon_awaiting_submission`` never
+    commit, so the claim and its ledger event share one transaction. This is
+    that transaction's boundary; any failure rolls the session back and
+    re-raises, which keeps commit/rollback out of the router.
+    """
+    try:
+        result = await claim
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return result
 
 
 async def fail_queued_submission(
