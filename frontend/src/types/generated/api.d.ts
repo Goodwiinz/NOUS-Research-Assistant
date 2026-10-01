@@ -16418,6 +16418,10 @@ export interface components {
         ManuscriptReleaseResponse: {
             /** Actor Role */
             actor_role: string;
+            /** Anonymized Files */
+            anonymized_files?: components["schemas"]["PackageFile"][] | null;
+            /** Anonymized Sha256 */
+            anonymized_sha256?: string | null;
             /** Candidate Release Id */
             candidate_release_id?: string | null;
             /** Checks */

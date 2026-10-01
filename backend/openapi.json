@@ -13908,6 +13908,31 @@
             "title": "Actor Role",
             "type": "string"
           },
+          "anonymized_files": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PackageFile"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anonymized Files"
+          },
+          "anonymized_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anonymized Sha256"
+          },
           "candidate_release_id": {
             "anyOf": [
               {

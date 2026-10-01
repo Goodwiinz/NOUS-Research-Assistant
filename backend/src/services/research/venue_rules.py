@@ -55,7 +55,7 @@ REDACTED = "[redacted]"
 # would redact ordinary words); full names, emails and ids are far longer.
 MIN_IDENTITY = 3
 
-_ORCID = re.compile(r"^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$")
+ORCID_PATTERN = re.compile(r"^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$")
 _DOC = re.compile(r"\[Doc (\d+)\]")
 _HEADING = re.compile(r"^(#{1,3})\s")
 _ACK = re.compile(r"^#{1,3}\s*Acknowledg", re.IGNORECASE)
@@ -107,7 +107,9 @@ def _author(raw: Any, index: int) -> dict[str, Any]:
         except ValueError as error:
             raise StatementError(f"{field}.user_id", "must be a UUID") from error
     orcid = raw.get("orcid")
-    if orcid is not None and (not isinstance(orcid, str) or not _ORCID.match(orcid)):
+    if orcid is not None and (
+        not isinstance(orcid, str) or not ORCID_PATTERN.match(orcid)
+    ):
         raise StatementError(f"{field}.orcid", "must look like 0000-0000-0000-000X")
     roles = raw.get("credit_roles")
     if roles is not None:

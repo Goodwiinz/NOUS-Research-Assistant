@@ -15,6 +15,15 @@ a failed transaction deletes them (nothing committed cites them). Claim
 support is GOO-307's: it is read from the live ``draft_releases`` row, never
 re-checked here. Nothing here talks to the network: packaging never
 authorizes an external submission.
+
+GOO-316: the snapshot captures the current statement set (id, hash,
+approvals) when one exists; every new candidate also stores an
+``anonymized`` package variant whose every member is byte-scanned for every
+identity string (a leak fails the build); a statement-bound candidate gets
+an automatic venue check, and verified promotion requires ``statements`` and
+``venue`` for that exact package hash. ``package_files`` is a list for
+GOO-315 rows and ``{identified, anonymized, anonymized_sha256,
+anonymized_storage_key}`` for new rows.
 """
 
 import hashlib
@@ -34,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.draft_release import DraftRelease
 from src.models.generated_draft import GeneratedDraft
 from src.models.manuscript_release import ManuscriptRelease
+from src.models.manuscript_statements import VenueCheck
 from src.models.research_claim import ResearchClaimEvidenceLink
 from src.models.research_experiment import (
     ResearchFigure,
@@ -46,7 +56,12 @@ from src.models.research_synthesis import SynthesisResult
 from src.services.artifacts.storage import get_artifact_storage
 from src.services.research import claim_rules, draft_release_service
 from src.services.research import manuscript_rules as rules
-from src.services.research import peer_review_service, release_rules
+from src.services.research import (
+    peer_review_service,
+    release_rules,
+    statements_service,
+    venue_rules,
+)
 from src.services.research.bibliography_service import BibliographyService
 from src.services.research.draft_generation_service import DraftGenerationService
 from src.services.research_decisions import (
@@ -75,21 +90,27 @@ from src.services.research_engine.project_access import ProjectContext
 from src.services.research_engine.screening_service import _is_unique_violation
 from src.shared.manuscript_release_schemas import (
     CandidateCreate,
+    CheckResult,
     ManuscriptReleaseListResponse,
     ManuscriptReleaseResponse,
     MemberCheck,
+    PackageFile,
+    PackageVariant,
     PromoteRequest,
     ReferenceMapping,
     ReleaseVerification,
 )
+from src.shared.statements_schemas import VenueCheckCreate, VenueCheckResponse
 
 AGGREGATE_TYPE = "research_manuscript"
 SUBJECT_TYPE = "manuscript_release"
 CHECKS_SCHEMA = "nous.manuscript-checks/1"
 LINEAGE_SCHEMA = "nous.manuscript-figure-lineage/1"
+ANONYMIZATION_LEAK = "anonymization_leak"
 
 DRAFT_NOT_FOUND = "Draft not found"
 RELEASE_NOT_FOUND = "Release not found"
+NO_ANONYMIZED = "This release has no anonymized variant"
 CONTENT_CHANGED = "Draft content changed; reload"
 CANDIDATE_CHANGED = "Candidate changed; reload"
 CANDIDATE_STALE = "Candidate is stale; rebuild"
@@ -124,8 +145,22 @@ async def _all(db: AsyncSession, statement: Any) -> list[Any]:
     return list((await db.execute(statement)).scalars().all())
 
 
-def storage_key(organization_id: Any, release_id: Any) -> str:
-    return f"artifacts/{organization_id}/manuscript-releases/{release_id}/package.zip"
+def storage_key(organization_id: Any, release_id: Any, variant: str = "") -> str:
+    name = "package.zip" if not variant else f"package.{variant}.zip"
+    return f"artifacts/{organization_id}/manuscript-releases/{release_id}/{name}"
+
+
+def variants(row: Any) -> tuple[list[Any], dict[str, Any] | None]:
+    """(identified files, the anonymized variant record or None). GOO-315
+    rows store a plain list and have no anonymized variant."""
+    files = row.package_files
+    if isinstance(files, list):
+        return list(files), None
+    return list(files["identified"]), {
+        "files": list(files["anonymized"]),
+        "sha256": files["anonymized_sha256"],
+        "storage_key": files["anonymized_storage_key"],
+    }
 
 
 # --- Snapshot (reads only) ---
@@ -354,7 +389,7 @@ async def build_snapshot(
         else []
     )
     prisma_state, prisma_package = await _prisma(db, collection_id)
-    return {
+    snapshot: dict[str, Any] = {
         "schema": rules.SNAPSHOT_SCHEMA,
         "draft": {
             "id": str(draft.id),
@@ -397,14 +432,25 @@ async def build_snapshot(
             db, collection_id, cast(UUID, draft.id)
         ),
     }
+    # GOO-316: absent (not null) without a statement set, so a GOO-315
+    # snapshot rebuilds to the same hash.
+    statements = await statements_service.snapshot_binding(db, collection_id)
+    if statements is not None:
+        snapshot["statements"] = statements
+    return snapshot
 
 
 async def check_inputs(
-    db: AsyncSession, context: ProjectContext, snapshot: Mapping[str, Any]
+    db: AsyncSession,
+    context: ProjectContext,
+    snapshot: Mapping[str, Any],
+    packaged: Any = None,
 ) -> rules.CheckInputs:
     """Fresh inputs for ``manuscript_rules.evaluate``: GOO-307's live release
     and blockers, protocol amendments, synthesis/appraisal currency and
-    peer-review rounds are read now; the rest comes from the snapshot."""
+    peer-review rounds are read now; the rest comes from the snapshot.
+    GOO-316: the bound set's approvals and ``packaged``'s venue checks (none
+    before packaging) are read now too."""
     collection_id = _cid(context)
     draft_ref = snapshot["draft"]
     draft = await _draft(db, collection_id, UUID(draft_ref["id"]))
@@ -450,6 +496,26 @@ async def check_inputs(
                 s.value in ("agreed", "adjudicated") for s in statuses.values()
             )
     rounds = await peer_review_service.list_rounds(db, context)
+    binding = snapshot.get("statements")
+    unapproved: tuple[str, ...] = ()
+    venue: tuple[rules.VenueIn, ...] = ()
+    if binding:
+        unapproved = await statements_service.unapproved_authors(db, binding)
+    if binding and packaged is not None:
+        venue = tuple(
+            rules.VenueIn(
+                str(v.id),
+                str(v.package_sha256),
+                int(v.profile_version),
+                str(v.status),
+                tuple(
+                    name
+                    for name, state in (v.result.get("rules") or {}).items()
+                    if state != "pass"
+                ),
+            )
+            for v in await statements_service.venue_checks_for(db, packaged.id)
+        )
     return rules.CheckInputs(
         content_hash=draft_ref["content_hash"],
         draft_release=release,
@@ -481,6 +547,10 @@ async def check_inputs(
             for f in snapshot["figures"]
         ),
         prisma=snapshot["prisma_state"],
+        statements_bound=bool(binding),
+        unapproved_authors=unapproved,
+        package_sha256=None if packaged is None else packaged.package_sha256,
+        venue_checks=venue,
     )
 
 
@@ -533,6 +603,15 @@ async def _parts(
         audit_bundle._sealed_part("checks.json", CHECKS_SCHEMA, dict(checks), False),
         *await audit_bundle._methods(db, context),
     ]
+    if snapshot.get("statements"):
+        parts.append(
+            audit_bundle._sealed_part(
+                "statements.json",
+                venue_rules.STATEMENTS_PART_SCHEMA,
+                await statements_service.package_body(db, snapshot["statements"]),
+                False,
+            )
+        )
     if snapshot["prisma_state"] == "consistent":
         _state, package = await _prisma(db, collection_id)
         parts.append(audit_bundle._package_part("prisma-flow.json", package, False))
@@ -600,8 +679,15 @@ async def graph_part(
 
 
 def _response(
-    row: Any, status: str = "candidate", cause: str | None = None
+    row: Any,
+    status: str = "candidate",
+    cause: str | None = None,
+    venue: Mapping[str, Any] | None = None,
 ) -> ManuscriptReleaseResponse:
+    """``venue``: GOO-316's live venue state for a statement-bound row (the
+    stored candidate checks predate its package, so theirs is ``unknown``)."""
+    checks = dict(row.checks) if venue is None else {**row.checks, "venue": venue}
+    _files, anonymized = variants(row)
     response = cast(
         ManuscriptReleaseResponse, ManuscriptReleaseResponse.model_validate(row)
     )
@@ -611,18 +697,72 @@ def _response(
             update={
                 "status": status,
                 "stale_cause": cause,
-                "failing_obligations": rules.failing_obligations(row.checks),
+                "checks": {k: CheckResult.model_validate(v) for k, v in checks.items()},
+                "failing_obligations": rules.failing_obligations(
+                    checks, rules.obligations(row.snapshot)
+                ),
+                "anonymized_files": (
+                    None
+                    if anonymized is None
+                    else [PackageFile.model_validate(f) for f in anonymized["files"]]
+                ),
+                "anonymized_sha256": (
+                    None if anonymized is None else anonymized["sha256"]
+                ),
             }
         ),
     )
 
 
+async def _venue_states(
+    db: AsyncSession, rows: Sequence[Any]
+) -> dict[Any, dict[str, Any]]:
+    """The live ``venue`` result of each statement-bound row, evaluated on
+    the candidate's venue checks for the row's exact package hash."""
+    bound = [r for r in rows if r.snapshot.get("statements")]
+    if not bound:
+        return {}
+    checked = [r.candidate_release_id or r.id for r in bound]
+    by_release: dict[Any, list[Any]] = {}
+    for check in await _all(
+        db,
+        select(VenueCheck)
+        .where(VenueCheck.release_id.in_(checked))
+        .order_by(VenueCheck.created_at, VenueCheck.id),
+    ):
+        by_release.setdefault(check.release_id, []).append(check)
+    out = {}
+    for row in bound:
+        inputs = rules.CheckInputs(
+            content_hash=row.content_hash,
+            statements_bound=True,
+            package_sha256=row.package_sha256,
+            venue_checks=tuple(
+                rules.VenueIn(
+                    str(v.id),
+                    str(v.package_sha256),
+                    int(v.profile_version),
+                    str(v.status),
+                    tuple(
+                        name
+                        for name, state in (v.result.get("rules") or {}).items()
+                        if state != "pass"
+                    ),
+                )
+                for v in by_release.get(row.candidate_release_id or row.id, [])
+            ),
+        )
+        out[row.id] = rules.evaluate(inputs)["venue"]
+    return out
+
+
 async def _responses(
     db: AsyncSession, collection_id: UUID, rows: Sequence[Any]
 ) -> list[ManuscriptReleaseResponse]:
+    venue = await _venue_states(db, rows)
     verified = [r for r in rows if r.stage == "verified"]
     if not verified:
-        return [_response(r) for r in rows]
+        return [_response(r, venue=venue.get(r.id)) for r in rows]
     stale_nodes = (await draft_release_service._graph(db, collection_id)).stale_nodes()
     stamped = {
         r.id
@@ -647,7 +787,7 @@ async def _responses(
             if row.stage == "candidate"
             else ("stale" if cause else "verified")
         )
-        out.append(_response(row, status, cause))
+        out.append(_response(row, status, cause, venue.get(row.id)))
     return out
 
 
@@ -757,12 +897,56 @@ async def _append(
         raise HTTPException(status_code=409, detail="Idempotency conflict") from exc
 
 
-async def _commit_or_forget(db: AsyncSession, key: str) -> None:
+async def _forget(keys: Sequence[str]) -> None:
+    storage = get_artifact_storage()
+    for key in keys:
+        await storage.delete(key)
+
+
+async def _commit_or_forget(db: AsyncSession, keys: Sequence[str]) -> None:
     try:
         await db.commit()
     except BaseException:
-        await get_artifact_storage().delete(key)
+        await _forget(keys)
         raise
+
+
+async def _anonymized(
+    db: AsyncSession,
+    context: ProjectContext,
+    parts: Sequence[audit_bundle.Part],
+    snapshot: Mapping[str, Any],
+    meta: Mapping[str, Any],
+) -> bytes:
+    """GOO-316's anonymized variant of the same parts. Every member of the
+    written zip is byte-scanned for every identity string; any hit fails
+    the build (422 ``anonymization_leak:<member>``), so the redaction is
+    never just trusted."""
+    names = await statements_service.identities(db, context)
+    body: Mapping[str, Any] = {}
+    if snapshot.get("statements"):
+        packaged = await statements_service.package_body(db, snapshot["statements"])
+        body = packaged["statements"]
+    redacted = venue_rules.anonymize({p.path: p.data for p in parts}, body, names)
+    anonymous = [
+        audit_bundle.Part(
+            p.path,
+            p.schema,
+            redacted[p.path],
+            (
+                json.loads(redacted[p.path])["body_sha256"]
+                if p.body_sha256 is not None and p.path.endswith(".json")
+                else _sha(redacted[p.path])
+            ),
+            p.empty,
+        )
+        for p in parts
+    ]
+    package, _manifest_sha = audit_bundle.write_zip(anonymous, **meta)
+    leaks = venue_rules.scan_leaks(_members(package), names)
+    if leaks:
+        raise HTTPException(status_code=422, detail=f"{ANONYMIZATION_LEAK}:{leaks[0]}")
+    return package
 
 
 async def create_candidate(
@@ -796,19 +980,23 @@ async def create_candidate(
     checks = rules.evaluate(await check_inputs(db, context, snapshot))
     release_id, created_at = uuid4(), datetime.now(timezone.utc)
     parts = await _parts(db, context, draft, snapshot, checks)
-    package, _manifest_sha = audit_bundle.write_zip(
-        parts,
-        project_id=str(collection_id),
-        generated_at=created_at.isoformat(),
-        deployment_sha=None,  # reproducible from the same inputs
-        protocol_version_id=snapshot["protocol"]["protocol_version_id"],
-        stream_heads={},
-        schema=rules.PACKAGE_SCHEMA,
-    )
-    package_sha256 = _sha(package)
+    meta: dict[str, Any] = {
+        "project_id": str(collection_id),
+        "generated_at": created_at.isoformat(),
+        "deployment_sha": None,  # reproducible from the same inputs
+        "protocol_version_id": snapshot["protocol"]["protocol_version_id"],
+        "stream_heads": {},
+        "schema": rules.PACKAGE_SCHEMA,
+    }
+    package, _manifest_sha = audit_bundle.write_zip(parts, **meta)
+    anonymous = await _anonymized(db, context, parts, snapshot, meta)
+    package_sha256, anonymized_sha256 = _sha(package), _sha(anonymous)
     object_key = storage_key(context.organization_id, release_id)
+    anonymized_key = storage_key(context.organization_id, release_id, "anonymized")
+    keys = [object_key, anonymized_key]
     storage = get_artifact_storage()
     await storage.put(object_key, package, "application/zip")
+    await storage.put(anonymized_key, anonymous, "application/zip")
     try:
         row = ManuscriptRelease(
             id=release_id,
@@ -821,7 +1009,12 @@ async def create_candidate(
             snapshot_hash=digest,
             checks=checks,
             checks_hash=canonical_json_sha256(checks),
-            package_files=package_files(package),
+            package_files={
+                "identified": package_files(package),
+                "anonymized": package_files(anonymous),
+                "anonymized_sha256": anonymized_sha256,
+                "anonymized_storage_key": anonymized_key,
+            },
             package_sha256=package_sha256,
             package_storage_key=object_key,
             created_by_id=actor_id,
@@ -847,10 +1040,21 @@ async def create_candidate(
             key=key,
             fingerprint=fingerprint,
         )
+        if snapshot.get("statements"):
+            # GOO-316: the automatic venue check of this exact package.
+            await statements_service.record_venue_check(
+                db,
+                context,
+                actor_id,
+                row,
+                _members(package),
+                (_members(anonymous), anonymized_sha256),
+                key=f"venue:candidate:{release_id}",
+            )
     except BaseException:
-        await storage.delete(object_key)
+        await _forget(keys)
         raise
-    await _commit_or_forget(db, object_key)
+    await _commit_or_forget(db, keys)
     return await _one(db, collection_id, row), False
 
 
@@ -865,7 +1069,9 @@ async def _verified_for(db: AsyncSession, candidate_id: UUID) -> Any:
 
 
 async def _stored_bytes(row: Any) -> bytes:
-    data = await get_artifact_storage().get(cast(str, row.package_storage_key))
+    """A row's identified package, or an anonymized variant record's bytes."""
+    key = row["storage_key"] if isinstance(row, dict) else row.package_storage_key
+    data = await get_artifact_storage().get(cast(str, key))
     if data is None:
         raise HTTPException(status_code=404, detail=RELEASE_NOT_FOUND)
     return data
@@ -902,18 +1108,30 @@ async def promote(
     snapshot = await build_snapshot(db, context, draft)
     if rules.snapshot_hash(snapshot) != candidate.snapshot_hash:
         raise HTTPException(status_code=409, detail=CANDIDATE_STALE)
-    checks = rules.evaluate(await check_inputs(db, context, snapshot))
-    failing = rules.failing_obligations(checks)
+    checks = rules.evaluate(await check_inputs(db, context, snapshot, candidate))
+    obligations = rules.obligations(snapshot)
+    failing = rules.failing_obligations(checks, obligations)
     if failing:
         raise ObligationsNotMet(failing)
     package = await _stored_bytes(candidate)
     if _sha(package) != candidate.package_sha256:
         raise HTTPException(status_code=409, detail=PACKAGE_CHANGED)
+    _identified, anonymized = variants(candidate)
+    anonymous = None if anonymized is None else await _stored_bytes(anonymized)
+    if anonymized is not None and _sha(cast(bytes, anonymous)) != anonymized["sha256"]:
+        raise HTTPException(status_code=409, detail=PACKAGE_CHANGED)
     draft_release_id = snapshot["claims"]["draft_release_id"]
     release_id = uuid4()
     object_key = storage_key(context.organization_id, release_id)
+    keys = [object_key]
+    files: Any = candidate.package_files
     storage = get_artifact_storage()
     await storage.put(object_key, package, "application/zip")
+    if anonymized is not None:
+        anonymized_key = storage_key(context.organization_id, release_id, "anonymized")
+        keys.append(anonymized_key)
+        await storage.put(anonymized_key, cast(bytes, anonymous), "application/zip")
+        files = {**candidate.package_files, "anonymized_storage_key": anonymized_key}
     try:
         row = ManuscriptRelease(
             id=release_id,
@@ -928,7 +1146,7 @@ async def promote(
             snapshot_hash=candidate.snapshot_hash,
             checks=checks,
             checks_hash=canonical_json_sha256(checks),
-            package_files=candidate.package_files,
+            package_files=files,
             package_sha256=candidate.package_sha256,
             package_storage_key=object_key,
             created_by_id=actor_id,
@@ -949,7 +1167,7 @@ async def promote(
             winner = await _verified_for(db, candidate_id)
             if winner is None:
                 raise
-            await storage.delete(object_key)
+            await _forget(keys)
             return await _one(db, collection_id, winner), True
         await _append(
             db,
@@ -963,17 +1181,15 @@ async def promote(
                 "content_hash": row.content_hash,
                 "snapshot_hash": row.snapshot_hash,
                 "package_sha256": row.package_sha256,
-                "obligations": {
-                    k: checks[k]["state"] for k in rules.VERIFIED_OBLIGATIONS
-                },
+                "obligations": {k: checks[k]["state"] for k in obligations},
             },
             key=key,
             fingerprint=fingerprint,
         )
     except BaseException:
-        await storage.delete(object_key)
+        await _forget(keys)
         raise
-    await _commit_or_forget(db, object_key)
+    await _commit_or_forget(db, keys)
     return await _one(db, collection_id, row), False
 
 
@@ -981,14 +1197,61 @@ async def promote(
 
 
 async def package_bytes(
-    db: AsyncSession, context: ProjectContext, release_id: UUID
+    db: AsyncSession,
+    context: ProjectContext,
+    release_id: UUID,
+    variant: PackageVariant = "identified",
 ) -> tuple[bytes, str]:
-    """VIEW: the stored package, re-hashed before it leaves."""
+    """VIEW: the stored package (or GOO-316's anonymized variant, 404 for a
+    GOO-315 row), re-hashed before it leaves."""
     row = await _release(db, _cid(context), release_id)
-    data = await _stored_bytes(row)
-    if _sha(data) != row.package_sha256:
+    if variant == "anonymized":
+        _files, anonymized = variants(row)
+        if anonymized is None:
+            raise HTTPException(status_code=404, detail=NO_ANONYMIZED)
+        source, expected = anonymized, str(anonymized["sha256"])
+    else:
+        source, expected = row, str(row.package_sha256)
+    data = await _stored_bytes(source)
+    if _sha(data) != expected:
         raise HTTPException(status_code=500, detail=PACKAGE_CHANGED)
-    return data, cast(str, row.package_sha256)
+    return data, expected
+
+
+async def run_venue_check(
+    db: AsyncSession,
+    context: ProjectContext,
+    actor_id: UUID,
+    release_id: UUID,
+    data: VenueCheckCreate,
+) -> VenueCheckResponse:
+    """EDIT: ``generic-icmje-credit/1`` against the stored package bytes of
+    one release (both variants re-hashed first); commits once."""
+    key, fingerprint, replay = await statements_service._begin(
+        db, context, "venue", data, actor_id, release_id=release_id
+    )
+    if replay is not None:
+        replayed = await db.get(VenueCheck, UUID(replay["venue_check_id"]))
+        return statements_service.venue_response(replayed)
+    row = await _release(db, _cid(context), release_id)
+    package, _sha256 = await package_bytes(db, context, release_id)
+    _files, anonymized = variants(row)
+    anonymous = None
+    if anonymized is not None:
+        data_anon, sha = await package_bytes(db, context, release_id, "anonymized")
+        anonymous = (_members(data_anon), sha)
+    check = await statements_service.record_venue_check(
+        db,
+        context,
+        actor_id,
+        row,
+        _members(package),
+        anonymous,
+        key=key,
+        fingerprint=fingerprint,
+    )
+    await db.commit()
+    return statements_service.venue_response(check)
 
 
 async def verify(
@@ -999,7 +1262,8 @@ async def verify(
     row = await _release(db, _cid(context), release_id)
     data = await _stored_bytes(row)
     members = _members(data)
-    listed = {f["path"]: f["sha256"] for f in row.package_files}
+    identified, _anonymized = variants(row)
+    listed = {f["path"]: f["sha256"] for f in identified}
     checks = [
         MemberCheck(
             path=path,
