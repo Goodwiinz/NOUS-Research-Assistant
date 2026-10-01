@@ -115,6 +115,35 @@ async def _resolve_ws_role(
     return UserRole.USER.value
 
 
+# client_info bounds (audit I11): it is stored on the connection for its whole
+# lifetime, so cap the raw size and keep only a small flat dict of scalars.
+CLIENT_INFO_MAX_CHARS = 4096
+CLIENT_INFO_MAX_KEYS = 32
+CLIENT_INFO_MAX_VALUE_CHARS = 256
+
+
+def _parse_client_info(raw: str) -> Dict[str, Any]:
+    """Parse the client_info query param into a bounded flat dict; {} if invalid."""
+    if not raw:
+        return {}
+    if len(raw) > CLIENT_INFO_MAX_CHARS:
+        logger.warning("client_info too long (%d chars), ignoring", len(raw))
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Invalid client_info JSON, ignoring")
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    scalars = {
+        k: v[:CLIENT_INFO_MAX_VALUE_CHARS] if isinstance(v, str) else v
+        for k, v in parsed.items()
+        if v is None or isinstance(v, (str, int, float, bool))
+    }
+    return dict(list(scalars.items())[:CLIENT_INFO_MAX_KEYS])
+
+
 async def _get_user_organization_id(
     user_id: str,
     session_factory=AsyncSessionLocal,
@@ -260,6 +289,11 @@ async def websocket_connect_v2_secure(
     - unsubscribe: Unsubscribe from channel
     - status_update: Update connection status or message filter
 
+    Inbound limits (audit I11):
+    - A frame over 64 KiB closes the socket with 1009 (message too big).
+    - More than 60 frames in 10 s sends one `rate_limited` error, then closes
+      with 1008 (policy violation).
+
     Server-to-Client Messages:
     - pong: Heartbeat response
     - document_processing: Document processing status updates
@@ -305,13 +339,8 @@ async def websocket_connect_v2_secure(
     # gating must not trust it.
     db_role = await _resolve_ws_role(user_id)
 
-    # Parse client information
-    client_info_dict = {}
-    if client_info:
-        try:
-            client_info_dict = json.loads(client_info)
-        except json.JSONDecodeError:
-            logger.warning(f"Invalid client_info JSON: {client_info}")
+    # Parse client information (bounded; server-stamped keys added below win)
+    client_info_dict = _parse_client_info(client_info)
 
     # Parse channels
     channel_list = (
@@ -422,6 +451,10 @@ async def websocket_connect_v2_secure(
                 await connection_manager.handle_client_message(
                     connection_id, raw_message
                 )
+                # The manager closed + dropped the socket (inbound cap, audit
+                # I11); receiving again would raise on every iteration.
+                if connection_id not in connection_manager.active_connections:
+                    break
 
             except WebSocketDisconnect:
                 logger.info(f"WebSocket client disconnected: {connection_id}")
