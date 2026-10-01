@@ -1,3 +1,6 @@
+vi.mock('@/hooks/useBackendCapabilities', () => ({
+  useBackendCapabilities: () => ({ draftClaims: true, draftRelease: true }),
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@/test/test-utils';
 import { DraftViewer } from '../DraftViewer';

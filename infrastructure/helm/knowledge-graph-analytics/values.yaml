@@ -57,6 +57,9 @@ awsRdsSecret:
 
 # Backend Configuration
 backend:
+  # AWS Argo rollout barrier; other overlays retain their existing init path.
+  migrations:
+    enabled: false
   enabled: true
   replicaCount: 3
 

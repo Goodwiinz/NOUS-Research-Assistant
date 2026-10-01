@@ -17,6 +17,7 @@ import { InsertPreview } from './InsertPreview';
 import { OutlineDialog } from './OutlineDialog';
 import { DraftReleasePanel, ReleaseBadge } from './DraftReleasePanel';
 import { useDraftRelease } from '@/hooks/useDraftRelease';
+import { useBackendCapabilities } from '@/hooks/useBackendCapabilities';
 import type {
   RewriteResponse,
   WriteResponse,
@@ -60,6 +61,7 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
   // Captured at click time: reading contentRef during render is not allowed.
   const [cursorContext, setCursorContext] = useState('');
   const [showOutlineDialog, setShowOutlineDialog] = useState(false);
+  const capabilities = useBackendCapabilities(Boolean(projectId));
   const release = useDraftRelease(projectId, draft.id, draft.version);
 
   const handleTextSelect = useCallback((event: React.MouseEvent) => {
@@ -166,7 +168,7 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
             <h3 className="font-semibold text-foreground">{draft.title}</h3>
             <p className="text-xs text-muted-foreground">
               Version {draft.version}
-              {projectId && (
+              {projectId && capabilities.draftRelease && (
                 <ReleaseBadge
                   status={
                     release.data?.release_status ??
@@ -221,7 +223,9 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
         </div>
       </div>
 
-      {projectId && <DraftReleasePanel projectId={projectId} draft={draft} />}
+      {projectId && capabilities.draftRelease && (
+        <DraftReleasePanel projectId={projectId} draft={draft} />
+      )}
 
       {/* Themes */}
       {draft.themes && draft.themes.length > 0 && (
