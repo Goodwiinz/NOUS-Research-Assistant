@@ -202,3 +202,45 @@ def test_merges_follow_survivor_and_unresolved_is_unknown() -> None:
         "unchanged": 1,
         "unknown": 1,
     }
+
+
+def test_snapshot_from_package_takes_live_reports_and_latest_record() -> None:
+    body = {
+        "identities": {
+            "reports": [
+                {"id": "r1", "title_snapshot": "One", "merged_into_report_id": None},
+                {"id": "r2", "title_snapshot": "Two", "merged_into_report_id": "r1"},
+                {"id": "r3", "title_snapshot": "Three", "merged_into_report_id": None},
+            ],
+            "identifiers": [
+                {"report_id": "r1", "kind": "doi", "value": "10.1/one"},
+                {"report_id": "r2", "kind": "doi", "value": "10.1/two"},
+            ],
+            "observations": [{"report_id": "r1", "source_id": "s1"}],
+        },
+        "sources": [
+            {
+                "id": "s1",
+                "title": "One (source)",
+                "authors": ["A"],
+                "metadata": {"journal": "J", "published": [[2020, 1]]},
+            }
+        ],
+        "imports": [
+            {
+                "records": [
+                    {
+                        "report_id": "r1",
+                        "status": "accepted",
+                        "parsed": {"title": "One (import)", "year": "2021"},
+                    }
+                ]
+            }
+        ],
+    }
+    snapshot = rules.snapshot_from_package(body)
+    assert set(snapshot) == {"r1", "r3"}  # merged r2 is not live
+    assert snapshot["r1"]["identifiers"] == {"doi": ["10.1/one"]}
+    assert snapshot["r1"]["fields"] == {"title": "One (import)", "year": "2021"}
+    assert snapshot["r3"]["fields"] == {"title": "Three"}
+    assert rules.source_record(body["sources"][0])["year"] == "2020"

@@ -2231,3 +2231,153 @@ class RerunResponse(BaseModel):
 
 class RerunListResponse(BaseModel):
     reruns: List[RerunResponse]
+
+
+# --- GOO-319: scheduled search updates ---------------------------------------
+
+DeltaClass = Literal["new", "changed", "corrected_retracted", "unchanged", "unknown"]
+DeltaUnknownReason = Literal[
+    "provider_failed",
+    "provider_capped",
+    "not_returned",
+    "no_doi_publication_check_not_performed",
+    "merge_unresolved",
+]
+ScheduleStatus = Literal["disabled", "scheduled", "running", "blocked", "failed", "ok"]
+_STRATEGY_VERSION = r"^sha256:[0-9a-f]{64}$"
+
+
+class SearchScheduleCreate(BaseModel):
+    """Pin one GOO-298 strategy (from a completed run's search journal)."""
+
+    source_run_id: UUID
+    step_id: str = Field(..., min_length=1, max_length=100)
+    strategy_version: str = Field(..., pattern=_STRATEGY_VERSION)
+    cron: str = Field(..., min_length=9, max_length=64)
+    timezone: str = Field(..., min_length=1, max_length=64)
+    enabled: bool = True
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+
+class SearchScheduleVersionCreate(BaseModel):
+    """Edit, enable or disable: a new version on top of ``expected_tip_id``.
+    A new strategy needs all three of run, step and strategy version."""
+
+    expected_tip_id: UUID
+    cron: Optional[str] = Field(default=None, min_length=9, max_length=64)
+    timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    enabled: Optional[bool] = None
+    source_run_id: Optional[UUID] = None
+    step_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    strategy_version: Optional[str] = Field(default=None, pattern=_STRATEGY_VERSION)
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _strategy_together(self) -> "SearchScheduleVersionCreate":
+        given = [self.source_run_id, self.step_id, self.strategy_version]
+        if any(v is not None for v in given) and any(v is None for v in given):
+            raise ValueError("source_run_id, step_id and strategy_version go together")
+        return self
+
+
+class SearchStrategyOption(BaseModel):
+    """A pinnable strategy from a completed run of this project."""
+
+    source_run_id: UUID
+    step_id: str
+    strategy_version: str
+    query: str
+    providers: List[str]
+    protocol_version_id: Optional[str] = None
+    current_protocol: bool
+
+
+class SearchScheduleVersionResponse(BaseModel):
+    id: UUID
+    schedule_id: UUID
+    owner_id: UUID
+    protocol_version_id: UUID
+    source_run_id: UUID
+    step_id: str
+    strategy_version: str
+    query: str
+    cron: str
+    timezone: str
+    enabled: bool
+    supersedes_schedule_version_id: Optional[UUID] = None
+    baseline_digest: Optional[str] = None
+    created_at: datetime
+
+
+class SearchAttemptResponse(BaseModel):
+    id: UUID
+    outcome: Literal["started", "succeeded", "failed", "skipped"]
+    reason: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None
+    worker: str
+    created_at: datetime
+
+
+class SearchExecutionResponse(BaseModel):
+    id: UUID
+    schedule_id: UUID
+    schedule_version_id: UUID
+    scheduled_local: str
+    scheduled_for: datetime
+    missed_fires: int
+    created_at: datetime
+    status: Literal["pending", "started", "succeeded", "failed", "skipped"]
+    attempts: List[SearchAttemptResponse]
+    import_receipt_id: Optional[UUID] = None
+    baseline_execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = None
+    counts: Optional[Dict[DeltaClass, int]] = None
+
+
+class SearchScheduleResponse(BaseModel):
+    schedule_id: UUID
+    tip: SearchScheduleVersionResponse
+    versions: List[SearchScheduleVersionResponse]
+    status: ScheduleStatus
+    next_fire_local: Optional[str] = None
+    next_fire_utc: Optional[datetime] = None
+    last_execution: Optional[SearchExecutionResponse] = None
+
+
+class SearchScheduleListResponse(BaseModel):
+    schedules: List[SearchScheduleResponse]
+    strategies: List[SearchStrategyOption]
+
+
+class SearchExecutionListResponse(BaseModel):
+    executions: List[SearchExecutionResponse]
+
+
+class SearchDeltaItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    report_id: str
+    delta_class: DeltaClass = Field(alias="class")
+    reason: Optional[DeltaUnknownReason] = None
+    evidence: Dict[str, Any]
+    publication: Dict[str, Any]
+
+
+class SearchDeltaResponse(BaseModel):
+    """One succeeded execution's classified delta (GOO-320 accepts it by
+    ``(execution_id, delta_hash)``)."""
+
+    execution_id: UUID
+    collection_id: UUID
+    schedule_id: UUID
+    schedule_version_id: UUID
+    scheduled_local: str
+    baseline_execution_id: Optional[UUID] = None
+    baseline_digest: str
+    corpus_snapshot_digest: str
+    import_receipt_id: UUID
+    delta_hash: str
+    counts: Dict[DeltaClass, int]
+    items: List[SearchDeltaItem]
+    coverage: Dict[str, Any]
+    citation_chasing: Dict[str, Any]

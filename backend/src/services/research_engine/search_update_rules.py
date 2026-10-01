@@ -187,14 +187,77 @@ def version_key(record: Mapping[str, Any]) -> str:
 
 
 def snapshot_entry(
-    identifiers: Mapping[str, str], record: Mapping[str, Any]
+    identifiers: Mapping[str, str | Sequence[str]], record: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """One work in a corpus snapshot: identifiers plus its source version."""
+    """One work in a corpus snapshot: every identifier value by kind plus its
+    source version."""
     fields = record_fields(record)
     return {
-        "identifiers": dict(sorted(identifiers.items())),
+        "identifiers": {
+            kind: sorted([values] if isinstance(values, str) else set(values))
+            for kind, values in sorted(identifiers.items())
+        },
         "fields": fields,
         "version_key": canonical_sha256(fields),
+    }
+
+
+def _year(metadata: Mapping[str, Any]) -> str | None:
+    """``report_rendering.publication_year``'s keys, without its imports."""
+    for key in ("publication_year", "year", "publication_date", "published"):
+        value = metadata.get(key)
+        if isinstance(value, list):  # Crossref date-parts [[2021, 3]]
+            value = value[0][0] if value and value[0] else None
+        text = str(value)[:4] if value is not None else ""
+        if text.isdigit():
+            return text
+    return None
+
+
+def source_record(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Version fields of a provider source row (export or ``SourceDocument``)."""
+    metadata = source.get("metadata") or {}
+    return {
+        "title": source.get("title"),
+        "authors": source.get("authors"),
+        "venue": metadata.get("journal") or metadata.get("venue"),
+        "year": _year(metadata),
+        "provider_updated": metadata.get("provider_updated"),
+    }
+
+
+def snapshot_from_package(body: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """``{report_id: entry}`` for the live reports of a GOO-300 corpus export
+    body. A report's source version is its latest record: observed provider
+    sources first, then import records in receipt order (later wins).
+    ponytail: one full snapshot per execution; delta-encode if corpora near
+    ``MAX_EXPORT_RECORDS``."""
+    identities = body["identities"]
+    live = {
+        str(r["id"]): r
+        for r in identities["reports"]
+        if r.get("merged_into_report_id") is None
+    }
+    identifiers: dict[str, dict[str, list[str]]] = {rid: {} for rid in live}
+    for row in identities["identifiers"]:
+        rid = str(row["report_id"])
+        if rid in identifiers:
+            identifiers[rid].setdefault(row["kind"], []).append(row["value"])
+    records: dict[str, dict[str, Any]] = {}
+    sources = {str(s["id"]): s for s in body.get("sources") or []}
+    for observation in identities.get("observations") or []:
+        source = sources.get(str(observation["source_id"]))
+        if source is not None:
+            records[str(observation["report_id"])] = source_record(source)
+    for receipt in body.get("imports") or []:
+        for record in receipt.get("records") or []:
+            if record.get("report_id") and record.get("status") == "accepted":
+                records[str(record["report_id"])] = dict(record.get("parsed") or {})
+    return {
+        rid: snapshot_entry(
+            identifiers[rid], records.get(rid) or {"title": report["title_snapshot"]}
+        )
+        for rid, report in sorted(live.items())
     }
 
 
@@ -226,7 +289,7 @@ def _publication(
 
 
 def _missing_reason(
-    identifiers: Mapping[str, str], coverage: Mapping[str, Any]
+    identifiers: Mapping[str, Any], coverage: Mapping[str, Any]
 ) -> tuple[str, dict[str, Any]]:
     """Why a baseline work is absent from today's results: a failure or cap
     of a provider that could have returned it, else ``not_returned``."""
@@ -301,7 +364,8 @@ def classify(
     for report_id in sorted(set(resolved) | set(current)):
         before, after = resolved.get(report_id), current.get(report_id)
         identifiers = dict((after or before or {}).get("identifiers") or {})
-        publication = _publication(identifiers.get("doi"), notices, notice_check_failed)
+        dois = identifiers.get("doi") or [None]
+        publication = _publication(dois[0], notices, notice_check_failed)
         item: dict[str, Any] = {"report_id": report_id, "publication": publication}
         evidence: dict[str, Any] = {}
         if before is not None and before["merged_from"]:

@@ -43,6 +43,7 @@ celery_app = Celery(
         "src.tasks.artifact_tasks",
         "src.tasks.integration_action_tasks",
         "src.tasks.deposit_tasks",
+        "src.tasks.search_update_tasks",
     ],
 )
 
@@ -124,6 +125,7 @@ celery_app.conf.update(
         "src.tasks.artifact_tasks.drain_artifacts": {"queue": "agent_runs"},
         "src.tasks.artifact_tasks.sweep_artifact_uploads": {"queue": "agent_runs"},
         "src.tasks.deposit_tasks.drain_deposits": {"queue": "agent_runs"},
+        "src.tasks.search_update_tasks.tick": {"queue": "celery"},
         "src.tasks.integration_action_tasks.drain_integration_actions": {
             "queue": "agent_runs"
         },
@@ -143,6 +145,10 @@ celery_app.conf.update(
         "drain-deposits": {  # GOO-318: one phase per queued deposit
             "task": "src.tasks.deposit_tasks.drain_deposits",
             "schedule": 10.0,
+        },
+        "search-updates-tick": {  # GOO-319: claim and run due search fires
+            "task": "src.tasks.search_update_tasks.tick",
+            "schedule": 60.0,
         },
         "sweep-artifact-uploads": {
             "task": "src.tasks.artifact_tasks.sweep_artifact_uploads",
