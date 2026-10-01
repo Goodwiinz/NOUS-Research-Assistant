@@ -135,7 +135,7 @@ async def _document_bytes(document: Any) -> bytes:
         with open(local, "rb") as handle:
             return handle.read()
 
-    return await run_in_threadpool(read)
+    return cast(bytes, await run_in_threadpool(read))
 
 
 def input_loader(db: AsyncSession, collection_id: UUID) -> InputLoader:
@@ -460,7 +460,7 @@ async def manifest_v2(db: AsyncSession, run: Any) -> RunManifestV2Response:
     row = await _manifest_row(db, run.id)
     if row is None:
         legacy = rules.legacy_view(legacy_manifest_body(run))
-        return RunManifestV2Response.model_validate(legacy)
+        return cast(RunManifestV2Response, RunManifestV2Response.model_validate(legacy))
     return RunManifestV2Response(
         schema=rules.SCHEMA,
         manifest=row.manifest,
@@ -519,11 +519,14 @@ def _superseded(rows: Sequence[Any]) -> set[Any]:
 
 def _figure_response(row: Any, superseded: set[Any], stale: set[Any]) -> FigureResponse:
     response = FigureResponse.model_validate(row)
-    return response.model_copy(
-        update={
-            "superseded": row.id in superseded,
-            "stale": release_rules.node("figure", row.id) in stale,
-        }
+    return cast(
+        FigureResponse,
+        response.model_copy(
+            update={
+                "superseded": row.id in superseded,
+                "stale": release_rules.node("figure", row.id) in stale,
+            }
+        ),
     )
 
 
