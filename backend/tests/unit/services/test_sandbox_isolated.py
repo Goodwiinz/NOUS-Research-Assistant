@@ -8,17 +8,25 @@ carries ``exit_code``/``stdout``/``stderr`` on a non-zero exit,
 ``get_info().template_id`` and ``kill()``.
 
 Mutation verification: calling ``get_or_create_sandbox`` inside
-``run_isolated`` fails ``-k thread_cache`` (``_sandboxes`` not empty).
+``run_isolated`` fails ``-k thread_cache`` (``_sandboxes`` not empty);
+skipping GOO-313's in-sandbox re-hash fails ``-k input_hash`` (the command
+runs).
 """
 
 import asyncio
+import hashlib
+import shlex
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from src.services.sandbox import e2b_sandbox_manager as module
-from src.services.sandbox.e2b_sandbox_manager import IsolatedSpec, SandboxManager
+from src.services.sandbox.e2b_sandbox_manager import (
+    IsolatedSpec,
+    RestoreSpec,
+    SandboxManager,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -76,6 +84,18 @@ class _FakeSandbox:
             return SimpleNamespace(stdout="numpy==2.1.1\n", stderr="", exit_code=0)
         if cmd == "python -VV":
             return SimpleNamespace(stdout="Python 3.11.9\n", stderr="", exit_code=0)
+        if cmd.startswith("sha256sum -- "):
+            # Really hash what was written; a missing file exits non-zero.
+            lines, missing = [], False
+            for name in shlex.split(cmd)[2:]:
+                data = self.fs.get(f"/work/{name}")
+                if data is None:
+                    missing = True
+                    continue
+                lines.append(f"{hashlib.sha256(data).hexdigest()}  {name}\n")
+            if missing:
+                raise _Exit(1, "".join(lines), "No such file")
+            return SimpleNamespace(stdout="".join(lines), stderr="", exit_code=0)
         if self.on_command is not None and kwargs.get("cwd") == "/work":
             return await self.on_command(self, cmd)
         return SimpleNamespace(stdout="", stderr="", exit_code=0)
@@ -210,3 +230,115 @@ async def test_unavailable_without_key(
     _FakeSandbox.fail_create = True
     result = await manager.run_isolated(_spec())
     assert result.status == "unavailable" and result.sandbox_id is None
+
+
+# --- GOO-313 verified restore mode ---------------------------------------------
+
+LOCK = b"numpy==2.1.1\n"
+FILES = {"main.py": b"print(1)\n", "in/data.csv": b"x\n1\n"}
+
+
+def _digests(files: dict[str, bytes]) -> dict[str, str]:
+    return {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
+
+
+def _restore(**override: Any) -> RestoreSpec:
+    fields: dict[str, Any] = {
+        "expected_template_id": "tid-code-interpreter-v1",
+        "lock_bytes": LOCK,
+        "expected_sha256": _digests(FILES),
+    }
+    return RestoreSpec(**(fields | override))
+
+
+def _commands(sandbox: _FakeSandbox) -> list[str]:
+    return [cmd for cmd, _ in sandbox.commands_run]
+
+
+async def _restore_run(
+    manager: SandboxManager, monkeypatch: pytest.MonkeyPatch, restore: RestoreSpec
+) -> tuple[Any, _FakeSandbox]:
+    original_create = _FakeSandbox.create
+
+    async def create(**kwargs: Any) -> _FakeSandbox:
+        sandbox = await original_create(**kwargs)
+        sandbox.on_command = _writes_output
+        return sandbox
+
+    monkeypatch.setattr(_FakeSandbox, "create", create)
+    result = await manager.run_isolated(_spec(requirements=()), restore=restore)
+    return result, _FakeSandbox.created[-1]
+
+
+async def test_restore_template_mismatch_stops_before_command(
+    manager: SandboxManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    restore = _restore(expected_template_id="tid-other")
+    result, sandbox = await _restore_run(manager, monkeypatch, restore)
+    assert (result.status, result.reasons) == (
+        "restoration_failed",
+        ("template_mismatch",),
+    )
+    assert _commands(sandbox) == [] and sandbox.killed
+    assert result.outputs == {}
+
+
+async def test_restore_lock_mismatch_stops_before_command(
+    manager: SandboxManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result, sandbox = await _restore_run(
+        manager, monkeypatch, _restore(lock_bytes=b"numpy==2.1.0\n")
+    )
+    assert result.reasons == ("environment_lock_mismatch",)
+    assert sandbox.fs["/tmp/nous-requirements.txt"] == b"numpy==2.1.0\n"
+    assert "python main.py" not in _commands(sandbox) and sandbox.killed
+
+    original_run = _FakeSandbox._run
+
+    async def broken_install(self: _FakeSandbox, cmd: str, **kwargs: Any) -> Any:
+        if cmd.startswith("pip install"):
+            raise _Exit(1, "", "No matching distribution")
+        return await original_run(self, cmd, **kwargs)
+
+    monkeypatch.setattr(_FakeSandbox, "_run", broken_install)
+    result = await manager.run_isolated(_spec(requirements=()), restore=_restore())
+    assert result.reasons == ("environment_install_failed",)
+    assert "python main.py" not in _commands(_FakeSandbox.created[-1])
+
+
+async def test_restore_in_sandbox_input_hash_mismatch(
+    manager: SandboxManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = _digests(FILES) | {"in/data.csv": "0" * 64}
+    result, sandbox = await _restore_run(
+        manager, monkeypatch, _restore(expected_sha256=expected)
+    )
+    assert (result.status, result.reasons) == (
+        "restoration_failed",
+        ("input_mismatch:data.csv",),
+    )
+    assert "python main.py" not in _commands(sandbox) and sandbox.killed
+    expected = _digests(FILES) | {"main.py": "0" * 64, "in/gone.csv": "1" * 64}
+    result, _ = await _restore_run(
+        manager, monkeypatch, _restore(expected_sha256=expected)
+    )
+    assert result.reasons == ("input_mismatch:gone.csv", "code_mismatch")
+
+
+async def test_restore_success_runs_command_once(
+    manager: SandboxManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result, sandbox = await _restore_run(manager, monkeypatch, _restore())
+    assert result.status == "completed" and result.reasons == ()
+    assert result.outputs == {"figure.svg": b"<svg/>"}
+    commands = _commands(sandbox)
+    assert commands.count("python main.py") == 1
+    # Restore order: install the archived lock, freeze, hash, then run.
+    assert (
+        commands.index("pip freeze --all")
+        < commands.index("sha256sum -- in/data.csv main.py")
+        < commands.index("python main.py")
+    )
+    assert sandbox.fs["/tmp/nous-requirements.txt"] == LOCK
+    assert all(kwargs.get("envs") == {} for _, kwargs in sandbox.commands_run)
+    assert manager._sandboxes == {} and sandbox.killed

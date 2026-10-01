@@ -2144,3 +2144,90 @@ class FigureLineageResponse(BaseModel):
     protocol_version_id: Optional[str] = None
     protocol_content_hash: Optional[str] = None
     effective_plan_hash: Optional[str] = None
+
+
+# --- Fresh reruns (GOO-313) ----------------------------------------------------
+
+RerunAttemptStatus = Literal[
+    "queued",
+    "running",
+    "restoration_failed",
+    "environment_unavailable",
+    "execution_failed",
+    "cancelled",
+    "interrupted",
+    "executed",
+]
+RerunReproduction = Literal["reproduced", "not_reproduced"]
+
+
+class RerunCreate(BaseModel):
+    """``rule`` is a ``nous.rerun-rule/1`` naming every manifest output once;
+    omitted, byte equality for every output. It is hashed before enqueue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule: Optional[Dict[str, Any]] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=128)
+
+
+class RerunEligibilityResponse(BaseModel):
+    eligible: bool
+    reasons: List[str]
+    default_rule: Optional[Dict[str, Any]] = None
+
+
+class RerunComparisonRow(BaseModel):
+    name: str
+    mode: Literal["bytes", "json_numeric"]
+    expected_sha256: Optional[str] = None
+    actual_sha256: Optional[str] = None
+    equal: bool
+    numeric: Optional[List[Dict[str, Any]]] = None
+    reason: Optional[str] = None
+
+
+class RerunOutputResponse(BaseModel):
+    """A retained rerun output; its bytes stream through the output route."""
+
+    name: str
+    sha256: str
+    byte_size: int
+
+
+class RerunAttemptResponse(BaseModel):
+    """``queued``/``running``/``interrupted`` without ``finished_at`` are
+    derived (no terminal row yet); every other status is a terminal row.
+    ``reproduction`` exists iff ``status == "executed"``."""
+
+    attempt: int
+    status: RerunAttemptStatus
+    reproduction: Optional[RerunReproduction] = None
+    reasons: List[str] = Field(default_factory=list)
+    environment_validation: Dict[str, Any] = Field(default_factory=dict)
+    input_validation: Dict[str, Any] = Field(default_factory=dict)
+    comparison: Optional[List[RerunComparisonRow]] = None
+    comparison_hash: Optional[str] = None
+    outputs: List[RerunOutputResponse] = Field(default_factory=list)
+    template_id: Optional[str] = None
+    sandbox_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    lease_expires_at: Optional[datetime] = None
+
+
+class RerunResponse(BaseModel):
+    id: UUID
+    collection_id: UUID
+    run_id: UUID
+    manifest_id: UUID
+    manifest_hash: str
+    rule: Dict[str, Any]
+    rule_hash: str
+    requested_by_id: UUID
+    created_at: datetime
+    attempts: List[RerunAttemptResponse]
+
+
+class RerunListResponse(BaseModel):
+    reruns: List[RerunResponse]

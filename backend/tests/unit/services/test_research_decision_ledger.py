@@ -18,6 +18,7 @@ from src.services.research_decisions.ledger import (
     _validate_extraction_transitions,
     _validate_identity_transitions,
     _validate_release_transitions,
+    _validate_reproduction_transitions,
     _validate_screening_transitions,
     _validate_synthesis_transitions,
     decision_request_fingerprint,
@@ -2811,4 +2812,149 @@ def test_claim_linked_v3_requires_figure_id_for_figure_kind() -> None:
             versioned,
             ("claim.linked", "editor", figure),
             ("claim.observed", "machine", c.observed(link, uuid4())),
+        )
+
+
+# --- GOO-313: research_reproduction ------------------------------------------
+
+
+class _Reproduction:
+    """Hand-built events for one Collection's research_reproduction stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.rerun = uuid4()
+
+    def admitted(self) -> tuple[str, str, dict[str, Any]]:
+        return (
+            "rerun.admitted",
+            "reviewer",
+            {
+                "collection_id": str(self.collection_id),
+                "rerun_id": str(self.rerun),
+                "run_id": str(uuid4()),
+                "manifest_id": str(uuid4()),
+                "manifest_hash": "a" * 64,
+                "rule_hash": "b" * 64,
+            },
+        )
+
+    def started(self, attempt: int) -> tuple[str, str, dict[str, Any]]:
+        return (
+            "rerun.attempt_started",
+            "machine",
+            {
+                "collection_id": str(self.collection_id),
+                "rerun_id": str(self.rerun),
+                "attempt": attempt,
+                "lease_expires_at": "2026-10-01T00:07:00+00:00",
+            },
+        )
+
+    def finished(
+        self, attempt: int, status: str, reproduction: str | None = None
+    ) -> tuple[str, str, dict[str, Any]]:
+        return (
+            "rerun.attempt_finished",
+            "machine",
+            {
+                "collection_id": str(self.collection_id),
+                "rerun_id": str(self.rerun),
+                "attempt": attempt,
+                "status": status,
+                "reproduction": reproduction,
+                "comparison_hash": "c" * 64 if reproduction else None,
+                "output_sha256s": ["d" * 64] if reproduction else [],
+                "reasons": [] if reproduction else ["sandbox_unavailable"],
+            },
+        )
+
+    def validate(self, event: tuple[str, str, dict[str, Any]]) -> None:
+        event_type, _, payload = event
+        _validate_event(
+            aggregate_type="research_reproduction",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="experiment_rerun",
+            subject_id=self.rerun,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="e" * 64,
+        )
+
+    def replay(self, *events: tuple[str, str, dict[str, Any]]) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_reproduction_transitions(stored, self.collection_id)
+
+
+def test_reproduction_payloads_validate() -> None:
+    r = _Reproduction()
+    for event in (
+        r.admitted(),
+        r.started(1),
+        r.finished(1, "executed", "reproduced"),
+        r.finished(1, "cancelled"),
+    ):
+        r.validate(event)
+    with pytest.raises(DecisionValidationError, match="executed"):
+        r.validate(r.finished(1, "restoration_failed", "reproduced"))
+    with pytest.raises(DecisionValidationError, match="lease"):
+        event_type, role, payload = r.started(1)
+        r.validate((event_type, role, {**payload, "lease_expires_at": "soon"}))
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        event_type, role, payload = r.admitted()
+        r.validate((event_type, role, {**payload, "storage_key": "k"}))
+
+
+def test_reproduction_replay_rejects_second_finish() -> None:
+    r = _Reproduction()
+    r.replay(r.admitted(), r.started(1), r.finished(1, "interrupted"))
+    with pytest.raises(DecisionReplayError, match="out of order"):
+        r.replay(
+            r.admitted(),
+            r.started(1),
+            r.finished(1, "cancelled"),
+            r.finished(1, "interrupted"),
+        )
+    # Cancelled before the worker claimed it: a finish without a start.
+    r.replay(r.admitted(), r.finished(1, "cancelled"), r.started(2))
+    with pytest.raises(DecisionReplayError, match="out of order"):
+        r.replay(r.admitted(), r.finished(1, "cancelled"), r.started(1))
+    with pytest.raises(DecisionReplayError, match="reviewer"):
+        _, _, payload = r.admitted()
+        r.replay(("rerun.admitted", "machine", payload))
+
+
+def test_reproduction_replay_rejects_reproduced_without_executed() -> None:
+    r = _Reproduction()
+    event_type, role, payload = r.finished(1, "restoration_failed")
+    with pytest.raises(DecisionReplayError, match="executed"):
+        r.replay(
+            r.admitted(),
+            r.started(1),
+            (event_type, role, {**payload, "reproduction": "reproduced"}),
+        )
+
+
+def test_reproduction_replay_rejects_attempt_after_executed() -> None:
+    r = _Reproduction()
+    r.replay(
+        r.admitted(),
+        r.started(1),
+        r.finished(1, "execution_failed"),
+        r.started(2),
+        r.finished(2, "executed", "not_reproduced"),
+    )
+    with pytest.raises(DecisionReplayError, match="after an executed"):
+        r.replay(
+            r.admitted(),
+            r.started(1),
+            r.finished(1, "executed", "reproduced"),
+            r.started(2),
         )

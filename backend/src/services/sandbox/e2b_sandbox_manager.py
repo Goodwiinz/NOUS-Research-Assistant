@@ -8,10 +8,11 @@ multiple code executions within the same conversation.
 import asyncio
 import logging
 import os
+import shlex
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Mapping, Optional
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +97,23 @@ class IsolatedSpec:
 
 
 @dataclass(frozen=True)
+class RestoreSpec:
+    """GOO-313 verified restore: the sandbox must report
+    ``expected_template_id``, install exactly ``lock_bytes`` (the archived
+    ``pip freeze --all``) and freeze back to the same bytes, and every file in
+    ``expected_sha256`` (paths relative to ``/work``) must hash to its digest
+    inside the sandbox before the command runs."""
+
+    expected_template_id: str
+    lock_bytes: bytes
+    expected_sha256: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class IsolatedResult:
-    status: Literal["completed", "failed", "timeout", "unavailable"]
+    status: Literal[
+        "completed", "failed", "timeout", "unavailable", "restoration_failed"
+    ]
     outputs: Dict[str, bytes]
     stdout: str
     stderr: str
@@ -109,6 +125,7 @@ class IsolatedResult:
     started_at: datetime
     completed_at: datetime
     error: Optional[str] = None
+    reasons: Tuple[str, ...] = ()
 
 
 def _now() -> datetime:
@@ -264,17 +281,26 @@ class SandboxManager:
         )
         return await self.execute(thread_id, install_code)
 
-    async def run_isolated(self, spec: IsolatedSpec) -> IsolatedResult:
+    async def run_isolated(
+        self, spec: IsolatedSpec, restore: Optional[RestoreSpec] = None
+    ) -> IsolatedResult:
         """Run one command in a throwaway sandbox (GOO-312), never through the
         per-thread cache. ``envs`` is always empty; only the pinned
         requirements are installed (``--no-deps``, no DEFAULT_PACKAGES); the
         environment capture is ``pip freeze --all``, ``python -VV`` and
         ``/etc/os-release``, taken after the install and before the command.
-        The sandbox is killed in ``finally``."""
+        The sandbox is killed in ``finally``.
+
+        With ``restore`` (GOO-313) the archived lock replaces
+        ``spec.requirements`` and every restoration is verified in the
+        sandbox; any mismatch returns ``restoration_failed`` with its reasons
+        and the command never runs."""
         started = _now()
         state: Dict[str, Any] = {"outputs": {}, "stdout": "", "stderr": ""}
 
-        def result(status: Any, error: Optional[str] = None) -> IsolatedResult:
+        def result(
+            status: Any, error: Optional[str] = None, reasons: Tuple[str, ...] = ()
+        ) -> IsolatedResult:
             return IsolatedResult(
                 status=status,
                 outputs=state["outputs"],
@@ -288,7 +314,11 @@ class SandboxManager:
                 started_at=started,
                 completed_at=_now(),
                 error=error,
+                reasons=reasons,
             )
+
+        def refused(*reasons: str) -> IsolatedResult:
+            return result("restoration_failed", reasons[0], tuple(reasons))
 
         if not self.is_available:
             return result("unavailable", "sandbox_unavailable")
@@ -304,18 +334,30 @@ class SandboxManager:
             info = await sandbox.get_info()
             state["template_id"] = info.template_id
             run = sandbox.commands.run
-            if spec.requirements:
-                await sandbox.files.write(
-                    _REQUIREMENTS_PATH, "\n".join(spec.requirements) + "\n"
-                )
-                await run(
-                    f"pip install -q --no-deps -r {_REQUIREMENTS_PATH}",
-                    envs={},
-                    timeout=spec.timeout,
-                )
+            if restore is not None and info.template_id != restore.expected_template_id:
+                return refused("template_mismatch")
+            requirements: Any = (
+                restore.lock_bytes
+                if restore is not None
+                else ("\n".join(spec.requirements) + "\n" if spec.requirements else "")
+            )
+            if requirements:
+                await sandbox.files.write(_REQUIREMENTS_PATH, requirements)
+                try:
+                    await run(
+                        f"pip install -q --no-deps -r {_REQUIREMENTS_PATH}",
+                        envs={},
+                        timeout=spec.timeout,
+                    )
+                except Exception as exc:
+                    if restore is not None and hasattr(exc, "exit_code"):
+                        return refused("environment_install_failed")
+                    raise
             state["lock"] = (
                 await run("pip freeze --all", envs={}, timeout=60)
             ).stdout.encode("utf-8")
+            if restore is not None and state["lock"] != restore.lock_bytes:
+                return refused("environment_lock_mismatch")
             state["python"] = (
                 await run("python -VV", envs={}, timeout=60)
             ).stdout.strip()
@@ -324,6 +366,10 @@ class SandboxManager:
             )
             for name, data in spec.files.items():
                 await sandbox.files.write(f"{ISOLATED_WORKDIR}/{name}", data)
+            if restore is not None:
+                mismatched = await _verify_restored(run, restore.expected_sha256)
+                if mismatched:
+                    return refused(*mismatched)
             await run(f"mkdir -p {ISOLATED_WORKDIR}/out", envs={}, timeout=60)
             done = await run(
                 spec.command, cwd=ISOLATED_WORKDIR, envs={}, timeout=spec.timeout
@@ -398,6 +444,34 @@ class SandboxManager:
             # Stop loop if no sandboxes remain
             if not self._sandboxes:
                 break
+
+
+async def _verify_restored(run: Any, expected: Mapping[str, str]) -> List[str]:
+    """``sha256sum`` inside the sandbox over the restored files; one reason
+    per file whose in-sandbox digest is absent or differs."""
+    paths = " ".join(shlex.quote(name) for name in sorted(expected))
+    try:
+        done = await run(
+            f"sha256sum -- {paths}", cwd=ISOLATED_WORKDIR, envs={}, timeout=60
+        )
+        stdout = done.stdout
+    except Exception as exc:
+        if not hasattr(exc, "exit_code"):  # a missing file exits non-zero
+            raise
+        stdout = getattr(exc, "stdout", "") or ""
+    seen: Dict[str, str] = {}
+    for line in str(stdout).splitlines():
+        digest, _, name = line.partition("  ")
+        seen[name.strip()] = digest.strip()
+    reasons = []
+    for name in sorted(expected):
+        if seen.get(name) != expected[name]:
+            reasons.append(
+                "code_mismatch"
+                if name == "main.py"
+                else f"input_mismatch:{name.removeprefix('in/')}"
+            )
+    return reasons
 
 
 # Module-level singleton

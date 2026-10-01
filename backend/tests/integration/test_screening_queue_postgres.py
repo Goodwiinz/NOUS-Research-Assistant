@@ -84,6 +84,9 @@ _REBUILT_TABLES = (
     "research_claim_assessments",
     "research_claim_stance_observations",
     "research_claim_evidence_links",
+    # GOO-313: reruns reference manifests and runs; attempts reference reruns.
+    "experiment_rerun_attempts",
+    "experiment_reruns",
     # GOO-312: figures reference run artifacts and manifests; claim links
     # (figure_id) reference figures, so these come off after the links.
     "research_figures",
@@ -145,6 +148,7 @@ def _upgrade(connection: Connection) -> None:
         "f4b6d8a0c2e3_create_evidence_certainty.py",
         "a6c8e0b2d4f5_create_synthesis_results.py",
         "b8e0c2d4f6a7_create_run_manifests.py",
+        "c0f2a4b6d8e9_create_experiment_reruns.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename

@@ -33,6 +33,7 @@ import { StepProgress, type StepData } from './StepProgress';
 import { ReviewPanel, type ReviewSourceRecord } from './ReviewPanel';
 import { RunResults } from './RunResults';
 import { RunReproducibility } from './RunReproducibility';
+import { RunRerun } from './RunRerun';
 
 interface RunViewProps {
   runId: string;
@@ -777,6 +778,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
             projectId={activeRun.project_id}
           />
         )}
+      {activeRun?.status === 'completed' && <RunRerun runId={activeRun.id} />}
     </div>
   );
 }

@@ -388,6 +388,8 @@ _EVIDENCE_MIGRATION = "f4b6d8a0c2e3_create_evidence_certainty.py"
 _SYNTHESIS_MIGRATION = "a6c8e0b2d4f5_create_synthesis_results.py"
 # GOO-312's manifest, artifact and figure triggers use the function too.
 _MANIFEST_MIGRATION = "b8e0c2d4f6a7_create_run_manifests.py"
+# GOO-313's reruns reference GOO-312's manifests and use the function too.
+_RERUN_MIGRATION = "c0f2a4b6d8e9_create_experiment_reruns.py"
 
 
 def _migration(connection: Connection, direction: str, filename: str) -> None:
@@ -401,6 +403,7 @@ def _migration(connection: Connection, direction: str, filename: str) -> None:
 
 async def _run_migration(factory: Factory, direction: str) -> None:
     order = [
+        _RERUN_MIGRATION,
         _MANIFEST_MIGRATION,
         _SYNTHESIS_MIGRATION,
         _EVIDENCE_MIGRATION,

@@ -152,6 +152,7 @@ from .research_experiment import (
     ResearchRunArtifact,
     ResearchRunManifest,
 )
+from .research_rerun import ExperimentRerun, ExperimentRerunAttempt
 from .research_claim import (
     ResearchClaim,
     ResearchClaimAssessment,
@@ -317,6 +318,8 @@ __all__ = [
     "ResearchRunManifest",
     "ResearchRunArtifact",
     "ResearchFigure",
+    "ExperimentRerun",
+    "ExperimentRerunAttempt",
     "ResearchClaim",
     "ResearchClaimVersion",
     "ResearchClaimEvidenceLink",

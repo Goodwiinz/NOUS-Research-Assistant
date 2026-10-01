@@ -41,6 +41,7 @@ from src.services.research_engine import (
     experiment_service,
     identity_service,
     prisma,
+    rerun_service,
     synthesis_service,
 )
 from src.services.research_engine.contracts import canonical_json_sha256
@@ -337,6 +338,16 @@ async def _experiments(db: AsyncSession, context: ProjectContext) -> list[Part]:
     ]
 
 
+async def _reproduction(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-313: every rerun with its rule, hash and attempts (no storage keys)."""
+    body = await rerun_service.export_body(db, context)
+    return [
+        _sealed_part(
+            "reproduction.json", rerun_service.EXPORT_SCHEMA, body, not body["reruns"]
+        )
+    ]
+
+
 async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
     """The builders, in a fixed order (looked up at call time). PRISMA reads
     last: without the caller's snapshot, ``load_inputs`` would open its own
@@ -352,6 +363,7 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _evidence,
         _synthesis,
         _experiments,
+        _reproduction,
         _prisma,
     ):
         parts.extend(await build(db, context))
