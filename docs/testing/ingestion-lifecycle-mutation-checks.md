@@ -75,3 +75,14 @@ completes; a crash after cancellation writes FAILED over CANCELLED.
 An earlier G6 mutant (`rollback` → `raise`) survived because the raise landed
 in the outer `except` and wrote nothing. It was not a guard removal, so it was
 replaced by the plain-`db.get` mutant above.
+
+### GOO-357 review fixes (`a495ef29d`)
+
+Both defects were reproduced on PostgreSQL before the fix: a real
+`DeadlockDetected`, and a live run stopped as `queued`.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G10 lock before flush, `processing_lifecycle.py:71` | `db.flush()` moved back above the lock selects | `test_guard_does_not_deadlock_with_a_concurrent_delete` | `DeadlockDetected` |
+| G11 lock before entity reset, `processing_tasks.py:402` | guard call replaced by a no-op | `test_entity_reset_does_not_deadlock_with_a_cascading_delete` | `DeadlockDetected` |
+| G12 late producer QUEUED, `processing_lifecycle.py:97` | `if False:` | `test_producer_late_queued_write_does_not_stop_live_run` | `'stopped' == 'completed'` |
