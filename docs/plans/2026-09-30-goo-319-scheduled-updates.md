@@ -299,3 +299,23 @@ Record SHA/PR, CI and oasdiff links, the two corpus snapshots and delta export, 
 ## Out of scope
 
 `ponytail:` markers at each seam: sub-hourly schedules; backfilling missed fires; Retraction Watch or PubMed retraction feeds beyond Crossref `update-to`; email/notification on new deltas; per-provider schedules; converting local saved searches into strategies.
+
+---
+
+## Amendment 2026-10-01: as implemented
+
+The plan above is kept as written. Where the implementation differs:
+
+- **Results row:** `citation_chasing JSONB` replaces `chase_receipt_id FK`. When the protocol requires chasing, each `new` report (at most `MAX_CHASE_SEEDS = 3`, the rest counted as `seeds_over_cap`) is chased once per required direction through GOO-300's `chase_citations` and the run's OpenAlex connector. Each chase is its own `citation_chase` receipt.
+- **Schedule versions:** there is no `created_by_id` column. `owner_id` is whoever saved the version, and the schedule runs as them. Saving also requires workspace edit access (403 `Schedule owners need edit access to the project`); without it every run would fail `owner_access_revoked`.
+- **Source version:** the version fields are title, authors, venue, year and `provider_updated`. `abstract_sha256` is dropped because the GOO-300 export (the baseline) redacts non-CC0 abstracts. A work is `changed` only when a field that both sides carry differs; a field present on one side only is not evidence. Crossref's `provider_updated` is `deposited.date-time`, because `indexed` moves on every reindex. PubMed and OpenAlex leave it absent.
+- **Claim:** archived or revoked schedules are still claimed and record a `failed` attempt as evidence. Disabled tips are never claimed. A fire claimed before a disable is `skipped schedule_disabled`. `resumable()` re-offers executions that have no terminal attempt, and the tick runs claimed plus resumable ones. Missed fires older than 400 days are neither run nor counted.
+- **Commits:** `run_execution` commits at four points (start, import, each chase, finish). Each point is idempotent: the started attempt is under the execution row lock, a retry reuses the committed import by `dedup_key`, and the results PK plus the stream lock cover the finish.
+- **Failures:** when every provider fails, the attempt is `failed providers_failed` (`search_sources` raises, so that call's page receipts are not retained). Notice checks are capped at 400 DOIs. An otherwise unchanged work beyond the cap is `unknown/provider_capped`.
+- **Ledger:** `search_update.executed` uses actor role `machine`, as GOO-318 does, not `system`. Its payload adds `schedule_version_id`. Replay checks that it names a recorded version of its schedule (the fire time is not in the stream).
+- **Status:** `scheduled` (never fired) joins the derived statuses.
+- **API:** the `GET` list also returns the pinnable `strategies` of completed runs, which the UI picks from. The delta attachment is documented as `SearchDeltaExport`, and `accepted_delta` returns `SearchDeltaResponse`, the GOO-320 seam.
+- **GOO-300 export fix:** `corpus_export` read every non-file receipt as a citation chase (`KeyError: 'direction'`). Scheduled receipts' providers are now listed with the provider searches.
+- **Identity:** snapshot identifiers are lists per kind. If a baseline identifier now belongs to another live report, the split is reported as `unknown/merge_unresolved`.
+- **Proof step 9:** the workspace-withdrawal marker is a local import record that carries `is_retracted`/`retraction_status` metadata. Only Crossref notices classify a work as a correction or retraction.
+- **Task route:** queue `celery` (the default).
