@@ -75,6 +75,12 @@ _IDENTITY_TABLES = (
     "screening_observations",
     "screening_assignments",
     "screening_queues",
+    # GOO-319: execution results reference import receipts; schedules
+    # reference strategy and protocol versions.
+    "research_search_execution_results",
+    "research_search_execution_attempts",
+    "research_search_executions",
+    "research_search_schedules",
     "research_import_records",
     "research_import_receipts",
     "research_report_observations",
