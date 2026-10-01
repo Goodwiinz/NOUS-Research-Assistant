@@ -411,9 +411,7 @@ async def _run_migration(factory: Factory, direction: str) -> None:
     async with factory() as db:
         connection = await db.connection()
         for filename in order:
-            await connection.run_sync(
-                lambda sync, name=filename: _migration(sync, direction, name)
-            )
+            await connection.run_sync(_migration, direction, filename)
         await db.commit()
 
 

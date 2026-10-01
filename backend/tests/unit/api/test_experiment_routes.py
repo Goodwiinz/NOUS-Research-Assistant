@@ -11,7 +11,7 @@ import hashlib
 import json
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -148,7 +148,7 @@ def test_legacy_manifest_route_unchanged(
 
     monkeypatch.setattr(run_routes, "_get_owned_run", owned_run)
     legacy = asyncio.run(
-        run_routes.get_manifest(RUN, SimpleNamespace(id=uuid4()), harness.db)
+        run_routes.get_manifest(RUN, cast(Any, SimpleNamespace(id=uuid4())), harness.db)
     )
     body = harness.client.get(f"/research-engine/runs/{RUN}/manifest/v2").json()
     assert body["schema"] == manifest_rules.LEGACY_SCHEMA
