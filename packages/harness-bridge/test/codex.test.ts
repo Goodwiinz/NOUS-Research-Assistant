@@ -328,6 +328,12 @@ test("connect exchanges CLI-owned grant; workspace sends only opaque IDs and lab
   });
   assert.equal(paired.deviceId, device);
   assert.equal(calls.filter((c) => c.url.endsWith("/exchange")).length, 1);
+  // The grant id is stored so the grant can be renewed before it expires.
+  const stored = await new CredentialStore(options.stateDir).load(
+    paired.credentialHandle,
+  );
+  assert.equal(stored.grantId, grant);
+  assert.equal(typeof stored.renewedAt, "number");
   const created = await addWorkspace({
     ...options,
     root: dir,

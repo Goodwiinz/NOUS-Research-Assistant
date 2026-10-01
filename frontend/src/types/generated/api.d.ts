@@ -3847,6 +3847,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Action */
+        post: operations["create_action_api_v1_integrations_actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/actions/{invocation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Action */
+        get: operations["read_action_api_v1_integrations_actions__invocation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/actions/{invocation_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide */
+        post: operations["decide_api_v1_integrations_actions__invocation_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/actions/{invocation_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review Action */
+        get: operations["review_action_api_v1_integrations_actions__invocation_id__review_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices": {
         parameters: {
             query?: never;
@@ -4936,6 +5004,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Claims
+         * @description Each claim's tip version, or its version pinned to ``draft_id``.
+         */
+        get: operations["list_claims_api_v1_projects__project_id__claims_get"];
+        put?: never;
+        /**
+         * Create Claim
+         * @description Create a claim over an exact draft passage (EDIT).
+         */
+        post: operations["create_claim_api_v1_projects__project_id__claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Claims
+         * @description Download the reconstructable claims evidence package (VIEW).
+         */
+        get: operations["export_claims_api_v1_projects__project_id__claims_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Claim
+         * @description The claim's full version, link, observation and assessment history.
+         */
+        get: operations["get_claim_api_v1_projects__project_id__claims__claim_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}/assessments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Claim Assessment
+         * @description Assess the claim's tip version (ADJUDICATOR role only).
+         */
+        post: operations["create_claim_assessment_api_v1_projects__project_id__claims__claim_id__assessments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Claim Link
+         * @description Link, re-point or withdraw evidence on the claim's tip version (EDIT).
+         */
+        post: operations["create_claim_link_api_v1_projects__project_id__claims__claim_id__links_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}/links/{link_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Stance Observation
+         * @description Snapshot the evidence meter's stance for this link's source (EDIT).
+         */
+        post: operations["create_stance_observation_api_v1_projects__project_id__claims__claim_id__links__link_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/claims/{claim_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Claim Version
+         * @description Append a reworded version superseding the claim's tip (EDIT).
+         */
+        post: operations["create_claim_version_api_v1_projects__project_id__claims__claim_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/documents": {
         parameters: {
             query?: never;
@@ -5231,6 +5443,49 @@ export interface paths {
          * @description Export draft to LaTeX (.tex + .bib) or Markdown.
          */
         post: operations["export_draft_api_v1_projects__project_id__drafts__draft_id__export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote Draft
+         * @description Promote this exact version to verified (adjudicator or supervisor).
+         *
+         *     201 new, 200 replayed; 409 blocked (every blocker listed), content
+         *     changed or stale; 403 without the role.
+         */
+        post: operations["promote_draft_api_v1_projects__project_id__drafts__draft_id__versions__version__promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Draft Release
+         * @description Release status, every blocker and the invalidation report (VIEW).
+         */
+        get: operations["get_draft_release_api_v1_projects__project_id__drafts__draft_id__versions__version__release_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6041,6 +6296,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/audit-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Audit Bundle Route */
+        get: operations["audit_bundle_route_api_v1_research_engine_projects__project_id__audit_bundle_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/citation-chases": {
         parameters: {
             query?: never;
@@ -6095,6 +6367,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/fulltext": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Fulltext Route */
+        get: operations["list_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/fulltext/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request Fulltext Route */
+        post: operations["request_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/fulltext/requests/{request_id}/attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Attempt Route */
+        post: operations["record_attempt_route_api_v1_research_engine_projects__project_id__fulltext_requests__request_id__attempts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/imports": {
         parameters: {
             query?: never;
@@ -6125,6 +6448,60 @@ export interface paths {
         };
         /** Get Import Route */
         get: operations["get_import_route_api_v1_research_engine_projects__project_id__imports__receipt_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/journey": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Journey Route
+         * @description Stage facts and derived status; reports state, never enforces order.
+         */
+        get: operations["journey_route_api_v1_research_engine_projects__project_id__journey_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/prisma": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Prisma Flow Route */
+        get: operations["prisma_flow_route_api_v1_research_engine_projects__project_id__prisma_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/prisma/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Prisma Export Route */
+        get: operations["prisma_export_route_api_v1_research_engine_projects__project_id__prisma_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6301,6 +6678,160 @@ export interface paths {
         post?: never;
         /** Delete Project Role */
         delete: operations["delete_project_role_api_v1_research_engine_projects__project_id__roles__user_id___role__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Screening Queues Route */
+        get: operations["list_screening_queues_route_api_v1_research_engine_projects__project_id__screening_queues_get"];
+        put?: never;
+        /** Create Screening Queue Route */
+        post: operations["create_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assign Screening Reviewer Route */
+        post: operations["assign_screening_reviewer_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/assignments/{assignment_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Screening Assignment Route */
+        post: operations["revoke_screening_assignment_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments__assignment_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Screening Conflicts Route */
+        get: operations["screening_conflicts_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__conflicts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Screening History Route */
+        get: operations["screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Screening Queue Route */
+        get: operations["my_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__mine_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit Screening Observation Route */
+        post: operations["submit_screening_observation_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/adjudicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adjudicate Screening Report Route */
+        post: operations["adjudicate_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__adjudicate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen Screening Report Route */
+        post: operations["reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6645,7 +7176,10 @@ export interface paths {
          * @description Get an extraction matrix with all its cells.
          *
          *     Returns the matrix definition and all extracted cell values,
-         *     organized for rendering as a comparison grid.
+         *     organized for rendering as a comparison grid. Columns are the current form
+         *     version's fields; each cell is the accepted value, else the latest machine
+         *     observation, else the frozen legacy cell (``source``), with ``stale``
+         *     derived at read time.
          */
         get: operations["get_matrix_api_v1_research_matrices__matrix_id__get"];
         put?: never;
@@ -6661,10 +7195,32 @@ export interface paths {
          * Update Matrix
          * @description Update an extraction matrix (rename, add/remove/reorder columns).
          *
-         *     When clear_stale_cells is true and columns changed, cells whose
-         *     column_name no longer matches any column are deleted.
+         *     A column change appends an immutable form version; identical columns
+         *     create nothing. Prior values are never deleted: when clear_stale_cells is
+         *     true and columns changed, stale_document_ids lists the documents holding
+         *     values on removed columns.
          */
         patch: operations["update_matrix_api_v1_research_matrices__matrix_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/research/matrices/{matrix_id}/accepted-values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Extraction Value
+         * @description Accept a value that equals a cited observation (ADJUDICATOR role only).
+         */
+        post: operations["accept_extraction_value_api_v1_research_matrices__matrix_id__accepted_values_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/research/matrices/{matrix_id}/extract": {
@@ -6685,6 +7241,50 @@ export interface paths {
          *     extraction may take time for large document sets.
          */
         post: operations["trigger_extraction_api_v1_research_matrices__matrix_id__extract_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/matrices/{matrix_id}/form-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Form Versions
+         * @description Every immutable form version of a matrix, oldest first.
+         */
+        get: operations["list_form_versions_api_v1_research_matrices__matrix_id__form_versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/matrices/{matrix_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Cell Observations
+         * @description All observations (any form version) and the accepted chain of one cell.
+         */
+        get: operations["list_cell_observations_api_v1_research_matrices__matrix_id__observations_get"];
+        put?: never;
+        /**
+         * Create Observation
+         * @description Record a reviewer's own value or missingness reason (REVIEWER role).
+         */
+        post: operations["create_observation_api_v1_research_matrices__matrix_id__observations_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9249,6 +9849,72 @@ export interface components {
             /** Rate Limit Per Hour */
             rate_limit_per_hour: number;
         };
+        /** ActionDecision */
+        ActionDecision: {
+            /** Approved */
+            approved: boolean;
+        };
+        /**
+         * ActionReview
+         * @description What the interactive owner sees before deciding: the exact stored target.
+         */
+        ActionReview: {
+            /** Content */
+            content: string;
+            /** Decided At */
+            decided_at?: string | null;
+            /**
+             * Invocation Id
+             * Format: uuid
+             */
+            invocation_id: string;
+            /** Last Error */
+            last_error?: string | null;
+            /** Project Available */
+            project_available: boolean;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Label */
+            project_label: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            result?: components["schemas"]["ToolResult"] | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "awaiting_approval" | "approved" | "executing" | "succeeded" | "failed" | "outcome_unknown";
+            /** Tags */
+            tags: string[];
+            /** Title */
+            title: string;
+            /** Tool Name */
+            tool_name: string;
+        };
+        /** ActionStatus */
+        ActionStatus: {
+            /** Approval Url */
+            approval_url?: string | null;
+            /**
+             * Invocation Id
+             * Format: uuid
+             */
+            invocation_id: string;
+            result?: components["schemas"]["ToolResult"] | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "awaiting_approval" | "approved" | "executing" | "succeeded" | "failed" | "outcome_unknown";
+            /** Tool Name */
+            tool_name: string;
+        };
         /** AgentExecuteRequest */
         AgentExecuteRequest: {
             /**
@@ -10527,6 +11193,378 @@ export interface components {
             title?: string | null;
         };
         /**
+         * ClaimAssessmentCreate
+         * @description An adjudicator's judgement of the claim's tip version.
+         */
+        ClaimAssessmentCreate: {
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Link Ids */
+            link_ids?: string[];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Stance
+             * @enum {string}
+             */
+            stance: "supporting" | "opposing" | "neutral" | "not_addressed" | "unresolved";
+            /** Stance Observation Ids */
+            stance_observation_ids?: string[];
+            /** Supersedes Assessment Id */
+            supersedes_assessment_id?: string | null;
+        };
+        /** ClaimAssessmentResponse */
+        ClaimAssessmentResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Assessed By Id
+             * Format: uuid
+             */
+            assessed_by_id: string;
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Link Ids */
+            link_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Stance
+             * @enum {string}
+             */
+            stance: "supporting" | "opposing" | "neutral" | "not_addressed" | "unresolved";
+            /** Stance Observation Ids */
+            stance_observation_ids: string[];
+            /** Supersedes Assessment Id */
+            supersedes_assessment_id?: string | null;
+        };
+        /** ClaimCounts */
+        ClaimCounts: {
+            /** Assessed */
+            assessed: number;
+            /** Claims */
+            claims: number;
+            /** Legacy Unanchored */
+            legacy_unanchored: number;
+            /** Links By Kind */
+            links_by_kind: {
+                [key: string]: number;
+            };
+            /** Unassessed */
+            unassessed: number;
+        };
+        /**
+         * ClaimCreate
+         * @description A new claim over ``draft.content[start_char:end_char]`` (exactly).
+         */
+        ClaimCreate: {
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** End Char */
+            end_char: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @default factual
+             * @enum {string}
+             */
+            kind: "factual" | "interpretation";
+            /** Start Char */
+            start_char: number;
+            /** Text */
+            text: string;
+        };
+        /**
+         * ClaimDetailResponse
+         * @description The full history, each list in ``created_at, id`` order.
+         */
+        ClaimDetailResponse: {
+            /** Assessments */
+            assessments: components["schemas"]["ClaimAssessmentResponse"][];
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Links */
+            links: components["schemas"]["ClaimLinkResponse"][];
+            /** Observations */
+            observations: components["schemas"]["StanceObservationResponse"][];
+            /** Versions */
+            versions: components["schemas"]["ClaimVersionResponse"][];
+        };
+        /**
+         * ClaimLinkCreate
+         * @description Link the claim's tip version to evidence, or withdraw/re-point a link.
+         *
+         *     ``extraction`` takes ``accepted_value_id``; ``source_span`` takes
+         *     ``document_id``, ``start_char``, ``end_char`` and ``quote``;
+         *     ``legacy_unanchored`` takes ``draft_citation_id``. The server copies the
+         *     source hashes. A ``withdrawn`` row supersedes a link and copies its target.
+         */
+        ClaimLinkCreate: {
+            /** Accepted Value Id */
+            accepted_value_id?: string | null;
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /** Document Id */
+            document_id?: string | null;
+            /** Draft Citation Id */
+            draft_citation_id?: string | null;
+            /** End Char */
+            end_char?: number | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "extraction" | "source_span" | "legacy_unanchored";
+            /** Quote */
+            quote?: string | null;
+            /** Start Char */
+            start_char?: number | null;
+            /**
+             * Status
+             * @default linked
+             * @enum {string}
+             */
+            status: "linked" | "withdrawn";
+            /** Supersedes Link Id */
+            supersedes_link_id?: string | null;
+        };
+        /** ClaimLinkResponse */
+        ClaimLinkResponse: {
+            /** Accepted Value Id */
+            accepted_value_id?: string | null;
+            /**
+             * Claim Version Id
+             * Format: uuid
+             */
+            claim_version_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Document Id */
+            document_id?: string | null;
+            /** Draft Citation Id */
+            draft_citation_id?: string | null;
+            /** End Char */
+            end_char?: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "extraction" | "source_span" | "legacy_unanchored";
+            latest_observation?: components["schemas"]["StanceObservationResponse"] | null;
+            /** Quote */
+            quote?: string | null;
+            /**
+             * Source Changed
+             * @default false
+             */
+            source_changed: boolean;
+            /** Source Hash */
+            source_hash?: string | null;
+            /** Start Char */
+            start_char?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "linked" | "withdrawn";
+            /** Supersedes Link Id */
+            supersedes_link_id?: string | null;
+            /** Text Sha256 */
+            text_sha256?: string | null;
+        };
+        /** ClaimListResponse */
+        ClaimListResponse: {
+            counts: components["schemas"]["ClaimCounts"];
+            /** Items */
+            items: components["schemas"]["ClaimSummary"][];
+        };
+        /** ClaimResponse */
+        ClaimResponse: {
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            version: components["schemas"]["ClaimVersionResponse"];
+        };
+        /**
+         * ClaimSummary
+         * @description One claim: its tip version, or the version pinned to the filtered draft.
+         */
+        ClaimSummary: {
+            assessment?: components["schemas"]["ClaimAssessmentResponse"] | null;
+            /** Citation Review Status */
+            citation_review_status?: string | null;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Is Tip */
+            is_tip: boolean;
+            /** Links */
+            links: components["schemas"]["ClaimLinkResponse"][];
+            version: components["schemas"]["ClaimVersionResponse"];
+        };
+        /**
+         * ClaimVersionCreate
+         * @description A reworded passage; it must supersede the claim's current version.
+         */
+        ClaimVersionCreate: {
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** End Char */
+            end_char: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Kind
+             * @default factual
+             * @enum {string}
+             */
+            kind: "factual" | "interpretation";
+            /** Start Char */
+            start_char: number;
+            /**
+             * Supersedes Claim Version Id
+             * Format: uuid
+             */
+            supersedes_claim_version_id: string;
+            /** Text */
+            text: string;
+        };
+        /** ClaimVersionResponse */
+        ClaimVersionResponse: {
+            /** Attributed To User Id */
+            attributed_to_user_id?: string | null;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Draft Content Hash */
+            draft_content_hash: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Draft Review Id */
+            draft_review_id?: string | null;
+            /** Draft Version */
+            draft_version: number;
+            /** End Char */
+            end_char: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "factual" | "interpretation";
+            /** Normalized Hash */
+            normalized_hash: string;
+            /** Start Char */
+            start_char: number;
+            /** Supersedes Claim Version Id */
+            supersedes_claim_version_id?: string | null;
+            /** Text */
+            text: string;
+            /** Text Sha256 */
+            text_sha256: string;
+            /** Version No */
+            version_no: number;
+        };
+        /**
          * CollectionCreate
          * @description Create collection request
          */
@@ -11451,6 +12489,71 @@ export interface components {
          * @enum {string}
          */
         DocumentType: "text" | "image" | "audio" | "video" | "pdf" | "spreadsheet" | "presentation" | "multimodal";
+        /**
+         * DraftPromoteRequest
+         * @description Promote the exact version whose content hashes to ``content_hash``.
+         */
+        DraftPromoteRequest: {
+            /** Content Hash */
+            content_hash: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Rationale */
+            rationale?: string | null;
+        };
+        /**
+         * DraftReleaseResponse
+         * @description A promotion of one exact draft version; stale rows are kept.
+         */
+        DraftReleaseResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /** Assessment Ids */
+            assessment_ids: string[];
+            /** Claim Version Ids */
+            claim_version_ids: string[];
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Draft Version */
+            draft_version: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Interpretation Claim Version Ids */
+            interpretation_claim_version_ids: string[];
+            /** Policy Version */
+            policy_version: number;
+            /**
+             * Promoted By Id
+             * Format: uuid
+             */
+            promoted_by_id: string;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /** Rationale */
+            rationale?: string | null;
+            /** Stale At */
+            stale_at?: string | null;
+            /** Stale Event Id */
+            stale_event_id?: string | null;
+        };
         /** DraftReviewListResponse */
         DraftReviewListResponse: {
             /** Reviews */
@@ -11913,10 +13016,161 @@ export interface components {
             y2: number;
         };
         /**
+         * ExtractionAcceptCreate
+         * @description An adjudicator's accepted value; it must equal a cited observation.
+         */
+        ExtractionAcceptCreate: {
+            /**
+             * Accept Unverified
+             * @default false
+             */
+            accept_unverified: boolean;
+            /** Anchor Start */
+            anchor_start?: number | null;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Missingness */
+            missingness?: ("not_reported" | "not_applicable" | "unavailable_text" | "unresolved_disagreement") | null;
+            /** Observation Ids */
+            observation_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /** Supersedes Accepted Value Id */
+            supersedes_accepted_value_id?: string | null;
+            /** Value */
+            value?: unknown;
+        };
+        /** ExtractionAcceptedValueResponse */
+        ExtractionAcceptedValueResponse: {
+            /**
+             * Accepted By Id
+             * Format: uuid
+             */
+            accepted_by_id: string;
+            /** Anchor End Char */
+            anchor_end_char?: number | null;
+            /** Anchor Observation Id */
+            anchor_observation_id?: string | null;
+            /** Anchor Resolution */
+            anchor_resolution?: ("verified" | "disambiguated" | "accepted_unverified" | "not_applicable" | "legacy") | null;
+            /** Anchor Start Char */
+            anchor_start_char?: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Missingness */
+            missingness?: string | null;
+            /** Observation Ids */
+            observation_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Source Changed
+             * @default false
+             */
+            source_changed: boolean;
+            /** Source Hash */
+            source_hash: string;
+            /** Supersedes Accepted Value Id */
+            supersedes_accepted_value_id?: string | null;
+            /** Text Sha256 */
+            text_sha256?: string | null;
+            /** Value */
+            value?: unknown;
+        };
+        /**
+         * ExtractionAnchor
+         * @description Where an observation's verbatim citation sits in the retained text.
+         */
+        ExtractionAnchor: {
+            /** End Char */
+            end_char?: number | null;
+            /** Occurrence Contexts */
+            occurrence_contexts?: components["schemas"]["ExtractionAnchorOccurrence"][];
+            /** Occurrences */
+            occurrences?: number[];
+            /** Occurrences In Text */
+            occurrences_in_text?: number | null;
+            /** Page */
+            page?: number | null;
+            /** Start Char */
+            start_char?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "verified" | "ambiguous" | "unverified" | "location_unavailable";
+        };
+        /**
+         * ExtractionAnchorOccurrence
+         * @description One place a repeated citation occurs, sliced server-side (code points).
+         */
+        ExtractionAnchorOccurrence: {
+            /** Context After */
+            context_after: string;
+            /** Context Before */
+            context_before: string;
+            /** End Char */
+            end_char: number;
+            /** Page */
+            page?: number | null;
+            /** Start Char */
+            start_char: number;
+        };
+        /** ExtractionCellObservationsResponse */
+        ExtractionCellObservationsResponse: {
+            /** Accepted Chain */
+            accepted_chain: components["schemas"]["ExtractionAcceptedValueResponse"][];
+            /** Observations */
+            observations: components["schemas"]["ExtractionObservationResponse"][];
+        };
+        /**
          * ExtractionColumn
          * @description A column definition for the extraction matrix.
          */
         ExtractionColumn: {
+            /**
+             * Categories
+             * @description Allowed values; required for, and only for, categorical
+             */
+            categories?: string[] | null;
             /**
              * Description
              * @description What to extract
@@ -11927,6 +13181,49 @@ export interface components {
              * @description Column header name
              */
             name: string;
+            /** Timepoint */
+            timepoint?: string | null;
+            /**
+             * Type
+             * @description Value type of the extracted field
+             * @default text
+             * @enum {string}
+             */
+            type: "text" | "number" | "boolean" | "categorical";
+            /** Unit */
+            unit?: string | null;
+        };
+        /** ExtractionFormVersionResponse */
+        ExtractionFormVersionResponse: {
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By Id */
+            created_by_id?: string | null;
+            /** Fields */
+            fields: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Matrix Id
+             * Format: uuid
+             */
+            matrix_id: string;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /** Provenance */
+            provenance: string;
+            /** Version No */
+            version_no: number;
         };
         /**
          * ExtractionItemDecision
@@ -11951,6 +13248,104 @@ export interface components {
          * @enum {string}
          */
         ExtractionMethod: "spacy_ner" | "pattern_matching" | "manual" | "llm_extraction" | "rule_based" | "hybrid" | "unknown";
+        /**
+         * ExtractionObservationCreate
+         * @description A reviewer's value (or missingness reason) for one field of one document.
+         */
+        ExtractionObservationCreate: {
+            /** Anchor Start */
+            anchor_start?: number | null;
+            /** Citation */
+            citation?: string | null;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Missingness */
+            missingness?: ("not_reported" | "not_applicable" | "unavailable_text") | null;
+            /** Value */
+            value?: unknown;
+        };
+        /** ExtractionObservationResponse */
+        ExtractionObservationResponse: {
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            anchor?: components["schemas"]["ExtractionAnchor"] | null;
+            /** Citation */
+            citation?: string | null;
+            /** Context After */
+            context_after?: string | null;
+            /** Context Before */
+            context_before?: string | null;
+            /** Coverage Complete */
+            coverage_complete?: boolean | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Extractor Model */
+            extractor_model?: string | null;
+            /** Extractor Run Id */
+            extractor_run_id?: string | null;
+            /**
+             * Field Id
+             * Format: uuid
+             */
+            field_id: string;
+            /**
+             * Form Version Id
+             * Format: uuid
+             */
+            form_version_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Inspected Coverage */
+            inspected_coverage?: number[][] | null;
+            /** Kind */
+            kind: string;
+            /** Missingness */
+            missingness?: string | null;
+            /**
+             * Source Changed
+             * @default false
+             */
+            source_changed: boolean;
+            /** Source Hash */
+            source_hash: string;
+            /** Text Length */
+            text_length?: number | null;
+            /** Text Sha256 */
+            text_sha256?: string | null;
+            /** Validation State */
+            validation_state: string;
+            /** Value */
+            value?: unknown;
+        };
         /** ExtractionRequest */
         ExtractionRequest: {
             /**
@@ -12067,6 +13462,115 @@ export interface components {
          * @description Final review carries no client-authored report or evidence fields.
          */
         FinalReviewDecisionPayload: Record<string, never>;
+        /**
+         * FulltextAttemptCreate
+         * @description One attempt; ``previous_attempt_id`` must be the current head (or null).
+         */
+        FulltextAttemptCreate: {
+            /**
+             * Attempted On
+             * Format: date
+             */
+            attempted_on: string;
+            /** Document Id */
+            document_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "requested" | "retrieved" | "unavailable";
+            /** Previous Attempt Id */
+            previous_attempt_id?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** FulltextAttemptResponse */
+        FulltextAttemptResponse: {
+            /**
+             * Actor Id
+             * Format: uuid
+             */
+            actor_id: string;
+            /**
+             * Attempted On
+             * Format: date
+             */
+            attempted_on: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Document Available
+             * @default false
+             */
+            document_available: boolean;
+            /** Document Content Hash */
+            document_content_hash?: string | null;
+            /** Document Id */
+            document_id?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "requested" | "retrieved" | "unavailable";
+            /** Previous Attempt Id */
+            previous_attempt_id?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** FulltextRequestCreate */
+        FulltextRequestCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+        };
+        /** FulltextStateResponse */
+        FulltextStateResponse: {
+            /** Attempts */
+            attempts: components["schemas"]["FulltextAttemptResponse"][];
+            /** Head Attempt Id */
+            head_attempt_id?: string | null;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Requested By Id
+             * Format: uuid
+             */
+            requested_by_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "requested" | "retrieved" | "unavailable";
+        };
         /** GrantDecision */
         GrantDecision: {
             /** Approved */
@@ -12727,6 +14231,35 @@ export interface components {
                 [key: string]: unknown;
             }[] | null;
         };
+        /** JourneyResponse */
+        JourneyResponse: {
+            /** Current */
+            current?: ("plan" | "discover" | "select" | "extract" | "write") | null;
+            /** Stages */
+            stages: components["schemas"]["JourneyStage"][];
+        };
+        /**
+         * JourneyStage
+         * @description Derived from persisted rows on every call (``journey.derive_stages``).
+         */
+        JourneyStage: {
+            /** Blockers */
+            blockers: string[];
+            /** Facts */
+            facts: {
+                [key: string]: number | boolean | string | null;
+            };
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "plan" | "discover" | "select" | "extract" | "write";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_started" | "in_progress" | "attention" | "complete";
+        };
         /**
          * KeyRotationRequest
          * @description Request model for key rotation
@@ -13151,6 +14684,68 @@ export interface components {
          * @enum {string}
          */
         MetricTimeRange: "1h" | "24h" | "7d" | "30d" | "90d";
+        /** MyScreeningQueueInfo */
+        MyScreeningQueueInfo: {
+            /** Criteria Hash */
+            criteria_hash: string;
+            /** Exclusion Reasons */
+            exclusion_reasons: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /** Stale */
+            stale?: string | null;
+        };
+        /** MyScreeningQueueItem */
+        MyScreeningQueueItem: {
+            /** Abstract */
+            abstract?: string | null;
+            /** Identifiers */
+            identifiers: {
+                [key: string]: string[];
+            };
+            observation?: components["schemas"]["ScreeningObservationResponse"] | null;
+            /** Others */
+            others?: components["schemas"]["ScreeningObservationResponse"][];
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            resolution?: components["schemas"]["ScreeningResolutionResponse"] | null;
+            /**
+             * Reveal State
+             * @default hidden
+             * @enum {string}
+             */
+            reveal_state: "hidden" | "revealed";
+            /** Title Snapshot */
+            title_snapshot: string;
+        };
+        /** MyScreeningQueueResponse */
+        MyScreeningQueueResponse: {
+            /**
+             * Assignment Id
+             * Format: uuid
+             */
+            assignment_id: string;
+            counts: components["schemas"]["ScreeningCounts"];
+            /** Items */
+            items: components["schemas"]["MyScreeningQueueItem"][];
+            queue: components["schemas"]["MyScreeningQueueInfo"];
+        };
         /**
          * NativeDecision
          * @description A strict one-time decision, or exact answers to native questions.
@@ -13431,6 +15026,122 @@ export interface components {
          * @enum {string}
          */
         Priority: "low" | "normal" | "high" | "critical";
+        /** PrismaAmendment */
+        PrismaAmendment: {
+            /** Aggregate Type */
+            aggregate_type: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** From */
+            from: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Seq */
+            seq: number;
+            /** To */
+            to: string;
+        };
+        /** PrismaChecks */
+        PrismaChecks: {
+            /** Assessed Within Retrieved */
+            assessed_within_retrieved: boolean;
+            /** Included Plus Excluded Equals Assessed */
+            included_plus_excluded_equals_assessed: boolean;
+            /** Screened Plus Awaiting Equals Unique */
+            screened_plus_awaiting_equals_unique: boolean;
+        };
+        /** PrismaCounts */
+        PrismaCounts: {
+            /** Duplicates Removed */
+            duplicates_removed: number;
+            /** Import Rejected */
+            import_rejected: number;
+            /** Included Reports */
+            included_reports: number;
+            /** Included Studies */
+            included_studies: number;
+            /** Records Awaiting Screening */
+            records_awaiting_screening: number;
+            /** Records By Import */
+            records_by_import: {
+                [key: string]: number;
+            };
+            /** Records By Source */
+            records_by_source: {
+                [key: string]: number;
+            };
+            /** Records Excluded */
+            records_excluded: number;
+            /** Records Identified */
+            records_identified: number;
+            /** Records Screened */
+            records_screened: number;
+            /** Reports Assessed */
+            reports_assessed: number;
+            /** Reports Awaiting Retrieval */
+            reports_awaiting_retrieval: number;
+            /** Reports Excluded By Reason */
+            reports_excluded_by_reason: {
+                [key: string]: number;
+            };
+            /** Reports Not Retrieved */
+            reports_not_retrieved: number;
+            /** Reports Sought */
+            reports_sought: number;
+            /** Unconfirmed Study Links */
+            unconfirmed_study_links: number;
+            /** Unique Reports */
+            unique_reports: number;
+        };
+        /** PrismaFlowBody */
+        PrismaFlowBody: {
+            /** Amendments */
+            amendments: components["schemas"]["PrismaAmendment"][];
+            checks: components["schemas"]["PrismaChecks"];
+            counts: components["schemas"]["PrismaCounts"];
+            /** Excluded From Flow */
+            excluded_from_flow: {
+                [key: string]: number;
+            };
+            versions: components["schemas"]["PrismaVersions"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * PrismaFlowResponse
+         * @description Recomputed from persisted rows on every call; nothing here is stored.
+         */
+        PrismaFlowResponse: {
+            body: components["schemas"]["PrismaFlowBody"];
+            /** Body Sha256 */
+            body_sha256: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Schema */
+            schema: string;
+        };
+        /** PrismaVersions */
+        PrismaVersions: {
+            /** Corpus Hash */
+            corpus_hash: string;
+            /** Protocol Version Ids */
+            protocol_version_ids: string[];
+            /** Stream Heads */
+            stream_heads: {
+                [key: string]: number;
+            };
+        };
         /** ProcessingJobResponse */
         ProcessingJobResponse: {
             /** Completed At */
@@ -14335,6 +16046,68 @@ export interface components {
          */
         RelationshipType: "WORKS_FOR" | "KNOWS" | "RELATED_TO" | "LOCATED_IN" | "PART_OF" | "MENTIONED_IN" | "APPEARS_WITH" | "CREATED_BY" | "OWNS" | "MANAGES" | "COLLABORATES_WITH" | "REPORTS_TO" | "MEMBER_OF" | "ATTENDED" | "SPOKE_AT" | "PUBLISHED_BY" | "CITED" | "REFERENCES" | "CUSTOM";
         /**
+         * ReleaseBlocker
+         * @description One reason a draft version cannot be promoted (GOO-307).
+         */
+        ReleaseBlocker: {
+            /** Claim Version Id */
+            claim_version_id?: string | null;
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** End */
+            end: number;
+            /** Start */
+            start: number;
+            /** Text */
+            text: string;
+        };
+        /**
+         * ReleaseCheckResponse
+         * @description A draft version's release status, blockers and invalidation report.
+         */
+        ReleaseCheckResponse: {
+            /** Blockers */
+            blockers: components["schemas"]["ReleaseBlocker"][];
+            /** Content Hash */
+            content_hash: string;
+            /** Dimensions */
+            dimensions: {
+                [key: string]: unknown;
+            };
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Draft Version */
+            draft_version: number;
+            invalidation?: components["schemas"]["ReleaseInvalidation"] | null;
+            release?: components["schemas"]["DraftReleaseResponse"] | null;
+            /**
+             * Release Status
+             * @enum {string}
+             */
+            release_status: "candidate" | "verified" | "stale";
+        };
+        /**
+         * ReleaseInvalidation
+         * @description Why the latest release is stale: persisted, or derived on read.
+         */
+        ReleaseInvalidation: {
+            /** Assessment Ids */
+            assessment_ids: string[];
+            /** Cause */
+            cause: {
+                [key: string]: unknown;
+            };
+            /** Changed Nodes */
+            changed_nodes: string[];
+            /** Stale At */
+            stale_at?: string | null;
+        };
+        /**
          * ReportCandidatesResponse
          * @description Read-only suggestions; titles and years never equate reports.
          */
@@ -15108,6 +16881,145 @@ export interface components {
             severity: string;
         };
         /**
+         * ScreeningAdjudicateRequest
+         * @description Resolve the exact conflict tip the adjudicator saw (stale inputs: 409).
+         */
+        ScreeningAdjudicateRequest: {
+            /** Criteria Hash */
+            criteria_hash: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "uncertain";
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Input Observation Ids */
+            input_observation_ids: string[];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Resolution Id
+             * Format: uuid
+             */
+            resolution_id: string;
+        };
+        /** ScreeningAssignmentCreate */
+        ScreeningAssignmentCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Reviewer User Id
+             * Format: uuid
+             */
+            reviewer_user_id: string;
+        };
+        /** ScreeningAssignmentResponse */
+        ScreeningAssignmentResponse: {
+            /**
+             * Assigned By Id
+             * Format: uuid
+             */
+            assigned_by_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Queue Id
+             * Format: uuid
+             */
+            queue_id: string;
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /** Revoked At */
+            revoked_at?: string | null;
+            /** Revoked By Id */
+            revoked_by_id?: string | null;
+        };
+        /** ScreeningConflictResponse */
+        ScreeningConflictResponse: {
+            /** Exclusion Reasons */
+            exclusion_reasons: string[];
+            /** Identifiers */
+            identifiers: {
+                [key: string]: string[];
+            };
+            /** Observations */
+            observations: components["schemas"]["ScreeningObservationResponse"][];
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            resolution: components["schemas"]["ScreeningResolutionResponse"];
+            /** Title Snapshot */
+            title_snapshot: string;
+        };
+        /** ScreeningCounts */
+        ScreeningCounts: {
+            /**
+             * Conflicts
+             * @default 0
+             */
+            conflicts: number;
+            /** Remaining */
+            remaining: number;
+            /**
+             * Revealed
+             * @default 0
+             */
+            revealed: number;
+            /** Screened */
+            screened: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * ScreeningEventResponse
+         * @description A screening event; a peer's hidden decision is ``redacted`` (GOO-302).
+         */
+        ScreeningEventResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /**
+             * Actor User Id
+             * Format: uuid
+             */
+            actor_user_id: string;
+            /** Event Type */
+            event_type: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Redacted
+             * @default false
+             */
+            redacted: boolean;
+            /** Seq */
+            seq: number;
+        };
+        /**
          * ScreeningItemDecision
          * @description A review decision for exactly one persisted screening source part.
          */
@@ -15124,6 +17036,207 @@ export interface components {
             /** Source Id */
             source_id: string;
         };
+        /** ScreeningObservationCreate */
+        ScreeningObservationCreate: {
+            /**
+             * Assignment Id
+             * Format: uuid
+             */
+            assignment_id: string;
+            /** Criteria Hash */
+            criteria_hash: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "uncertain";
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Note */
+            note?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Supersedes Observation Id */
+            supersedes_observation_id?: string | null;
+        };
+        /** ScreeningObservationResponse */
+        ScreeningObservationResponse: {
+            /**
+             * Assignment Id
+             * Format: uuid
+             */
+            assignment_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "uncertain";
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Note */
+            note?: string | null;
+            /**
+             * Queue Id
+             * Format: uuid
+             */
+            queue_id: string;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            resolution?: components["schemas"]["ScreeningResolutionResponse"] | null;
+            /**
+             * Reviewer Id
+             * Format: uuid
+             */
+            reviewer_id: string;
+            /** Supersedes Observation Id */
+            supersedes_observation_id?: string | null;
+        };
+        /** ScreeningQueueCreate */
+        ScreeningQueueCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Report Ids */
+            report_ids?: string[] | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /** Suggestion Step Id */
+            suggestion_step_id?: string | null;
+            /** Supersedes Queue Id */
+            supersedes_queue_id?: string | null;
+        };
+        /**
+         * ScreeningQueueResponse
+         * @description Counts only: decision breakdowns belong to GOO-302's reveal rules.
+         */
+        ScreeningQueueResponse: {
+            /** Assignment Count */
+            assignment_count: number;
+            /**
+             * Conflict Count
+             * @default 0
+             */
+            conflict_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Criteria Hash */
+            criteria_hash: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Observation Count */
+            observation_count: number;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Report Count */
+            report_count: number;
+            /**
+             * Resolved Count
+             * @default 0
+             */
+            resolved_count: number;
+            /** Reviewer Mode */
+            reviewer_mode: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /** Stale */
+            stale?: string | null;
+            /** Suggestion Count */
+            suggestion_count: number;
+            /** Suggestions Skipped */
+            suggestions_skipped?: number | null;
+            /** Supersedes Queue Id */
+            supersedes_queue_id?: string | null;
+        };
+        /** ScreeningReopenRequest */
+        ScreeningReopenRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Rationale */
+            rationale: string;
+            /**
+             * Resolution Id
+             * Format: uuid
+             */
+            resolution_id: string;
+        };
+        /**
+         * ScreeningResolutionResponse
+         * @description A derived or adjudicated outcome; never an editable field (GOO-302).
+         */
+        ScreeningResolutionResponse: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "single" | "agreement" | "conflict" | "adjudicated" | "reopened";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Criteria Hash */
+            criteria_hash: string;
+            /** Exclusion Reason */
+            exclusion_reason?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Input Observation Ids */
+            input_observation_ids: string[];
+            /** Outcome */
+            outcome?: ("include" | "exclude" | "uncertain") | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /** Supersedes Resolution Id */
+            supersedes_resolution_id?: string | null;
+        };
         /**
          * ScreeningReviewDecisionPayload
          * @description Exact-set screening decisions submitted for one stage output.
@@ -15131,6 +17244,13 @@ export interface components {
         ScreeningReviewDecisionPayload: {
             /** Items */
             items: components["schemas"]["ScreeningItemDecision"][];
+        };
+        /** ScreeningRevokeRequest */
+        ScreeningRevokeRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * SearchAnalytics
@@ -15929,6 +18049,56 @@ export interface components {
             title: string;
         };
         /**
+         * StanceObservationCreate
+         * @description Snapshot the evidence meter's current stance for this link's source.
+         */
+        StanceObservationCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** StanceObservationResponse */
+        StanceObservationResponse: {
+            /** Classified At */
+            classified_at?: string | null;
+            /** Classifier Confidence */
+            classifier_confidence: number;
+            /** Classifier Version */
+            classifier_version: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Inference Model Version */
+            inference_model_version?: string | null;
+            /** Justification Excerpt */
+            justification_excerpt?: string | null;
+            /**
+             * Link Id
+             * Format: uuid
+             */
+            link_id: string;
+            /**
+             * Observed By Id
+             * Format: uuid
+             */
+            observed_by_id: string;
+            /** Source Content Hash */
+            source_content_hash: string;
+            /**
+             * Stance
+             * @enum {string}
+             */
+            stance: "supporting" | "opposing" | "neutral" | "not_addressed";
+            /** Stance Classification Id */
+            stance_classification_id?: string | null;
+        };
+        /**
          * StartChatFromProjectRequest
          * @description Request to start a new chat from a project with document context
          */
@@ -16585,7 +18755,7 @@ export interface components {
         UpdateMatrixRequest: {
             /**
              * Clear Stale Cells
-             * @description Delete cells whose column_name no longer matches any column
+             * @description Deprecated: nothing is deleted. When true and columns changed, the response lists documents holding values on removed columns.
              * @default false
              */
             clear_stale_cells: boolean;
@@ -23884,6 +26054,136 @@ export interface operations {
             };
         };
     };
+    create_action_api_v1_integrations_actions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolInvocation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_action_api_v1_integrations_actions__invocation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invocation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_api_v1_integrations_actions__invocation_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invocation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActionDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_action_api_v1_integrations_actions__invocation_id__review_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invocation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_devices_api_v1_integrations_devices_get: {
         parameters: {
             query?: never;
@@ -25758,6 +28058,284 @@ export interface operations {
             };
         };
     };
+    list_claims_api_v1_projects__project_id__claims_get: {
+        parameters: {
+            query?: {
+                draft_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_claim_api_v1_projects__project_id__claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_claims_api_v1_projects__project_id__claims_export_get: {
+        parameters: {
+            query?: {
+                draft_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_claim_api_v1_projects__project_id__claims__claim_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_claim_assessment_api_v1_projects__project_id__claims__claim_id__assessments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimAssessmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimAssessmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_claim_link_api_v1_projects__project_id__claims__claim_id__links_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimLinkCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimLinkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_stance_observation_api_v1_projects__project_id__claims__claim_id__links__link_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+                link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StanceObservationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StanceObservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_claim_version_api_v1_projects__project_id__claims__claim_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimVersionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_project_documents_api_v1_projects__project_id__documents_get: {
         parameters: {
             query?: never;
@@ -26285,6 +28863,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_draft_api_v1_projects__project_id__drafts__draft_id__versions__version__promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                draft_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftPromoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftReleaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_draft_release_api_v1_projects__project_id__drafts__draft_id__versions__version__release_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                draft_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseCheckResponse"];
                 };
             };
             /** @description Validation Error */
@@ -27770,6 +30418,37 @@ export interface operations {
             };
         };
     };
+    audit_bundle_route_api_v1_research_engine_projects__project_id__audit_bundle_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Offline-verifiable audit bundle (manifest + SHA256SUMS) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     chase_citations_route_api_v1_research_engine_projects__project_id__citation_chases_post: {
         parameters: {
             query?: never;
@@ -27883,6 +30562,108 @@ export interface operations {
             };
         };
     };
+    list_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulltextStateResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FulltextRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulltextStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_attempt_route_api_v1_research_engine_projects__project_id__fulltext_requests__request_id__attempts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FulltextAttemptCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulltextStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_imports_route_api_v1_research_engine_projects__project_id__imports_get: {
         parameters: {
             query?: never;
@@ -27977,6 +30758,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportReceiptDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    journey_route_api_v1_research_engine_projects__project_id__journey_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JourneyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prisma_flow_route_api_v1_research_engine_projects__project_id__prisma_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrismaFlowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prisma_export_route_api_v1_research_engine_projects__project_id__prisma_export_get: {
+        parameters: {
+            query?: {
+                format?: "json" | "md";
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -28408,6 +31284,351 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_screening_queues_route_api_v1_research_engine_projects__project_id__screening_queues_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningQueueResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningQueueCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_screening_reviewer_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningAssignmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_screening_assignment_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments__assignment_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+                assignment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningAssignmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    screening_conflicts_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__conflicts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningConflictResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningEventResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__mine_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyScreeningQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_screening_observation_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningObservationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningObservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adjudicate_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__adjudicate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningAdjudicateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningResolutionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                queue_id: string;
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningReopenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningResolutionResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -29138,6 +32359,41 @@ export interface operations {
             };
         };
     };
+    accept_extraction_value_api_v1_research_matrices__matrix_id__accepted_values_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                matrix_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtractionAcceptCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionAcceptedValueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     trigger_extraction_api_v1_research_matrices__matrix_id__extract_post: {
         parameters: {
             query?: never;
@@ -29160,6 +32416,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_form_versions_api_v1_research_matrices__matrix_id__form_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                matrix_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionFormVersionResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_cell_observations_api_v1_research_matrices__matrix_id__observations_get: {
+        parameters: {
+            query: {
+                document_id: string;
+                field_id: string;
+            };
+            header?: never;
+            path: {
+                matrix_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionCellObservationsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_observation_api_v1_research_matrices__matrix_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                matrix_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtractionObservationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionObservationResponse"];
                 };
             };
             /** @description Validation Error */

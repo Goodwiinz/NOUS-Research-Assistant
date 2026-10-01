@@ -162,20 +162,13 @@ def _source_doi(source: dict[str, Any]) -> str | None:
     )
 
 
-def _publication_year(source: dict[str, Any]) -> int | None:
-    metadata = _source_metadata(source)
-    candidate: Any = (
-        source.get("publication_year")
-        or source.get("year")
-        or metadata.get("publication_year")
-        or metadata.get("year")
-        or metadata.get("publication_date")
-        or metadata.get("published")
-    )
-    if isinstance(candidate, dict):
+def _coerce_year(candidate: Any) -> int | None:
+    if isinstance(candidate, dict):  # Crossref {"date-parts": [[Y, M, D]]}
         candidate = candidate.get("date-parts")
-    while isinstance(candidate, list) and candidate:
+    while isinstance(candidate, list) and candidate:  # Crossref [[Y, M, D]]
         candidate = candidate[0]
+    if not isinstance(candidate, (int, str)):  # date/datetime objects
+        candidate = getattr(candidate, "year", None)
     if isinstance(candidate, int) and 1000 <= candidate <= 9999:
         return candidate
     if isinstance(candidate, str):
@@ -183,6 +176,29 @@ def _publication_year(source: dict[str, Any]) -> int | None:
         if match:
             return int(match.group(1))
     return None
+
+
+def publication_year(*sources: Any) -> int | None:
+    """Canonical publication year from bibliographic metadata mappings.
+
+    The single year derivation for exports, report rendering and identity
+    matching. Each mapping is tried in order, and within it ``publication_year``
+    → ``year`` → ``publication_date`` (arXiv ISO timestamp) → Crossref
+    ``published`` date-parts. Ingest timestamps (``created_at``) are never a
+    publication year, so they are deliberately not consulted.
+    """
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("publication_year", "year", "publication_date", "published"):
+            year = _coerce_year(source.get(key))
+            if year is not None:
+                return year
+    return None
+
+
+def _publication_year(source: dict[str, Any]) -> int | None:
+    return publication_year(source, _source_metadata(source))
 
 
 def _source_projection(source: dict[str, Any]) -> dict[str, Any]:

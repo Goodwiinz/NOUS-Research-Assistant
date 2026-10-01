@@ -175,6 +175,179 @@
         "title": "APIKeyResponse",
         "type": "object"
       },
+      "ActionDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "approved"
+        ],
+        "title": "ActionDecision",
+        "type": "object"
+      },
+      "ActionReview": {
+        "description": "What the interactive owner sees before deciding: the exact stored target.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "invocation_id": {
+            "format": "uuid",
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "project_available": {
+            "title": "Project Available",
+            "type": "boolean"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_label": {
+            "title": "Project Label",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "awaiting_approval",
+              "approved",
+              "executing",
+              "succeeded",
+              "failed",
+              "outcome_unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invocation_id",
+          "state",
+          "tool_name",
+          "project_id",
+          "project_label",
+          "project_available",
+          "title",
+          "content",
+          "tags",
+          "requested_at"
+        ],
+        "title": "ActionReview",
+        "type": "object"
+      },
+      "ActionStatus": {
+        "properties": {
+          "approval_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Url"
+          },
+          "invocation_id": {
+            "format": "uuid",
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "awaiting_approval",
+              "approved",
+              "executing",
+              "succeeded",
+              "failed",
+              "outcome_unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invocation_id",
+          "state",
+          "tool_name"
+        ],
+        "title": "ActionStatus",
+        "type": "object"
+      },
       "AgentExecuteRequest": {
         "properties": {
           "attachment_ids": {
@@ -3091,6 +3264,895 @@
         "title": "CitationLookupRequest",
         "type": "object"
       },
+      "ClaimAssessmentCreate": {
+        "description": "An adjudicator's judgement of the claim's tip version.",
+        "properties": {
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "link_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Link Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "stance": {
+            "enum": [
+              "supporting",
+              "opposing",
+              "neutral",
+              "not_addressed",
+              "unresolved"
+            ],
+            "title": "Stance",
+            "type": "string"
+          },
+          "stance_observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Stance Observation Ids",
+            "type": "array"
+          },
+          "supersedes_assessment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Assessment Id"
+          }
+        },
+        "required": [
+          "claim_version_id",
+          "stance",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ClaimAssessmentCreate",
+        "type": "object"
+      },
+      "ClaimAssessmentResponse": {
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "assessed_by_id": {
+            "format": "uuid",
+            "title": "Assessed By Id",
+            "type": "string"
+          },
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "link_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Link Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "stance": {
+            "enum": [
+              "supporting",
+              "opposing",
+              "neutral",
+              "not_addressed",
+              "unresolved"
+            ],
+            "title": "Stance",
+            "type": "string"
+          },
+          "stance_observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Stance Observation Ids",
+            "type": "array"
+          },
+          "supersedes_assessment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Assessment Id"
+          }
+        },
+        "required": [
+          "id",
+          "claim_version_id",
+          "stance",
+          "link_ids",
+          "stance_observation_ids",
+          "rationale",
+          "assessed_by_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "ClaimAssessmentResponse",
+        "type": "object"
+      },
+      "ClaimCounts": {
+        "properties": {
+          "assessed": {
+            "title": "Assessed",
+            "type": "integer"
+          },
+          "claims": {
+            "title": "Claims",
+            "type": "integer"
+          },
+          "legacy_unanchored": {
+            "title": "Legacy Unanchored",
+            "type": "integer"
+          },
+          "links_by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Links By Kind",
+            "type": "object"
+          },
+          "unassessed": {
+            "title": "Unassessed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "claims",
+          "links_by_kind",
+          "legacy_unanchored",
+          "assessed",
+          "unassessed"
+        ],
+        "title": "ClaimCounts",
+        "type": "object"
+      },
+      "ClaimCreate": {
+        "description": "A new claim over ``draft.content[start_char:end_char]`` (exactly).",
+        "properties": {
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "end_char": {
+            "minimum": 1.0,
+            "title": "End Char",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "default": "factual",
+            "enum": [
+              "factual",
+              "interpretation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "start_char": {
+            "minimum": 0.0,
+            "title": "Start Char",
+            "type": "integer"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "start_char",
+          "end_char",
+          "text",
+          "idempotency_key"
+        ],
+        "title": "ClaimCreate",
+        "type": "object"
+      },
+      "ClaimDetailResponse": {
+        "description": "The full history, each list in ``created_at, id`` order.",
+        "properties": {
+          "assessments": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimAssessmentResponse"
+            },
+            "title": "Assessments",
+            "type": "array"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimLinkResponse"
+            },
+            "title": "Links",
+            "type": "array"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/StanceObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimVersionResponse"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "created_by_id",
+          "created_at",
+          "versions",
+          "links",
+          "observations",
+          "assessments"
+        ],
+        "title": "ClaimDetailResponse",
+        "type": "object"
+      },
+      "ClaimLinkCreate": {
+        "description": "Link the claim's tip version to evidence, or withdraw/re-point a link.\n\n``extraction`` takes ``accepted_value_id``; ``source_span`` takes\n``document_id``, ``start_char``, ``end_char`` and ``quote``;\n``legacy_unanchored`` takes ``draft_citation_id``. The server copies the\nsource hashes. A ``withdrawn`` row supersedes a link and copies its target.",
+        "properties": {
+          "accepted_value_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Value Id"
+          },
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "draft_citation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Citation Id"
+          },
+          "end_char": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Char"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "extraction",
+              "source_span",
+              "legacy_unanchored"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "start_char": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Char"
+          },
+          "status": {
+            "default": "linked",
+            "enum": [
+              "linked",
+              "withdrawn"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "supersedes_link_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Link Id"
+          }
+        },
+        "required": [
+          "claim_version_id",
+          "kind",
+          "idempotency_key"
+        ],
+        "title": "ClaimLinkCreate",
+        "type": "object"
+      },
+      "ClaimLinkResponse": {
+        "properties": {
+          "accepted_value_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Value Id"
+          },
+          "claim_version_id": {
+            "format": "uuid",
+            "title": "Claim Version Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "draft_citation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Citation Id"
+          },
+          "end_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Char"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "extraction",
+              "source_span",
+              "legacy_unanchored"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "latest_observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StanceObservationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "source_changed": {
+            "default": false,
+            "title": "Source Changed",
+            "type": "boolean"
+          },
+          "source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Hash"
+          },
+          "start_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Char"
+          },
+          "status": {
+            "enum": [
+              "linked",
+              "withdrawn"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "supersedes_link_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Link Id"
+          },
+          "text_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Sha256"
+          }
+        },
+        "required": [
+          "id",
+          "claim_version_id",
+          "kind",
+          "status",
+          "created_by_id",
+          "created_at"
+        ],
+        "title": "ClaimLinkResponse",
+        "type": "object"
+      },
+      "ClaimListResponse": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/ClaimCounts"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "counts"
+        ],
+        "title": "ClaimListResponse",
+        "type": "object"
+      },
+      "ClaimResponse": {
+        "properties": {
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ClaimVersionResponse"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "created_by_id",
+          "created_at",
+          "version"
+        ],
+        "title": "ClaimResponse",
+        "type": "object"
+      },
+      "ClaimSummary": {
+        "description": "One claim: its tip version, or the version pinned to the filtered draft.",
+        "properties": {
+          "assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClaimAssessmentResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "citation_review_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation Review Status"
+          },
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "is_tip": {
+            "title": "Is Tip",
+            "type": "boolean"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimLinkResponse"
+            },
+            "title": "Links",
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ClaimVersionResponse"
+          }
+        },
+        "required": [
+          "claim_id",
+          "version",
+          "is_tip",
+          "links"
+        ],
+        "title": "ClaimSummary",
+        "type": "object"
+      },
+      "ClaimVersionCreate": {
+        "description": "A reworded passage; it must supersede the claim's current version.",
+        "properties": {
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "end_char": {
+            "minimum": 1.0,
+            "title": "End Char",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "kind": {
+            "default": "factual",
+            "enum": [
+              "factual",
+              "interpretation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "start_char": {
+            "minimum": 0.0,
+            "title": "Start Char",
+            "type": "integer"
+          },
+          "supersedes_claim_version_id": {
+            "format": "uuid",
+            "title": "Supersedes Claim Version Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "start_char",
+          "end_char",
+          "text",
+          "idempotency_key",
+          "supersedes_claim_version_id"
+        ],
+        "title": "ClaimVersionCreate",
+        "type": "object"
+      },
+      "ClaimVersionResponse": {
+        "properties": {
+          "attributed_to_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributed To User Id"
+          },
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "draft_content_hash": {
+            "title": "Draft Content Hash",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_review_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Review Id"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "end_char": {
+            "title": "End Char",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "factual",
+              "interpretation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "normalized_hash": {
+            "title": "Normalized Hash",
+            "type": "string"
+          },
+          "start_char": {
+            "title": "Start Char",
+            "type": "integer"
+          },
+          "supersedes_claim_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Claim Version Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "text_sha256": {
+            "title": "Text Sha256",
+            "type": "string"
+          },
+          "version_no": {
+            "title": "Version No",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "claim_id",
+          "version_no",
+          "kind",
+          "text",
+          "text_sha256",
+          "normalized_hash",
+          "draft_id",
+          "draft_version",
+          "draft_content_hash",
+          "start_char",
+          "end_char",
+          "created_by_id",
+          "created_at"
+        ],
+        "title": "ClaimVersionResponse",
+        "type": "object"
+      },
       "CollectionCreate": {
         "description": "Create collection request",
         "properties": {
@@ -5252,6 +6314,173 @@
         "title": "DocumentType",
         "type": "string"
       },
+      "DraftPromoteRequest": {
+        "description": "Promote the exact version whose content hashes to ``content_hash``.",
+        "properties": {
+          "content_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          }
+        },
+        "required": [
+          "content_hash",
+          "idempotency_key"
+        ],
+        "title": "DraftPromoteRequest",
+        "type": "object"
+      },
+      "DraftReleaseResponse": {
+        "description": "A promotion of one exact draft version; stale rows are kept.",
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Assessment Ids",
+            "type": "array"
+          },
+          "claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Claim Version Ids",
+            "type": "array"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "interpretation_claim_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Interpretation Claim Version Ids",
+            "type": "array"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "integer"
+          },
+          "promoted_by_id": {
+            "format": "uuid",
+            "title": "Promoted By Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "stale_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale At"
+          },
+          "stale_event_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Event Id"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "draft_id",
+          "draft_version",
+          "content_hash",
+          "claim_version_ids",
+          "assessment_ids",
+          "interpretation_claim_version_ids",
+          "policy_version",
+          "promoted_by_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "DraftReleaseResponse",
+        "type": "object"
+      },
       "DraftReviewListResponse": {
         "properties": {
           "reviews": {
@@ -6209,9 +7438,426 @@
         "title": "ExtractRegionRequest",
         "type": "object"
       },
+      "ExtractionAcceptCreate": {
+        "description": "An adjudicator's accepted value; it must equal a cited observation.",
+        "properties": {
+          "accept_unverified": {
+            "default": false,
+            "title": "Accept Unverified",
+            "type": "boolean"
+          },
+          "anchor_start": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Start"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_reported",
+                  "not_applicable",
+                  "unavailable_text",
+                  "unresolved_disagreement"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Observation Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "supersedes_accepted_value_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Accepted Value Id"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "document_id",
+          "field_id",
+          "form_version_id",
+          "observation_ids",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ExtractionAcceptCreate",
+        "type": "object"
+      },
+      "ExtractionAcceptedValueResponse": {
+        "properties": {
+          "accepted_by_id": {
+            "format": "uuid",
+            "title": "Accepted By Id",
+            "type": "string"
+          },
+          "anchor_end_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor End Char"
+          },
+          "anchor_observation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Observation Id"
+          },
+          "anchor_resolution": {
+            "anyOf": [
+              {
+                "enum": [
+                  "verified",
+                  "disambiguated",
+                  "accepted_unverified",
+                  "not_applicable",
+                  "legacy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Resolution"
+          },
+          "anchor_start_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Start Char"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Observation Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "source_changed": {
+            "default": false,
+            "title": "Source Changed",
+            "type": "boolean"
+          },
+          "source_hash": {
+            "title": "Source Hash",
+            "type": "string"
+          },
+          "supersedes_accepted_value_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Accepted Value Id"
+          },
+          "text_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Sha256"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "form_version_id",
+          "field_id",
+          "document_id",
+          "observation_ids",
+          "accepted_by_id",
+          "rationale",
+          "source_hash",
+          "created_at"
+        ],
+        "title": "ExtractionAcceptedValueResponse",
+        "type": "object"
+      },
+      "ExtractionAnchor": {
+        "description": "Where an observation's verbatim citation sits in the retained text.",
+        "properties": {
+          "end_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Char"
+          },
+          "occurrence_contexts": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractionAnchorOccurrence"
+            },
+            "title": "Occurrence Contexts",
+            "type": "array"
+          },
+          "occurrences": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Occurrences",
+            "type": "array"
+          },
+          "occurrences_in_text": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurrences In Text"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "start_char": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Char"
+          },
+          "status": {
+            "enum": [
+              "verified",
+              "ambiguous",
+              "unverified",
+              "location_unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ExtractionAnchor",
+        "type": "object"
+      },
+      "ExtractionAnchorOccurrence": {
+        "description": "One place a repeated citation occurs, sliced server-side (code points).",
+        "properties": {
+          "context_after": {
+            "title": "Context After",
+            "type": "string"
+          },
+          "context_before": {
+            "title": "Context Before",
+            "type": "string"
+          },
+          "end_char": {
+            "title": "End Char",
+            "type": "integer"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "start_char": {
+            "title": "Start Char",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_char",
+          "end_char",
+          "context_before",
+          "context_after"
+        ],
+        "title": "ExtractionAnchorOccurrence",
+        "type": "object"
+      },
+      "ExtractionCellObservationsResponse": {
+        "properties": {
+          "accepted_chain": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractionAcceptedValueResponse"
+            },
+            "title": "Accepted Chain",
+            "type": "array"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractionObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "observations",
+          "accepted_chain"
+        ],
+        "title": "ExtractionCellObservationsResponse",
+        "type": "object"
+      },
       "ExtractionColumn": {
         "description": "A column definition for the extraction matrix.",
         "properties": {
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Allowed values; required for, and only for, categorical",
+            "title": "Categories"
+          },
           "description": {
             "anyOf": [
               {
@@ -6231,12 +7877,122 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "timepoint": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timepoint"
+          },
+          "type": {
+            "default": "text",
+            "description": "Value type of the extracted field",
+            "enum": [
+              "text",
+              "number",
+              "boolean",
+              "categorical"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
           }
         },
         "required": [
           "name"
         ],
         "title": "ExtractionColumn",
+        "type": "object"
+      },
+      "ExtractionFormVersionResponse": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Id"
+          },
+          "fields": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "matrix_id": {
+            "format": "uuid",
+            "title": "Matrix Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "provenance": {
+            "title": "Provenance",
+            "type": "string"
+          },
+          "version_no": {
+            "title": "Version No",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "matrix_id",
+          "version_no",
+          "provenance",
+          "fields",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "ExtractionFormVersionResponse",
         "type": "object"
       },
       "ExtractionItemDecision": {
@@ -6299,6 +8055,276 @@
         ],
         "title": "ExtractionMethod",
         "type": "string"
+      },
+      "ExtractionObservationCreate": {
+        "description": "A reviewer's value (or missingness reason) for one field of one document.",
+        "properties": {
+          "anchor_start": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Start"
+          },
+          "citation": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_reported",
+                  "not_applicable",
+                  "unavailable_text"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "document_id",
+          "field_id",
+          "form_version_id",
+          "idempotency_key"
+        ],
+        "title": "ExtractionObservationCreate",
+        "type": "object"
+      },
+      "ExtractionObservationResponse": {
+        "properties": {
+          "actor_user_id": {
+            "format": "uuid",
+            "title": "Actor User Id",
+            "type": "string"
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtractionAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "citation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation"
+          },
+          "context_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context After"
+          },
+          "context_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Before"
+          },
+          "coverage_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Complete"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "extractor_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extractor Model"
+          },
+          "extractor_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extractor Run Id"
+          },
+          "field_id": {
+            "format": "uuid",
+            "title": "Field Id",
+            "type": "string"
+          },
+          "form_version_id": {
+            "format": "uuid",
+            "title": "Form Version Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inspected_coverage": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inspected Coverage"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "missingness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missingness"
+          },
+          "source_changed": {
+            "default": false,
+            "title": "Source Changed",
+            "type": "boolean"
+          },
+          "source_hash": {
+            "title": "Source Hash",
+            "type": "string"
+          },
+          "text_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Length"
+          },
+          "text_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Sha256"
+          },
+          "validation_state": {
+            "title": "Validation State",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "form_version_id",
+          "field_id",
+          "document_id",
+          "kind",
+          "actor_user_id",
+          "validation_state",
+          "source_hash",
+          "created_at"
+        ],
+        "title": "ExtractionObservationResponse",
+        "type": "object"
       },
       "ExtractionRequest": {
         "properties": {
@@ -6520,6 +8546,264 @@
         "description": "Final review carries no client-authored report or evidence fields.",
         "properties": {},
         "title": "FinalReviewDecisionPayload",
+        "type": "object"
+      },
+      "FulltextAttemptCreate": {
+        "description": "One attempt; ``previous_attempt_id`` must be the current head (or null).",
+        "properties": {
+          "attempted_on": {
+            "format": "date",
+            "title": "Attempted On",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "requested",
+              "retrieved",
+              "unavailable"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "previous_attempt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Attempt Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "outcome",
+          "attempted_on",
+          "idempotency_key"
+        ],
+        "title": "FulltextAttemptCreate",
+        "type": "object"
+      },
+      "FulltextAttemptResponse": {
+        "properties": {
+          "actor_id": {
+            "format": "uuid",
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "attempted_on": {
+            "format": "date",
+            "title": "Attempted On",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_available": {
+            "default": false,
+            "title": "Document Available",
+            "type": "boolean"
+          },
+          "document_content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Content Hash"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "requested",
+              "retrieved",
+              "unavailable"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "previous_attempt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Attempt Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "attempted_on",
+          "actor_id",
+          "created_at"
+        ],
+        "title": "FulltextAttemptResponse",
+        "type": "object"
+      },
+      "FulltextRequestCreate": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "idempotency_key"
+        ],
+        "title": "FulltextRequestCreate",
+        "type": "object"
+      },
+      "FulltextStateResponse": {
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/FulltextAttemptResponse"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "head_attempt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Attempt Id"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "requested_by_id": {
+            "format": "uuid",
+            "title": "Requested By Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "requested",
+              "retrieved",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "report_id",
+          "requested_by_id",
+          "requested_at",
+          "state",
+          "attempts"
+        ],
+        "title": "FulltextStateResponse",
         "type": "object"
       },
       "GrantDecision": {
@@ -7768,6 +10052,101 @@
         "title": "JobStatusResponse",
         "type": "object"
       },
+      "JourneyResponse": {
+        "properties": {
+          "current": {
+            "anyOf": [
+              {
+                "enum": [
+                  "plan",
+                  "discover",
+                  "select",
+                  "extract",
+                  "write"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/JourneyStage"
+            },
+            "title": "Stages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stages"
+        ],
+        "title": "JourneyResponse",
+        "type": "object"
+      },
+      "JourneyStage": {
+        "description": "Derived from persisted rows on every call (``journey.derive_stages``).",
+        "properties": {
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "facts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Facts",
+            "type": "object"
+          },
+          "key": {
+            "enum": [
+              "plan",
+              "discover",
+              "select",
+              "extract",
+              "write"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "not_started",
+              "in_progress",
+              "attention",
+              "complete"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "status",
+          "facts",
+          "blockers"
+        ],
+        "title": "JourneyStage",
+        "type": "object"
+      },
       "KeyRotationRequest": {
         "description": "Request model for key rotation",
         "properties": {
@@ -8756,6 +11135,166 @@
         "title": "MetricTimeRange",
         "type": "string"
       },
+      "MyScreeningQueueInfo": {
+        "properties": {
+          "criteria_hash": {
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "exclusion_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusion Reasons",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "title_abstract",
+              "full_text"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "stale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "protocol_version_id",
+          "criteria_hash",
+          "exclusion_reasons"
+        ],
+        "title": "MyScreeningQueueInfo",
+        "type": "object"
+      },
+      "MyScreeningQueueItem": {
+        "properties": {
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abstract"
+          },
+          "identifiers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Identifiers",
+            "type": "object"
+          },
+          "observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreeningObservationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "others": {
+            "items": {
+              "$ref": "#/components/schemas/ScreeningObservationResponse"
+            },
+            "title": "Others",
+            "type": "array"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreeningResolutionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reveal_state": {
+            "default": "hidden",
+            "enum": [
+              "hidden",
+              "revealed"
+            ],
+            "title": "Reveal State",
+            "type": "string"
+          },
+          "title_snapshot": {
+            "title": "Title Snapshot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "title_snapshot",
+          "identifiers"
+        ],
+        "title": "MyScreeningQueueItem",
+        "type": "object"
+      },
+      "MyScreeningQueueResponse": {
+        "properties": {
+          "assignment_id": {
+            "format": "uuid",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ScreeningCounts"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MyScreeningQueueItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/MyScreeningQueueInfo"
+          }
+        },
+        "required": [
+          "queue",
+          "assignment_id",
+          "items",
+          "counts"
+        ],
+        "title": "MyScreeningQueueResponse",
+        "type": "object"
+      },
       "NativeDecision": {
         "additionalProperties": false,
         "description": "A strict one-time decision, or exact answers to native questions.",
@@ -9438,6 +11977,278 @@
         ],
         "title": "Priority",
         "type": "string"
+      },
+      "PrismaAmendment": {
+        "properties": {
+          "aggregate_type": {
+            "title": "Aggregate Type",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "from": {
+            "title": "From",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "to": {
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "aggregate_type",
+          "seq",
+          "kind",
+          "report_id",
+          "from",
+          "to"
+        ],
+        "title": "PrismaAmendment",
+        "type": "object"
+      },
+      "PrismaChecks": {
+        "properties": {
+          "assessed_within_retrieved": {
+            "title": "Assessed Within Retrieved",
+            "type": "boolean"
+          },
+          "included_plus_excluded_equals_assessed": {
+            "title": "Included Plus Excluded Equals Assessed",
+            "type": "boolean"
+          },
+          "screened_plus_awaiting_equals_unique": {
+            "title": "Screened Plus Awaiting Equals Unique",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "screened_plus_awaiting_equals_unique",
+          "assessed_within_retrieved",
+          "included_plus_excluded_equals_assessed"
+        ],
+        "title": "PrismaChecks",
+        "type": "object"
+      },
+      "PrismaCounts": {
+        "properties": {
+          "duplicates_removed": {
+            "title": "Duplicates Removed",
+            "type": "integer"
+          },
+          "import_rejected": {
+            "title": "Import Rejected",
+            "type": "integer"
+          },
+          "included_reports": {
+            "title": "Included Reports",
+            "type": "integer"
+          },
+          "included_studies": {
+            "title": "Included Studies",
+            "type": "integer"
+          },
+          "records_awaiting_screening": {
+            "title": "Records Awaiting Screening",
+            "type": "integer"
+          },
+          "records_by_import": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Records By Import",
+            "type": "object"
+          },
+          "records_by_source": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Records By Source",
+            "type": "object"
+          },
+          "records_excluded": {
+            "title": "Records Excluded",
+            "type": "integer"
+          },
+          "records_identified": {
+            "title": "Records Identified",
+            "type": "integer"
+          },
+          "records_screened": {
+            "title": "Records Screened",
+            "type": "integer"
+          },
+          "reports_assessed": {
+            "title": "Reports Assessed",
+            "type": "integer"
+          },
+          "reports_awaiting_retrieval": {
+            "title": "Reports Awaiting Retrieval",
+            "type": "integer"
+          },
+          "reports_excluded_by_reason": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Reports Excluded By Reason",
+            "type": "object"
+          },
+          "reports_not_retrieved": {
+            "title": "Reports Not Retrieved",
+            "type": "integer"
+          },
+          "reports_sought": {
+            "title": "Reports Sought",
+            "type": "integer"
+          },
+          "unconfirmed_study_links": {
+            "title": "Unconfirmed Study Links",
+            "type": "integer"
+          },
+          "unique_reports": {
+            "title": "Unique Reports",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "records_identified",
+          "records_by_source",
+          "records_by_import",
+          "import_rejected",
+          "duplicates_removed",
+          "unique_reports",
+          "records_screened",
+          "records_excluded",
+          "records_awaiting_screening",
+          "reports_sought",
+          "reports_not_retrieved",
+          "reports_awaiting_retrieval",
+          "reports_assessed",
+          "reports_excluded_by_reason",
+          "included_reports",
+          "included_studies",
+          "unconfirmed_study_links"
+        ],
+        "title": "PrismaCounts",
+        "type": "object"
+      },
+      "PrismaFlowBody": {
+        "properties": {
+          "amendments": {
+            "items": {
+              "$ref": "#/components/schemas/PrismaAmendment"
+            },
+            "title": "Amendments",
+            "type": "array"
+          },
+          "checks": {
+            "$ref": "#/components/schemas/PrismaChecks"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/PrismaCounts"
+          },
+          "excluded_from_flow": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Excluded From Flow",
+            "type": "object"
+          },
+          "versions": {
+            "$ref": "#/components/schemas/PrismaVersions"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "counts",
+          "excluded_from_flow",
+          "amendments",
+          "warnings",
+          "checks",
+          "versions"
+        ],
+        "title": "PrismaFlowBody",
+        "type": "object"
+      },
+      "PrismaFlowResponse": {
+        "description": "Recomputed from persisted rows on every call; nothing here is stored.",
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/PrismaFlowBody"
+          },
+          "body_sha256": {
+            "title": "Body Sha256",
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "schema": {
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "generated_at",
+          "body_sha256",
+          "body"
+        ],
+        "title": "PrismaFlowResponse",
+        "type": "object"
+      },
+      "PrismaVersions": {
+        "properties": {
+          "corpus_hash": {
+            "title": "Corpus Hash",
+            "type": "string"
+          },
+          "protocol_version_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protocol Version Ids",
+            "type": "array"
+          },
+          "stream_heads": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Stream Heads",
+            "type": "object"
+          }
+        },
+        "required": [
+          "corpus_hash",
+          "protocol_version_ids",
+          "stream_heads"
+        ],
+        "title": "PrismaVersions",
+        "type": "object"
       },
       "ProcessingJobResponse": {
         "properties": {
@@ -11638,6 +14449,165 @@
         "title": "RelationshipType",
         "type": "string"
       },
+      "ReleaseBlocker": {
+        "description": "One reason a draft version cannot be promoted (GOO-307).",
+        "properties": {
+          "claim_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Version Id"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "end": {
+            "title": "End",
+            "type": "integer"
+          },
+          "start": {
+            "title": "Start",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "start",
+          "end",
+          "text",
+          "detail"
+        ],
+        "title": "ReleaseBlocker",
+        "type": "object"
+      },
+      "ReleaseCheckResponse": {
+        "description": "A draft version's release status, blockers and invalidation report.",
+        "properties": {
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "invalidation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseInvalidation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DraftReleaseResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release_status": {
+            "enum": [
+              "candidate",
+              "verified",
+              "stale"
+            ],
+            "title": "Release Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "draft_version",
+          "release_status",
+          "content_hash",
+          "blockers",
+          "dimensions"
+        ],
+        "title": "ReleaseCheckResponse",
+        "type": "object"
+      },
+      "ReleaseInvalidation": {
+        "description": "Why the latest release is stale: persisted, or derived on read.",
+        "properties": {
+          "assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Assessment Ids",
+            "type": "array"
+          },
+          "cause": {
+            "additionalProperties": true,
+            "title": "Cause",
+            "type": "object"
+          },
+          "changed_nodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Nodes",
+            "type": "array"
+          },
+          "stale_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale At"
+          }
+        },
+        "required": [
+          "cause",
+          "changed_nodes",
+          "assessment_ids"
+        ],
+        "title": "ReleaseInvalidation",
+        "type": "object"
+      },
       "ReportCandidatesResponse": {
         "description": "Read-only suggestions; titles and years never equate reports.",
         "properties": {
@@ -13358,6 +16328,300 @@
         "title": "ScanFindingResponse",
         "type": "object"
       },
+      "ScreeningAdjudicateRequest": {
+        "description": "Resolve the exact conflict tip the adjudicator saw (stale inputs: 409).",
+        "properties": {
+          "criteria_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "include",
+              "exclude",
+              "uncertain"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "input_observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Input Observation Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "resolution_id": {
+            "format": "uuid",
+            "title": "Resolution Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resolution_id",
+          "input_observation_ids",
+          "criteria_hash",
+          "decision",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ScreeningAdjudicateRequest",
+        "type": "object"
+      },
+      "ScreeningAssignmentCreate": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reviewer_user_id": {
+            "format": "uuid",
+            "title": "Reviewer User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reviewer_user_id",
+          "idempotency_key"
+        ],
+        "title": "ScreeningAssignmentCreate",
+        "type": "object"
+      },
+      "ScreeningAssignmentResponse": {
+        "properties": {
+          "assigned_by_id": {
+            "format": "uuid",
+            "title": "Assigned By Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "queue_id": {
+            "format": "uuid",
+            "title": "Queue Id",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "revoked_by_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked By Id"
+          }
+        },
+        "required": [
+          "id",
+          "queue_id",
+          "reviewer_id",
+          "assigned_by_id",
+          "created_at"
+        ],
+        "title": "ScreeningAssignmentResponse",
+        "type": "object"
+      },
+      "ScreeningConflictResponse": {
+        "properties": {
+          "exclusion_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusion Reasons",
+            "type": "array"
+          },
+          "identifiers": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Identifiers",
+            "type": "object"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/ScreeningObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/ScreeningResolutionResponse"
+          },
+          "title_snapshot": {
+            "title": "Title Snapshot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "title_snapshot",
+          "identifiers",
+          "exclusion_reasons",
+          "resolution",
+          "observations"
+        ],
+        "title": "ScreeningConflictResponse",
+        "type": "object"
+      },
+      "ScreeningCounts": {
+        "properties": {
+          "conflicts": {
+            "default": 0,
+            "title": "Conflicts",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "revealed": {
+            "default": 0,
+            "title": "Revealed",
+            "type": "integer"
+          },
+          "screened": {
+            "title": "Screened",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "screened",
+          "remaining"
+        ],
+        "title": "ScreeningCounts",
+        "type": "object"
+      },
+      "ScreeningEventResponse": {
+        "description": "A screening event; a peer's hidden decision is ``redacted`` (GOO-302).",
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "actor_user_id": {
+            "format": "uuid",
+            "title": "Actor User Id",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "redacted": {
+            "default": false,
+            "title": "Redacted",
+            "type": "boolean"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "event_type",
+          "actor_user_id",
+          "actor_role",
+          "payload",
+          "occurred_at"
+        ],
+        "title": "ScreeningEventResponse",
+        "type": "object"
+      },
       "ScreeningItemDecision": {
         "additionalProperties": false,
         "description": "A review decision for exactly one persisted screening source part.",
@@ -13405,6 +16669,492 @@
         "title": "ScreeningItemDecision",
         "type": "object"
       },
+      "ScreeningObservationCreate": {
+        "properties": {
+          "assignment_id": {
+            "format": "uuid",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "criteria_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "include",
+              "exclude",
+              "uncertain"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "supersedes_observation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Observation Id"
+          }
+        },
+        "required": [
+          "report_id",
+          "assignment_id",
+          "criteria_hash",
+          "decision",
+          "idempotency_key"
+        ],
+        "title": "ScreeningObservationCreate",
+        "type": "object"
+      },
+      "ScreeningObservationResponse": {
+        "properties": {
+          "assignment_id": {
+            "format": "uuid",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "include",
+              "exclude",
+              "uncertain"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "queue_id": {
+            "format": "uuid",
+            "title": "Queue Id",
+            "type": "string"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreeningResolutionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "supersedes_observation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Observation Id"
+          }
+        },
+        "required": [
+          "id",
+          "queue_id",
+          "report_id",
+          "reviewer_id",
+          "assignment_id",
+          "decision",
+          "created_at"
+        ],
+        "title": "ScreeningObservationResponse",
+        "type": "object"
+      },
+      "ScreeningQueueCreate": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "report_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Ids"
+          },
+          "stage": {
+            "enum": [
+              "title_abstract",
+              "full_text"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "suggestion_step_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion Step Id"
+          },
+          "supersedes_queue_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Queue Id"
+          }
+        },
+        "required": [
+          "protocol_version_id",
+          "stage",
+          "idempotency_key"
+        ],
+        "title": "ScreeningQueueCreate",
+        "type": "object"
+      },
+      "ScreeningQueueResponse": {
+        "description": "Counts only: decision breakdowns belong to GOO-302's reveal rules.",
+        "properties": {
+          "assignment_count": {
+            "title": "Assignment Count",
+            "type": "integer"
+          },
+          "conflict_count": {
+            "default": 0,
+            "title": "Conflict Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "criteria_hash": {
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "observation_count": {
+            "title": "Observation Count",
+            "type": "integer"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "report_count": {
+            "title": "Report Count",
+            "type": "integer"
+          },
+          "resolved_count": {
+            "default": 0,
+            "title": "Resolved Count",
+            "type": "integer"
+          },
+          "reviewer_mode": {
+            "title": "Reviewer Mode",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "title_abstract",
+              "full_text"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "stale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale"
+          },
+          "suggestion_count": {
+            "title": "Suggestion Count",
+            "type": "integer"
+          },
+          "suggestions_skipped": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestions Skipped"
+          },
+          "supersedes_queue_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Queue Id"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "protocol_version_id",
+          "criteria_hash",
+          "reviewer_mode",
+          "created_by_id",
+          "created_at",
+          "report_count",
+          "assignment_count",
+          "observation_count",
+          "suggestion_count"
+        ],
+        "title": "ScreeningQueueResponse",
+        "type": "object"
+      },
+      "ScreeningReopenRequest": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "resolution_id": {
+            "format": "uuid",
+            "title": "Resolution Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resolution_id",
+          "rationale",
+          "idempotency_key"
+        ],
+        "title": "ScreeningReopenRequest",
+        "type": "object"
+      },
+      "ScreeningResolutionResponse": {
+        "description": "A derived or adjudicated outcome; never an editable field (GOO-302).",
+        "properties": {
+          "basis": {
+            "enum": [
+              "single",
+              "agreement",
+              "conflict",
+              "adjudicated",
+              "reopened"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "criteria_hash": {
+            "title": "Criteria Hash",
+            "type": "string"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Input Observation Ids",
+            "type": "array"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "include",
+                  "exclude",
+                  "uncertain"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "report_id": {
+            "format": "uuid",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "supersedes_resolution_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Resolution Id"
+          }
+        },
+        "required": [
+          "id",
+          "report_id",
+          "basis",
+          "input_observation_ids",
+          "criteria_hash",
+          "created_at"
+        ],
+        "title": "ScreeningResolutionResponse",
+        "type": "object"
+      },
       "ScreeningReviewDecisionPayload": {
         "additionalProperties": false,
         "description": "Exact-set screening decisions submitted for one stage output.",
@@ -13423,6 +17173,28 @@
           "items"
         ],
         "title": "ScreeningReviewDecisionPayload",
+        "type": "object"
+      },
+      "ScreeningRevokeRequest": {
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "idempotency_key"
+        ],
+        "title": "ScreeningRevokeRequest",
         "type": "object"
       },
       "SearchAnalytics": {
@@ -15031,6 +18803,126 @@
         "title": "StanceBreakdownItem",
         "type": "object"
       },
+      "StanceObservationCreate": {
+        "description": "Snapshot the evidence meter's current stance for this link's source.",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "StanceObservationCreate",
+        "type": "object"
+      },
+      "StanceObservationResponse": {
+        "properties": {
+          "classified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classified At"
+          },
+          "classifier_confidence": {
+            "title": "Classifier Confidence",
+            "type": "number"
+          },
+          "classifier_version": {
+            "title": "Classifier Version",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inference_model_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inference Model Version"
+          },
+          "justification_excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Justification Excerpt"
+          },
+          "link_id": {
+            "format": "uuid",
+            "title": "Link Id",
+            "type": "string"
+          },
+          "observed_by_id": {
+            "format": "uuid",
+            "title": "Observed By Id",
+            "type": "string"
+          },
+          "source_content_hash": {
+            "title": "Source Content Hash",
+            "type": "string"
+          },
+          "stance": {
+            "enum": [
+              "supporting",
+              "opposing",
+              "neutral",
+              "not_addressed"
+            ],
+            "title": "Stance",
+            "type": "string"
+          },
+          "stance_classification_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stance Classification Id"
+          }
+        },
+        "required": [
+          "id",
+          "link_id",
+          "stance",
+          "classifier_confidence",
+          "classifier_version",
+          "source_content_hash",
+          "observed_by_id",
+          "created_at"
+        ],
+        "title": "StanceObservationResponse",
+        "type": "object"
+      },
       "StartChatFromProjectRequest": {
         "description": "Request to start a new chat from a project with document context",
         "properties": {
@@ -16536,7 +20428,7 @@
         "properties": {
           "clear_stale_cells": {
             "default": false,
-            "description": "Delete cells whose column_name no longer matches any column",
+            "description": "Deprecated: nothing is deleted. When true and columns changed, the response lists documents holding values on removed columns.",
             "title": "Clear Stale Cells",
             "type": "boolean"
           },
@@ -29729,6 +33621,210 @@
         ]
       }
     },
+    "/api/v1/integrations/actions": {
+      "post": {
+        "operationId": "create_action_api_v1_integrations_actions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Action",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/actions/{invocation_id}": {
+      "get": {
+        "operationId": "read_action_api_v1_integrations_actions__invocation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Action",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/actions/{invocation_id}/decision": {
+      "post": {
+        "operationId": "decide_api_v1_integrations_actions__invocation_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/actions/{invocation_id}/review": {
+      "get": {
+        "operationId": "review_action_api_v1_integrations_actions__invocation_id__review_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionReview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Review Action",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/devices": {
       "get": {
         "operationId": "get_devices_api_v1_integrations_devices_get",
@@ -33004,6 +37100,536 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/claims": {
+      "get": {
+        "description": "Each claim's tip version, or its version pinned to ``draft_id``.",
+        "operationId": "list_claims_api_v1_projects__project_id__claims_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "draft_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Claims",
+        "tags": [
+          "claims"
+        ]
+      },
+      "post": {
+        "description": "Create a claim over an exact draft passage (EDIT).",
+        "operationId": "create_claim_api_v1_projects__project_id__claims_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Claim",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/export": {
+      "get": {
+        "description": "Download the reconstructable claims evidence package (VIEW).",
+        "operationId": "export_claims_api_v1_projects__project_id__claims_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "draft_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Claims",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}": {
+      "get": {
+        "description": "The claim's full version, link, observation and assessment history.",
+        "operationId": "get_claim_api_v1_projects__project_id__claims__claim_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Claim",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}/assessments": {
+      "post": {
+        "description": "Assess the claim's tip version (ADJUDICATOR role only).",
+        "operationId": "create_claim_assessment_api_v1_projects__project_id__claims__claim_id__assessments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimAssessmentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimAssessmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Claim Assessment",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}/links": {
+      "post": {
+        "description": "Link, re-point or withdraw evidence on the claim's tip version (EDIT).",
+        "operationId": "create_claim_link_api_v1_projects__project_id__claims__claim_id__links_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimLinkCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Claim Link",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}/links/{link_id}/observations": {
+      "post": {
+        "description": "Snapshot the evidence meter's stance for this link's source (EDIT).",
+        "operationId": "create_stance_observation_api_v1_projects__project_id__claims__claim_id__links__link_id__observations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "link_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Link Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StanceObservationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StanceObservationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Stance Observation",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/claims/{claim_id}/versions": {
+      "post": {
+        "description": "Append a reworded version superseding the claim's tip (EDIT).",
+        "operationId": "create_claim_version_api_v1_projects__project_id__claims__claim_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimVersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Claim Version",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/documents": {
       "get": {
         "description": "List documents in a project.\n\nArgs:\n    project_id: Project ID\n    current_user: Authenticated user\n    db: Database session\n\nReturns:\n    List of documents",
@@ -34050,6 +38676,152 @@
           }
         ],
         "summary": "Export Draft",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/promote": {
+      "post": {
+        "description": "Promote this exact version to verified (adjudicator or supervisor).\n\n201 new, 200 replayed; 409 blocked (every blocker listed), content\nchanged or stale; 403 without the role.",
+        "operationId": "promote_draft_api_v1_projects__project_id__drafts__draft_id__versions__version__promote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftPromoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Promote Draft",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/drafts/{draft_id}/versions/{version}/release": {
+      "get": {
+        "description": "Release status, every blocker and the invalidation report (VIEW).",
+        "operationId": "get_draft_release_api_v1_projects__project_id__drafts__draft_id__versions__version__release_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Draft Release",
         "tags": [
           "drafts"
         ]
@@ -36503,6 +41275,50 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{project_id}/audit-bundle": {
+      "get": {
+        "operationId": "audit_bundle_route_api_v1_research_engine_projects__project_id__audit_bundle_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Offline-verifiable audit bundle (manifest + SHA256SUMS)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Audit Bundle Route",
+        "tags": [
+          "research-engine-journey"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}/citation-chases": {
       "post": {
         "description": "OpenAlex citation chase; the service checks EDIT before and after I/O.",
@@ -36689,6 +41505,184 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{project_id}/fulltext": {
+      "get": {
+        "operationId": "list_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FulltextStateResponse"
+                  },
+                  "title": "Response List Fulltext Route Api V1 Research Engine Projects  Project Id  Fulltext Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Fulltext Route",
+        "tags": [
+          "research-engine-acquisition"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/fulltext/requests": {
+      "post": {
+        "operationId": "request_fulltext_route_api_v1_research_engine_projects__project_id__fulltext_requests_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FulltextRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulltextStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Fulltext Route",
+        "tags": [
+          "research-engine-acquisition"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/fulltext/requests/{request_id}/attempts": {
+      "post": {
+        "operationId": "record_attempt_route_api_v1_research_engine_projects__project_id__fulltext_requests__request_id__attempts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FulltextAttemptCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulltextStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Record Attempt Route",
+        "tags": [
+          "research-engine-acquisition"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}/imports": {
       "get": {
         "operationId": "list_imports_route_api_v1_research_engine_projects__project_id__imports_get",
@@ -36863,6 +41857,163 @@
         "summary": "Get Import Route",
         "tags": [
           "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/journey": {
+      "get": {
+        "description": "Stage facts and derived status; reports state, never enforces order.",
+        "operationId": "journey_route_api_v1_research_engine_projects__project_id__journey_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JourneyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Journey Route",
+        "tags": [
+          "research-engine-journey"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/prisma": {
+      "get": {
+        "operationId": "prisma_flow_route_api_v1_research_engine_projects__project_id__prisma_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrismaFlowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Prisma Flow Route",
+        "tags": [
+          "research-engine-acquisition"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/prisma/export": {
+      "get": {
+        "operationId": "prisma_export_route_api_v1_research_engine_projects__project_id__prisma_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "enum": [
+                "json",
+                "md"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Prisma Export Route",
+        "tags": [
+          "research-engine-acquisition"
         ]
       }
     },
@@ -37602,6 +42753,666 @@
         "summary": "Delete Project Role",
         "tags": [
           "research-engine"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues": {
+      "get": {
+        "operationId": "list_screening_queues_route_api_v1_research_engine_projects__project_id__screening_queues_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScreeningQueueResponse"
+                  },
+                  "title": "Response List Screening Queues Route Api V1 Research Engine Projects  Project Id  Screening Queues Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Screening Queues Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      },
+      "post": {
+        "operationId": "create_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningQueueCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningQueueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Screening Queue Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/assignments": {
+      "post": {
+        "operationId": "assign_screening_reviewer_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningAssignmentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningAssignmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Assign Screening Reviewer Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/assignments/{assignment_id}/revoke": {
+      "post": {
+        "operationId": "revoke_screening_assignment_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__assignments__assignment_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "assignment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Assignment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningAssignmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Screening Assignment Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/conflicts": {
+      "get": {
+        "operationId": "screening_conflicts_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__conflicts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScreeningConflictResponse"
+                  },
+                  "title": "Response Screening Conflicts Route Api V1 Research Engine Projects  Project Id  Screening Queues  Queue Id  Conflicts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Screening Conflicts Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/history": {
+      "get": {
+        "operationId": "screening_history_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScreeningEventResponse"
+                  },
+                  "title": "Response Screening History Route Api V1 Research Engine Projects  Project Id  Screening Queues  Queue Id  History Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Screening History Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/mine": {
+      "get": {
+        "operationId": "my_screening_queue_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__mine_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyScreeningQueueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Screening Queue Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/observations": {
+      "post": {
+        "operationId": "submit_screening_observation_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__observations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningObservationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningObservationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Submit Screening Observation Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/adjudicate": {
+      "post": {
+        "operationId": "adjudicate_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__adjudicate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningAdjudicateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningResolutionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Adjudicate Screening Report Route",
+        "tags": [
+          "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/screening/queues/{queue_id}/reports/{report_id}/reopen": {
+      "post": {
+        "operationId": "reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "queue_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Queue Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreeningReopenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningResolutionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reopen Screening Report Route",
+        "tags": [
+          "research-engine-screening"
         ]
       }
     },
@@ -38679,7 +44490,7 @@
         ]
       },
       "get": {
-        "description": "Get an extraction matrix with all its cells.\n\nReturns the matrix definition and all extracted cell values,\norganized for rendering as a comparison grid.",
+        "description": "Get an extraction matrix with all its cells.\n\nReturns the matrix definition and all extracted cell values,\norganized for rendering as a comparison grid. Columns are the current form\nversion's fields; each cell is the accepted value, else the latest machine\nobservation, else the frozen legacy cell (``source``), with ``stale``\nderived at read time.",
         "operationId": "get_matrix_api_v1_research_matrices__matrix_id__get",
         "parameters": [
           {
@@ -38724,7 +44535,7 @@
         ]
       },
       "patch": {
-        "description": "Update an extraction matrix (rename, add/remove/reorder columns).\n\nWhen clear_stale_cells is true and columns changed, cells whose\ncolumn_name no longer matches any column are deleted.",
+        "description": "Update an extraction matrix (rename, add/remove/reorder columns).\n\nA column change appends an immutable form version; identical columns\ncreate nothing. Prior values are never deleted: when clear_stale_cells is\ntrue and columns changed, stale_document_ids lists the documents holding\nvalues on removed columns.",
         "operationId": "update_matrix_api_v1_research_matrices__matrix_id__patch",
         "parameters": [
           {
@@ -38774,6 +44585,65 @@
           }
         ],
         "summary": "Update Matrix",
+        "tags": [
+          "extraction-matrix"
+        ]
+      }
+    },
+    "/api/v1/research/matrices/{matrix_id}/accepted-values": {
+      "post": {
+        "description": "Accept a value that equals a cited observation (ADJUDICATOR role only).",
+        "operationId": "accept_extraction_value_api_v1_research_matrices__matrix_id__accepted_values_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractionAcceptCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionAcceptedValueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Accept Extraction Value",
         "tags": [
           "extraction-matrix"
         ]
@@ -38831,6 +44701,185 @@
           }
         ],
         "summary": "Trigger Extraction",
+        "tags": [
+          "extraction-matrix"
+        ]
+      }
+    },
+    "/api/v1/research/matrices/{matrix_id}/form-versions": {
+      "get": {
+        "description": "Every immutable form version of a matrix, oldest first.",
+        "operationId": "list_form_versions_api_v1_research_matrices__matrix_id__form_versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExtractionFormVersionResponse"
+                  },
+                  "title": "Response List Form Versions Api V1 Research Matrices  Matrix Id  Form Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Form Versions",
+        "tags": [
+          "extraction-matrix"
+        ]
+      }
+    },
+    "/api/v1/research/matrices/{matrix_id}/observations": {
+      "get": {
+        "description": "All observations (any form version) and the accepted chain of one cell.",
+        "operationId": "list_cell_observations_api_v1_research_matrices__matrix_id__observations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "field_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Field Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionCellObservationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Cell Observations",
+        "tags": [
+          "extraction-matrix"
+        ]
+      },
+      "post": {
+        "description": "Record a reviewer's own value or missingness reason (REVIEWER role).",
+        "operationId": "create_observation_api_v1_research_matrices__matrix_id__observations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "matrix_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Matrix Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractionObservationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionObservationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Observation",
         "tags": [
           "extraction-matrix"
         ]

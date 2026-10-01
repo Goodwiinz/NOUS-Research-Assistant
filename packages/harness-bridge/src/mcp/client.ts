@@ -17,6 +17,10 @@ export type McpSession = {
   apiOrigin: string;
   credentialHandle: string;
   stateDir: string;
+  // Absolute registered output root; enables artifacts_publish when present.
+  outputRoot?: string;
+  // Grant carries tools:write; enables request_action / get_action_status.
+  actions?: boolean;
 };
 export const REAUTH_MESSAGE =
   "NOUS session expired or revoked; reconnect this device (nous-harness connect --tools)";
@@ -63,6 +67,46 @@ async function detailOf(response: Response): Promise<string | undefined> {
       : undefined;
   } catch {
     return undefined;
+  }
+}
+
+export type StatusMessages = { forbidden?: string; disabled?: string };
+
+/** Map gateway statuses to stable tool errors; 2xx passes through. */
+export async function throwForStatus(
+  response: Response,
+  messages: StatusMessages = {},
+): Promise<void> {
+  if (response.status === 401) throw new ReauthenticationRequired();
+  if (response.status === 403)
+    throw new ToolRequestRejected(messages.forbidden ?? FORBIDDEN_MESSAGE);
+  if (response.status === 404)
+    throw new ToolRequestRejected(
+      (await detailOf(response)) ?? "NOUS could not find that resource",
+    );
+  if (response.status === 409)
+    throw new ToolRequestRejected(
+      (await detailOf(response)) ?? "NOUS reported a conflict",
+    );
+  if (response.status === 413)
+    throw new ToolRequestRejected(
+      (await detailOf(response)) ?? "NOUS rejected the size or quota",
+    );
+  if (response.status === 422) {
+    const detail = await detailOf(response);
+    throw new ToolRequestRejected(
+      "NOUS rejected the tool arguments" + (detail ? `: ${detail}` : ""),
+    );
+  }
+  if (response.status === 503)
+    throw new ToolRequestRejected(
+      (await detailOf(response)) ?? messages.disabled ?? DISABLED_MESSAGE,
+    );
+  if (!response.ok) {
+    const detail = await detailOf(response);
+    throw new Error(
+      `NOUS request failed (${response.status})` + (detail ? `: ${detail}` : ""),
+    );
   }
 }
 
@@ -131,17 +175,7 @@ export class CapabilityClient {
       console.error(wrapped.message);
       throw wrapped;
     }
-    if (response.status === 401) throw new ReauthenticationRequired();
-    if (response.status === 403) throw new ToolRequestRejected(FORBIDDEN_MESSAGE);
-    if (response.status === 422) {
-      const detail = await detailOf(response);
-      throw new ToolRequestRejected(
-        "NOUS rejected the tool arguments" + (detail ? `: ${detail}` : ""),
-      );
-    }
-    if (response.status === 503)
-      throw new ToolRequestRejected((await detailOf(response)) ?? DISABLED_MESSAGE);
-    if (!response.ok) throw new Error(`NOUS request failed (${response.status})`);
+    await throwForStatus(response);
     try {
       return await response.json();
     } catch {

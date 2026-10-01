@@ -48,6 +48,7 @@ _EXPECTED_WIRE_VALUES = [
     "approval_required",
     "done",
     "error",
+    "artifact",
 ]
 
 

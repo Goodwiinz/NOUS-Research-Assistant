@@ -40,6 +40,8 @@ celery_app = Celery(
         "src.tasks.reconcile_tasks",
         "src.tasks.reconcile_jobs",
         "src.tasks.research_run_tasks",
+        "src.tasks.artifact_tasks",
+        "src.tasks.integration_action_tasks",
     ],
 )
 
@@ -118,12 +120,36 @@ celery_app.conf.update(
         "src.tasks.agent_run_tasks.run_agent_job": {
             "queue": "agent_runs",
         },
+        "src.tasks.artifact_tasks.drain_artifacts": {"queue": "agent_runs"},
+        "src.tasks.artifact_tasks.sweep_artifact_uploads": {"queue": "agent_runs"},
+        "src.tasks.integration_action_tasks.drain_integration_actions": {
+            "queue": "agent_runs"
+        },
+        "src.tasks.integration_action_tasks.sweep_stale_actions": {
+            "queue": "agent_runs"
+        },
     },
     # Audit P1.4 sweepers (flag-gated at runtime by SWEEPERS_ENABLED; the
     # tasks self-skip when disabled). Task modules merge additional entries
     # via conf.beat_schedule.update(...) — this assignment runs first, at
     # celery_app import time, so nothing is clobbered.
     beat_schedule={
+        "drain-artifacts": {
+            "task": "src.tasks.artifact_tasks.drain_artifacts",
+            "schedule": 2.0,
+        },
+        "sweep-artifact-uploads": {
+            "task": "src.tasks.artifact_tasks.sweep_artifact_uploads",
+            "schedule": 60.0,
+        },
+        "drain-integration-actions": {
+            "task": "src.tasks.integration_action_tasks.drain_integration_actions",
+            "schedule": 2.0,
+        },
+        "sweep-stale-integration-actions": {
+            "task": "src.tasks.integration_action_tasks.sweep_stale_actions",
+            "schedule": 60.0,
+        },
         "dispatch-harness": {
             "task": "src.tasks.harness_dispatch.dispatch_harness",
             "schedule": 5.0,

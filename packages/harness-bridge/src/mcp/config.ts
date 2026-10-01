@@ -10,6 +10,8 @@ function mcpArgs(session: McpSession): string[] {
   // the store must be absolute; a bare `tsx` or `./store` would not resolve.
   if (!isAbsolute(session.stateDir))
     throw new Error("MCP state directory must be absolute");
+  if (session.outputRoot !== undefined && !isAbsolute(session.outputRoot))
+    throw new Error("MCP output root must be absolute");
   const tsxLoader = fileURLToPath(import.meta.resolve("tsx"));
   return [
     "--import",
@@ -22,6 +24,8 @@ function mcpArgs(session: McpSession): string[] {
     session.stateDir,
     "--session",
     session.credentialHandle,
+    ...(session.outputRoot ? ["--root", session.outputRoot] : []),
+    ...(session.actions ? ["--actions"] : []),
   ];
 }
 /** Session-scoped Codex MCP configuration; only opaque handles reach argv. */
