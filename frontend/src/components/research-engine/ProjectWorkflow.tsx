@@ -27,6 +27,7 @@ import { JourneyRail } from './JourneyRail';
 import { PrismaFlowCard } from './PrismaFlowCard';
 import { ProtocolPanel } from './ProtocolPanel';
 import { ReportIdentityPanel } from './ReportIdentityPanel';
+import { ReviewVersionsPanel } from './ReviewVersionsPanel';
 import { ScreeningConflictsPanel } from './ScreeningConflictsPanel';
 import { ScreeningQueuePanel } from './ScreeningQueuePanel';
 import { SearchSchedulePanel } from './SearchSchedulePanel';
@@ -227,6 +228,11 @@ export function ProjectWorkflow({
         <ReportIdentityPanel projectId={project.id} readOnly={archived} />
         <CorpusPanel projectId={project.id} readOnly={archived} />
         <SearchSchedulePanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+        <ReviewVersionsPanel
           projectId={project.id}
           roles={roles.data ?? []}
           readOnly={archived}
