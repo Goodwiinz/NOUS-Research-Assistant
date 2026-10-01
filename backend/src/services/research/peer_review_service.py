@@ -1083,3 +1083,19 @@ async def open_obligations(
             if c.status != "resolved"
         ]
     return out
+
+
+async def export_body(db: AsyncSession, context: ProjectContext) -> dict[str, Any]:
+    """The audit bundle's ``peer_review.json`` body: every round with its
+    comments, responses and decisions, anchors checked against the current
+    draft."""
+    cid = _cid(context)
+    rounds = await _rows(db, PeerReviewRound, PeerReviewRound.collection_id == cid)
+    if not rounds:
+        return {"rounds": []}
+    target = await _current_draft(db, cid)
+    return {
+        "rounds": [
+            (await _detail(db, cid, r, target)).model_dump(mode="json") for r in rounds
+        ]
+    }

@@ -33,6 +33,7 @@ from src.models.research_decision import ResearchDecisionStream
 from src.models.research_protocol import ResearchProtocol, ResearchProtocolVersion
 from src.services.research import claims_service, draft_release_service
 from src.services.research import extraction_forms_service as forms
+from src.services.research import peer_review_service
 from src.services.research.draft_generation_service import DraftGenerationService
 from src.services.research_engine import (
     appraisal_service,
@@ -348,6 +349,19 @@ async def _reproduction(db: AsyncSession, context: ProjectContext) -> list[Part]
     ]
 
 
+async def _peer_review(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-314: every peer-review round with responses and decisions."""
+    body = await peer_review_service.export_body(db, context)
+    return [
+        _sealed_part(
+            "peer_review.json",
+            peer_review_service.EXPORT_SCHEMA,
+            body,
+            not body["rounds"],
+        )
+    ]
+
+
 async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
     """The builders, in a fixed order (looked up at call time). PRISMA reads
     last: without the caller's snapshot, ``load_inputs`` would open its own
@@ -364,6 +378,7 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _synthesis,
         _experiments,
         _reproduction,
+        _peer_review,
         _prisma,
     ):
         parts.extend(await build(db, context))
