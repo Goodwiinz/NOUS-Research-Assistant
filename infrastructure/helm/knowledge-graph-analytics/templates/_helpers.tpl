@@ -355,3 +355,41 @@ spec:
     rule: 'RunAsAny'
 {{- end }}
 {{- end }}
+
+{{/* Hash the exact immutable Job pod definition, including template defaults. */}}
+{{- define "knowledge-graph-analytics.migrationPod" -}}
+metadata:
+  {{- if .Values.backend.image.sourceSha }}
+  annotations:
+    {{- include "knowledge-graph-analytics.backendSourceAnnotation" . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "knowledge-graph-analytics.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+spec:
+  restartPolicy: Never
+  {{- with .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  serviceAccountName: {{ include "knowledge-graph-analytics.serviceAccountName" . }}
+  securityContext:
+    {{- toYaml .Values.securityContext | nindent 4 }}
+  containers:
+    - name: run-migrations
+      image: {{ include "knowledge-graph-analytics.backendImage" . | quote }}
+      imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+      workingDir: /app
+      command: ["alembic", "upgrade", "heads"]
+      envFrom:
+        {{- toYaml .Values.backend.envFrom | nindent 8 }}
+      env:
+        {{- include "knowledge-graph-analytics.mergedEnv" (dict "base" .Values.backend.env) | nindent 8 }}
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+{{- end }}
