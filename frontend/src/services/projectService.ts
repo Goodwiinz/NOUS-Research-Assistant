@@ -22,6 +22,15 @@ import type {
   ApiReleaseCheck,
   ApiReleaseStatus,
 } from '@/types/api/research-release-contract';
+import type {
+  ApiDraftDiff,
+  ApiPeerReviewDecision,
+  ApiPeerReviewDecisionCreate,
+  ApiPeerReviewResponse,
+  ApiPeerReviewResponseCreate,
+  ApiPeerReviewRoundDetail,
+  ApiPeerReviewRoundList,
+} from '@/types/api/peer-review-contract';
 
 // Types
 export interface Project {
@@ -636,6 +645,77 @@ export const projectService = {
   ): Promise<DraftComparison> {
     return api.get<DraftComparison>(
       `/projects/${projectId}/drafts/compare?version_a=${versionA}&version_b=${versionB}`
+    );
+  },
+
+  /** GOO-314: sentence-level anchored diff between two saved versions. */
+  async diffDrafts(
+    projectId: string,
+    fromDraftId: string,
+    toDraftId: string
+  ): Promise<ApiDraftDiff> {
+    const qs = new URLSearchParams({
+      from_draft_id: fromDraftId,
+      to_draft_id: toDraftId,
+    }).toString();
+    return api.get<ApiDraftDiff>(`/projects/${projectId}/drafts/diff?${qs}`);
+  },
+
+  /** GOO-314: the project's external peer-review rounds. */
+  async listPeerReviewRounds(
+    projectId: string
+  ): Promise<ApiPeerReviewRoundList> {
+    return api.get<ApiPeerReviewRoundList>(
+      `/projects/${projectId}/peer-review/rounds`
+    );
+  },
+
+  /** GOO-314: one round, anchors checked against the target version. */
+  async getPeerReviewRound(
+    projectId: string,
+    roundId: string,
+    targetDraftId?: string
+  ): Promise<ApiPeerReviewRoundDetail> {
+    const qs = targetDraftId
+      ? `?${new URLSearchParams({ target_draft_id: targetDraftId })}`
+      : '';
+    return api.get<ApiPeerReviewRoundDetail>(
+      `/projects/${projectId}/peer-review/rounds/${roundId}${qs}`
+    );
+  },
+
+  /** GOO-314: a response version (409 when the tip moved). */
+  async respondToPeerReviewComment(
+    projectId: string,
+    commentRootId: string,
+    data: ApiPeerReviewResponseCreate
+  ): Promise<ApiPeerReviewResponse> {
+    return api.post<ApiPeerReviewResponse>(
+      `/projects/${projectId}/peer-review/comments/${commentRootId}/responses`,
+      data
+    );
+  },
+
+  /** GOO-314: assign (EDIT) or resolve/reopen (ADJUDICATE) a comment. */
+  async decidePeerReviewComment(
+    projectId: string,
+    commentRootId: string,
+    data: ApiPeerReviewDecisionCreate
+  ): Promise<ApiPeerReviewDecision> {
+    return api.post<ApiPeerReviewDecision>(
+      `/projects/${projectId}/peer-review/comments/${commentRootId}/decisions`,
+      data
+    );
+  },
+
+  /** GOO-314: the response export (Markdown or JSON attachment). */
+  async downloadPeerReviewExport(
+    projectId: string,
+    roundId: string,
+    format: 'markdown' | 'json'
+  ): Promise<void> {
+    await api.download(
+      `/projects/${projectId}/peer-review/rounds/${roundId}/export?format=${format}`
     );
   },
 
