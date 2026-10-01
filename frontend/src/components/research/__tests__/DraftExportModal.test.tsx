@@ -37,3 +37,20 @@ describe('DraftExportModal (GOO-317)', () => {
     expect(onExport).toHaveBeenLastCalledWith('ris', true, 'bibtex');
   });
 });
+
+describe('DraftExportModal reopen', () => {
+  it('resets to the initial format each time it opens', async () => {
+    const props = {
+      onClose: vi.fn(),
+      onExport: vi.fn().mockResolvedValue(undefined),
+      draftTitle: 'Results',
+      initialFormat: 'latex' as const,
+    };
+    const { rerender } = render(<DraftExportModal isOpen {...props} />);
+    await userEvent.click(screen.getByRole('button', { name: /RIS/ }));
+    rerender(<DraftExportModal isOpen={false} {...props} />);
+    rerender(<DraftExportModal isOpen {...props} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Export' }));
+    expect(props.onExport).toHaveBeenLastCalledWith('latex', true, 'bibtex');
+  });
+});

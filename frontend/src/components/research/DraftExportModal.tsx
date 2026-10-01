@@ -5,7 +5,7 @@
  * Modal for exporting drafts to different formats
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { X, Download, FileText, Code, Loader2, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -70,11 +70,13 @@ export const DraftExportModal: React.FC<DraftExportModalProps> = ({
   >('bibtex');
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    if (isOpen) {
-      setFormat(initialFormat);
-    }
-  }, [initialFormat, isOpen]);
+  // Reset the format whenever the dialog opens (or its initial format
+  // changes): adjusted during render rather than in an effect.
+  const [synced, setSynced] = useState({ isOpen, initialFormat });
+  if (synced.isOpen !== isOpen || synced.initialFormat !== initialFormat) {
+    setSynced({ isOpen, initialFormat });
+    if (isOpen) setFormat(initialFormat);
+  }
 
   const handleExport = async () => {
     setExporting(true);
