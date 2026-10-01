@@ -79,6 +79,15 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-306: claim tables reference the extraction tables and (GOO-311's
+    # column) synthesis results, so they come off first.
+    "research_claim_assessments",
+    "research_claim_stance_observations",
+    "research_claim_evidence_links",
+    "research_claim_versions",
+    "research_claims",
+    # GOO-311: synthesis results reference evidence tables.
+    "synthesis_results",
     # GOO-310: certainty and contradictions reference evidence tables, which
     # reference extraction tables, matrices and protocol versions.
     "outcome_certainty_assessments",
@@ -86,14 +95,8 @@ _REBUILT_TABLES = (
     "evidence_table_versions",
     # GOO-309: appraisals reference reports, studies and protocol versions.
     "appraisal_assessments",
-    # GOO-307: releases reference drafts and nothing rebuilt; dropped first.
+    # GOO-307: releases reference drafts and nothing rebuilt.
     "draft_releases",
-    # GOO-306: claim tables reference the extraction tables; rebuilt last.
-    "research_claim_assessments",
-    "research_claim_stance_observations",
-    "research_claim_evidence_links",
-    "research_claim_versions",
-    "research_claims",
     # GOO-304: extraction tables reference documents, users and protocol
     # versions only; rebuilt by their own migration below.
     "extraction_accepted_values",
@@ -135,6 +138,7 @@ def _upgrade(connection: Connection) -> None:
         "d7f9b1c3e5a8_create_draft_releases.py",
         "e2a4c6b8d0f1_create_appraisal_assessments.py",
         "f4b6d8a0c2e3_create_evidence_certainty.py",
+        "a6c8e0b2d4f5_create_synthesis_results.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename
