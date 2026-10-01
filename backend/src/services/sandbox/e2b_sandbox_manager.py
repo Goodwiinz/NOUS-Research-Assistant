@@ -10,7 +10,8 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,44 @@ MAX_EXECUTION_TIMEOUT = 300  # 5 minutes
 
 # Maximum number of code executions per agent graph run
 MAX_EXECUTIONS_PER_RUN = 5
+
+
+# GOO-312: one-shot isolated execution for the research ``analyze`` step.
+ISOLATED_WORKDIR = "/work"
+_REQUIREMENTS_PATH = "/tmp/nous-requirements.txt"
+
+
+@dataclass(frozen=True)
+class IsolatedSpec:
+    """``files`` are paths relative to ``/work`` (``main.py``, ``in/x.csv``);
+    each output is read back from ``/work/out/<name>``."""
+
+    template: str
+    requirements: tuple[str, ...]
+    files: Mapping[str, bytes]
+    command: str
+    output_names: tuple[str, ...]
+    timeout: int = MAX_EXECUTION_TIMEOUT
+
+
+@dataclass(frozen=True)
+class IsolatedResult:
+    status: Literal["completed", "failed", "timeout", "unavailable"]
+    outputs: Dict[str, bytes]
+    stdout: str
+    stderr: str
+    template_id: Optional[str]
+    sandbox_id: Optional[str]
+    lock: Optional[bytes]
+    python: Optional[str]
+    os_release: Optional[bytes]
+    started_at: datetime
+    completed_at: datetime
+    error: Optional[str] = None
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class SandboxManager:
@@ -223,6 +262,99 @@ class SandboxManager:
             f"print(result.stderr) if result.stderr else None"
         )
         return await self.execute(thread_id, install_code)
+
+    async def run_isolated(self, spec: IsolatedSpec) -> IsolatedResult:
+        """Run one command in a throwaway sandbox (GOO-312), never through the
+        per-thread cache. ``envs`` is always empty; only the pinned
+        requirements are installed (``--no-deps``, no DEFAULT_PACKAGES); the
+        environment capture is ``pip freeze --all``, ``python -VV`` and
+        ``/etc/os-release``, taken after the install and before the command.
+        The sandbox is killed in ``finally``."""
+        started = _now()
+        state: Dict[str, Any] = {"outputs": {}, "stdout": "", "stderr": ""}
+
+        def result(status: Any, error: Optional[str] = None) -> IsolatedResult:
+            return IsolatedResult(
+                status=status,
+                outputs=state["outputs"],
+                stdout=state["stdout"],
+                stderr=state["stderr"],
+                template_id=state.get("template_id"),
+                sandbox_id=state.get("sandbox_id"),
+                lock=state.get("lock"),
+                python=state.get("python"),
+                os_release=state.get("os_release"),
+                started_at=started,
+                completed_at=_now(),
+                error=error,
+            )
+
+        if not self.is_available:
+            return result("unavailable", "sandbox_unavailable")
+        try:
+            sandbox = await AsyncSandbox.create(
+                template=spec.template, timeout=SANDBOX_IDLE_TIMEOUT, envs={}
+            )
+        except Exception as exc:
+            logger.warning("Isolated sandbox create failed: %s", type(exc).__name__)
+            return result("unavailable", "sandbox_unavailable")
+        try:
+            state["sandbox_id"] = sandbox.sandbox_id
+            info = await sandbox.get_info()
+            state["template_id"] = info.template_id
+            run = sandbox.commands.run
+            if spec.requirements:
+                await sandbox.files.write(
+                    _REQUIREMENTS_PATH, "\n".join(spec.requirements) + "\n"
+                )
+                await run(
+                    f"pip install -q --no-deps -r {_REQUIREMENTS_PATH}",
+                    envs={},
+                    timeout=spec.timeout,
+                )
+            state["lock"] = (
+                await run("pip freeze --all", envs={}, timeout=60)
+            ).stdout.encode("utf-8")
+            state["python"] = (
+                await run("python -VV", envs={}, timeout=60)
+            ).stdout.strip()
+            state["os_release"] = await sandbox.files.read(
+                "/etc/os-release", format="bytes"
+            )
+            for name, data in spec.files.items():
+                await sandbox.files.write(f"{ISOLATED_WORKDIR}/{name}", data)
+            await run(f"mkdir -p {ISOLATED_WORKDIR}/out", envs={}, timeout=60)
+            done = await run(
+                spec.command, cwd=ISOLATED_WORKDIR, envs={}, timeout=spec.timeout
+            )
+            state["stdout"], state["stderr"] = _cap_log(done.stdout), _cap_log(
+                done.stderr
+            )
+            for name in spec.output_names:
+                try:
+                    data = await sandbox.files.read(
+                        f"{ISOLATED_WORKDIR}/out/{name}", format="bytes"
+                    )
+                except Exception:
+                    return result("failed", f"missing_output:{name}")
+                state["outputs"][name] = bytes(data)
+            return result("completed")
+        except asyncio.TimeoutError:
+            return result("timeout", "timeout")
+        except Exception as exc:
+            if type(exc).__name__ == "TimeoutException":
+                return result("timeout", "timeout")
+            if hasattr(exc, "exit_code"):  # e2b CommandExitException
+                state["stdout"] = _cap_log(getattr(exc, "stdout", ""))
+                state["stderr"] = _cap_log(getattr(exc, "stderr", ""))
+                return result("failed", f"exit_code:{getattr(exc, 'exit_code')}")
+            logger.warning("Isolated sandbox run failed: %s", type(exc).__name__)
+            return result("failed", "sandbox_error")
+        finally:
+            try:
+                await sandbox.kill()
+            except Exception as exc:
+                logger.warning("Isolated sandbox kill failed: %s", type(exc).__name__)
 
     async def cleanup(self, thread_id: str) -> None:
         """Kill and remove sandbox for a thread."""
