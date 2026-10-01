@@ -3,7 +3,7 @@
 Date: 2026-10-01
 Audit SHA: `1092b380bd657cb7bb4c3a2dbf8795a1b0eef153` (tip of `develop`, #1783 merged)
 Linear epic: GOO-361 (children GOO-362+ per finding).
-Ledger: `~/.audit-ledgers/rag/agent-audit-round8.md` (+ `-details.md`) — status source of truth; claim by ID before touching a slice.
+Ledger: `~/.audit-ledgers/rag/agent-audit-round8.md` (+ `-details.md`) — status source of truth; claim by ID before touching a slice. The ledger is deliberately kept outside the repo (shared, home-dir, per the audit-ledger workflow) so parallel sessions and worktrees see one file; every finding's evidence, failure scenario, fix and mutation check is also mirrored verbatim on its Linear issue (GOO-362..393), which is the durable copy for anyone without the home directory.
 Lens: agent architecture (graph wiring, state, durability, SSE) + bug hunt. Prompt-injection was round 7 (#1594–#1597) and is out of scope here.
 
 ## Result
@@ -23,7 +23,7 @@ Lens: agent architecture (graph wiring, state, durability, SSE) + bug hunt. Prom
 
 ## Slices
 
-Each slice = one branch `fix/agent-r8-<slice>` cut from `origin/develop`, one PR, Opus implementer at xhigh effort. Claim the IDs in the ledger before branching. Every fix lands with the mutation test from the details file (test must fail with the guard removed — `docs/engineering/testing.md`).
+Each slice = one branch `fix/agent-r8-<slice>` cut from the fetched tip of `develop` (`git fetch origin develop && git worktree add -b <branch> <dir> origin/develop` — the normal remote-tracking ref, which is current), one PR, Opus implementer at xhigh effort. Claim the IDs in the ledger before branching. Every fix lands with the mutation test from the details file (test must fail with the guard removed — `docs/engineering/testing.md`).
 
 | # | Branch | IDs | Files | Depends on |
 |---|--------|-----|-------|------------|
@@ -47,10 +47,10 @@ Parallel waves: **wave 1** S1, S2, S3, S4, S9 (disjoint files). **Wave 2** S5, S
 - B4: when `truncated` is set, rewrite `returned`/`has_more` from retained identities, or clamp `limit` so a page fits the 32 KiB cap.
 - B6: catch pydantic `ValidationError` in the mutation branch separately → `invalid_tool_arguments`, `automatic_retry_allowed=True`.
 - **Class test (required):** parametrised test that drives every registered tool through `execute_tool` with LLM-minimal args (required fields only) and asserts the impl receives no injected `None` optionals and no dropped server-injected scope. This is the regression gate for theme 2.
-- Decide and record: delete `tools.py` wrapper bodies (dead) or add the guard-diff test. Also delete stale `AGENT_TOOLS` in `tools_impl.py:151-718` if its only consumer is the `execute.py` re-export (verify).
+- Decide and record: delete `tools.py` wrapper bodies (dead) or add the guard-diff test. Either way, **every wrapper-only guard must first be ported into the schema or the implementation** (known gaps: `export_bibliography` cap of 50 lives only in the wrapper while `_tool_export_bibliography` builds an unbounded `IN` query; `max_results`/`max_depth` use `min()` only so negatives pass). Deleting bodies before porting the guards widens the gap. Also delete stale `AGENT_TOOLS` in `tools_impl.py:151-718` if its only consumer is the `execute.py` re-export (verify).
 
 ### S2 — RAG gating (A1 high, A4, A10)
-- A1: `is_conversational` must fullmatch the normalized message (reuse `_BARE_CONVERSATION_RE` / `is_bare_greeting_text` semantics) or require every token conversational and token count < N. Shared predicate — both `rag_node` and `memory_retrieval_node` change together.
+- A1: `is_conversational` must fullmatch the normalized message — define a new full-match predicate that keeps the existing acknowledgement vocabulary (`yes`, `no`, `ok`, `got it`, `ok cool`, `thanks`, …) and only stops substring matches inside longer messages. Do **not** swap in `_BARE_CONVERSATION_RE` or `is_bare_greeting_text` directly: neither carries the ack vocabulary, so bare acks would start triggering RAG/memory and break the ack fast-path tests and the A4 contract. Shared predicate — both `rag_node` and `memory_retrieval_node` change together.
 - A4: fast path handles greetings only; acks ("ok", "great", "thanks") are ineligible when the previous assistant message ends in a question/proposal or when a project page context is present. Fast path is on in values-dev/values-aws, so this is live.
 - A10: short-circuit conversational turns before the thread-attachment branch in `rag_node` (explicit `attachment_ids` still win).
 - Tests: the mutation checks in the details file (A1 two asserts; A4 `classify_fast_path_turn` ineligible; A10 `_load_attachment_contexts` not awaited).
@@ -68,7 +68,7 @@ Parallel waves: **wave 1** S1, S2, S3, S4, S9 (disjoint files). **Wave 2** S5, S
 - A9: `capability_terminal` accepts `"completed"`; fix the fixture in `test_task3_capability_terminal.py` to the real status string.
 
 ### S5 — collection links (B3, B5)
-- B3: `_link_documents_to_project` uses `on_conflict_do_update(set_={"is_deleted": False, "deleted_at": None})` and counts revived rows as linked. Check `collection_service.py:258-278` REST re-add (R6-M7) — fix there too if it shares the helper, otherwise leave a ledger note.
+- B3: `_link_documents_to_project` must (a) stop pre-filtering soft-deleted pairs out of the batch — today the existing-link select ignores `is_deleted` and `new_rows` is built only from ids absent from it, so a deleted pair never reaches the INSERT — then (b) use `on_conflict_do_update(set_={"is_deleted": False, "deleted_at": None})`, and (c) count revived rows as linked (report them separately, e.g. `restored`). Changing only the conflict action leaves B3 unfixed. Check `collection_service.py:258-278` REST re-add (R6-M7) — fix there too if it shares the helper, otherwise leave a ledger note.
 - B5: replayed external-barrier results carry `replayed_from_operation`, set `automatic_retry_allowed=False`, and count toward `error_count`.
 
 ### S6 — SSE sessions (D1, D2, D5, D8, C5)
@@ -117,4 +117,4 @@ Mutation verification is mandatory for every race/idempotency-shaped fix (C1, C3
 - Recursion headroom (writing/data subgraph ≈40 steps vs `RECURSION_LIMIT=50`).
 - Compactor's dependence on `add_messages` un-marking `RemoveMessage` (langgraph pin `>=0.4,<2.0` too loose).
 - `langgraph` psycopg pool has no checkout `check`; ~33 connections/pod vs RDS limits.
-- Stray remote ref `refs/remotes/origin/develop` (140 commits stale) makes `launch_audit.sh --ref origin/develop` pin the wrong SHA. Use `--ref develop`; delete the ref.
+- The GitHub remote carries a stray branch literally named `refs/remotes/origin/develop` (140 commits stale). It is **not** the local remote-tracking ref `origin/develop`, which is current and is what every slice branches from. The stray ref only bites `launch_audit.sh --ref origin/develop`, which fetches the ref by that literal name; use `--ref develop`, and delete the stray ref on the remote (`git push origin :refs/remotes/origin/develop`).
