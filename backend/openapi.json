@@ -3223,6 +3223,35 @@
         "title": "CLIAuthApproveRequest",
         "type": "object"
       },
+      "CandidateCreate": {
+        "description": "Package one exact saved draft version (bound by its content hash).",
+        "properties": {
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_content_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Expected Content Hash",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "expected_content_hash",
+          "idempotency_key"
+        ],
+        "title": "CandidateCreate",
+        "type": "object"
+      },
       "CategoryTrackingRequest": {
         "properties": {
           "categories": {
@@ -4317,6 +4346,61 @@
           }
         },
         "title": "ChatMessageUpdate",
+        "type": "object"
+      },
+      "CheckItem": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          }
+        },
+        "required": [
+          "code",
+          "detail"
+        ],
+        "title": "CheckItem",
+        "type": "object"
+      },
+      "CheckResult": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CheckItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "pass",
+              "fail",
+              "unknown",
+              "not_applicable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "CheckResult",
         "type": "object"
       },
       "CitationChaseDeclaration": {
@@ -13802,6 +13886,196 @@
         "title": "LocalExtractionRequest",
         "type": "object"
       },
+      "ManuscriptReleaseListResponse": {
+        "properties": {
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/ManuscriptReleaseResponse"
+            },
+            "title": "Releases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "releases"
+        ],
+        "title": "ManuscriptReleaseListResponse",
+        "type": "object"
+      },
+      "ManuscriptReleaseResponse": {
+        "properties": {
+          "actor_role": {
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "candidate_release_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Release Id"
+          },
+          "checks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CheckResult"
+            },
+            "title": "Checks",
+            "type": "object"
+          },
+          "checks_hash": {
+            "title": "Checks Hash",
+            "type": "string"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_id": {
+            "format": "uuid",
+            "title": "Created By Id",
+            "type": "string"
+          },
+          "draft_id": {
+            "format": "uuid",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_release_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Release Id"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "external_submission": {
+            "const": "not_authorized",
+            "default": "not_authorized",
+            "title": "External Submission",
+            "type": "string"
+          },
+          "failing_obligations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failing Obligations",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "package_files": {
+            "items": {
+              "$ref": "#/components/schemas/PackageFile"
+            },
+            "title": "Package Files",
+            "type": "array"
+          },
+          "package_sha256": {
+            "title": "Package Sha256",
+            "type": "string"
+          },
+          "snapshot_hash": {
+            "title": "Snapshot Hash",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "candidate",
+              "verified"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "stale_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Cause"
+          },
+          "status": {
+            "default": "candidate",
+            "enum": [
+              "candidate",
+              "verified",
+              "stale"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "collection_id",
+          "draft_id",
+          "draft_version",
+          "content_hash",
+          "stage",
+          "snapshot_hash",
+          "checks",
+          "checks_hash",
+          "package_files",
+          "package_sha256",
+          "created_by_id",
+          "actor_role",
+          "created_at"
+        ],
+        "title": "ManuscriptReleaseResponse",
+        "type": "object"
+      },
+      "MemberCheck": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "ok"
+        ],
+        "title": "MemberCheck",
+        "type": "object"
+      },
       "MergeJobEntityRef": {
         "properties": {
           "id": {
@@ -14904,6 +15178,29 @@
           "suggested_word_count"
         ],
         "title": "OutlineSection",
+        "type": "object"
+      },
+      "PackageFile": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "bytes"
+        ],
+        "title": "PackageFile",
         "type": "object"
       },
       "PageContextRequest": {
@@ -16703,6 +17000,36 @@
         "title": "ProjectUpdate",
         "type": "object"
       },
+      "PromoteRequest": {
+        "description": "Promote exactly the candidate snapshot and content the caller saw.",
+        "properties": {
+          "expected_content_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Expected Content Hash",
+            "type": "string"
+          },
+          "expected_snapshot_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Expected Snapshot Hash",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_snapshot_hash",
+          "expected_content_hash",
+          "idempotency_key"
+        ],
+        "title": "PromoteRequest",
+        "type": "object"
+      },
       "ProtocolApprovalRequest": {
         "properties": {
           "expected_content_hash": {
@@ -17639,6 +17966,35 @@
         "title": "RealtimeStatusSubscription",
         "type": "object"
       },
+      "ReferenceMapping": {
+        "properties": {
+          "entry_sha256": {
+            "title": "Entry Sha256",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "key",
+          "entry_sha256"
+        ],
+        "title": "ReferenceMapping",
+        "type": "object"
+      },
       "RejectRequest": {
         "properties": {
           "audit_note": {
@@ -17932,6 +18288,68 @@
           "assessment_ids"
         ],
         "title": "ReleaseInvalidation",
+        "type": "object"
+      },
+      "ReleaseVerification": {
+        "description": "Recomputed from the stored bytes alone; nothing is re-resolved.",
+        "properties": {
+          "bundle_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Error"
+          },
+          "bundle_ok": {
+            "title": "Bundle Ok",
+            "type": "boolean"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/MemberCheck"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "package_sha256": {
+            "title": "Package Sha256",
+            "type": "string"
+          },
+          "package_sha256_ok": {
+            "title": "Package Sha256 Ok",
+            "type": "boolean"
+          },
+          "reference_mapping": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceMapping"
+            },
+            "title": "Reference Mapping",
+            "type": "array"
+          },
+          "references_ok": {
+            "title": "References Ok",
+            "type": "boolean"
+          },
+          "release_id": {
+            "format": "uuid",
+            "title": "Release Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "release_id",
+          "package_sha256",
+          "package_sha256_ok",
+          "members",
+          "bundle_ok",
+          "references_ok",
+          "reference_mapping"
+        ],
+        "title": "ReleaseVerification",
         "type": "object"
       },
       "ReportCandidatesResponse": {
@@ -44069,6 +44487,297 @@
         "summary": "Get Draft Release",
         "tags": [
           "drafts"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/manuscript-releases": {
+      "get": {
+        "operationId": "list_releases_api_v1_projects__project_id__manuscript_releases_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManuscriptReleaseListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Releases",
+        "tags": [
+          "manuscript-releases"
+        ]
+      },
+      "post": {
+        "description": "Package a candidate release of one exact draft version (EDIT).",
+        "operationId": "create_candidate_api_v1_projects__project_id__manuscript_releases_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManuscriptReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Candidate",
+        "tags": [
+          "manuscript-releases"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/package": {
+      "get": {
+        "description": "The stored package bytes (VIEW), re-hashed before they leave.",
+        "operationId": "download_package_api_v1_projects__project_id__manuscript_releases__release_id__package_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Release Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Package",
+        "tags": [
+          "manuscript-releases"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/promote": {
+      "post": {
+        "description": "Promote one exact candidate to verified (RELEASE).",
+        "operationId": "promote_api_v1_projects__project_id__manuscript_releases__release_id__promote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Release Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManuscriptReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Obligations not met, or a stale candidate"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Promote",
+        "tags": [
+          "manuscript-releases"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/verify": {
+      "get": {
+        "description": "Recompute every package hash and the reference mapping (VIEW).",
+        "operationId": "verify_release_api_v1_projects__project_id__manuscript_releases__release_id__verify_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Release Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseVerification"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Verify Release",
+        "tags": [
+          "manuscript-releases"
         ]
       }
     },

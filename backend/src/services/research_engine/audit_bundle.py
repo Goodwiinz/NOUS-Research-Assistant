@@ -57,6 +57,7 @@ SCHEMA = "nous.academic.audit-bundle.v1"
 METHODS_SCHEMA = "nous.academic.audit-methods.v1"
 EXTRACTION_SCHEMA = "nous.academic.audit-extraction.v1"
 RELEASE_CHECKS_SCHEMA = "nous.academic.release-checks.v1"
+MANUSCRIPT_RELEASES_SCHEMA = "nous.academic.manuscript-releases.v1"
 MANIFEST = "manifest.json"
 SUMS = "SHA256SUMS"
 _ZIP_TIME = (1980, 1, 1, 0, 0, 0)  # fixed: identical parts, identical members
@@ -362,6 +363,23 @@ async def _peer_review(db: AsyncSession, context: ProjectContext) -> list[Part]:
     ]
 
 
+async def _manuscript_releases(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-315: every manuscript release's snapshot, checks and package
+    hashes (never the package bytes). Local import: that service reuses
+    this module's writer."""
+    from src.services.research import manuscript_release_service
+
+    body = await manuscript_release_service.export_body(db, context)
+    return [
+        _sealed_part(
+            "manuscript-releases.json",
+            MANUSCRIPT_RELEASES_SCHEMA,
+            body,
+            not body["releases"],
+        )
+    ]
+
+
 async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
     """The builders, in a fixed order (looked up at call time). PRISMA reads
     last: without the caller's snapshot, ``load_inputs`` would open its own
@@ -379,6 +397,7 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _experiments,
         _reproduction,
         _peer_review,
+        _manuscript_releases,
         _prisma,
     ):
         parts.extend(await build(db, context))

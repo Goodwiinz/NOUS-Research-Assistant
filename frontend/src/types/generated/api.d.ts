@@ -5512,6 +5512,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/manuscript-releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Releases */
+        get: operations["list_releases_api_v1_projects__project_id__manuscript_releases_get"];
+        put?: never;
+        /**
+         * Create Candidate
+         * @description Package a candidate release of one exact draft version (EDIT).
+         */
+        post: operations["create_candidate_api_v1_projects__project_id__manuscript_releases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/package": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Package
+         * @description The stored package bytes (VIEW), re-hashed before they leave.
+         */
+        get: operations["download_package_api_v1_projects__project_id__manuscript_releases__release_id__package_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote
+         * @description Promote one exact candidate to verified (RELEASE).
+         */
+        post: operations["promote_api_v1_projects__project_id__manuscript_releases__release_id__promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/manuscript-releases/{release_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify Release
+         * @description Recompute every package hash and the reference mapping (VIEW).
+         */
+        get: operations["verify_release_api_v1_projects__project_id__manuscript_releases__release_id__verify_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/memories": {
         parameters: {
             query?: never;
@@ -11681,6 +11762,21 @@ export interface components {
             /** Verification Code */
             verification_code: string;
         };
+        /**
+         * CandidateCreate
+         * @description Package one exact saved draft version (bound by its content hash).
+         */
+        CandidateCreate: {
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Expected Content Hash */
+            expected_content_hash: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
         /** CategoryTrackingRequest */
         CategoryTrackingRequest: {
             /**
@@ -12091,6 +12187,25 @@ export interface components {
             feedback_rating?: number | null;
             /** Feedback Text */
             feedback_text?: string | null;
+        };
+        /** CheckItem */
+        CheckItem: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** Ref */
+            ref?: string | null;
+        };
+        /** CheckResult */
+        CheckResult: {
+            /** Items */
+            items?: components["schemas"]["CheckItem"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pass" | "fail" | "unknown" | "not_applicable";
         };
         /**
          * CitationChaseDeclaration
@@ -16294,6 +16409,91 @@ export interface components {
              */
             update_knowledge_graph: boolean;
         };
+        /** ManuscriptReleaseListResponse */
+        ManuscriptReleaseListResponse: {
+            /** Releases */
+            releases: components["schemas"]["ManuscriptReleaseResponse"][];
+        };
+        /** ManuscriptReleaseResponse */
+        ManuscriptReleaseResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /** Candidate Release Id */
+            candidate_release_id?: string | null;
+            /** Checks */
+            checks: {
+                [key: string]: components["schemas"]["CheckResult"];
+            };
+            /** Checks Hash */
+            checks_hash: string;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /**
+             * Draft Id
+             * Format: uuid
+             */
+            draft_id: string;
+            /** Draft Release Id */
+            draft_release_id?: string | null;
+            /** Draft Version */
+            draft_version: number;
+            /**
+             * External Submission
+             * @default not_authorized
+             * @constant
+             */
+            external_submission: "not_authorized";
+            /** Failing Obligations */
+            failing_obligations?: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Package Files */
+            package_files: components["schemas"]["PackageFile"][];
+            /** Package Sha256 */
+            package_sha256: string;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "candidate" | "verified";
+            /** Stale Cause */
+            stale_cause?: string | null;
+            /**
+             * Status
+             * @default candidate
+             * @enum {string}
+             */
+            status: "candidate" | "verified" | "stale";
+        };
+        /** MemberCheck */
+        MemberCheck: {
+            /** Ok */
+            ok: boolean;
+            /** Path */
+            path: string;
+            /** Sha256 */
+            sha256: string;
+        };
         /** MergeJobEntityRef */
         MergeJobEntityRef: {
             /** Id */
@@ -16726,6 +16926,15 @@ export interface components {
             suggested_word_count: number;
             /** Title */
             title: string;
+        };
+        /** PackageFile */
+        PackageFile: {
+            /** Bytes */
+            bytes: number;
+            /** Path */
+            path: string;
+            /** Sha256 */
+            sha256: string;
         };
         /** PageContextRequest */
         PageContextRequest: {
@@ -17457,6 +17666,18 @@ export interface components {
             /** Tags */
             tags?: string[] | null;
         };
+        /**
+         * PromoteRequest
+         * @description Promote exactly the candidate snapshot and content the caller saw.
+         */
+        PromoteRequest: {
+            /** Expected Content Hash */
+            expected_content_hash: string;
+            /** Expected Snapshot Hash */
+            expected_snapshot_hash: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
         /** ProtocolApprovalRequest */
         ProtocolApprovalRequest: {
             /** Expected Content Hash */
@@ -17847,6 +18068,15 @@ export interface components {
             /** @default normal */
             frequency: components["schemas"]["UpdateFrequency"];
         };
+        /** ReferenceMapping */
+        ReferenceMapping: {
+            /** Entry Sha256 */
+            entry_sha256: string;
+            /** Key */
+            key: string;
+            /** Title */
+            title?: string | null;
+        };
         /** RejectRequest */
         RejectRequest: {
             /** Audit Note */
@@ -17953,6 +18183,31 @@ export interface components {
             changed_nodes: string[];
             /** Stale At */
             stale_at?: string | null;
+        };
+        /**
+         * ReleaseVerification
+         * @description Recomputed from the stored bytes alone; nothing is re-resolved.
+         */
+        ReleaseVerification: {
+            /** Bundle Error */
+            bundle_error?: string | null;
+            /** Bundle Ok */
+            bundle_ok: boolean;
+            /** Members */
+            members: components["schemas"]["MemberCheck"][];
+            /** Package Sha256 */
+            package_sha256: string;
+            /** Package Sha256 Ok */
+            package_sha256_ok: boolean;
+            /** Reference Mapping */
+            reference_mapping: components["schemas"]["ReferenceMapping"][];
+            /** References Ok */
+            references_ok: boolean;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
         };
         /**
          * ReportCandidatesResponse
@@ -31542,6 +31797,179 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReleaseCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_releases_api_v1_projects__project_id__manuscript_releases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManuscriptReleaseListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_candidate_api_v1_projects__project_id__manuscript_releases_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CandidateCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManuscriptReleaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_package_api_v1_projects__project_id__manuscript_releases__release_id__package_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                release_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_api_v1_projects__project_id__manuscript_releases__release_id__promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                release_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManuscriptReleaseResponse"];
+                };
+            };
+            /** @description Obligations not met, or a stale candidate */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_release_api_v1_projects__project_id__manuscript_releases__release_id__verify_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                release_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseVerification"];
                 };
             };
             /** @description Validation Error */
