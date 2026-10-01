@@ -234,6 +234,34 @@ def _durable_stop_poller(
     return poll
 
 
+async def _fail_or_acknowledge_stop(
+    finalize_failed: Callable[[], Awaitable[bool]],
+    stop_requested: Callable[[], Awaitable[bool]],
+    acknowledge_stop: Callable[[], Awaitable[None]],
+) -> bool:
+    """Commit FAILED before the caller exposes an ERROR frame (R8-D8).
+
+    Returns True only when a competing Stop won (the guarded FAILED write was
+    refused over STOPPING) AND its cancellation was durably acknowledged; the
+    caller then sends no ERROR, like the done path. A failed FAILED write or a
+    failed Stop acknowledgement is logged and returns False, so the caller
+    still ends the stream with a terminal ERROR frame — never a silent end.
+    """
+    try:
+        failed = await finalize_failed()
+    except Exception:
+        logger.error("Failed to finalize errored agent run", exc_info=True)
+        return False
+    if failed is not False or not await stop_requested():
+        return False
+    try:
+        await acknowledge_stop()
+    except Exception:
+        logger.error("Failed to acknowledge Stop on errored agent run", exc_info=True)
+        return False
+    return True
+
+
 # `accept_submission` raises a bare ValueError when the submitted messages
 # contain no user turn — a malformed *request*, not a server fault. It carries
 # no dedicated type, so the branch is keyed on the exact sentinel text raised in
@@ -797,10 +825,11 @@ async def _stream_luna_fast_path(
         await persist_partial()
         # Commit FAILED before exposing the terminal frame (R8-D8), mirroring
         # the done path: a client retrying on ERROR must not find the thread's
-        # single-writer slot still held. A finalize failure still sends ERROR.
-        finalized: Optional[bool] = None
-        try:
-            finalized = await _finalize_run(
+        # single-writer slot still held. (The except-bound name is unbound
+        # after this block, so the closure captures the safe text, not it.)
+        luna_error = client_safe_error(exc)
+        stop_acknowledged = await _fail_or_acknowledge_stop(
+            lambda: _finalize_run(
                 db,
                 acceptance,
                 current_user,
@@ -808,17 +837,15 @@ async def _stream_luna_fast_path(
                 event_type=RunEventType.RUN_FAILED,
                 payload={
                     "code": "luna_stream_failed",
-                    "message": client_safe_error(exc),
+                    "message": luna_error,
                 },
                 error_code="luna_stream_failed",
-                error=client_safe_error(exc),
-            )
-        except Exception:
-            logger.error("Failed to finalize errored Luna run", exc_info=True)
-        if finalized is False and await durable_stop_requested():
-            # Stop claimed the run first: acknowledge it, as the done path does.
-            await cancel_fast_path(reason="user_requested")
-        else:
+                error=luna_error,
+            ),
+            durable_stop_requested,
+            lambda: cancel_fast_path(reason="user_requested"),
+        )
+        if not stop_acknowledged:
             yield await emitter.emit(
                 AgentStreamEvent.ERROR,
                 error_frame_payload(exc, category=_stream_failure_category(exc)),
@@ -3203,9 +3230,8 @@ async def stream_event_generator(
             )
             # FAILED commits before the ERROR frame (R8-D8); a bookkeeping
             # failure is logged and the ERROR still goes out (audit S2-M3).
-            stopped = False
-            try:
-                failed = await _finalize_run(
+            if await _fail_or_acknowledge_stop(
+                lambda: _finalize_run(
                     db,
                     acceptance,
                     current_user,
@@ -3217,13 +3243,10 @@ async def stream_event_generator(
                     },
                     error_code="interrupt_not_checkpointed",
                     error="Interrupt state could not be saved. Please retry.",
-                )
-                if failed is False and await durable_stop_requested():
-                    stopped = True
-                    await cancel_current_stream(reason="user_requested")
-            except Exception:
-                logger.error("Failed to finalize drained interrupt run", exc_info=True)
-            if stopped:
+                ),
+                durable_stop_requested,
+                lambda: cancel_current_stream(reason="user_requested"),
+            ):
                 return
             frame = await emitter.emit(
                 AgentStreamEvent.ERROR,
@@ -3319,10 +3342,11 @@ async def stream_event_generator(
             # ordering as the done path: a client retrying on ERROR must not
             # find the thread's single-writer slot still held. `acceptance is
             # None` (the accept transaction itself failed) finalizes nothing.
-            # A finalize failure is logged and the ERROR still goes out.
-            stopped = False
-            try:
-                failed = await _finalize_run(
+            # A Stop that won the race is acknowledged instead of ERROR; any
+            # bookkeeping failure still ends the stream with ERROR.
+            stream_error = client_safe_error(e)
+            stop_acknowledged = await _fail_or_acknowledge_stop(
+                lambda: _finalize_run(
                     db,
                     acceptance,
                     current_user,
@@ -3330,19 +3354,15 @@ async def stream_event_generator(
                     event_type=RunEventType.RUN_FAILED,
                     payload={
                         "code": "stream_failed",
-                        "message": client_safe_error(e),
+                        "message": stream_error,
                     },
                     error_code="stream_failed",
-                    error=client_safe_error(e),
-                )
-                if failed is False and await durable_stop_requested():
-                    # Stop claimed the run first: acknowledge the cancellation
-                    # (as the done path does) instead of publishing ERROR.
-                    stopped = True
-                    await cancel_current_stream(reason="user_requested")
-            except Exception:
-                logger.error("Failed to finalize errored stream run", exc_info=True)
-            if not stopped:
+                    error=stream_error,
+                ),
+                durable_stop_requested,
+                lambda: cancel_current_stream(reason="user_requested"),
+            )
+            if not stop_acknowledged:
                 frame = await emitter.emit(
                     AgentStreamEvent.ERROR, error_frame_payload(wire_error, category)
                 )

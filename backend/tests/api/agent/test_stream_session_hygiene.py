@@ -480,6 +480,52 @@ async def test_pre_graph_failure_after_stop_acknowledges_cancellation() -> None:
     assert not any(sse_event_name(frame) == "error" for frame in frames)
 
 
+@pytest.mark.parametrize("failure", ["pre_graph", "interrupt_not_checkpointed"])
+async def test_failed_stop_acknowledgement_still_ends_with_error_frame(
+    failure: str,
+) -> None:
+    """Stop won the race but its CANCELLED write failed: the stream must not
+    end silently — the client still gets a terminal ERROR frame."""
+    from langgraph.errors import GraphInterrupt
+
+    db = _SpySession()
+    state = {"stopping": False}
+
+    async def snapshot(*_args: Any, **_kwargs: Any) -> Any:
+        if failure == "pre_graph":
+            state["stopping"] = True
+            raise RuntimeError("runtime snapshot store unavailable")
+        return empty_runtime_snapshot()
+
+    def pull(_n: int) -> dict[str, Any]:
+        state["stopping"] = True
+        raise GraphInterrupt(())  # graph.aget_state shows no saved interrupt
+
+    async def cancel_poll(*_args: Any, **_kwargs: Any) -> bool:
+        return state["stopping"]
+
+    async def finalize(*_args: Any, **kwargs: Any) -> bool:
+        if kwargs["status"] is JobStatus.CANCELLED:
+            raise ConnectionError("db down during the cancellation ACK")
+        return not state["stopping"]
+
+    finalize_mock = AsyncMock(side_effect=finalize)
+    with _graph_stream_env(
+        db=db,
+        graph=_ScriptedGraph(pull),
+        cancel_poll=AsyncMock(side_effect=cancel_poll),
+        finalize=finalize_mock,
+        runtime_snapshot=snapshot,
+    ):
+        frames = await _drain(_stream())
+
+    statuses = [c.kwargs["status"] for c in finalize_mock.await_args_list]
+    assert statuses == [JobStatus.FAILED, JobStatus.CANCELLED]
+    assert (
+        sse_event_name(frames[-1]) == "error"
+    ), "a failed Stop acknowledgement ended the stream with no terminal frame"
+
+
 # ---------------------------------------------------------------------------
 # R8-D8 — FAILED commits before the ERROR frame is exposed
 # ---------------------------------------------------------------------------
