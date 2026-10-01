@@ -79,6 +79,11 @@ pytestmark = pytest.mark.integration
 
 VERSIONS = Path(__file__).parents[2] / "alembic" / "versions"
 _REBUILT_TABLES = (
+    # GOO-318: the outbox references attempts; attempts reference approvals
+    # and manuscript releases.
+    "archive_deposit_outbox",
+    "archive_deposit_attempts",
+    "archive_deposit_approvals",
     # GOO-316: venue checks reference manuscript releases; approvals
     # reference statement sets.
     "venue_checks",
@@ -166,6 +171,7 @@ def _upgrade(connection: Connection) -> None:
         "d2a4c6e8f0b1_create_peer_review.py",
         "e4c6a8b0d2f3_create_manuscript_releases.py",
         "f6a8c0d2e4b5_create_statements_venue.py",
+        "b0e2a4c6d8f9_create_archive_deposits.py",
     ):
         spec = importlib.util.spec_from_file_location(
             filename[:-3], VERSIONS / filename
