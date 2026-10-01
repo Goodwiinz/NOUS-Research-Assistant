@@ -15,8 +15,8 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import AsyncIterator
-from unittest.mock import AsyncMock, patch
+from typing import AsyncIterator, Iterator
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -144,11 +144,11 @@ async def _delete_as_owner(env: SimpleNamespace) -> None:
 
 def _quota(env: SimpleNamespace) -> int:
     with env.sync() as db:
-        return db.get(Organization, env.ids.org).storage_used_bytes
+        return int(db.get(Organization, env.ids.org).storage_used_bytes)
 
 
 @pytest.fixture(autouse=True)
-def _no_side_effects():
+def _no_side_effects() -> Iterator[MagicMock]:
     """Storage objects, DO KB and Neo4j are out of scope; Celery is observed."""
     with (
         patch.object(FileService, "delete_physical_file"),
@@ -158,7 +158,9 @@ def _no_side_effects():
         yield app
 
 
-async def test_deleted_ingestion_is_not_claimed(_no_side_effects) -> None:
+async def test_deleted_ingestion_is_not_claimed(
+    _no_side_effects: MagicMock,
+) -> None:
     async with _schema() as env:
         await _delete_as_owner(env)
 
