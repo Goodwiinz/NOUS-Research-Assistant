@@ -394,6 +394,9 @@ _RERUN_MIGRATION = "c0f2a4b6d8e9_create_experiment_reruns.py"
 _PEER_REVIEW_MIGRATION = "d2a4c6e8f0b1_create_peer_review.py"
 # GOO-315's manuscript-release trigger uses the function too.
 _MANUSCRIPT_MIGRATION = "e4c6a8b0d2f3_create_manuscript_releases.py"
+# GOO-316's statement and venue triggers use the function too (and venue
+# checks reference manuscript releases).
+_STATEMENTS_MIGRATION = "f6a8c0d2e4b5_create_statements_venue.py"
 
 
 def _migration(connection: Connection, direction: str, filename: str) -> None:
@@ -407,6 +410,7 @@ def _migration(connection: Connection, direction: str, filename: str) -> None:
 
 async def _run_migration(factory: Factory, direction: str) -> None:
     order = [
+        _STATEMENTS_MIGRATION,
         _MANUSCRIPT_MIGRATION,
         _PEER_REVIEW_MIGRATION,
         _RERUN_MIGRATION,

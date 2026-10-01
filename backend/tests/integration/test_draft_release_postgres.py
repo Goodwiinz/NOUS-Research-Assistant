@@ -745,9 +745,15 @@ async def test_release_gate_invalidation_graph_and_races(
     assert [str(e.event_type) for e in events].count("release.promoted") == 3
 
     # 15. Downgrade drops only draft_releases (GOO-315's empty
-    # manuscript_releases references it, so it comes off first).
+    # manuscript_releases references it, so it comes off first, after
+    # GOO-316's empty venue checks that reference it).
     async with factory() as db:
         connection = await db.connection()
+        await connection.run_sync(
+            lambda sync: _migration(
+                sync, "downgrade", "f6a8c0d2e4b5_create_statements_venue.py"
+            )
+        )
         await connection.run_sync(
             lambda sync: _migration(
                 sync, "downgrade", "e4c6a8b0d2f3_create_manuscript_releases.py"

@@ -136,6 +136,12 @@ class Settings(BaseSettings):
     # Empty falls back to cors_origins_list[0] for backward compatibility.
     FRONTEND_BASE_URL: str = ""
 
+    # GOO-316: ORCID OAuth (/authenticate scope only). With no client id the
+    # ORCID routes answer 503; the token response is never stored.
+    ORCID_CLIENT_ID: str = ""
+    ORCID_CLIENT_SECRET: str = ""
+    ORCID_BASE_URL: str = "https://sandbox.orcid.org"
+
     # CORS Configuration (comma-separated string from env, parsed to list)
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Optional regex pattern (e.g. ^https://nous-platform-[a-z0-9-]+\.vercel\.app$).
