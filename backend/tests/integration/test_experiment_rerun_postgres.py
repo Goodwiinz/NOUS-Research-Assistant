@@ -698,7 +698,7 @@ async def test_rerun_reproduces_and_every_failure_is_explicit(
             aggregate_type="research_reproduction",
             aggregate_id=w.p1,
         )
-    kinds = [e.event_type for e in events]
+    kinds = [str(e.event_type) for e in events]
     assert kinds.count("rerun.admitted") == 10
     assert kinds.count("rerun.attempt_finished") == await _scalar(
         factory, "SELECT count(*) FROM experiment_rerun_attempts"

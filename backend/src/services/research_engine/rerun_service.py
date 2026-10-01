@@ -40,6 +40,7 @@ from src.schemas.research_engine import (
     RerunCreate,
     RerunEligibilityResponse,
     RerunListResponse,
+    RerunOutputResponse,
     RerunResponse,
 )
 from src.services.artifacts.storage import get_artifact_storage
@@ -266,7 +267,9 @@ def _row_response(row: Any) -> RerunAttemptResponse:
         comparison=row.comparison,
         comparison_hash=row.comparison_hash,
         outputs=[
-            {k: o[k] for k in ("name", "sha256", "byte_size")}
+            RerunOutputResponse(
+                name=o["name"], sha256=o["sha256"], byte_size=o["byte_size"]
+            )
             for o in row.outputs or []
         ],
         template_id=row.template_id,
@@ -656,6 +659,8 @@ async def sweep_expired(db: AsyncSession) -> int:
         if datetime.fromisoformat(payload["lease_expires_at"]) > now:
             continue
         row = await db.get(ExperimentRerun, UUID(payload["rerun_id"]))
+        if row is None:  # FK RESTRICT: a claim always names a rerun
+            continue
         rerun = SimpleNamespace(
             id=row.id,
             collection_id=row.collection_id,
