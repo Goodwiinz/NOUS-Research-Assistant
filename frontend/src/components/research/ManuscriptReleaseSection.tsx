@@ -10,7 +10,9 @@
  * venue checks (obligations only when a statement set is bound), the
  * venue-check results with actionable items, and the anonymized download.
  * GOO-317 adds per-release BibTeX / CSL JSON / RIS downloads from the
- * immutable snapshot, with the count of omitted metadata fields.
+ * immutable snapshot, with the count of omitted metadata fields. GOO-318
+ * mounts the Zenodo sandbox deposit panel on verified releases; only a
+ * deposit approval in force marks a release authorized for submission.
  */
 
 import React from 'react';
@@ -22,6 +24,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { projectService, type Draft } from '@/services/projectService';
+import { DepositPanel } from './DepositPanel';
 import type {
   ApiCheckState,
   ApiManuscriptRelease,
@@ -191,6 +194,11 @@ const ReleaseCard: React.FC<{
         <span className="text-muted-foreground">
           sha256 {release.package_sha256.slice(0, 12)}
         </span>
+        {release.external_submission === 'authorized' && (
+          <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+            Deposit approved
+          </span>
+        )}
       </div>
       {release.status === 'stale' && (
         <p role="status" className="text-xs text-destructive">
@@ -287,6 +295,13 @@ const ReleaseCard: React.FC<{
           Verify
         </button>
       </div>
+      {release.status === 'verified' && (
+        <DepositPanel
+          projectId={projectId}
+          release={release}
+          canRelease={canPromote}
+        />
+      )}
       {release.checks.statements &&
         release.checks.statements.state !== 'not_applicable' && (
           <VenueChecks
