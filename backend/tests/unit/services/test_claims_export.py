@@ -161,7 +161,12 @@ def test_counts_match_rows() -> None:
     assert body["counts"] == {
         "claims": 1,
         "claim_versions": 1,
-        "links_by_kind": {"extraction": 1, "source_span": 2, "legacy_unanchored": 1},
+        "links_by_kind": {
+            "extraction": 1,
+            "source_span": 2,
+            "legacy_unanchored": 1,
+            "synthesis_result": 0,  # GOO-311's kind is always counted
+        },
         "withdrawn_links": 1,
         "stance_observations": 1,
         "assessments_by_stance": {},

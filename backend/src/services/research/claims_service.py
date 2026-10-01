@@ -169,6 +169,7 @@ async def _append(
     key: str,
     fingerprint: str,
     reason: str | None = None,
+    schema_version: int = 1,
 ) -> UUID:
     """Append one event; returns its id (a GOO-307 staling cause)."""
     payload = {
@@ -183,7 +184,7 @@ async def _append(
             aggregate_type=AGGREGATE_TYPE,
             aggregate_id=_cid(context),
             event_type=event_type,
-            event_schema_version=1,
+            event_schema_version=schema_version,
             actor_user_id=actor_id,
             actor_role=actor_role,
             subject_type=SUBJECT_TYPE,
@@ -744,9 +745,11 @@ async def link(
             "start_char": row.start_char,
             "end_char": row.end_char,
             "quote_sha256": anchors.text_sha256(columns["quote"]),
+            "synthesis_result_id": _str(row.synthesis_result_id),
         },
         key=key,
         fingerprint=fingerprint,
+        schema_version=2,  # GOO-311: v2 carries synthesis_result_id
     )
     if data.supersedes_link_id is not None:  # re-pointed or withdrawn
         await _invalidate(
