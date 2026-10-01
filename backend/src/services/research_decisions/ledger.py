@@ -3,8 +3,9 @@
 Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
-``research_evidence``) registers its subject type, payload vocabulary, value validation and replay transition
-rules in ``_FAMILIES``.
+``research_evidence``, ``research_synthesis``) registers its subject type,
+payload vocabulary, value validation and replay transition rules in
+``_FAMILIES``.
 
 Idempotency is scoped to one aggregate stream. Protocol approval derives one
 stable subkey per emitted event (for example ``<request>:superseded`` and
@@ -33,6 +34,7 @@ from src.services.research_engine import (
     appraisal_rules,
     evidence_rules,
     screening_rules,
+    synthesis_rules,
 )
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -311,6 +313,10 @@ _CLAIMS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
         }
     ),
 }
+# GOO-311: v2 adds the ``synthesis_result`` link target; v1 keeps replaying.
+_CLAIMS_PAYLOAD_KEYS[("claim.linked", 2)] = _CLAIMS_PAYLOAD_KEYS[
+    ("claim.linked", 1)
+] | {"synthesis_result_id"}
 # GOO-307: verified draft releases, one stream per Collection so promotion
 # and cross-draft invalidation share one total order. A promotion's subject is
 # its release; a staling's subject is the Collection.
@@ -318,7 +324,12 @@ _RELEASE_AGGREGATE = "research_release"
 _RELEASE_SUBJECT = "draft_release"
 _RELEASE_PROMOTERS = frozenset({"adjudicator", "supervisor"})
 _RELEASE_CAUSE_FAMILIES = frozenset(
-    {"research_extraction", "research_claims", "research_release"}
+    {
+        "research_extraction",
+        "research_claims",
+        "research_release",
+        "research_synthesis",  # GOO-311: a successor synthesis result
+    }
 )
 _RELEASE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     ("release.promoted", 1): frozenset(
@@ -418,6 +429,32 @@ _EVIDENCE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
             "appraisal_assessment_ids",
             "contradiction_ids",
             "input_hash",
+        }
+    ),
+}
+# GOO-311: quantitative synthesis results, one stream per Collection. The
+# subject of each event is the result row it inserted.
+_SYNTHESIS_AGGREGATE = "research_synthesis"
+_SYNTHESIS_SUBJECT = "synthesis_result"
+_SYNTHESIS_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("synthesis.executed", 1): frozenset(
+        {
+            "collection_id",
+            "result_id",
+            "supersedes_result_id",
+            "table_version_id",
+            "protocol_version_id",
+            "outcome_key",
+            "timepoint",
+            "measure",
+            "model",
+            "config_hash",
+            "estimator_version",
+            "status",
+            "input_hash",
+            "result_hash",
+            "included_units",
+            "excluded",
         }
     ),
 }
@@ -1040,6 +1077,9 @@ def _validate_claims_payload(
                 quote=payload["quote_sha256"],
                 status=payload["status"],
                 supersedes_link_id=supersedes,
+                synthesis_result_id=_validated_optional_uuid(
+                    payload.get("synthesis_result_id"), "synthesis_result_id"
+                ),
             )
         except ValueError as error:
             raise DecisionValidationError(f"claim link: {error}") from error
@@ -2025,7 +2065,7 @@ def _validate_claims_transitions(
             row = live(link)
             if (
                 row is None
-                or row["kind"] == "legacy_unanchored"
+                or row["kind"] in ("legacy_unanchored", "synthesis_result")
                 or version_claim[link_version[link]] != claim
             ):
                 raise DecisionReplayError("stance observation needs a live link")
@@ -2205,6 +2245,78 @@ def _validate_evidence_transitions(
             certainty_tips[key] = str(payload["certainty_id"])
 
 
+def _validate_synthesis_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["result_id"], "result_id") != subject_id:
+        raise DecisionValidationError("synthesis event subject is not its result")
+    _validated_optional_uuid(payload["supersedes_result_id"], "supersedes_result_id")
+    for key in ("table_version_id", "protocol_version_id"):
+        _validated_payload_uuid(payload[key], key)
+    for key in ("outcome_key", "timepoint", "estimator_version"):
+        if not isinstance(payload[key], str) or not payload[key]:
+            raise DecisionValidationError(f"synthesis {key} is invalid")
+    if (payload["measure"], payload["model"]) != (
+        synthesis_rules.MEASURE,
+        synthesis_rules.MODEL,
+    ):
+        raise DecisionValidationError("synthesis method is unsupported")
+    if payload["status"] not in synthesis_rules.STATUSES:
+        raise DecisionValidationError("synthesis status is invalid")
+    for key in ("config_hash", "input_hash", "result_hash"):
+        _validated_sha256(payload[key], key)
+    units = payload["included_units"]
+    if (
+        not isinstance(units, list)
+        or not all(isinstance(u, str) and u for u in units)
+        or len(set(units)) != len(units)
+    ):
+        raise DecisionValidationError("included_units must be unique unit keys")
+    excluded = payload["excluded"]
+    if not isinstance(excluded, list) or not all(
+        isinstance(e, dict) and set(e) == {"unit", "report_ids", "reason", "detail"}
+        for e in excluded
+    ):
+        raise DecisionValidationError("synthesis exclusions are invalid")
+
+
+def _validate_synthesis_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Each (outcome, timepoint) has one result chain and every successor
+    names its tip; an unchanged input never makes a successor; a result is
+    computed iff it pooled at least two units; a reviewer executes."""
+    tips: dict[tuple[str, str], tuple[str, str]] = {}  # key -> (id, input_hash)
+    seen: set[str] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        if event.actor_role != "reviewer":
+            raise DecisionReplayError("synthesis execution requires a reviewer")
+        key = (str(payload["outcome_key"]), str(payload["timepoint"]))
+        tip = tips.get(key)
+        if payload["supersedes_result_id"] != (None if tip is None else tip[0]):
+            raise DecisionReplayError("synthesis result supersedes a non-tip")
+        if tip is not None and tip[1] == payload["input_hash"]:
+            raise DecisionReplayError("synthesis successor with an unchanged input")
+        if (payload["status"] == "computed") != (len(payload["included_units"]) >= 2):
+            raise DecisionReplayError("synthesis status disagrees with its units")
+        result = str(payload["result_id"])
+        if result in seen:
+            raise DecisionReplayError("synthesis result id reused")
+        seen.add(result)
+        tips[key] = (result, str(payload["input_hash"]))
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -2294,6 +2406,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_EVIDENCE_PAYLOAD_KEYS,
         validate_payload=_validate_evidence_payload,
         validate_transitions=_validate_evidence_transitions,
+        requires_subject_version=False,
+    ),
+    _SYNTHESIS_AGGREGATE: _Family(
+        subject_type=_SYNTHESIS_SUBJECT,
+        payload_keys=_SYNTHESIS_PAYLOAD_KEYS,
+        validate_payload=_validate_synthesis_payload,
+        validate_transitions=_validate_synthesis_transitions,
         requires_subject_version=False,
     ),
 }

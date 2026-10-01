@@ -53,6 +53,13 @@ import type {
   ApiEvidenceTableCreate,
   ApiEvidenceTablePreview,
 } from '@/types/api/research-evidence-contract';
+import type {
+  ApiSynthesisExecute,
+  ApiSynthesisList,
+  ApiSynthesisPreview,
+  ApiSynthesisResult,
+  ApiSynthesisRoles,
+} from '@/types/api/research-synthesis-contract';
 
 const BASE = '/api/v1/research-engine';
 
@@ -589,3 +596,46 @@ export const assessCertainty = (
 /** Every version, stale ones included; the server names the file. */
 export const exportEvidence = (projectId: string): Promise<void> =>
   api.download(`/research-engine/projects/${projectId}/evidence/export`);
+
+// --- Quantitative synthesis (GOO-311) ----------------------------------------
+
+export type {
+  ApiSynthesisExclusion as SynthesisExclusion,
+  ApiSynthesisExecute as SynthesisExecute,
+  ApiSynthesisIncluded as SynthesisIncluded,
+  ApiSynthesisList as SynthesisList,
+  ApiSynthesisPreview as SynthesisPreview,
+  ApiSynthesisResult as SynthesisResult,
+  ApiSynthesisRoles as SynthesisRoles,
+  ApiSynthesisSelection as SynthesisSelection,
+} from '@/types/api/research-synthesis-contract';
+
+const synthesis = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/synthesis`;
+
+export const listSynthesis = (projectId: string): Promise<ApiSynthesisList> =>
+  api.get<ApiSynthesisList>(synthesis(projectId));
+
+export const previewSynthesis = (
+  projectId: string,
+  tableVersionId: string,
+  roles: ApiSynthesisRoles
+): Promise<ApiSynthesisPreview> => {
+  const params = new URLSearchParams({
+    table_version_id: tableVersionId,
+    ...roles,
+  });
+  return api.get<ApiSynthesisPreview>(
+    `${synthesis(projectId)}/preview?${params.toString()}`
+  );
+};
+
+export const executeSynthesis = (
+  projectId: string,
+  data: ApiSynthesisExecute
+): Promise<ApiSynthesisResult> =>
+  api.post<ApiSynthesisResult>(synthesis(projectId), data);
+
+/** Every result with its inputs; the numbers recompute offline. */
+export const exportSynthesis = (projectId: string): Promise<void> =>
+  api.download(`/research-engine/projects/${projectId}/synthesis/export`);

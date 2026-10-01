@@ -146,6 +146,7 @@ from .research_report import (
     ResearchReportObservation,
     ResearchStudy,
 )
+from .research_synthesis import SynthesisResult
 from .research_claim import (
     ResearchClaim,
     ResearchClaimAssessment,
@@ -307,6 +308,7 @@ __all__ = [
     "ExtractionObservation",
     "ExtractionAcceptedValue",
     # Versioned claims (GOO-306)
+    "SynthesisResult",
     "ResearchClaim",
     "ResearchClaimVersion",
     "ResearchClaimEvidenceLink",

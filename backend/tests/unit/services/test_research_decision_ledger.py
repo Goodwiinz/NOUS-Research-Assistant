@@ -18,6 +18,7 @@ from src.services.research_decisions.ledger import (
     _validate_identity_transitions,
     _validate_release_transitions,
     _validate_screening_transitions,
+    _validate_synthesis_transitions,
     decision_request_fingerprint,
     replay_screening_resolutions,
 )
@@ -2467,3 +2468,173 @@ def test_evidence_payload_keys_exact() -> None:
                 request_fingerprint="c" * 64,
                 reason=None,
             )
+
+
+# --- GOO-311: research_synthesis and claim.linked v2 --------------------------
+
+
+class _Synthesis:
+    """Hand-built events for one Collection's research_synthesis stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+
+    def executed(
+        self,
+        result: UUID,
+        supersedes: UUID | None = None,
+        input_hash: str = "a" * 64,
+        units: tuple[str, ...] = ("study:A", "study:B"),
+        status: str = "computed",
+    ) -> dict[str, Any]:
+        return {
+            "collection_id": str(self.collection_id),
+            "result_id": str(result),
+            "supersedes_result_id": None if supersedes is None else str(supersedes),
+            "table_version_id": str(uuid4()),
+            "protocol_version_id": str(uuid4()),
+            "outcome_key": "depressive_symptoms",
+            "timepoint": "12 weeks",
+            "measure": "smd_hedges_g",
+            "model": "random_effects_dl",
+            "config_hash": "b" * 64,
+            "estimator_version": "nous.smd-hedges-g.dl/1",
+            "status": status,
+            "input_hash": input_hash,
+            "result_hash": "c" * 64,
+            "included_units": list(units),
+            "excluded": [
+                {
+                    "unit": "study:E",
+                    "report_ids": [str(uuid4())],
+                    "reason": "invalid_variance:c",
+                    "detail": "0.0",
+                }
+            ],
+        }
+
+    def validate(self, payload: dict[str, Any]) -> None:
+        _validate_event(
+            aggregate_type="research_synthesis",
+            aggregate_id=self.collection_id,
+            event_type="synthesis.executed",
+            event_schema_version=1,
+            subject_type="synthesis_result",
+            subject_id=UUID(payload["result_id"]),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="d" * 64,
+        )
+
+    def replay(self, *events: tuple[str, dict[str, Any]]) -> None:
+        stored = []
+        for role, payload in events:
+            event = _stored("synthesis.executed", payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_synthesis_transitions(stored, self.collection_id)
+
+
+def test_synthesis_payload_keys_exact() -> None:
+    s = _Synthesis()
+    payload = s.executed(uuid4())
+    s.validate(payload)
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        s.validate({**payload, "extra": 1})
+    with pytest.raises(DecisionValidationError, match="another collection"):
+        s.validate({**payload, "collection_id": str(uuid4())})
+    with pytest.raises(DecisionValidationError, match="unsupported"):
+        s.validate({**payload, "model": "reml"})
+    with pytest.raises(DecisionValidationError, match="unique unit keys"):
+        s.validate({**payload, "included_units": ["study:A", "study:A"]})
+    with pytest.raises(DecisionValidationError, match="exclusions"):
+        s.validate({**payload, "excluded": [{"unit": None}]})
+
+
+def test_synthesis_replay_rejects_successor_with_same_input_hash() -> None:
+    s = _Synthesis()
+    first = uuid4()
+    s.replay(
+        ("reviewer", s.executed(first)),
+        ("reviewer", s.executed(uuid4(), first, input_hash="e" * 64)),
+    )
+    with pytest.raises(DecisionReplayError, match="unchanged input"):
+        s.replay(
+            ("reviewer", s.executed(first)), ("reviewer", s.executed(uuid4(), first))
+        )
+    with pytest.raises(DecisionReplayError, match="non-tip"):
+        s.replay(("reviewer", s.executed(first)), ("reviewer", s.executed(uuid4())))
+    with pytest.raises(DecisionReplayError, match="reviewer"):
+        s.replay(("supervisor", s.executed(first)))
+    with pytest.raises(DecisionReplayError, match="units"):
+        s.replay(("reviewer", s.executed(first, units=("study:A",))))
+    s.replay(
+        ("reviewer", s.executed(first, units=("study:A",), status="validation_failed"))
+    )
+    with pytest.raises(DecisionReplayError, match="units"):
+        s.replay(("reviewer", s.executed(first, status="validation_failed")))
+
+
+def test_claim_linked_v1_still_replays_v2_requires_result_id() -> None:
+    c = _Claims()
+    version, link, result = uuid4(), uuid4(), uuid4()
+    c.validate("claim.linked", c.linked(version, link))  # v1 keeps validating
+
+    def validate_v2(payload: dict[str, Any]) -> None:
+        _validate_event(
+            aggregate_type="research_claims",
+            aggregate_id=c.collection_id,
+            event_type="claim.linked",
+            event_schema_version=2,
+            subject_type="research_claim",
+            subject_id=c.claim,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="b" * 64,
+        )
+
+    synthesis = {
+        **c.linked(version, link, "legacy_unanchored"),
+        "draft_citation_id": None,
+        "document_id": None,
+        "kind": "synthesis_result",
+        "synthesis_result_id": str(result),
+    }
+    validate_v2(synthesis)
+    validate_v2({**c.linked(version, link), "synthesis_result_id": None})
+    with pytest.raises(DecisionValidationError, match="claim link"):
+        validate_v2({**synthesis, "synthesis_result_id": None})
+    with pytest.raises(DecisionValidationError, match="claim link"):
+        validate_v2({**synthesis, "document_id": str(uuid4())})
+    with pytest.raises(DecisionValidationError, match="event schema"):
+        validate_v2(c.linked(version, link))  # v2 requires the key
+    # A synthesis link is live for assessment but carries no model stance.
+    versioned = ("claim.versioned", "editor", c.versioned(version))
+    c.replay(
+        versioned,
+        ("claim.linked", "editor", synthesis),
+        ("claim.assessed", "adjudicator", c.assessed(version, uuid4(), [link])),
+    )
+    with pytest.raises(DecisionReplayError, match="live link"):
+        c.replay(
+            versioned,
+            ("claim.linked", "editor", synthesis),
+            ("claim.observed", "machine", c.observed(link, uuid4())),
+        )
+
+
+def test_release_staled_accepts_synthesis_cause() -> None:
+    r = _Release()
+    payload = r.staled(uuid4())
+    payload["cause"] = {
+        "family": "research_synthesis",
+        "event_id": str(uuid4()),
+        "kind": "synthesis.executed",
+    }
+    payload["changed_nodes"] = [f"synthesis:{uuid4()}"]
+    r.validate("release.staled", payload, r.collection_id)
+    payload["cause"] = {**payload["cause"], "family": "research_nonsense"}
+    with pytest.raises(DecisionValidationError, match="cause"):
+        r.validate("release.staled", payload, r.collection_id)
