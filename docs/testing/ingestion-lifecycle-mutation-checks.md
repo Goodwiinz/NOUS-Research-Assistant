@@ -12,7 +12,7 @@ they skip, so treat them as NOT RUN, not passing. Run from `backend/`.
 
 ## GOO-356: deleted ingestion cannot start or double-release quota
 
-Verified on `741b3b637` against local PostgreSQL 2026-10-01.
+Verified in PR #1798 against local PostgreSQL 2026-10-01.
 
 ### G1. Claim refuses deleted work
 
@@ -52,7 +52,7 @@ Verified on `741b3b637` against local PostgreSQL 2026-10-01.
 
 ## GOO-357: a running worker cannot write after it lost the job
 
-Verified on `cded11004` against local PostgreSQL 2026-10-01. Task-level tests
+Verified in PR #1800 against local PostgreSQL 2026-10-01. Task-level tests
 are in `tests/unit/tasks/test_ingestion_stage_guard_postgres.py` (here, not
 under `tests/integration/`, because that conftest mocks Redis, which breaks
 Celery's eager `.apply()`). The helper matrix is
@@ -76,7 +76,7 @@ An earlier G6 mutant (`rollback` → `raise`) survived because the raise landed
 in the outer `except` and wrote nothing. It was not a guard removal, so it was
 replaced by the plain-`db.get` mutant above.
 
-### GOO-357 review fixes (`a495ef29d`)
+### GOO-357 review fixes (PR #1800)
 
 Both defects were reproduced on PostgreSQL before the fix: a real
 `DeadlockDetected`, and a live run stopped as `queued`.
