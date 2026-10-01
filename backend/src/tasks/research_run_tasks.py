@@ -54,3 +54,38 @@ def sweep_stale_research_runs() -> Dict[str, Any]:
         raise
     finally:
         db.close()
+
+
+# --- GOO-313 fresh reruns --------------------------------------------------------
+
+
+@celery_app.task(name="src.tasks.research_run_tasks.execute_experiment_rerun")
+def execute_experiment_rerun(rerun_id: str, attempt: int) -> None:
+    """One rerun attempt; enqueued after the admission or retry commit."""
+    from uuid import UUID
+
+    from src.core.database import AsyncSessionLocal
+    from src.services.research_engine import rerun_service
+    from src.tasks._async_utils import run_async
+
+    run_async(rerun_service.execute_attempt(AsyncSessionLocal, UUID(rerun_id), attempt))
+
+
+async def _sweep_reruns() -> int:
+    from src.core.database import AsyncSessionLocal
+    from src.services.research_engine import rerun_service
+
+    async with AsyncSessionLocal() as db:
+        return await rerun_service.sweep_expired(db)
+
+
+@celery_app.task(name="src.tasks.research_run_tasks.sweep_expired_reruns")
+def sweep_expired_reruns() -> int:
+    """A rerun attempt whose lease expired without a terminal row (worker
+    death) ends ``interrupted``, never ``running`` forever."""
+    from src.tasks._async_utils import run_async
+
+    swept = run_async(_sweep_reruns())
+    if swept:
+        logger.warning("sweep_expired_reruns: interrupted %d attempts", swept)
+    return swept
