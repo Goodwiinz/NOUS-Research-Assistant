@@ -10,6 +10,7 @@ work that was not returned fails ``-k disappeared``.
 import hashlib
 import json
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -205,7 +206,7 @@ def test_merges_follow_survivor_and_unresolved_is_unknown() -> None:
 
 
 def test_snapshot_from_package_takes_live_reports_and_latest_record() -> None:
-    body = {
+    body: dict[str, Any] = {
         "identities": {
             "reports": [
                 {"id": "r1", "title_snapshot": "One", "merged_into_report_id": None},
